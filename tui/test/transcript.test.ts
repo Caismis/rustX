@@ -56,6 +56,7 @@ describe("assistant text", () => {
       {
         type: "attempt_started" as const,
         attempt_id: "a1",
+        execution_settings: null,
         model: attemptModel("alpha/model-a"),
       },
       {

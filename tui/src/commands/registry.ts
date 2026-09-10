@@ -25,12 +25,15 @@ export interface CommandSpec {
  * client-facing attachment contract.
  */
 export const COMMANDS: readonly CommandSpec[] = [
+  { name: "/settings", description: "Inspect native settings, captured sources, and application boundaries." },
+  { name: "/defaults", description: "Read the user default document and its revision (separate from live settings).", argumentHint: "user" },
+  { name: "/save-default", description: "Explicitly save selected model/profile or desired approval to user defaults; live state is unchanged.", argumentHint: "user <model|approval> <revision>" },
   { name: "/help", description: "List the available commands." },
   {
     name: "/model",
     description:
       "Open the searchable model selector, or select one directly; selection resets primary overrides and preserves summary policy.",
-    argumentHint: "[show|provider/model]",
+    argumentHint: "[show|provider/model|profile set <id>|profile clear]",
   },
   { name: "/new", description: "Create a new independent local session." },
   {
@@ -89,7 +92,7 @@ export const COMMANDS: readonly CommandSpec[] = [
       "Show bounded presentation, runtime, and protocol diagnostics.",
   },
   {
-    name: "/reasoning",
+    name: "/show-reasoning",
     description:
       "Show or hide model reasoning. A client display preference; it never changes what rustX requests.",
     argumentHint: "[on|off]",

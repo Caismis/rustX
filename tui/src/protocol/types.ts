@@ -60,7 +60,9 @@
  * rather than as JSON numbers, because `JSON.stringify` cannot preserve
  * binary64 identity.
  */
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 24;
+// Version 25: captured launch/lifetime metadata, explicit default documents,
+// frozen admission resource/policy evidence, and unavailable historical models.
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 25;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -943,7 +945,8 @@ export interface RuntimeClientAttempt {
   in_flight?: InFlightAssistantMessage;
   foreground?: ForegroundToolExecution[];
   /** The immutable model this attempt froze at admission. */
-  model: AttemptModelView;
+  model: AttemptModelView | null;
+  execution_settings: AdmittedSettings | null;
 }
 
 export interface InboundItemView {
@@ -1384,7 +1387,38 @@ export interface WorkflowRunView {
 }
 export interface WorkflowSnapshot { revision: number; runs: WorkflowRunView[]; omitted_runs: number }
 
+export type SettingsBoundary = "launch_capture" | "next_admission" | "safe_boundary" | "resource_publication" | "frozen_admission" | "client_local" | "next_launch";
+export interface ModelDefault { model: string; reasoning_profile: string | null }
+export type SettingOrigin = { kind: "builtin" | "cli" } | { kind: "user" | "project"; document: string };
+export interface LaunchSettings {
+  model: ModelDefault;
+  model_origin: SettingOrigin;
+  reasoning_origin: SettingOrigin;
+  approval_mode: ApprovalMode;
+  approval_origin: SettingOrigin;
+  runtime_root_origin: SettingOrigin;
+  tool_selection_origin: SettingOrigin;
+}
+export type DefaultTarget = "model_selection" | "approval_mode";
+export interface SettingsLifetimes {
+  launch: SettingsBoundary; model: SettingsBoundary; approval: SettingsBoundary;
+  resources: SettingsBoundary; attempt: SettingsBoundary; presentation: SettingsBoundary; saved_defaults: SettingsBoundary;
+}
+export interface AdmittedSettings { resource_revision: number; approval_mode: ApprovalMode }
+export type DefaultScope = "user";
+export type DefaultValue = { field: "model_selection"; selection: ModelDefault } | { field: "approval_mode"; mode: ApprovalMode };
+export interface DefaultDocument {
+  scope: DefaultScope; document: string; revision: string; model: ModelDefault | null; approval_mode: ApprovalMode | null;
+}
+export interface SaveDefaultResult {
+  scope: DefaultScope; document: string; revision: string; changed: DefaultValue;
+  live_unchanged: boolean; applies_at: SettingsBoundary;
+}
+
 export interface RuntimeClientSnapshot {
+  settings_evidence: "live_session" | "frozen_child" | "historical_partial";
+  launch_settings: LaunchSettings | null;
+  settings_lifetimes: SettingsLifetimes;
   workflows: WorkflowSnapshot;
   conversation_id: ConversationId;
   shutting_down: boolean;
@@ -1414,7 +1448,7 @@ export interface RuntimeClientSnapshot {
   /** The active runtime resource generation (context files, agent profile). */
   resources?: RuntimeClientResourcesView;
   /** The session's *desired* model. Never the running attempt's model. */
-  model: SessionModelView;
+  model: SessionModelView | null;
   /**
    * The conversation's task list as of the newest committed `todo` result.
    *
@@ -1510,7 +1544,8 @@ export type RuntimeClientEvent =
        * self-contained, so an incremental client never infers the active
        * attempt's model and never needs a second `snapshot_get`.
        */
-      model: AttemptModelView;
+      model: AttemptModelView | null;
+  execution_settings: AdmittedSettings | null;
     }
   | {
       type: "attempt_settled";
@@ -1823,6 +1858,8 @@ export type RuntimeClientRequest =
     }
   | { method: "capability_get"; id: RequestId }
   | { method: "model_catalog_get"; id: RequestId }
+  | { method: "defaults_read"; id: RequestId; scope: DefaultScope }
+  | { method: "default_save"; id: RequestId; scope: DefaultScope; expected_revision: string; target: DefaultTarget }
   | { method: "model_get"; id: RequestId }
   | { method: "model_set"; id: RequestId; config: SessionModelConfig }
   | { method: "approval_mode_set"; id: RequestId; mode: ApprovalMode }
@@ -1911,6 +1948,8 @@ export type RuntimeClientRequestBody =
   | Omit<Extract<RuntimeClientRequest, { method: "subscribe_events" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "capability_get" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "model_catalog_get" }>, "id">
+  | Omit<Extract<RuntimeClientRequest, { method: "defaults_read" }>, "id">
+  | Omit<Extract<RuntimeClientRequest, { method: "default_save" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "model_get" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "model_set" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "approval_mode_set" }>, "id">
@@ -1966,6 +2005,8 @@ export type RuntimeClientResult =
   | { type: "capability"; capabilities: CapabilityView }
   | { type: "model_catalog"; catalog: ModelCatalogView }
   | { type: "model"; model: SessionModelView }
+  | { type: "defaults"; document: DefaultDocument }
+  | { type: "default_saved"; result: SaveDefaultResult }
   | { type: "model_set"; model: SessionModelView }
   | {
       type: "approval_mode_set";

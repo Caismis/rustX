@@ -138,12 +138,14 @@ export interface AttemptPresentation {
    * Distinct from {@link PresentationState.sessionModel}: while this attempt
    * runs on A and the session moved to B, this stays A.
    */
-  model: AttemptModelView;
+  model: AttemptModelView | null;
+  executionSettings: import("../protocol/types.ts").AdmittedSettings | null;
   /** Foreground tool executions in call-assembly order. */
   foreground: ForegroundToolExecution[];
 }
 
 export interface PresentationState {
+  settingsEvidence: "live_session" | "frozen_child" | "historical_partial";
   workflows: import("../protocol/types.ts").WorkflowSnapshot;
   conversationId: ConversationId;
   /** The cursor this state is consistent through. */
@@ -175,7 +177,9 @@ export interface PresentationState {
   /** The active runtime resource generation: context files, agent profile. */
   resources: RuntimeClientResourcesView;
   /** The session's *desired* model configuration. */
-  sessionModel: SessionModelView;
+  sessionModel: SessionModelView | null;
+  launchSettings: import("../protocol/types.ts").LaunchSettings | null;
+  settingsLifetimes: import("../protocol/types.ts").SettingsLifetimes | null;
   /** True once runtime drain begins; shutdown responses complete at quiescence. */
   runtimeShutdown: boolean;
   /**

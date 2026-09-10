@@ -96,12 +96,13 @@ pub mod endpoint;
 pub mod event;
 pub mod host;
 pub mod projection;
+pub mod settings;
 pub mod snapshot;
 pub mod transport;
 pub mod types;
 
 #[cfg(test)]
-mod test_sync;
+pub(crate) mod test_sync;
 
 pub use attachment::RuntimeAttachment;
 pub use endpoint::RuntimeClientEndpoint;

@@ -134,9 +134,10 @@ export function workingStatus(state: PresentationState): string | undefined {
  * into a different, shorter, wrong identity.
  */
 function modelSegments(state: PresentationState): Segment[] {
+  if (state.sessionModel === null) return [{ text: "historical model unavailable", priority: 1 }];
   const configured = state.sessionModel.configured.model;
   const effective = state.sessionModel.effective.model;
-  const attempt = state.attempt?.model.primary.model;
+  const attempt = state.attempt?.model?.primary.model;
 
   const distinct =
     configured !== effective ||
@@ -230,7 +231,7 @@ export function footerSegments(
   }
 
   segments.push({
-    text: role.meta(`provider ${providerLabel(state.sessionModel.effective)}`),
+    text: role.meta(`provider ${state.sessionModel ? providerLabel(state.sessionModel.effective) : "unavailable"}`),
     priority: 1,
   });
 
@@ -382,9 +383,8 @@ export function contextLabel(state: PresentationState): string {
   const usage = state.attempt?.lastUsage;
   const window =
     usage === undefined
-      ? state.sessionModel.effective.contextWindow
-      : state.attempt?.model.primary.contextWindow ??
-        state.sessionModel.effective.contextWindow;
+      ? (state.sessionModel?.effective.contextWindow ?? 0)
+      : state.attempt?.model?.primary.contextWindow ?? 0;
   if (usage === undefined || window <= 0) {
     return `context —/${compact(window)}`;
   }
@@ -442,6 +442,7 @@ export function renderStartup(
   session?: SessionView,
   width = 120,
 ): string {
+  if (state.sessionModel === null) return role.meta("rustX · historical inspection · live model unavailable");
   const model = state.sessionModel.effective;
   const lines = [
     role.strong("rustX"),

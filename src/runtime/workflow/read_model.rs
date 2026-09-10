@@ -634,7 +634,7 @@ mod tests {
                 skills: vec![],
                 sources: vec![],
             },
-            model,
+            Some(model),
             64,
         );
         client.fold_workflows(prepared.clone());

@@ -296,7 +296,9 @@ pub enum RuntimeClientSessionRequest {
 /// server origin — on every Questionnaire request and subject (Issue #242).
 /// The change is deliberately breaking: rustX is pre-1.0, so there is no
 /// compatibility shim, no dual questionnaire mode, and no fallback parser.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 24;
+/// Version 25 adds captured launch facts, explicit lifetimes, bounded user-default
+/// operations, and nullable historical model/admission evidence. No v24 decoding.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 25;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -520,6 +522,18 @@ pub enum RuntimeClientRequest {
         /// The complete desired session model configuration.
         config: Box<SessionModelConfig>,
     },
+    /// Read only the declared user default document, separately from live state.
+    DefaultsRead {
+        id: RequestId,
+        scope: super::settings::DefaultScope,
+    },
+    /// Explicit, revision-checked disk write; never a live mutation.
+    DefaultSave {
+        id: RequestId,
+        scope: super::settings::DefaultScope,
+        expected_revision: String,
+        target: super::settings::DefaultTarget,
+    },
     /// Request a runtime `ApprovalMode` transition.
     ApprovalModeSet {
         /// Attachment-scoped request id.
@@ -680,6 +694,8 @@ impl RuntimeClientRequest {
             | Self::ModelCatalogGet { id, .. }
             | Self::ModelGet { id, .. }
             | Self::ModelSet { id, .. }
+            | Self::DefaultsRead { id, .. }
+            | Self::DefaultSave { id, .. }
             | Self::ApprovalModeSet { id, .. }
             | Self::SessionList { id, .. }
             | Self::SessionGet { id, .. }
@@ -717,6 +733,8 @@ impl RuntimeClientRequest {
             Self::ModelCatalogGet { .. } => "model_catalog_get",
             Self::ModelGet { .. } => "model_get",
             Self::ModelSet { .. } => "model_set",
+            Self::DefaultsRead { .. } => "defaults_read",
+            Self::DefaultSave { .. } => "default_save",
             Self::ApprovalModeSet { .. } => "approval_mode_set",
             Self::SessionList { .. } => "session_list",
             Self::SessionGet { .. } => "session_get",
@@ -761,6 +779,8 @@ impl RuntimeClientRequest {
         matches!(
             self,
             Self::CompactContext { .. }
+                | Self::DefaultsRead { .. }
+                | Self::DefaultSave { .. }
                 | Self::ReloadResources { .. }
                 | Self::InteractionRespond { .. }
                 | Self::SubagentWorkspaceDispose { .. }
@@ -781,6 +801,7 @@ impl RuntimeClientRequest {
                 | Self::ReloadResources { .. }
                 | Self::InteractionRespond { .. }
                 | Self::ModelSet { .. }
+                | Self::DefaultSave { .. }
                 | Self::ApprovalModeSet { .. }
                 | Self::SessionName { .. }
                 | Self::SessionNew { .. }
@@ -1026,6 +1047,14 @@ pub enum RuntimeClientResult {
         /// Bounded diagnostic for the replacement path.
         diagnostic: String,
     },
+    /// Declared disk document, not an effective live projection.
+    Defaults {
+        document: super::settings::DefaultDocument,
+    },
+    /// Published disk outcome; live state is unchanged.
+    DefaultSaved {
+        result: super::settings::SaveDefaultResult,
+    },
     /// `model_set` succeeded: the update was applied and published.
     ///
     /// The result carries the *session* state after the update. It never
@@ -1256,7 +1285,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 24);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 25);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1453,7 +1482,8 @@ mod tests {
             cursor: RuntimeClientCursor::new(5),
             event: RuntimeClientEvent::AttemptStarted {
                 attempt_id: AttemptId::new("attempt-1"),
-                model: Box::new(attempt_model_view("acme/model-a")),
+                model: Some(Box::new(attempt_model_view("acme/model-a"))),
+                execution_settings: None,
             },
         };
         let value = serde_json::to_value(&notification).expect("serialize");
@@ -1472,7 +1502,8 @@ mod tests {
     fn attempt_started_carries_the_frozen_attempt_model() {
         let event = RuntimeClientEvent::AttemptStarted {
             attempt_id: AttemptId::new("attempt-a"),
-            model: Box::new(attempt_model_view("acme/model-a")),
+            model: Some(Box::new(attempt_model_view("acme/model-a"))),
+            execution_settings: None,
         };
         let value = serde_json::to_value(&event).expect("serialize");
         assert_eq!(value["type"], "attempt_started");

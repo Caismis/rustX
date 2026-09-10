@@ -310,6 +310,7 @@ describe("model identity distinctions", () => {
       attemptId: "a1",
       phase: { type: "running" as const },
       turn: 1,
+      executionSettings: null,
       model: attemptModel(model),
       foreground: [],
     };
@@ -387,6 +388,7 @@ describe("model identity distinctions", () => {
             outcome: { type: "completed", finish_reason: { type: "stop" } },
           },
           turn: 1,
+          executionSettings: null,
           model: attemptModel("alpha/model-a"),
           foreground: [],
         },

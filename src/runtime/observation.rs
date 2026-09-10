@@ -261,21 +261,12 @@ pub(crate) enum ConversationObservation {
         availability: CapabilityAvailability,
     },
 
-    /// The coordinator admitted an attempt (before the loop started).
+    /// One complete frozen admission fact, under the coordinator lock.
     AttemptAdmitted {
-        /// The admitted attempt.
         attempt_id: AttemptId,
-    },
-    /// The admitted attempt froze its immutable model snapshot.
-    ///
-    /// Published under the same lock acquisition as `AttemptAdmitted`, so
-    /// the attempt read model always carries the model it actually runs
-    /// with.
-    AttemptModelFrozen {
-        /// The admitted attempt.
-        attempt_id: AttemptId,
-        /// The frozen model view.
         model: Box<AttemptModelView>,
+        resource_revision: crate::runtime::identity::RuntimeResourceRevision,
+        approval_mode: ApprovalMode,
     },
     /// The authoritative session model configuration changed.
     SessionModelChanged {

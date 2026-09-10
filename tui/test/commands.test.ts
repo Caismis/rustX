@@ -86,6 +86,9 @@ describe("command registry", () => {
     assert.deepEqual(
       COMMANDS.map((command) => command.name),
       [
+        "/settings",
+        "/defaults",
+        "/save-default",
         "/help",
         "/model",
         "/new",
@@ -102,7 +105,7 @@ describe("command registry", () => {
         "/compact",
         "/reload",
         "/debug",
-        "/reasoning",
+        "/show-reasoning",
         "/expand",
         "/cancel",
         "/approval",
@@ -122,7 +125,7 @@ describe("command registry", () => {
   it("declares no shell, file, or Skill-execution escape", () => {
     // These would bypass rustX semantics entirely. There is no `!bash`, no
     // `@file` attachment, and no client-side Skill invocation.
-    const names = COMMANDS.map((command) => command.name).join(" ");
+    const names = COMMANDS.map((command) => command.name);
     for (const forbidden of ["!", "@", "/bash", "/sh", "/run", "/read", "/edit"]) {
       assert.ok(!names.includes(forbidden), `${forbidden} must not exist`);
     }
@@ -327,11 +330,12 @@ describe("CommandDispatcher", () => {
           attempt_id: "a1",
           phase: { type: "running" },
           turn: 1,
+          execution_settings: null,
           model: attemptModel("alpha/model-a"),
         },
       }),
     );
-    assert.equal(session.state?.attempt?.model.primary.model, "alpha/model-a");
+    assert.equal(session.state?.attempt?.model!.primary.model, "alpha/model-a");
 
     const outcome = await dispatcher.submit("/model show");
     assert.equal(outcome.kind, "inspect");
@@ -366,6 +370,7 @@ describe("CommandDispatcher", () => {
           attempt_id: "attempt-a",
           phase: { type: "running" },
           turn: 1,
+          execution_settings: null,
           model: attemptModel("alpha/model-a"),
         },
       }),
@@ -757,18 +762,18 @@ describe("CommandDispatcher", () => {
     });
   });
 
-  it("treats /reasoning and /expand as client display preferences", async () => {
+  it("treats /show-reasoning and /expand as client display preferences", async () => {
     const { peer, dispatcher } = await harness();
 
-    assert.deepEqual(await dispatcher.submit("/reasoning"), {
+    assert.deepEqual(await dispatcher.submit("/show-reasoning"), {
       kind: "preference",
       preference: { type: "reasoning" },
     });
-    assert.deepEqual(await dispatcher.submit("/reasoning off"), {
+    assert.deepEqual(await dispatcher.submit("/show-reasoning off"), {
       kind: "preference",
       preference: { type: "reasoning", visible: false },
     });
-    assert.deepEqual(await dispatcher.submit("/reasoning on"), {
+    assert.deepEqual(await dispatcher.submit("/show-reasoning on"), {
       kind: "preference",
       preference: { type: "reasoning", visible: true },
     });
@@ -793,13 +798,101 @@ describe("CommandDispatcher", () => {
     assert.equal(peer.requests.length, 2);
   });
 
-  it("rejects an unusable /reasoning argument instead of guessing", async () => {
+  it("CFG238 rejects obsolete /reasoning and keeps display toggles out of semantic state", async () => {
+    const { peer, session, dispatcher } = await harness();
+    const before = structuredClone(session.state);
+    for (const command of ["/show-reasoning on", "/show-reasoning off"]) {
+      assert.equal((await dispatcher.submit(command)).kind, "preference");
+      assert.deepEqual(session.state, before);
+    }
+    const obsolete = await dispatcher.submit("/reasoning on");
+    assert.equal(obsolete.kind, "transient");
+    if (obsolete.kind === "transient") assert.match(obsolete.text, /unknown command/);
+    assert.deepEqual(session.state, before);
+    assert.equal(peer.requests.length, 2, "no model, tool, history, or save mutation reaches Rust");
+    assert.ok(!COMMANDS.some(command => command.name === "/reasoning"));
+  });
+
+  for (const profile of ["default", "clear", "off", "set", "on", null]) {
+    it(`CFG238 profile grammar selects ${profile ?? "catalog default"} through whole-state model_set`, async () => {
+      const { peer, session, dispatcher } = await harness();
+      const before = structuredClone(session.state);
+      const command = dispatcher.submit(profile === null ? "/model profile clear" : `/model profile set ${profile}`);
+      await peer.awaitRequests(3);
+      assert.equal(peer.requests[2]?.method, "model_get");
+      const current = sessionModel("alpha/model-a");
+      current.configured.reasoningProfile = "previous";
+      current.configured.requestParams = { temperature: 0.5 };
+      current.configured.maxOutputTokens = 2048;
+      current.configured.summaryModel = { mode: "explicit", model: "alpha/summary", request_params: { temperature: 0.2 } };
+      peer.respond(3, { type: "model", model: current });
+      await peer.awaitRequests(4);
+      const request = peer.requests[3];
+      assert.equal(request?.method, "model_set");
+      const expected = { ...current.configured };
+      if (profile === null) delete expected.reasoningProfile;
+      else expected.reasoningProfile = profile;
+      if (request?.method === "model_set") assert.deepEqual(request.config, expected);
+      peer.respond(4, { type: "model_set", model: { ...current, configured: expected } });
+      assert.equal((await command).kind, "transient");
+      assert.equal(peer.requests.length, 4);
+      assert.deepEqual(session.state, before, "responses never mutate the semantic projection");
+    });
+  }
+
+  it("CFG238 rejects obsolete ambiguous profile syntax without a native operation", async () => {
+    const { peer, dispatcher } = await harness();
+    for (const text of ["/model profile default", "/model profile off", "/model profile set", "/model profile", "/model profile clear extra"]) {
+      const result = await dispatcher.submit(text);
+      assert.equal(result.kind, "transient");
+      if (result.kind === "transient") assert.equal(result.text, "usage: /model profile set <id> | /model profile clear");
+    }
+    assert.equal(peer.requests.length, 2);
+  });
+
+  it("CFG238 save declares user scope, fields and caller revision without live mutation", async () => {
+    const { peer, session, dispatcher } = await harness();
+    const before = structuredClone(session.state);
+    const command = dispatcher.submit("/save-default user model sha256:reviewed");
+    await peer.awaitRequests(3);
+    const request = peer.requests[2];
+    assert.equal(request?.method, "default_save");
+    if (request?.method !== "default_save") throw new Error("default save");
+    assert.equal(request.scope, "user");
+    assert.equal(request.expected_revision, "sha256:reviewed");
+    assert.equal(request.target, "model_selection");
+    assert.ok(!("value" in request));
+    peer.respond(3, { type: "default_saved", result: { scope: "user", document: "/config/settings.jsonc", revision: "sha256:new", changed: { field: "model_selection", selection: { model: "alpha/model-b", reasoning_profile: null } }, live_unchanged: true, applies_at: "next_launch" } });
+    const result = await command;
+    assert.equal(result.kind, "transient");
+    if (result.kind === "transient") assert.match(result.text, /Live Session unchanged/);
+    assert.deepEqual(session.state, before);
+    assert.equal(peer.requests.length, 3);
+  });
+
+  it("CFG238 save after model response never consumes the lagging A projection", async () => {
+    const { peer, session, dispatcher } = await harness(snapshot({ model: sessionModel("alpha/model-a") }));
+    const setting = session.modelSet(sessionModel("alpha/model-b").configured);
+    await peer.awaitRequests(3);
+    peer.respond(3, { type: "model_set", model: sessionModel("alpha/model-b") });
+    await setting;
+    // Deliberately deliver no SessionModelChanged notification.
+    assert.equal(session.state?.sessionModel?.configured.model, "alpha/model-a");
+    const saving = dispatcher.submit("/save-default user model sha256:reviewed");
+    await peer.awaitRequests(4);
+    assert.deepEqual(peer.requests[3], { method: "default_save", id: 4, scope: "user", expected_revision: "sha256:reviewed", target: "model_selection" });
+    peer.respond(4, { type: "default_saved", result: { scope: "user", document: "/config/settings.jsonc", revision: "sha256:B", changed: { field: "model_selection", selection: { model: "alpha/model-b", reasoning_profile: null } }, live_unchanged: true, applies_at: "next_launch" } });
+    await saving;
+    assert.equal(session.state?.sessionModel?.configured.model, "alpha/model-a");
+  });
+
+  it("rejects an unusable /show-reasoning argument instead of guessing", async () => {
     const { dispatcher } = await harness();
-    const outcome = await dispatcher.submit("/reasoning maybe");
+    const outcome = await dispatcher.submit("/show-reasoning maybe");
     assert.equal(outcome.kind, "transient");
     if (outcome.kind === "transient") {
       assert.equal(outcome.level, "error");
-      assert.match(outcome.text, /usage: \/reasoning \[on\|off\]/);
+      assert.match(outcome.text, /usage: \/show-reasoning \[on\|off\]/);
     }
   });
 

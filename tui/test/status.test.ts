@@ -129,6 +129,7 @@ describe("working status", () => {
     push({
       type: "attempt_started",
       attempt_id: "a1",
+      execution_settings: null,
       model: attemptModel("alpha/model-a"),
     });
     push({ type: "assistant_message_started", attempt_id: "a1", message_id: "m1" });
@@ -440,6 +441,7 @@ describe("footer", () => {
     const state = stateOf({
       model: sessionModel("alpha/model-a"),
       attempt: attemptView({
+        execution_settings: null,
         model: attemptModel("beta/model-b"),
         last_usage: { input_tokens: 12_500, output_tokens: 840, total_tokens: 13_340 },
       }),
@@ -531,6 +533,7 @@ describe("startup and context", () => {
   it("uses only the latest runtime-published request usage", () => {
     const state = stateOf({
       attempt: attemptView({
+        execution_settings: null,
         model: attemptModel("alpha/model-a", { contextWindow: 256_000 }),
         last_usage: { input_tokens: 25_600, output_tokens: 512, total_tokens: 26_112 },
       }),

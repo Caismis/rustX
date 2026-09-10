@@ -297,7 +297,7 @@ export class ModelSelector implements PopupContent, Focusable {
   #rolesOf(model: ModelRef): string[] {
     const configured = this.#sessionModel.configured.model;
     const effective = this.#sessionModel.effective.model;
-    const attempt = this.#attempt?.model.primary.model;
+    const attempt = this.#attempt?.model?.primary.model;
     const unified =
       configured === effective && (attempt === undefined || attempt === effective);
     if (unified) {
@@ -340,7 +340,7 @@ export class ModelSelector implements PopupContent, Focusable {
 
     const attempt = this.#attempt;
     if (attempt !== undefined) {
-      const frozen = attempt.model.primary.model;
+      const frozen = attempt.model?.primary.model ?? "unavailable";
       lines.push(
         attempt.phase.type === "settled"
           ? role.meta(`attempt     ${frozen} · frozen at admission (settled)`)

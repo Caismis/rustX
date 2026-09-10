@@ -502,6 +502,7 @@ describe("lifecycle progression", () => {
       {
         type: "attempt_started" as const,
         attempt_id: "a1",
+        execution_settings: null,
         model: attemptModel("alpha/model-a"),
       },
       {
@@ -570,7 +571,7 @@ describe("lifecycle progression", () => {
     };
 
     push({
-      type: "attempt_started",
+      type: "attempt_started", execution_settings: null,
       attempt_id: "a1",
       model: attemptModel("alpha/model-a"),
     });

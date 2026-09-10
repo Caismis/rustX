@@ -225,13 +225,16 @@ impl RuntimeClientProjection {
         conversation_id: ConversationId,
         initial_messages: Vec<MessageBlock>,
         initial_capabilities: CapabilityView,
-        initial_model: SessionModelView,
+        initial_model: Option<SessionModelView>,
         replay_limit: usize,
     ) -> Self {
         Self {
             cursor: RuntimeClientCursor::new(0),
             exhausted: false,
             snapshot: RuntimeClientSnapshot {
+                settings_evidence: super::settings::SettingsEvidence::LiveSession,
+                launch_settings: None,
+                settings_lifetimes: super::settings::SettingsLifetimes::default(),
                 workflows: crate::runtime::workflow::read_model::WorkflowSnapshot::default(),
                 conversation_id,
                 shutting_down: false,
@@ -298,6 +301,18 @@ impl RuntimeClientProjection {
     /// installed from the same seed for one coherent cut. Every
     /// transition after `R` arrives through the live observation stream
     /// and gets the first real cursor.
+    pub(crate) fn set_settings_evidence(&mut self, evidence: super::settings::SettingsEvidence) {
+        self.snapshot.settings_evidence = evidence;
+        if evidence == super::settings::SettingsEvidence::FrozenChild {
+            self.snapshot.settings_lifetimes.model =
+                super::settings::SettingsBoundary::FrozenAdmission;
+        }
+    }
+
+    pub(crate) fn set_launch_settings(&mut self, launch: Option<super::settings::LaunchSettings>) {
+        self.snapshot.launch_settings = launch;
+    }
+
     pub(crate) fn bootstrap(
         &mut self,
         seed: &crate::runtime::conversation_runtime::RuntimeBootstrapSnapshot,
@@ -767,11 +782,12 @@ impl RuntimeClientProjection {
                     resources,
                 }]
             }
-            ConversationObservation::AttemptAdmitted { attempt_id } => {
-                // The model is folded by the `AttemptModelFrozen`
-                // observation the admission path publishes immediately
-                // after this one, under the same lock acquisition.
-                let model = Box::new(self.snapshot.model.to_attempt_view());
+            ConversationObservation::AttemptAdmitted {
+                attempt_id,
+                model,
+                resource_revision,
+                approval_mode,
+            } => {
                 self.snapshot.attempt = Some(RuntimeClientAttempt {
                     attempt_id,
                     phase: RuntimeClientAttemptPhase::Admitted,
@@ -779,23 +795,16 @@ impl RuntimeClientProjection {
                     last_usage: None,
                     in_flight: None,
                     foreground: Vec::new(),
-                    model,
+                    model: Some(model),
+                    execution_settings: Some(super::settings::AdmittedSettings {
+                        resource_revision,
+                        approval_mode,
+                    }),
                 });
                 Vec::new()
             }
-            ConversationObservation::AttemptModelFrozen { attempt_id, model } => {
-                if let Some(attempt) = self
-                    .snapshot
-                    .attempt
-                    .as_mut()
-                    .filter(|attempt| attempt.attempt_id == attempt_id)
-                {
-                    attempt.model = model;
-                }
-                Vec::new()
-            }
             ConversationObservation::SessionModelChanged { model } => {
-                self.snapshot.model = (*model).clone();
+                self.snapshot.model = Some((*model).clone());
                 vec![RuntimeClientEvent::SessionModelChanged { model }]
             }
             ConversationObservation::ApprovalModeChanged {
@@ -979,6 +988,7 @@ impl RuntimeClientProjection {
         match event {
             RuntimeEvent::AttemptStarted { .. } => {
                 let model = self.frozen_attempt_model(attempt_id);
+                let execution_settings = self.frozen_execution_settings(attempt_id);
                 self.snapshot.attempt = Some(RuntimeClientAttempt {
                     attempt_id: attempt_id.clone(),
                     phase: RuntimeClientAttemptPhase::Running,
@@ -987,6 +997,7 @@ impl RuntimeClientProjection {
                     in_flight: None,
                     foreground: Vec::new(),
                     model: model.clone(),
+                    execution_settings: execution_settings.clone(),
                 });
                 // The Agent Status window is deliberately untouched: a status
                 // composed by an earlier attempt is a historical fact of this
@@ -999,6 +1010,7 @@ impl RuntimeClientProjection {
                 vec![RuntimeClientEvent::AttemptStarted {
                     attempt_id: attempt_id.clone(),
                     model,
+                    execution_settings,
                 }]
             }
             RuntimeEvent::AttemptCompleted { finish_reason, .. } => self.settle_attempt(
@@ -1312,6 +1324,7 @@ impl RuntimeClientProjection {
                 in_flight: None,
                 foreground: Vec::new(),
                 model,
+                execution_settings: None,
             });
         }
     }
@@ -1322,7 +1335,18 @@ impl RuntimeClientProjection {
     /// `AttemptStarted` arrives after admission) must never lose the frozen
     /// model: while the same attempt is described, the already-frozen view
     /// wins over live session state.
-    fn frozen_attempt_model(&self, attempt_id: &AttemptId) -> Box<AttemptModelView> {
+    fn frozen_execution_settings(
+        &self,
+        attempt_id: &AttemptId,
+    ) -> Option<super::settings::AdmittedSettings> {
+        self.snapshot
+            .attempt
+            .as_ref()
+            .filter(|attempt| attempt.attempt_id == *attempt_id)
+            .and_then(|attempt| attempt.execution_settings.clone())
+    }
+
+    fn frozen_attempt_model(&self, attempt_id: &AttemptId) -> Option<Box<AttemptModelView>> {
         match self
             .snapshot
             .attempt
@@ -1330,7 +1354,7 @@ impl RuntimeClientProjection {
             .filter(|attempt| attempt.attempt_id == *attempt_id)
         {
             Some(attempt) => attempt.model.clone(),
-            None => Box::new(self.snapshot.model.to_attempt_view()),
+            None => None,
         }
     }
 
@@ -2266,7 +2290,7 @@ mod tests {
                 skills: Vec::new(),
                 sources: Vec::new(),
             },
-            model_view(),
+            Some(model_view()),
             64,
         )
     }
@@ -3430,7 +3454,7 @@ mod tests {
                     skills: Vec::new(),
                     sources: Vec::new(),
                 },
-                model_view(),
+                Some(model_view()),
                 64,
             );
             let (subscriber, _notify) = projection
@@ -4895,7 +4919,7 @@ mod tests {
                 skills: Vec::new(),
                 sources: Vec::new(),
             },
-            model_view(),
+            Some(model_view()),
             4,
         );
         apply_publication_open(&mut projection);
@@ -4954,7 +4978,7 @@ mod tests {
                 skills: Vec::new(),
                 sources: Vec::new(),
             },
-            model_view(),
+            Some(model_view()),
             limit,
         );
         apply_publication_open(&mut projection);

@@ -326,6 +326,22 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
     assert_ne!(new_view.id, root_session);
     assert_ne!(new_view.active_conversation_id, root_conversation);
 
+    // CFG238: disk saves use the same absorbing Session replacement fence.
+    let refused_save = session_request(
+        &endpoint,
+        RuntimeClientRequest::DefaultSave {
+            id: request_id(238),
+            scope: rustx::runtime_client::settings::DefaultScope::User,
+            expected_revision: "missing".into(),
+            target: rustx::runtime_client::settings::DefaultTarget::ModelSelection,
+        },
+    )
+    .await;
+    assert!(matches!(
+        refused_save.error,
+        Some(RuntimeClientError::SessionRestartRequired { .. })
+    ));
+
     // A duplicate command cannot publish a second transition after the
     // first command has released the only active runtime.
     let duplicate = session_request(
@@ -390,7 +406,13 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
         panic!("resumed runtime must initialize: {initialized:?}");
     };
     assert_eq!(
-        snapshot.model.configured.model.to_string(),
+        snapshot
+            .model
+            .as_ref()
+            .unwrap()
+            .configured
+            .model
+            .to_string(),
         "local/test-model",
         "a new Session uses the current runtime default, not the previous Session choice"
     );

@@ -71,6 +71,9 @@ export function emptyPresentationState(
     capabilities: { revision: 0, tools: [], skills: [] },
     resources: { revision: 0, context_files: [], agent_profile: false },
     sessionModel,
+    launchSettings: null,
+    settingsEvidence: "live_session",
+    settingsLifetimes: null,
     todos: undefined,
     runtimeShutdown: false,
     effectiveApprovalMode: "policy",
@@ -141,6 +144,7 @@ export function replaceFromSnapshot(
             turn: attempt.turn,
             lastUsage: attempt.last_usage,
             model: attempt.model,
+            executionSettings: attempt.execution_settings,
             foreground: [...(attempt.foreground ?? [])],
           },
     inbound: {
@@ -168,6 +172,9 @@ export function replaceFromSnapshot(
     // however far back the last `todo` result now sits.
     todos: parseSnapshot(snapshot.todos) ?? { tasks: [], next_id: 1 },
     sessionModel: snapshot.model,
+    launchSettings: snapshot.launch_settings,
+    settingsEvidence: snapshot.settings_evidence,
+    settingsLifetimes: snapshot.settings_lifetimes,
     runtimeShutdown: snapshot.shutting_down,
     effectiveApprovalMode: snapshot.effective_approval_mode,
     pendingApprovalMode: snapshot.pending_approval_mode,
@@ -221,7 +228,7 @@ export function reduce(
       // and the runtime's own window keeps them across attempts too — so
       // clearing them here would make this client disagree with the snapshot
       // it would repair from.
-      next.attempt = startAttempt(event.attempt_id, event.model);
+      next.attempt = startAttempt(event.attempt_id, event.model, event.execution_settings);
       return next;
 
     case "attempt_settled":
@@ -801,13 +808,15 @@ function dedupeStatuses(statuses: AgentStatusView[]): AgentStatusView[] {
 
 function startAttempt(
   attemptId: string,
-  model: AttemptModelView,
+  model: AttemptModelView | null,
+  executionSettings: import("../protocol/types.ts").AdmittedSettings | null,
 ): AttemptPresentation {
   return {
     attemptId,
     phase: { type: "running" },
     turn: 0,
     model,
+    executionSettings,
     foreground: [],
   };
 }

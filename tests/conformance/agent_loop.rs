@@ -1192,12 +1192,18 @@ async fn a_running_attempt_keeps_its_frozen_model_while_the_session_moves_on() {
         RuntimeClientAttemptPhase::Settled { .. }
     ));
     assert_eq!(
-        attempt.model.primary.model.to_string(),
+        attempt.model.as_ref().unwrap().primary.model.to_string(),
         format!("emulator/{CHAT_MODEL}"),
         "the settled attempt reports the model it froze"
     );
     assert_eq!(
-        snapshot.model.configured.model.to_string(),
+        snapshot
+            .model
+            .as_ref()
+            .unwrap()
+            .configured
+            .model
+            .to_string(),
         format!("emulator/{SECOND_MODEL}"),
         "the session moved on"
     );

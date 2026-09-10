@@ -317,13 +317,13 @@ async fn a_model_update_after_admission_affects_only_future_attempts() {
     // has to infer them from event ordering.
     let (snapshot, _) = host.snapshot().expect("snapshot");
     assert_eq!(
-        snapshot.model.configured.model,
+        snapshot.model.as_ref().unwrap().configured.model,
         beta.reference(),
         "the session desired model is B"
     );
     let attempt = snapshot.attempt.as_ref().expect("a running attempt");
     assert_eq!(
-        attempt.model.primary.model,
+        attempt.model.as_ref().unwrap().primary.model,
         alpha.reference(),
         "the running attempt still reports A"
     );
@@ -939,7 +939,7 @@ async fn a_rejected_model_update_changes_nothing() {
         "a rejected update allocates no cursor and publishes no event"
     );
     assert_eq!(
-        snapshot.model.configured,
+        snapshot.model.as_ref().unwrap().configured,
         SessionModelConfig::of(alpha.reference())
     );
     let RuntimeClientResult::Model { model } = attachment

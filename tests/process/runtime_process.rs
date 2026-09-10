@@ -322,14 +322,33 @@ async fn the_process_serves_a_real_conversation_runtime() {
 
     // inspect session model / effective capabilities
     assert_eq!(
-        snapshot.model.configured.model.to_string(),
+        snapshot
+            .model
+            .as_ref()
+            .unwrap()
+            .configured
+            .model
+            .to_string(),
         "fixture/process-model"
     );
-    assert_eq!(snapshot.model.effective.context_window, 128_000);
-    assert!(snapshot.model.effective.capabilities.tool_calls);
+    assert_eq!(
+        snapshot.model.as_ref().unwrap().effective.context_window,
+        128_000
+    );
+    assert!(
+        snapshot
+            .model
+            .as_ref()
+            .unwrap()
+            .effective
+            .capabilities
+            .tool_calls
+    );
     assert!(
         !snapshot
             .model
+            .as_ref()
+            .unwrap()
             .effective
             .capabilities
             .input_modalities

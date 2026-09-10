@@ -147,6 +147,10 @@ impl RuntimeAttachment {
             }
             RuntimeClientRequest::CapabilityGet { .. } => self.inner.capability(),
             RuntimeClientRequest::ModelCatalogGet { .. } => self.inner.model_catalog(),
+            RuntimeClientRequest::DefaultsRead { .. }
+            | RuntimeClientRequest::DefaultSave { .. } => {
+                unreachable!("default document operations are asynchronous")
+            }
             RuntimeClientRequest::ModelGet { .. } => self.inner.model_get(),
             RuntimeClientRequest::ModelSet { config, .. } => self.inner.model_set(*config),
             RuntimeClientRequest::ApprovalModeSet { mode, .. } => {
@@ -197,6 +201,7 @@ impl RuntimeAttachment {
     /// Handles a request whose semantic operation may await runtime-owned
     /// settlement. In particular, a successful shutdown response means the
     /// conversation runtime is already quiescent.
+    #[allow(clippy::too_many_lines)] // Exhaustive typed protocol dispatch.
     pub async fn handle_request_async(
         &self,
         request: RuntimeClientRequest,
@@ -212,6 +217,19 @@ impl RuntimeAttachment {
                     message: "conversation inspection is read-only".to_owned(),
                 },
             );
+        }
+        if matches!(
+            request,
+            RuntimeClientRequest::DefaultsRead { .. } | RuntimeClientRequest::DefaultSave { .. }
+        ) {
+            return match self.inner.defaults_request(request).await {
+                Ok(result) => RuntimeClientResponse {
+                    id,
+                    result: Some(result),
+                    error: None,
+                },
+                Err(error) => Self::error_response(id, error),
+            };
         }
         if !matches!(request, RuntimeClientRequest::Shutdown { .. }) {
             if matches!(request, RuntimeClientRequest::CompactContext { .. }) {

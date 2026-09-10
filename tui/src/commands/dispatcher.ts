@@ -200,6 +200,29 @@ export class CommandDispatcher {
       switch (name) {
         case "/help":
           return inspect("Help", renderHelp());
+        case "/settings":
+          return inspect("Effective settings", renderSettings(state));
+        case "/defaults": {
+          if (argument !== "user") return transient("error", "usage: /defaults user");
+          const document = await session.defaultsRead();
+          return inspect("Future user defaults", [
+            `Document: ${document.document}`,
+            `Revision: ${document.revision}`,
+            `Model: ${document.model?.model ?? "not set"}`,
+            `Reasoning profile: ${document.model?.reasoning_profile ?? "model default"}`,
+            `Approval: ${document.approval_mode ?? "not set"}`,
+            "Future launch only; project/CLI precedence still applies. This is not the running Session.",
+            "Save explicitly with /save-default user <model|approval> <revision>.",
+          ].join("\n"));
+        }
+        case "/save-default": {
+          const [scope, field, revision, extra] = argument.split(/\s+/);
+          if (scope !== "user" || !["model", "approval"].includes(field ?? "") || !revision || extra)
+            return transient("error", "usage: /save-default user <model|approval> <revision>; read /defaults user first");
+          const target = field === "model" ? "model_selection" : "approval_mode";
+          const saved = await session.defaultSave(revision, target);
+          return transient("info", `Saved ${field} to ${saved.document}; revision ${saved.revision}. Live Session unchanged; applies at ${boundaryLabel(saved.applies_at)}, subject to project/CLI precedence.`);
+        }
         case "/model":
           return await this.#model(session, state, argument);
         case "/new":
@@ -230,7 +253,7 @@ export class CommandDispatcher {
           return await this.#reload(session, argument);
         case "/debug":
           return inspect("Client diagnostics", renderDebug(state, this.#context.diagnostics()));
-        case "/reasoning":
+        case "/show-reasoning":
           return reasoningPreference(argument);
         case "/expand":
           return expandPreference(argument);
@@ -457,6 +480,18 @@ export class CommandDispatcher {
   ): Promise<CommandOutcome> {
     // `show` is answered from the projection alone; every other spelling
     // needs the runtime's authoritative catalog.
+    if (/^profile(?:\s|$)/.test(argument)) {
+      const parts = argument.split(/\s+/);
+      const clear = parts.length === 2 && parts[1] === "clear";
+      const profile = parts.length === 3 && parts[1] === "set" ? parts[2] : undefined;
+      if (!clear && !profile) return transient("error", "usage: /model profile set <id> | /model profile clear");
+      const current = await session.modelGet();
+      const configured = { ...current.configured };
+      if (clear) delete configured.reasoningProfile;
+      else if (profile !== undefined) configured.reasoningProfile = profile;
+      const updated = await session.modelSet(configured);
+      return transient("info", `Session reasoning profile -> ${updated.configured.reasoningProfile ?? "model default"}; next eligible admission. Defaults unchanged.`);
+    }
     if (argument === "show") {
       return inspect("Model", renderModel(state));
     }
@@ -494,7 +529,7 @@ export class CommandDispatcher {
     model: CatalogModelView,
   ): Promise<CommandOutcome> {
     try {
-      const current = session.state?.sessionModel.configured;
+      const current = session.state?.sessionModel?.configured;
       if (current === undefined) {
         return transient("error", "not attached yet");
       }
@@ -516,7 +551,7 @@ export class CommandDispatcher {
       const attempt = session.state?.attempt;
       const attemptNote =
         attempt !== undefined && attempt.phase.type === "running"
-          ? `current attempt remains ${attempt.model.primary.model}`
+          ? `current attempt remains ${attempt.model?.primary.model ?? "unavailable"}`
           : "";
       const modelFeedback = attemptNote.length > 0
         ? [
@@ -583,7 +618,7 @@ export class CommandDispatcher {
 }
 
 /**
- * `/reasoning [on|off]` — a display preference, applied by the UI.
+ * `/show-reasoning [on|off]` — a display preference, applied by the UI.
  *
  * It changes what is drawn and nothing else. The model's reasoning request
  * configuration lives in `SessionModelConfig.reasoningProfile` and is only
@@ -604,7 +639,7 @@ function reasoningPreference(argument: string): CommandOutcome {
         preference: { type: "reasoning", visible: false },
       };
     default:
-      return transient("error", "usage: /reasoning [on|off]");
+      return transient("error", "usage: /show-reasoning [on|off]");
   }
 }
 
@@ -744,8 +779,11 @@ export function renderHelp(): string {
  */
 export function renderModel(state: PresentationState): string {
   const session = state.sessionModel;
+  if (session === null) {
+    return "Historical evidence is partial. Active Session model, approval, resources, and launch sources are unavailable. Consult retained Request Snapshots for request-specific evidence.";
+  }
   const lines = [
-    "### Session model",
+    `### ${state.settingsEvidence === "frozen_child" ? "Parent-provided child" : "Session"} model (${lifetime(state, "model")})`,
     `- configured: \`${session.configured.model}\``,
     `- effective: \`${session.effective.model}\` via ${session.effective.protocol}`,
     `- context window: ${session.effective.contextWindow}`,
@@ -789,12 +827,12 @@ export function renderModel(state: PresentationState): string {
   if (attempt !== undefined) {
     lines.push(
       "",
-      "### Active attempt model (frozen at admission)",
+      `### Active attempt model (${lifetime(state, "attempt")})`,
       `- attempt: \`${attempt.attemptId}\` (${attempt.phase.type})`,
-      `- model: \`${attempt.model.primary.model}\``,
-      `- reasoning: ${describeReasoning(attempt.model.primary)}`,
+      `- model: \`${attempt.model?.primary.model ?? "unavailable"}\``,
+      `- reasoning: ${(attempt.model ? describeReasoning(attempt.model.primary) : "unavailable")}`,
     );
-    if (attempt.model.primary.model !== session.effective.model) {
+    if (attempt.model && attempt.model.primary.model !== session.effective.model) {
       lines.push(
         `- the session's effective model is \`${session.effective.model}\`; this attempt keeps the model it froze.`,
       );
@@ -922,8 +960,8 @@ export function renderDebug(
     `- authoritative repairs (resync): ${diagnostics.resyncCount}`,
     "",
     "### Runtime projection",
-    `- desired session model: \`${state.sessionModel.configured.model}\``,
-    `- active attempt model: \`${state.attempt?.model.primary.model ?? "none"}\``,
+    `- desired session model: \`${state.sessionModel?.configured.model ?? "unavailable"}\``,
+    `- active attempt model: \`${state.attempt?.model?.primary.model ?? "none"}\``,
     `- capability revision: ${state.capabilities.revision}`,
     ...contextDiagnosticsLines(state),
     `- inbound pending: ${(state.inbound.pending ?? []).length}`,
@@ -981,4 +1019,59 @@ function contextDiagnosticsLines(state: PresentationState): string[] {
     `- context compactions: ${context.compaction_count} (latest generation ${latest.generation}, surface revision ${latest.surface_revision})`,
     `- latest context measurement: ${latest.tokens_before.input_tokens} tokens before (${latest.tokens_before.source}), ${latest.estimated_tokens_after} estimated after`,
   ];
+}
+
+function lifetime(state: PresentationState, field: keyof import("../protocol/types.ts").SettingsLifetimes): string {
+  const boundary = state.settingsLifetimes?.[field];
+  if (boundary === undefined) return "lifetime unavailable";
+  return boundaryLabel(boundary);
+}
+
+function boundaryLabel(boundary: import("../protocol/types.ts").SettingsBoundary): string {
+  const labels: Record<import("../protocol/types.ts").SettingsBoundary, string> = {
+    launch_capture: "launch capture", next_admission: "next eligible admission",
+    safe_boundary: "safe boundary", resource_publication: "resource publication",
+    frozen_admission: "frozen at admission", client_local: "immediate, client-local",
+    next_launch: "future launch",
+  };
+  return labels[boundary];
+}
+
+/** Render only native facts; never consult disk or reconstruct old requests. */
+export function renderSettings(state: PresentationState): string {
+  if (state.settingsEvidence === "historical_partial") return renderModel(state);
+
+  const launch = state.launchSettings;
+  const source = (value: import("../protocol/types.ts").SettingOrigin) =>
+    "document" in value ? `${value.kind}: ${value.document}` : value.kind;
+  const admitted = state.attempt?.executionSettings;
+  return [
+    `### Launch capture (${lifetime(state, "launch")}; disk may now differ)`,
+    ...(launch ? [
+      `- model: ${launch.model.model}; source ${source(launch.model_origin)}`,
+      `- reasoning profile: ${launch.model.reasoning_profile ?? "model default"}; source ${source(launch.reasoning_origin)}`,
+      `- approval: ${launch.approval_mode}; source ${source(launch.approval_origin)}`,
+      `- launch ordinary tool selection source: ${source(launch.tool_selection_origin)}`,
+      `- runtime root source: ${source(launch.runtime_root_origin)}; restart required`,
+    ] : ["- launch provenance unavailable"]),
+    `### ${state.settingsEvidence === "frozen_child" ? "Child" : "Active Session"} selection (${lifetime(state, "model")})`,
+    renderModel(state),
+    `### Runtime policy (${lifetime(state, "approval")})`,
+    `- effective approval: ${state.effectiveApprovalMode}`,
+    `- pending approval: ${state.pendingApprovalMode ?? "none"}`,
+    `### Current resource generation (${lifetime(state, "resources")})`,
+    `- published revision: ${state.resources.revision}; capability revision: ${state.capabilities.revision}`,
+    renderTools(state),
+    renderSkills(state),
+    `### Admitted execution (${lifetime(state, "attempt")})`,
+    `- model: ${state.attempt?.model?.primary.model ?? "unavailable / no admitted attempt"}`,
+    `- resource revision: ${admitted?.resource_revision ?? "unavailable"}`,
+    `- approval: ${admitted?.approval_mode ?? "unavailable"}`,
+    "Child profiles/capabilities and admitted Workflow programs remain frozen; missing historical evidence is never filled from current state.",
+    `### Presentation (${lifetime(state, "presentation")})`,
+    "/show-reasoning on|off changes rendering only. /model profile changes generation-time reasoning.",
+    `### Defaults (${lifetime(state, "saved_defaults")}; separate disk authority)`,
+    "Read /defaults user, then explicitly /save-default user model|approval <revision>. Live selections do not save defaults automatically.",
+    "/reload publishes resources only; it is not startup settings hot reload. Reconnect repairs this view without replaying controls.",
+  ].join("\n");
 }

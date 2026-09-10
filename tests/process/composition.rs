@@ -187,16 +187,25 @@ async fn composition_owns_one_conversation_domain() {
 
     // The session model resolved through the catalog, credential and all.
     assert_eq!(
-        snapshot.model.configured.model.to_string(),
+        snapshot
+            .model
+            .as_ref()
+            .unwrap()
+            .configured
+            .model
+            .to_string(),
         "local/composed-model"
     );
-    assert_eq!(snapshot.model.effective.context_window, 128_000);
     assert_eq!(
-        snapshot.model.effective.protocol,
+        snapshot.model.as_ref().unwrap().effective.context_window,
+        128_000
+    );
+    assert_eq!(
+        snapshot.model.as_ref().unwrap().effective.protocol,
         ModelProtocol::OpenAiChatCompletions
     );
     assert_eq!(
-        snapshot.model.effective.request_params["temperature"],
+        snapshot.model.as_ref().unwrap().effective.request_params["temperature"],
         serde_json::json!(0.3)
     );
     let serialized = serde_json::to_string(&snapshot).expect("serialize");

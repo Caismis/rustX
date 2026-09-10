@@ -13,7 +13,7 @@
 //! - inbound diagnostics mirror the authoritative mailbox;
 //! - the capability view mirrors the active capability snapshot.
 //!
-//! The snapshot carries no internal executors, no environment paths, no
+//! The snapshot carries no internal executors, no executor environment paths, no
 //! provider objects, and no synchronization identities.
 //!
 //! Snapshot semantics are frozen by the snapshot/cursor invariant: a
@@ -67,6 +67,11 @@ pub struct RuntimeDurabilityFailure {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeClientSnapshot {
+    pub settings_evidence: super::settings::SettingsEvidence,
+    /// Immutable resolver facts; unavailable for durable-only or frozen-child attachment.
+    pub launch_settings: Option<super::settings::LaunchSettings>,
+    /// Application boundaries of the existing canonical sections.
+    pub settings_lifetimes: super::settings::SettingsLifetimes,
     /// Bounded native Workflow state, never reconstructed from the journal.
     pub workflows: crate::runtime::workflow::read_model::WorkflowSnapshot,
     /// The conversation this snapshot belongs to.
@@ -176,7 +181,8 @@ pub struct RuntimeClientSnapshot {
     ///
     /// No credential, adapter object, provider HTTP client, or
     /// synchronization identity appears here.
-    pub model: SessionModelView,
+    /// Absent when no live Session model authority exists (historical inspection).
+    pub model: Option<SessionModelView>,
     /// The conversation's task list, as of the newest committed `todo`
     /// result.
     ///
@@ -545,7 +551,9 @@ pub struct RuntimeClientAttempt {
     /// A client never has to infer "which model is this attempt actually
     /// using" from event ordering: the answer is here for the attempt's
     /// whole lifetime, even after the session moved on to another model.
-    pub model: Box<AttemptModelView>,
+    pub model: Option<Box<AttemptModelView>>,
+    /// Unavailable for history lacking native admission evidence. Never derived from current resources.
+    pub execution_settings: Option<super::settings::AdmittedSettings>,
 }
 
 /// The externally meaningful phase of one attempt.

@@ -245,9 +245,9 @@ describe("Agent Status placement", () => {
 
     const after = fold(base, [
       {
-        type: "attempt_started",
+        type: "attempt_started", execution_settings: null,
         attempt_id: "a2",
-        model: base.sessionModel.effective as never,
+        model: base.sessionModel!.effective as never,
       },
     ]);
     assert.deepEqual(transcriptText(after), before);

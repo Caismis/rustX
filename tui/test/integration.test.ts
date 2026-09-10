@@ -351,10 +351,10 @@ describe("real rustx child integration", { skip: SKIP }, () => {
     const initial = session.state;
     assert.ok(initial);
     assert.equal(
-      initial.sessionModel.configured.model,
+      initial.sessionModel!.configured.model,
       "fixture/integration-model",
     );
-    assert.equal(initial.sessionModel.effective.contextWindow, 128_000);
+    assert.equal(initial.sessionModel!.effective.contextWindow, 128_000);
 
     // The runtime names the project instruction files it loaded, by path and
     // by exact byte length. The client never reads the file to find out.
@@ -427,7 +427,7 @@ describe("real rustx child integration", { skip: SKIP }, () => {
       "the attempt settled",
     );
     const attempt = session.state?.attempt;
-    assert.equal(attempt?.model.primary.model, "fixture/integration-model");
+    assert.equal(attempt?.model!.primary.model, "fixture/integration-model");
     assert.deepEqual(attempt?.phase, {
       type: "settled",
       outcome: { type: "completed", finish_reason: { type: "stop" } },
@@ -449,11 +449,11 @@ describe("real rustx child integration", { skip: SKIP }, () => {
     const updated = await session.modelSet({ model: "fixture/second-model" });
     assert.equal(updated.configured.model, "fixture/second-model");
     await until(
-      () => session.state?.sessionModel.configured.model === "fixture/second-model",
+      () => session.state?.sessionModel!.configured.model === "fixture/second-model",
       "the session model change was published on the stream",
     );
     assert.equal(
-      session.state?.attempt?.model.primary.model,
+      session.state?.attempt?.model!.primary.model,
       "fixture/integration-model",
       "the settled attempt still reports the model it ran with",
     );
@@ -470,7 +470,23 @@ describe("real rustx child integration", { skip: SKIP }, () => {
         resyncCount: session.resyncCount,
       }),
     });
+    // CFG238: display commands do not cross the native control boundary. The
+    // real emulator requests and the canonical/model projection stay identical.
+    const beforeDisplay = structuredClone(session.state);
+    const beforeModel = await session.modelGet();
+    const beforeProvider = await provider.requests();
+    for (const command of ["/show-reasoning on", "/show-reasoning off"]) {
+      assert.equal((await dispatcher.submit(command)).kind, "preference");
+    }
+    const obsolete = await dispatcher.submit("/reasoning off");
+    assert.equal(obsolete.kind, "transient");
+    if (obsolete.kind === "transient") assert.match(obsolete.text, /unknown command/);
+    assert.deepEqual(session.state, beforeDisplay);
+    assert.deepEqual(await session.modelGet(), beforeModel);
+    assert.deepEqual(await provider.requests(), beforeProvider);
+
     for (const command of [
+      "/settings",
       "/model show",
       "/tools",
       "/skills",

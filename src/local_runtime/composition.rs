@@ -938,6 +938,8 @@ fn validate_workflow_tool_name_collisions(
 /// bounded parent-observation subscriber), and the headless runtime (which
 /// activates without any Runtime Client host).
 pub struct LocalConversationCore {
+    launch_settings: Option<crate::runtime_client::settings::LaunchSettings>,
+    defaults: Option<Arc<dyn crate::runtime_client::settings::DefaultSettingsStore>>,
     runtime: ConversationRuntime,
     tool_runtime: ConversationToolRuntime,
     capability: CapabilityCoordinator,
@@ -1280,6 +1282,8 @@ impl LocalConversationCore {
         })?;
 
         Ok(Self {
+            launch_settings: Some(paths.settings_view()),
+            defaults: Some(Arc::new(super::settings::UserDefaults::new(paths))),
             runtime,
             tool_runtime,
             capability,
@@ -1562,6 +1566,8 @@ impl LocalConversationCore {
         })?;
 
         Ok(Self {
+            launch_settings: None,
+            defaults: None,
             runtime,
             tool_runtime,
             capability,
@@ -1662,19 +1668,15 @@ impl LocalConversationCore {
         // (Issue #61): the runtime is still inert here, so the host's
         // initial snapshot is the runtime's real state at the activation
         // cut and no bootstrap fact can fabricate a live client event.
-        let host = match control {
-            Some(control) => RuntimeClientHost::new_with_session_control(
-                RuntimeClientHostConfig {
-                    runtime: self.runtime.clone(),
-                    replay_limit: None,
-                },
-                control,
-            )?,
-            None => RuntimeClientHost::new(RuntimeClientHostConfig {
+        let host = RuntimeClientHost::new_with_settings(
+            RuntimeClientHostConfig {
                 runtime: self.runtime.clone(),
                 replay_limit: None,
-            })?,
-        };
+            },
+            control,
+            self.launch_settings.clone(),
+            self.defaults.clone(),
+        )?;
 
         Ok(LocalConversationRuntime { core: self, host })
     }

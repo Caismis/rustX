@@ -68,10 +68,10 @@ describe("session model A -> B invariant", () => {
 
     // The attempt is admitted while the session model is A.
     state = fold(state, [
-      { type: "attempt_started", attempt_id: "a1", model: attemptModel(MODEL_A) },
+      { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel(MODEL_A) },
     ]);
-    assert.equal(state.attempt?.model.primary.model, MODEL_A);
-    assert.equal(state.sessionModel.configured.model, MODEL_A);
+    assert.equal(state.attempt?.model!.primary.model, MODEL_A);
+    assert.equal(state.sessionModel!.configured.model, MODEL_A);
 
     // The session switches to B while that attempt is still running.
     state = fold(state, [
@@ -79,12 +79,12 @@ describe("session model A -> B invariant", () => {
     ]);
 
     assert.equal(
-      state.sessionModel.configured.model,
+      state.sessionModel!.configured.model,
       MODEL_B,
       "desired session model = B",
     );
     assert.equal(
-      state.attempt?.model.primary.model,
+      state.attempt?.model!.primary.model,
       MODEL_A,
       "active attempt model stays A",
     );
@@ -102,16 +102,16 @@ describe("session model A -> B invariant", () => {
         outcome: { type: "completed", finish_reason: { type: "stop" } },
       },
     ]);
-    assert.equal(state.attempt?.model.primary.model, MODEL_A);
-    assert.equal(state.sessionModel.configured.model, MODEL_B);
+    assert.equal(state.attempt?.model!.primary.model, MODEL_A);
+    assert.equal(state.sessionModel!.configured.model, MODEL_B);
 
     // The next admission uses B.
     state = fold(state, [
-      { type: "attempt_started", attempt_id: "a2", model: attemptModel(MODEL_B) },
+      { type: "attempt_started", execution_settings: null, attempt_id: "a2", model: attemptModel(MODEL_B) },
     ]);
     assert.equal(state.attempt?.attemptId, "a2");
     assert.equal(
-      state.attempt?.model.primary.model,
+      state.attempt?.model!.primary.model,
       MODEL_B,
       "the next attempt uses B",
     );
@@ -123,7 +123,7 @@ describe("session model A -> B invariant", () => {
       runtimeCursor(0),
     );
     state = fold(state, [
-      { type: "attempt_started", attempt_id: "a1", model: attemptModel(MODEL_A) },
+      { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel(MODEL_A) },
     ]);
 
     // Every kind of activity that can occur mid-attempt, with the session
@@ -156,12 +156,12 @@ describe("session model A -> B invariant", () => {
     for (const event of interleaved) {
       state = fold(state, [event]);
       assert.equal(
-        state.attempt?.model.primary.model,
+        state.attempt?.model!.primary.model,
         MODEL_A,
         `the attempt model survived ${event.type}`,
       );
     }
-    assert.equal(state.sessionModel.configured.model, MODEL_B);
+    assert.equal(state.sessionModel!.configured.model, MODEL_B);
   });
 
   it("proves the invariant end to end over the transport", async () => {
@@ -186,12 +186,12 @@ describe("session model A -> B invariant", () => {
     peer.respond(2, { type: "subscribed", after_cursor: runtimeCursor(0) });
     await attaching;
 
-    assert.equal(session.state?.sessionModel.configured.model, MODEL_A);
+    assert.equal(session.state?.sessionModel!.configured.model, MODEL_A);
 
     // The runtime admits an attempt on A. The start event is self-contained:
     // the client learns the frozen model without a second snapshot_get.
     peer.emit(1, {
-      type: "attempt_started",
+      type: "attempt_started", execution_settings: null,
       attempt_id: "a1",
       model: attemptModel(MODEL_A),
     });
@@ -199,7 +199,7 @@ describe("session model A -> B invariant", () => {
       () => session.state?.attempt?.attemptId === "a1",
       "attempt observed",
     );
-    assert.equal(session.state?.attempt?.model.primary.model, MODEL_A);
+    assert.equal(session.state?.attempt?.model!.primary.model, MODEL_A);
 
     // The client requests B while the attempt runs; the runtime accepts.
     const setting = session.modelSet({ model: MODEL_B });
@@ -215,12 +215,12 @@ describe("session model A -> B invariant", () => {
       model: sessionModel(MODEL_B),
     });
     await until(
-      () => session.state?.sessionModel.configured.model === MODEL_B,
+      () => session.state?.sessionModel!.configured.model === MODEL_B,
       "session model change observed",
     );
 
     assert.equal(
-      session.state?.attempt?.model.primary.model,
+      session.state?.attempt?.model!.primary.model,
       MODEL_A,
       "the executing attempt did not visually mutate to B",
     );
@@ -233,7 +233,7 @@ describe("session model A -> B invariant", () => {
       outcome: { type: "completed", finish_reason: { type: "stop" } },
     });
     peer.emit(4, {
-      type: "attempt_started",
+      type: "attempt_started", execution_settings: null,
       attempt_id: "a2",
       model: attemptModel(MODEL_B),
     });
@@ -243,7 +243,7 @@ describe("session model A -> B invariant", () => {
     );
 
     assert.equal(
-      session.state?.attempt?.model.primary.model,
+      session.state?.attempt?.model!.primary.model,
       MODEL_B,
       "the next attempt uses B",
     );
@@ -274,10 +274,10 @@ describe("session model A -> B invariant", () => {
       runtimeCursor(0),
     );
 
-    assert.equal(state.sessionModel.effective.capabilities.reasoning, true);
-    assert.equal(state.sessionModel.effective.reasoningEnabled, true);
+    assert.equal(state.sessionModel!.effective.capabilities.reasoning, true);
+    assert.equal(state.sessionModel!.effective.reasoningEnabled, true);
     assert.equal(
-      state.sessionModel.effective.reasoningProfile,
+      state.sessionModel!.effective.reasoningProfile,
       undefined,
       "no profile is invented for a model that declares none",
     );
@@ -304,11 +304,11 @@ describe("session model A -> B invariant", () => {
       runtimeCursor(0),
     );
 
-    assert.deepEqual(state.sessionModel.effective.capabilities.inputModalities, [
+    assert.deepEqual(state.sessionModel!.effective.capabilities.inputModalities, [
       "text",
     ]);
     assert.ok(
-      state.sessionModel.effective.declaredCapabilities.inputModalities.includes(
+      state.sessionModel!.effective.declaredCapabilities.inputModalities.includes(
         "image",
       ),
       "the declaration is still available to explain the difference",

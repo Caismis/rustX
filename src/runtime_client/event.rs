@@ -69,7 +69,9 @@ pub enum RuntimeClientEvent {
         /// The attempt identity.
         attempt_id: AttemptId,
         /// The immutable model snapshot the attempt froze at admission.
-        model: Box<AttemptModelView>,
+        model: Option<Box<AttemptModelView>>,
+        /// Native frozen admission evidence, absent when unavailable.
+        execution_settings: Option<super::settings::AdmittedSettings>,
     },
     /// The attempt settled. Exactly one terminal settlement exists per
     /// attempt; the outcome is the platform-level settlement, never a

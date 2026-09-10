@@ -44,6 +44,7 @@ mod probes;
 pub mod schemas;
 pub mod serve;
 pub mod session;
+pub mod settings;
 #[cfg(test)]
 pub(crate) mod static_effects;
 pub mod subagent_child;
@@ -76,3 +77,6 @@ pub use session::{
 pub use supervisor::{
     LocalSessionSupervisor, SessionSupervisorError, SessionSwitchResult, SessionTreeResult,
 };
+
+#[cfg(test)]
+mod settings_e2e;
