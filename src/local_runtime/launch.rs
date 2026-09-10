@@ -959,6 +959,28 @@ pub fn analyze(
             )
         })?;
     }
+    // Every Agent node's trusted static invocation override is validated
+    // against the same prospective metadata, offline and side-effect free.
+    // An unavailable source is tolerated per selector rather than ending the
+    // walk, so it cannot hide a statically invalid selection listed later.
+    workflows
+        .validate_agent_overrides(&definitions, &availability, &skills)
+        .map_err(|e| {
+            let reason: String = e.reason.chars().take(1024).collect();
+            LaunchFailure::at(
+                Some(
+                    locations
+                        .workspace
+                        .join(".agents/workflows")
+                        .join(format!("{}.yaml", e.workflow)),
+                ),
+                &e.path,
+                &reason,
+                "select a capability and Skill this generation admits, or remove the \
+                 invocation override",
+                e.to_string(),
+            )
+        })?;
     let workflow_dependencies = workflows
         .inspect_metadata(&definitions, &availability, |definition| {
             Ok(native_leaves.contains(&definition.id))

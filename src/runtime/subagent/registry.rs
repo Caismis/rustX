@@ -63,6 +63,7 @@ use super::catalog::{SubagentDefinitionDigest, SubagentExecutionDeadline, Subage
 use super::ipc::DelegationFrame;
 use super::process::{PhysicalOutcome, PhysicalSettlement, StagedChild, SubagentSpawnPlan};
 use super::resolver::ResolvedSubagentSpec;
+use super::resolver::SubagentExecutionProfileDigest;
 use super::{
     MAX_CONTEXT_PACKAGE_BYTES, MAX_RESULT_CONTENT_BYTES, MAX_TASK_BYTES, SubagentTerminalState,
     bound_utf8, ownership_event, terminal_publication, terminal_settlement, workflow_output_event,
@@ -251,6 +252,12 @@ struct SubagentRecord {
     tool_call_id: ToolCallId,
     agent: SubagentName,
     definition_digest: SubagentDefinitionDigest,
+    /// The deterministic identity of the **effective execution profile** this
+    /// child committed with (Issue #258): the definition plus whatever an
+    /// authorized invocation override replaced. `None` for a
+    /// recovery-projected record, whose durable evidence predates the frozen
+    /// specification.
+    profile_digest: Option<SubagentExecutionProfileDigest>,
     terminal: SubagentTerminalMode,
     workspace: WorkspaceSnapshot,
     handoff: Option<WorkspaceHandoff>,
@@ -406,6 +413,10 @@ impl SubagentRecord {
             tool_call_id: self.tool_call_id.clone(),
             agent: self.agent.as_str().to_owned(),
             definition_digest: self.definition_digest.as_str().to_owned(),
+            profile_digest: self
+                .profile_digest
+                .as_ref()
+                .map(|digest| digest.as_str().to_owned()),
             workspace: self.workspace.clone(),
             handoff: self.handoff.clone(),
             workspace_resource_state: self.workspace_resource_state,
@@ -679,6 +690,16 @@ pub struct SubagentSnapshot {
     /// so a resource reload that redefines the same agent name can never
     /// make an already-running child appear to have the new definition.
     pub definition_digest: String,
+    /// The deterministic **effective execution profile** digest frozen at
+    /// start (Issue #258).
+    ///
+    /// Two children of one named agent that were specialized differently by
+    /// an authorized invocation override report the same `definition_digest`
+    /// and different values here. `None` for a recovery-projected record.
+    ///
+    /// This is diagnostic/recovery correlation only. No admission,
+    /// resolution, or execution decision reads it.
+    pub profile_digest: Option<String>,
     /// The immutable project-workspace authority selected before ownership.
     pub workspace: WorkspaceSnapshot,
     /// Retained work-product metadata, when terminal settlement preserves an
@@ -898,6 +919,7 @@ pub struct PreparedSubagent {
     tool_call_id: ToolCallId,
     agent: SubagentName,
     definition_digest: SubagentDefinitionDigest,
+    profile_digest: SubagentExecutionProfileDigest,
     terminal: SubagentTerminalMode,
     task: String,
     context: Option<String>,
@@ -1505,6 +1527,11 @@ impl SubagentRegistry {
             child_conversation_id: recovered.evidence.child_conversation_id.clone(),
             tool_call_id: recovered.evidence.tool_call_id.clone(),
             agent,
+            // A recovery-projected record carries the durable ownership
+            // evidence only. The effective execution profile was never a
+            // durable fact, so it stays absent rather than being invented
+            // from the current catalog.
+            profile_digest: None,
             definition_digest: serde_json::from_value(serde_json::Value::String(
                 recovered.evidence.definition_digest.clone(),
             ))
@@ -1592,6 +1619,11 @@ impl SubagentRegistry {
             child_conversation_id: recovered.evidence.child_conversation_id.clone(),
             tool_call_id: recovered.evidence.tool_call_id.clone(),
             agent,
+            // A recovery-projected record carries the durable ownership
+            // evidence only. The effective execution profile was never a
+            // durable fact, so it stays absent rather than being invented
+            // from the current catalog.
+            profile_digest: None,
             definition_digest: serde_json::from_value(serde_json::Value::String(
                 recovered.evidence.definition_digest.clone(),
             ))
@@ -1695,6 +1727,11 @@ impl SubagentRegistry {
             child_conversation_id: recovered.evidence.child_conversation_id.clone(),
             tool_call_id: recovered.evidence.tool_call_id.clone(),
             agent,
+            // A recovery-projected record carries the durable ownership
+            // evidence only. The effective execution profile was never a
+            // durable fact, so it stays absent rather than being invented
+            // from the current catalog.
+            profile_digest: None,
             definition_digest: serde_json::from_value(serde_json::Value::String(
                 recovered.evidence.definition_digest.clone(),
             ))
@@ -1968,6 +2005,7 @@ impl SubagentRegistry {
                         tool_call_id: spec.tool_call_id.clone(),
                         agent: spec.resolved.agent.clone(),
                         definition_digest: spec.resolved.definition_digest.clone(),
+                        profile_digest: spec.resolved.profile_digest(),
                         terminal: spec.terminal.clone(),
                         task: spec.task.clone(),
                         context: spec.context.clone(),
@@ -2046,6 +2084,7 @@ impl SubagentRegistry {
             tool_call_id: spec.tool_call_id.clone(),
             agent: spec.resolved.agent.clone(),
             definition_digest: spec.resolved.definition_digest.clone(),
+            profile_digest: spec.resolved.profile_digest(),
             terminal: spec.terminal.clone(),
             task: spec.task.clone(),
             context: spec.context.clone(),
@@ -2216,6 +2255,7 @@ impl SubagentRegistry {
             tool_call_id,
             agent,
             definition_digest,
+            profile_digest,
             terminal,
             task,
             context,
@@ -2360,6 +2400,7 @@ impl SubagentRegistry {
                             tool_call_id: tool_call_id.clone(),
                             agent: agent.clone(),
                             definition_digest: definition_digest.clone(),
+                            profile_digest: Some(profile_digest.clone()),
                             terminal: terminal.clone(),
                             workspace: workspace.clone(),
                             handoff: None,
@@ -9400,6 +9441,7 @@ mod tests {
                 "0".repeat(64)
             )))
             .expect("digest"),
+            profile_digest: None,
             terminal: SubagentTerminalMode::Normal,
             workspace: WorkspaceSnapshot::shared(std::path::PathBuf::from("/workspace")),
             handoff: None,

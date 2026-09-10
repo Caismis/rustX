@@ -80,6 +80,113 @@ impl WorkflowCatalog {
         .map_err(|e| e.to_string())
     }
 
+    /// Validates every Agent node's trusted static invocation override
+    /// against one candidate generation's metadata (Issue #258).
+    ///
+    /// This is *static reference* validation, not authorization: a Workflow
+    /// override's authority is the admitted generation itself, so what has to
+    /// hold here is that every statically knowable reference is real. It runs
+    /// offline and side-effect free — no provider, MCP connection, Python
+    /// environment, process, Session, worktree, or runtime state is created —
+    /// and it reuses the same availability/selection owner every other
+    /// selection path uses.
+    ///
+    /// The failure classes stay exactly the ones the rest of the runtime
+    /// already distinguishes:
+    ///
+    /// ```text
+    /// source authority absent   -> tolerated HERE, keep validating; the
+    ///                              invocation still fails at admission
+    /// source present, unknown   -> static configuration error
+    /// unknown/hidden Skill      -> static configuration error
+    /// child-unsupported scope   -> static configuration error
+    /// ```
+    ///
+    /// Tolerating an unavailable source never *stops* the walk, so an offline
+    /// MCP server listed before a misspelled selector cannot hide it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first static violation with the precise authored node
+    /// path, including nesting inside Loop bodies and Parallel branches.
+    pub(crate) fn validate_agent_overrides(
+        &self,
+        available: &[ToolDefinition],
+        availability: &crate::capabilities::CapabilityAvailability,
+        skills: &crate::skills::SkillSnapshot,
+    ) -> Result<(), super::inspection::CapabilityError> {
+        for program in self.definitions().values() {
+            for node in program.agent_override_nodes() {
+                let failure = |reason| super::inspection::CapabilityError {
+                    workflow: program.id().clone(),
+                    path: node.path.clone(),
+                    reason,
+                };
+                if let Some(selection) = &node.invocation_override.tools {
+                    for selector in selection.selectors() {
+                        match crate::capabilities::selection::resolve_metadata(
+                            &selector,
+                            available,
+                            availability,
+                        ) {
+                            Ok(selected)
+                                if !selected
+                                    .id
+                                    .as_str()
+                                    .starts_with(super::WORKFLOW_TOOL_ID_PREFIX) => {}
+                            Err(
+                                crate::capabilities::selection::ToolSelectionError::SourceUnavailable {
+                                    ..
+                                },
+                            ) => {}
+                            _ => {
+                                return Err(failure(format!(
+                                    "Agent override selects {selector}, which this generation \
+                                     does not authorize"
+                                )));
+                            }
+                        }
+                    }
+                }
+                if let Some(selected) = &node.invocation_override.skills {
+                    for skill in selected {
+                        if !skills
+                            .packages()
+                            .iter()
+                            .any(|package| package.name() == skill)
+                        {
+                            return Err(failure(format!(
+                                "Agent override selects Skill {skill:?}, which this generation \
+                                 did not admit"
+                            )));
+                        }
+                        if !skills
+                            .catalog_entries()
+                            .iter()
+                            .any(|entry| entry.name == *skill)
+                        {
+                            return Err(failure(format!(
+                                "Agent override selects Skill {skill:?}, which this generation \
+                                 admitted but hides from model invocation"
+                            )));
+                        }
+                    }
+                }
+                if let Some(selection) = &node.invocation_override.extensions
+                    && let Some(unsupported) =
+                        crate::extensions::unsupported_child_scope(&selection.resolve())
+                {
+                    return Err(failure(format!(
+                        "Agent override enables extension {:?}, which one-shot subagent \
+                         execution does not support: {}",
+                        unsupported.extension, unsupported.reason
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn inspect_metadata(
         &self,
         available: &[ToolDefinition],

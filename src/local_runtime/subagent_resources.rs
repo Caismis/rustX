@@ -83,19 +83,7 @@ pub(crate) fn parse(text: &str) -> Result<(SubagentDocument, String), String> {
     }
     validate_yaml(&value)?;
     let document: SubagentDocument = serde_yaml::from_value(value).map_err(|e| e.to_string())?;
-    for selector in document.tools.selectors() {
-        let empty = match selector {
-            crate::capabilities::selection::ToolSelector::Builtin { name } => {
-                name.trim().is_empty()
-            }
-            crate::capabilities::selection::ToolSelector::Mcp { server_id, name } => {
-                server_id.as_str().is_empty() || name.trim().is_empty()
-            }
-        };
-        if empty {
-            return Err("tools must name nonempty source-qualified capability identities".into());
-        }
-    }
+    document.tools.validate_spelling()?;
     document
         .execution_deadline()
         .map_err(|e| format!("timeoutMs: {e}"))?;

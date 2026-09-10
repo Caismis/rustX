@@ -82,32 +82,6 @@
       },
       "type": "object"
     },
-    "SubagentToolsDocument": {
-      "additionalProperties": false,
-      "description": "The source-qualified capability selection of one named definition.\n\nOrigins are named explicitly rather than collapsed into bare strings, so\na Builtin `read` and an MCP server's `read` are never interchangeable and\nresolution keeps exact source identity. Wildcards are deliberately\nabsent: a selection is an exact list. Managed Python tool packages are\nselected through the `mcp` map under their synthesized server identity\n(`python:<folder>`, Issue #174).\n\nThe `python:` namespace is reserved for those synthesized identities:\n`mcpServers` configuration may never declare a server under it (rejected\nduring validation), so a subagent selection naming `python:<folder>`\nalways resolves to the managed package, never to a configured server.",
-      "properties": {
-        "builtin": {
-          "default": [],
-          "description": "Built-in/native capabilities, by canonical model-facing name.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "mcp": {
-          "additionalProperties": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "default": {},
-          "description": "MCP capabilities, keyed by server identity.",
-          "type": "object"
-        }
-      },
-      "type": "object"
-    },
     "SubagentWorktreeDocument": {
       "additionalProperties": false,
       "description": "The JSONC representation of a named subagent's optional Git worktree\nisolation. An omitted or disabled value is the existing shared-workspace\nbehavior; there is no model-facing per-call override.\n\nIssue #188: when enabled, isolation runs the child from the committed\nparent `HEAD` snapshot. `require_clean_parent` defaults to `true`\n(strict): the parent source workspace must be clean, otherwise the child\nis rejected rather than silently dropping parent-local changes. Only an\nexplicit `\"requireCleanParent\": false` permits a dirty parent while the\nchild still receives exactly the committed snapshot.",
@@ -143,11 +117,37 @@
         }
       },
       "type": "object"
+    },
+    "ToolSelectionDocument": {
+      "additionalProperties": false,
+      "description": "The authored map form of an exact, source-qualified capability selection.\n\nThis is the one selection vocabulary shared by every trusted authoring\nsurface: named-role frontmatter (`tools:`), a Workflow Agent node's\ninvocation override, and the model-facing `subagent` Tool's `override`.\nOrigins are named explicitly rather than collapsed into bare strings, so a\nBuiltin `read` and an MCP server's `read` are never interchangeable.\nWildcards are deliberately absent: a selection is an exact list. Managed\nPython tool packages are selected through `mcp` under their synthesized\nserver identity (`python:<folder>`, Issue #174).\n\nThe `python:` namespace is reserved for those synthesized identities:\n`mcpServers` configuration may never declare a server under it (rejected\nduring validation), so a selection naming `python:<folder>` always resolves\nto the managed package, never to a configured server.",
+      "properties": {
+        "builtin": {
+          "default": [],
+          "description": "Built-in/native capabilities, by canonical model-facing name.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "mcp": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "default": {},
+          "description": "MCP capabilities, keyed by server identity.",
+          "type": "object"
+        }
+      },
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Strict canonical role Markdown frontmatter. The body supplies primary instructions.\n\nEverything here is *definition* state. None of it is exposed as a\nper-call model argument: the model chooses which named agent runs and\nnothing else.",
+  "description": "Strict canonical role Markdown frontmatter. The body supplies primary instructions.\n\nEverything here is *definition* state, and the definition is the child's\ncanonical **default** execution profile. One invocation may replace\n`tools`, `skills`, and `extensions` for exactly that child through the\nshared `SubagentInvocationOverride` (Issue #258), within an explicit\ndelegation ceiling. Every other field here — model, instructions,\n`timeoutMs`, `agentsMd`, `worktree` — has no per-call form at all.",
   "properties": {
     "agentsMd": {
       "$ref": "#/$defs/SubagentAgentsMdDocument",
@@ -205,7 +205,7 @@
       ]
     },
     "tools": {
-      "$ref": "#/$defs/SubagentToolsDocument",
+      "$ref": "#/$defs/ToolSelectionDocument",
       "default": {
         "builtin": [],
         "mcp": {}

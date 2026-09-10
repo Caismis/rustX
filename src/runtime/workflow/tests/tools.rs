@@ -207,6 +207,7 @@ fn context_with_workspace_policy(
         SessionModelConfig::of(model),
         models,
         ApprovalMode::Policy,
+        crate::extensions::NativeAgentExtensions::none(),
     );
     context.native = Some(Arc::new(NativeInvocationServices {
         lifecycle,
@@ -668,6 +669,7 @@ async fn agent_tool_branch_return_uses_committed_typed_binding() {
             task: "Return machine-compatible findings".into(),
             input: BTreeMap::new(),
             output: schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
+            invocation_override: None,
         },
     );
     if let WorkflowNodeDefinition::Tool {

@@ -1109,6 +1109,11 @@ export interface RuntimeClientSubagentExecutionProfile {
  * child actually started with. It is not derived from the current catalog:
  * a resource reload that redefines the same `agent` name leaves an
  * already-running child reporting its original digest.
+ *
+ * `profile_digest` is the deterministic identity of the *effective* execution
+ * profile: the same definition can produce differently specialized children
+ * once an authorized invocation override replaces tools, Skills, or
+ * extensions (Issue #258).
  */
 export interface RuntimeClientSubagent {
   subagent_id: SubagentId;
@@ -1116,6 +1121,17 @@ export interface RuntimeClientSubagent {
   child_conversation_id: ConversationId;
   agent: string;
   definition_digest: string;
+  /**
+   * The deterministic identity of the effective execution profile the child
+   * committed with (Issue #258): the named agent's defaults plus whatever an
+   * authorized invocation override replaced. Two children of one agent that
+   * were specialized differently share `definition_digest` and differ here.
+   * Absent for a recovery-projected record.
+   *
+   * Correlation identity only — never an authority token, and never
+   * accompanied by the effective selections themselves.
+   */
+  profile_digest?: string;
   state: SubagentState;
   /**
    * The bounded terminal failure/cancellation diagnostic, once known.

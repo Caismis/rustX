@@ -1317,6 +1317,7 @@ mod tests {
             child_conversation_id: ConversationId::new("conversation-child"),
             agent: "conformance".to_owned(),
             definition_digest: "sha256:definition".to_owned(),
+            profile_digest: None,
             state: crate::runtime::subagent::SubagentState::Interrupted,
             detail: Some("child outcome unknown".to_owned()),
             observation: crate::runtime::subagent::SubagentObservation::default(),

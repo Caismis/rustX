@@ -164,6 +164,15 @@ invariant is a real process boundary.
   bounded `enum` with a free-form `string` in one schema, so the acceptance
   also proves the repaired typed schema mapping against a real server. It
   follows the repository's uv-availability skip convention.
+The external `subagent` target additionally owns
+`overrides` — the Issue #258 invocation-scoped override contract driven
+against real composed runtime generations: replacement and isolation, the
+dynamic delegation ceiling, Skill visibility, R1/R2 freeze, effective-profile
+identity, and the Workflow half. The exact-identity algebra of the ceiling is
+owned by the resolver's own unit tests, and the pre-staging refusal at the
+model-facing Tool by the `subagent` intrinsic's unit tests; neither is
+re-proven there.
+
 - `subagent/conformance` — the child ownership boundary with real staged
   children (`sh`, own process group, real control socket): frozen authority
   crossing, registry lifecycle, exactly one terminal child notice, parent

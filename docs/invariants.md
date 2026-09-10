@@ -2450,8 +2450,10 @@ after ChildGuidanceOutcome::Accepted:
   inactive for the parent.
 - **A named subagent may narrow authority but cannot manufacture it.** No
   selector resolves to anything outside the invoking generation's authorized
-  available capabilities, and no per-call argument can widen a definition:
-  the model-facing contract is exactly `{agent, task, context?}`.
+  available capabilities. Since Issue #258 the model-facing contract is
+  `{agent, task, context?, override?}`, and the override is bounded by an
+  explicit delegation ceiling rather than by the generation alone; see
+  *Issue #258* below.
 - **A named definition's optional `timeoutMs` is a validated static policy.**
   The value is a positive integer number of milliseconds, bounded at
   86,400,000 (24 hours); absence means no whole-lifecycle deadline, and zero,
@@ -2831,6 +2833,150 @@ after ChildGuidanceOutcome::Accepted:
   plus a transport correlation id and nothing else, so no launch authority
   is spellable on the wire. HITL traffic is never a control acknowledgement
   and never uses the disposable observation lane.
+
+## Issue #258: invocation-scoped tools, Skills, and extension overrides
+
+### The final child execution contract
+
+- **`ResolvedSubagentSpec` — not the role document and not the invocation
+  payload — is the complete immutable child execution contract.** Defaults plus
+  an authorized invocation override are resolved against one admitted runtime
+  generation, validated once, and frozen before process staging and durable
+  ownership commit. The child consumes that value and reinterprets nothing: it
+  rereads no role file, `rustx.jsonc`, model catalog, Skill catalog, extension
+  authoring document, or later resource generation.
+- **A named definition is the canonical *default* child profile.** Exactly
+  three dimensions are overridable — `tools`, `skills`, `extensions` — through
+  one provider-independent typed contract,
+  `SubagentInvocationOverride`, shared by the model-facing `subagent` Tool and
+  a Workflow `Agent` node. There is no second merge algorithm in either
+  adapter, and no second resolver, Tool Plane, or `SubagentRuntime`.
+
+### Replacement, not merge
+
+- **Missing means inherit; present means replace.** A missing dimension uses
+  the definition's value; a present dimension replaces that dimension
+  completely and independently of the others. There is no additive or
+  subtractive mode, no wildcard, and no recursive merge of a present `tools` or
+  `extensions` object with the role's corresponding object.
+- **Emptiness is sayable.** `"tools": {}` is no ordinary selected tools,
+  `"skills": []` is no selected Skills, and `"extensions": {}` is no composed
+  native extension. Because all three dimensions have a legitimate empty value,
+  *presence* rather than emptiness is the inheritance signal, and an explicit
+  `null` is rejected rather than folded into absence.
+- **An override's extension selection carries no authoring defaults.**
+  `NativeAgentExtensionsDocument` supplies launch/role defaults, including an
+  enabled Agent Status; `NativeAgentExtensionSelection` is a separate
+  presence-aware closed record whose absent members compose nothing. The
+  vocabulary and the composition owner are the same closed EXT-01 ones: no open
+  registry and no generic merge engine appear.
+- **No override reaches anything else.** Model, instructions/body, timeout,
+  workspace/worktree policy, `AGENTS.md` policy, approval mode, credentials,
+  source enablement, and arbitrary external configuration have no per-call
+  form, and the strict input boundary rejects them by name.
+
+### Two callers, one algorithm, different authority
+
+- **The caller's authority is an explicit typed native input, never model
+  input.** `SubagentOverrideAuthority` is supplied by the launch site.
+  A model emits `override`; it cannot emit the authority its `override` is
+  judged under, cannot change the Subagent admission domain, and cannot supply
+  an authority snapshot of its own.
+- **For dynamic (main-model) delegation the ceiling is
+  `authorized role baseline[d] ∪ invoking Agent frozen authority[d]`, per
+  dimension.** The union is an authorization ceiling, not a merge of the
+  child's selections. A dimension the caller did not override is never judged
+  against the parent's registry at all, so a role default stays usable even
+  when the invoking model does not expose that capability.
+- **The parent contribution is the invoking attempt's frozen admitted
+  execution profile.** `InvokingAgentAuthority::frozen` reads the attempt's own
+  `CapabilitySnapshot::tool_registry()`, its `model_skill_entries()` (so the
+  Issue #234 Read gate governs Skill delegation), and the extension composition
+  its runtime is executing against. It is deliberately not
+  `available_tools()`, not a live mutable registry, not the next generation,
+  and not current configuration. Capabilities held only by another role, known
+  only to the generation, or merely compiled into the executable are not
+  delegable.
+- **Authority is exact native identity.** Tools compare by `ToolId` and Skills
+  by `SkillId` + `SkillVersionId`; a matching display name or role prose is
+  never authorization, and a same-named capability from another source cannot
+  substitute for an authorized one.
+- **Tools, Skills, and extensions are separate authorization domains.**
+  Holding one never implies holding another. Selecting a Skill grants no Tool —
+  Issue #234's exact-selection and visibility rules are unchanged — and an
+  extension-provided model Tool is governed by effective extension composition
+  rather than removed by the ordinary `tools` allowlist.
+- **Extension authorization is configuration-exact, not name-based.** For
+  Agent Status: an absent extension is always authorized (removal is
+  narrowing); a present one is authorized only when the role's or the invoking
+  Agent's own composition holds it, each contributor may be switched off but
+  never on, and `time.timezone` must be absent or exactly the authority's. Root
+  extension composition is therefore legitimate authority for an explicit
+  authorized override, and never implicit child inheritance.
+- **A Workflow Agent node's override is trusted static program data.** It is
+  validated at compilation and again during resource-generation preparation
+  against the Workflow's admitted generation and the applicable resource
+  policies — not against the main model's narrower active set — so it may
+  legitimately exceed the role defaults and the invoking model's capabilities.
+  It is not replaceable through model input, node input values, task text, or
+  any added expression/interpolation language, and main/Workflow profile
+  admission stays independent.
+- **Authorization is not source availability.** Unknown, unavailable,
+  inert/not-admitted, unauthorized, and unresolved stay distinct outcomes, and
+  a requested capability is never silently dropped.
+
+### Ordering, freeze, and the commit boundary
+
+- **Replacement precedes dependency resolution.** The resolver applies
+  `effective[d] = override[d] if present else definition[d]` before resolving
+  the invocation's required dependencies, so a default that was replaced away
+  is neither a materialization requirement nor a reason to fail when its
+  optional source is unavailable. The role's separate catalog/admission
+  validation is unchanged and still rejects a statically invalid definition.
+- **Every failure is decided before staging and ownership commit.** An
+  unauthorized or invalid override starts no child process, acquires no
+  override-specific execution resource, and commits no child ownership.
+  Cleanup after a spawn is not an authorization boundary. Extension
+  authorization and one-shot child-scope support are independent checks, and a
+  recognized-but-unsupported scope fails before spawn even for an entitled
+  caller.
+- **Resolution mutates nothing.** The shared definition, catalog, runtime
+  generation, and parent profile are unchanged, so two invocations of one role
+  with different overrides are independent. A child override never mutates the
+  parent's tool registry, extension composition, system instructions, request
+  prefix, or already-frozen model request.
+- **Cancellation semantics are unchanged.** A pre-commit cancellation
+  publishes and activates no owned child and leaves no partially materialized
+  resource or leaked staged process, through the existing staging/cleanup
+  protocol.
+- **One-shot lifecycle semantics are unchanged.** Final-report semantics,
+  terminal uniqueness, Workflow's typed terminal-output contract, deadlines,
+  process cleanup, ownership, workspace and candidate handoff, and existing
+  child tool restrictions all remain exactly as they were.
+
+### Effective execution-profile identity
+
+- **`SubagentDefinitionDigest` identifies the source definition;
+  `ResolvedSubagentSpec::profile_digest()` identifies the effective child
+  execution profile.** Materially different effective tools, Skills, or
+  extensions change it; equivalent effective profiles — no override, and an
+  override restating the defaults — produce the same value, and equivalent
+  authorized Tool and Workflow inputs agree.
+- **It is derived from the frozen contract, not stored beside it.** Every input
+  is already part of the frozen specification, so the identity is frozen
+  exactly as strongly as the contract while no second stored copy can drift
+  from the specification it labels; the child recomputes the same value from
+  the same frozen bytes.
+- **The framing is versioned and explicit about what it excludes.**
+  Semantically unordered collections are canonically normalized and meaningful
+  order is preserved. Execution identities, timestamps, temporary staging
+  paths, Skill source roots, raw payload formatting, and provider binding or
+  credential material are all outside the preimage.
+- **The digest is never an authorization token.** It is identity and
+  diagnostic/recovery correlation over an already-authorized contract. Runtime
+  Client projects it beside `definition_digest` as a bounded, redacted
+  correlation identity — never the effective selections, prompts, Skill bodies,
+  credentials, registries, or materialization secrets.
 
 ## Issues #146, #187, and #189: deterministic, scope-preserving worktree isolation
 

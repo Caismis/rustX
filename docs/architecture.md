@@ -1204,14 +1204,19 @@ extension never adds a Tool to the model-facing registry by itself.
   new `RuntimeResourceSnapshot` without reaching the composed extension set.
   Restart/resume is a new launch: it resolves the current document through the
   same resolver and rewrites no canonical Session history.
-- **Child.** `SubagentResolver::resolve_in_domain` freezes
-  `definition.extensions()` into `ResolvedSubagentSpec::extensions`, before
-  process staging and durable ownership commit. Root and named-role
-  compositions are independently authored — the root's document is not an input
-  to child resolution — and role extension settings participate in
-  `SubagentDefinitionDigest`. `LocalConversationCore::compose_subagent_child`
-  materializes `spec.resolved.extensions` and rereads no configuration document,
-  role file, or later resource generation.
+- **Child.** `SubagentResolver::resolve` freezes the **effective** composition
+  into `ResolvedSubagentSpec::extensions`, before process staging and durable
+  ownership commit. That is the role's own `definition.extensions()`, or the
+  composition an authorized invocation override replaced it with (SUB-OVR /
+  Issue #258). Root and named-role compositions remain independently authored:
+  the root's composition is never *inherited*, and participates only as one
+  half of an explicit delegation ceiling — a child composes an extension
+  because a role authored it or because an entitled caller asked for it. Role
+  extension settings participate in `SubagentDefinitionDigest`; the effective
+  composition participates in `ResolvedSubagentSpec::profile_digest()`.
+  `LocalConversationCore::compose_subagent_child` materializes
+  `spec.resolved.extensions` and rereads no configuration document, role file,
+  or later resource generation.
 
 An absent member means the extension is not part of the composition, not that
 it is present and idle. `Option<AgentStatusEngine>` is the *whole*
@@ -8211,10 +8216,12 @@ content; these are separate domains.
 
 The v1 program has only `Agent`, `Branch`, `Parallel`, and `Return`. Ordinary
 graph edges express sequential flow; there is no Sequence/Pipeline primitive.
-An Agent invokes one already admitted named profile with a fixed static task
-and a frozen output schema. It cannot override model, tools, capabilities,
-instructions, workspace policy, approval authority, execution mode, or retry
-policy. The root and every fixed Parallel branch contain the same compiled
+An Agent invokes one already admitted named profile with a fixed static task,
+a frozen output schema, and one optional trusted static `override` replacing
+that child's `tools`, `skills`, or `extensions` (SUB-OVR / Issue #258). It
+cannot override model, instructions, workspace policy, approval authority,
+execution mode, or retry policy, and its `override` is compiled program data
+rather than anything model output or node input values can reach. The root and every fixed Parallel branch contain the same compiled
 lexical block. Inputs and Returns use tagged reference, literal, object and
 array values, including `{type: reference, path: [review, blockers]}`.
 There is no interpolation or expression-string language.

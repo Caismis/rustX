@@ -146,6 +146,151 @@ impl NativeAgentExtensionsDocument {
     }
 }
 
+/// The **presence-aware** closed selection an invocation override expresses.
+///
+/// This is deliberately *not* [`NativeAgentExtensionsDocument`]. The authored
+/// document supplies launch/role **defaults** — its `agentStatus` member has
+/// `enabled: true` — which is exactly right for "an unconfigured role composes
+/// Agent Status" and exactly wrong for an override, where the whole point is
+/// that a present `extensions` dimension **replaces** the role's composition:
+///
+/// ```text
+/// role frontmatter   extensions: {}   ->  Agent Status composed (role default)
+/// invocation override "extensions": {} ->  no extension composed at all
+/// ```
+///
+/// Every member is therefore an explicit `Option`: absent means "this
+/// extension is not part of the requested composition", never "use a default".
+/// Presence is the only way to compose an extension, and a present member
+/// still carries its own complete authored configuration.
+///
+/// The record stays closed exactly like the authored document: an unknown
+/// extension name is rejected by `deny_unknown_fields`, so a misspelled or
+/// not-yet-implemented extension fails deterministically instead of being
+/// silently ignored.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[derive(schemars::JsonSchema)]
+pub struct NativeAgentExtensionSelection {
+    /// The requested Agent Status extension, when this selection composes it.
+    ///
+    /// `null` is not accepted: the field is either absent (not composed) or a
+    /// complete authored configuration. Collapsing an explicit `null` into
+    /// "absent" would give one wire spelling two meanings.
+    #[serde(
+        default,
+        deserialize_with = "crate::extensions::present_and_not_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    // The published schema must say what the runtime accepts: an absent key
+    // or a complete document, never `null`. The default `Option` rendering
+    // would advertise a spelling the deserializer refuses.
+    #[schemars(with = "AgentStatusExtensionDocument")]
+    pub agent_status: Option<AgentStatusExtensionDocument>,
+}
+
+/// Deserializes a field that may be **absent**, but never explicitly `null`.
+///
+/// serde reaches this function only when the key is present, so delegating to
+/// the inner type turns `"agentStatus": null` into that type's ordinary
+/// "invalid type: null" rejection while an omitted key still takes the
+/// container's `default`.
+///
+/// # Errors
+///
+/// Returns the inner type's deserialization error, including for `null`.
+pub(crate) fn present_and_not_null<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+impl NativeAgentExtensionSelection {
+    /// Freezes this requested selection into the composition a child runs
+    /// against.
+    ///
+    /// An absent member composes nothing. A present member composes exactly
+    /// what it authored, including `enabled: false`, which is "named and
+    /// switched off" and therefore still composes nothing — the same rule
+    /// [`NativeAgentExtensionsDocument::resolve`] applies.
+    #[must_use]
+    pub fn resolve(&self) -> NativeAgentExtensions {
+        NativeAgentExtensions {
+            agent_status: self
+                .agent_status
+                .as_ref()
+                .filter(|status| status.enabled)
+                .map(|status| AgentStatusConfig {
+                    time: status.time.clone(),
+                    background: status.background.clone(),
+                }),
+        }
+    }
+
+    /// The selection that reproduces an already-frozen composition exactly.
+    ///
+    /// This is what makes "no override" and "an explicit override restating
+    /// the defaults" the same effective profile rather than two shapes that
+    /// merely look alike.
+    #[must_use]
+    pub fn of(frozen: &NativeAgentExtensions) -> Self {
+        Self {
+            agent_status: frozen
+                .agent_status()
+                .map(|config| AgentStatusExtensionDocument {
+                    enabled: true,
+                    time: config.time.clone(),
+                    background: config.background.clone(),
+                }),
+        }
+    }
+}
+
+/// The one-shot child scope support of the closed extension vocabulary.
+///
+/// Extension **authorization** and child-**scope support** are independent
+/// checks: an extension a caller is fully entitled to compose may still be
+/// meaningless — or actively wrong — inside a one-shot child, and must then
+/// fail deterministically before the child is staged rather than be silently
+/// dropped.
+///
+/// The match below is exhaustive over the closed composition on purpose: it
+/// is the seam a future extension author has to visit, and it is a compile
+/// error to add a member without deciding this question. Today's whole
+/// vocabulary is one member, Agent Status, and it is supported: a child is an
+/// ordinary `ConversationRuntime` whose Agent Loop composes the same status
+/// engine the root does.
+#[must_use]
+pub fn unsupported_child_scope(
+    composition: &NativeAgentExtensions,
+) -> Option<UnsupportedChildScope> {
+    // The exhaustive match is the guarantee: adding a member to the closed
+    // composition without deciding its child scope does not compile.
+    match composition {
+        // Agent Status contributes one bounded structured fact that Context
+        // Assembly admits at request time. A one-shot child owns Context
+        // Assembly exactly like a root Agent and needs no multi-round or
+        // resumable lifecycle for it, so it is supported in child scope.
+        NativeAgentExtensions {
+            agent_status: None | Some(AgentStatusConfig { .. }),
+        } => None,
+    }
+}
+
+/// One recognized extension that a one-shot child cannot own.
+///
+/// This is a scope fact, never an authority fact: the caller may have been
+/// fully entitled to compose the extension, and the request still fails.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnsupportedChildScope {
+    /// The canonical authored extension name.
+    pub extension: &'static str,
+    /// The bounded reason the one-shot child scope cannot own it.
+    pub reason: &'static str,
+}
+
 /// The **frozen** native Agent Extension composition of one concrete
 /// Agent/Conversation.
 ///
@@ -236,6 +381,44 @@ impl NativeAgentExtensions {
         self.agent_status
             .clone()
             .map(|config| AgentStatusEngine::new(config, clock))
+    }
+
+    /// Whether this composition **authorizes** `requested` as a delegated
+    /// child composition.
+    ///
+    /// This is the typed extension half of the dynamic delegation ceiling. It
+    /// is deliberately not "the requested extension has the same name", and
+    /// deliberately not "any configuration of an authorized extension": naming
+    /// an extension is not permission to configure it arbitrarily, because the
+    /// configuration is exactly what decides the behavior.
+    ///
+    /// The rule is concrete per supported extension rather than a speculative
+    /// permission framework:
+    ///
+    /// ```text
+    /// requested extension absent        -> always authorized (narrowing)
+    /// requested extension present       -> this composition must compose it too, and
+    ///   time.enabled       requested true  -> authority time.enabled must be true
+    ///   background.enabled requested true  -> authority background.enabled must be true
+    ///   time.timezone      requested Some  -> authority timezone must be exactly that zone
+    /// ```
+    ///
+    /// Every contributor may therefore be switched **off** by a delegated
+    /// child and never switched on, and a timezone is an exact match rather
+    /// than a free parameter: a caller whose own composition renders UTC
+    /// cannot make a child render another region's local time.
+    #[must_use]
+    pub fn authorizes(&self, requested: &Self) -> bool {
+        let NativeAgentExtensions { agent_status } = requested;
+        match agent_status {
+            None => true,
+            Some(requested) => self.agent_status.as_ref().is_some_and(|authority| {
+                (!requested.time.enabled || authority.time.enabled)
+                    && (!requested.background.enabled || authority.background.enabled)
+                    && (requested.time.timezone.is_none()
+                        || requested.time.timezone == authority.time.timezone)
+            }),
+        }
     }
 
     /// The deterministic canonical framing of this composition, for the

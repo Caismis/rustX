@@ -1,7 +1,7 @@
 # Small Workflow authoring templates
 
-These three independent starting points use the same native loader, compiler,
-and foreground Tool boundary as the complete reference workflows. All three
+These four independent starting points use the same native loader, compiler,
+and foreground Tool boundary as the complete reference workflows. All four
 work in a **non-Git workspace**: none requests a run candidate, and the canonical
 `reviewer.md` role explicitly disables worktrees. Inputs and retained values are
 bounded by the native Workflow value limits (64 KiB per value, 4 MiB aggregate);
@@ -29,6 +29,7 @@ only one, use the minimum configuration in its guide:
 - [Typed Agent → Return](typed-agent.md): explicit input, one named role, typed output.
 - [Fixed keyed parallel checks](parallel-checks.md): two lexical branches and deterministic join.
 - [Human plan Review](human-plan.md): existing Review rendezvous, no Agent or candidate required.
+- [One role, two specializations](specialized-agent.md): one named role run twice, with an invocation `override` on the second node.
 
 Invoke each by its concrete Tool name from an ordinary foreground Agent turn,
 using the JSON input in its guide. There is no `workflow run` command. Main Tool

@@ -81,14 +81,143 @@ schema is [subagent.schema.json](../schemas/subagent.schema.json).
 Role extension composition is **independently authored**: root Agent extensions
 and named-Subagent extensions are separate compositions, and a child never
 implicitly inherits the root's set. A role that omits `extensions` composes the
-built-in defaults, not whatever the invoking runtime happens to run with. There
-is no invocation-time extension override: the model chooses which named agent
-runs and nothing else.
+built-in defaults, not whatever the invoking runtime happens to run with.
+
+A named role is the **default** child execution profile, not the final one. One
+invocation may replace `tools`, `skills`, and `extensions` for exactly that
+child; see [Invocation-scoped overrides](#invocation-scoped-overrides). Every
+other field — model, instructions, `timeoutMs`, `agentsMd`, `worktree` — belongs
+to the definition alone and has no per-call form.
 
 No role field overrides host-owned approval policy, external-source enablement,
 credentials, tool execution policies, model capabilities, or Workflow ownership.
 Names such as “reviewer,” prose such as “read-only,” and source provenance grant
 no authority.
+
+## Invocation-scoped overrides
+
+One `subagent` call, or one Workflow `Agent` node, may carry an optional
+`override` object. It has exactly three dimensions and no others:
+
+```json
+{
+  "agent": "reviewer",
+  "task": "Review the implementation",
+  "override": {
+    "tools": {"builtin": ["read", "grep", "bash"]},
+    "skills": ["rust-review"],
+    "extensions": {"agentStatus": {"enabled": true}}
+  }
+}
+```
+
+### Replacement semantics
+
+One rule covers all three dimensions:
+
+> A **missing** dimension uses the definition's value. A **present** dimension
+> **replaces** that dimension completely.
+
+| Written | Effective result |
+| --- | --- |
+| no `override` | the definition's `tools`, `skills`, and `extensions`, exactly |
+| `"override": {}` | identical to omitting it |
+| `"tools": {"builtin": ["bash"]}` | exactly Bash — **not** the role's tools plus Bash |
+| `"tools": {}` | no ordinary selected tools |
+| `"skills": []` | no selected Skills |
+| `"extensions": {}` | no composed native extension |
+
+Replacement is per dimension and independent: an override naming only `skills`
+leaves tools and extensions exactly as the role authored them. There is no
+additive or subtractive mode, no `addTools`/`removeTools`, no wildcard, and no
+recursive merge; a present `tools` or `extensions` object is never merged with
+the role's corresponding object.
+
+`"extensions": {}` deserves its own line because the *authoring* document
+defaults differ deliberately. A role that omits `extensions` composes the
+built-in defaults, which include Agent Status. An override that writes
+`"extensions": {}` composes **nothing**: presence, not emptiness, is what
+selects an extension in an override, so every closed extension member is
+explicitly named or absent. Absent means "not composed", never "use a default".
+
+An explicit `null` is not an accepted spelling for any dimension, or for
+`override` itself. Unknown fields, non-goal dimensions, and unknown extension
+names are rejected by the same strict boundary that rejects them in role
+frontmatter. Duplicate and out-of-order selectors are canonically normalized
+exactly as a definition normalizes them, so an override restating the defaults
+is the same effective profile as omitting the override.
+
+### Delegation authority
+
+An override says what the caller *asked for*. Whether the caller may ask is a
+separate, typed, native decision, and the two launch sites differ:
+
+```text
+main `subagent` Tool   dynamic delegation
+                       allowed[d] = authorized role baseline[d]
+                                    UNION
+                                    invoking Agent's frozen admitted profile[d]
+
+Workflow Agent node    trusted static program data
+                       allowed[d] = whatever the Workflow's admitted
+                                    runtime generation authorizes
+```
+
+The union is an authorization **ceiling**, not a merge: it decides what may be
+requested, never what the child ends up selecting.
+
+For the main model:
+
+- a role default stays delegable even when the invoking model does not expose
+  that capability at all — a named role is an independent projection of the
+  generation, not a subset of the parent's toolbar;
+- the parent's contribution is its **frozen admitted execution profile**: the
+  exact model-facing tool registry of the invoking attempt, the Skills that
+  attempt can actually see, and the extension composition its runtime is
+  executing against. It is not the generation's whole available catalog, not a
+  live mutable registry, not the next generation, and not current configuration;
+- a capability known only to the generation, held only by some other role, or
+  merely compiled into the executable is not delegable;
+- authority is compared by exact native identity — `ToolId`, and
+  `SkillId` + `SkillVersionId` — never by display name or role prose. A Builtin
+  `search` can never stand in for an MCP server's `search`, and a rewritten Skill
+  package is a different identity from the one a caller froze;
+- tools, Skills, and extensions are separate authorization domains. Holding one
+  never implies holding another, and a dimension the caller did not override is
+  never judged against the parent's registry at all;
+- extensions are authorized *by configuration*, not by name. A requested
+  Agent Status composition is authorized only when the role's or the invoking
+  Agent's own composition already holds it: each contributor may be switched
+  **off** but never on, and `time.timezone` must match exactly or be absent.
+
+A Workflow Agent node's override is compiled program data. It is validated at
+compilation and again during resource-generation preparation, and it is not
+reachable from model output, node input values, task text, or any expression or
+interpolation language. It may therefore legitimately exceed both the role's
+defaults and the invoking main model's capabilities — never the admitted
+generation.
+
+Authorization is not source availability. Unknown, unavailable, inert, and
+unauthorized stay four distinct outcomes, and a requested capability is never
+silently dropped.
+
+### What an override never reaches
+
+Model, instructions/body, timeout, workspace/worktree policy, `AGENTS.md`
+policy, approval policy, credentials, source enablement, and arbitrary external
+configuration have no per-call form. There are no continuable children, no
+generic inheritance, no additive or removal syntax, no wildcards, and no plugin
+SDK.
+
+Selecting a Skill grants no Tool: Skill visibility and dependency rules are
+unchanged, so a Skill selected under an empty tool set stays a Skill selection
+and never implicitly adds Read. Conversely, an extension-provided model Tool is
+governed by effective extension composition and is never removed by the ordinary
+`tools` allowlist.
+
+Extension authorization and child-scope support are independent checks. An
+extension a caller is fully entitled to compose still fails deterministically,
+before the child is staged, when one-shot child execution cannot own it.
 
 ## Roots, replacement, and admission
 
@@ -130,8 +259,9 @@ guidance is explicit and ordered after inherited guidance.
 ## Checking, reload, and child ownership
 
 `rustx config check` uses the same role loader as runtime preparation. It checks
-file bounds, trust, frontmatter, registration/admission references and statically
-known model, Skill and Tool/source contracts. It performs no model, Tool, Python,
+file bounds, trust, frontmatter, registration/admission references, statically
+known model, Skill and Tool/source contracts, and every statically knowable
+reference in a Workflow Agent node's invocation override. It performs no model, Tool, Python,
 MCP, package-preparation or network work, creates no Session/runtime state, and
 writes no trust. Unknown online Tool identities remain deferred to their source
 owner rather than being invented by static analysis.
@@ -154,13 +284,93 @@ authoritative. There is no additional registry, executor, epoch, or publisher.
 `SubagentResolver::resolve` freezes `ResolvedSubagentSpec` from the invoking
 generation during native preflight, before process staging and durable ownership
 commit. It contains instructions, complete model authority, exact Tool policy,
-Skill identities, project guidance, workspace policy, deadline, and the role's
-frozen native Agent Extension composition. A specification
-frozen from R1 retains R1 after R2 publishes; a later resolution receives R2.
-Resolution reads the definition and the invoking generation's authority only:
-the root Agent's `extensions` document is not an input, so it cannot widen,
-narrow, or reinterpret a child's extension set.
+Skill identities, project guidance, workspace policy, deadline, and the
+effective native Agent Extension composition. `ResolvedSubagentSpec`, not the
+role document and not the raw override payload, is the complete immutable child
+execution contract. A specification frozen from R1 retains R1 after R2
+publishes; a later resolution receives R2.
 Normal reload still obeys the existing runtime quiescence requirements.
+
+The resolution order is the contract:
+
+```text
+1. admission      is this role callable in this domain at all
+2. structural     is the override a well-formed child selection
+3. replacement    effective[d] = override[d] if present else definition[d]
+4. dependency     do the EFFECTIVE selections resolve in this generation
+5. authorization  may this caller delegate the effective selections
+6. child scope    can a one-shot child own the effective extensions
+7. freeze         model, instructions, guidance, materialization, identity
+```
+
+Step 3 preceding step 4 is what makes a replaced-away default stop being a
+requirement: a role whose default MCP tool is offline still starts when the
+invocation replaced that dimension, because the offline selector is no longer
+part of the effective invocation. The role's separate catalog-admission
+validation is unaffected and still rejects a statically invalid definition.
+
+Every failure is decided before a child process is staged, before any
+override-specific execution resource is acquired, and long before durable
+ownership commits. Cleanup after a spawn is not an authorization boundary.
+Cancellation semantics are unchanged at resolution, preparation, and commit: a
+pre-commit cancellation publishes no owned child and leaves no partially
+materialized resources.
+
+The invoking root Agent's own `extensions` composition participates only as one
+half of the explicit delegation ceiling. It is never implicit child
+inheritance: a child composes an extension because a definition authored it or
+because a caller asked for it and was entitled to.
+
+### Effective execution-profile identity
+
+`SubagentDefinitionDigest` continues to identify the **source definition**. It
+no longer uniquely identifies one child once overrides exist, so
+`ResolvedSubagentSpec::profile_digest()` is the deterministic identity of the
+**effective execution profile**. It is derived from the frozen contract rather
+than stored beside it, so it is frozen exactly as strongly as the contract and
+cannot disagree with the specification it labels; the child recomputes the same
+value from the same frozen bytes.
+
+The versioned canonical framing covers:
+
+```text
+agent name, source definition digest, instructions
+frozen model decision   model reference, protocol, context window,
+                        model and effective output budgets, reasoning profile
+                        and semantics, effective and declared capabilities,
+                        compat, effective request parameters, summary policy
+project instruction chain   path AND content, in order
+workspace policy, execution deadline
+effective tools         origin, exact ToolId, model-facing name, and the
+                        cross-process MCP identity where one exists
+effective Skills        exact SkillId + SkillVersionId and the visible name
+effective extensions    the closed composition's canonical framing
+materialization plane   exactly the external source identities required
+```
+
+and deliberately excludes:
+
+```text
+execution identities    SubagentId, conversation/agent ids, tool call id
+timestamps              nothing time-derived enters the preimage
+physical paths          staging roots, Skill source roots, remapped locations
+raw payload formatting  the override's key order, whitespace, duplicates, or
+                        whether an override was written at all
+provider binding        endpoints and credential material
+```
+
+Excluding the raw payload is the point: two invocations that produce the same
+effective profile — no override, and an override restating the defaults — share
+one identity, and the authorized Tool and Workflow paths agree for equivalent
+inputs. Semantically unordered collections are canonically normalized before
+framing; the project instruction chain, whose order is meaning, is framed in
+order.
+
+The digest is identity and diagnostic/recovery correlation over an
+already-authorized contract. It is never an authorization token: no resolution,
+admission, or execution path consults it to decide what a child may do. Runtime
+Client projects it beside `definition_digest` as a bounded correlation
+identity, never alongside the effective selections themselves.
 
 Child composition and `FrozenSubagentResourceLoader` consume this frozen native
 specification. Workspace/Git worktree acquisition supplies physical workspace

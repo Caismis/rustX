@@ -18,7 +18,7 @@ pub struct ToolDependency {
 }
 
 #[derive(Debug)]
-pub(crate) struct CapabilityError {
+pub struct CapabilityError {
     pub workflow: super::WorkflowId,
     pub path: String,
     pub reason: String,
@@ -74,6 +74,64 @@ impl WorkflowProgram {
         }
         paths
     }
+
+    /// Every Agent node that carries a trusted static invocation override,
+    /// with its precise authored path.
+    ///
+    /// The walk descends into Loop bodies and Parallel branches, so a nested
+    /// Agent node's override receives the same static validation and the same
+    /// precise diagnostic path as a root-level one.
+    #[must_use]
+    pub fn agent_override_nodes(&self) -> Vec<AgentOverrideNode<'_>> {
+        fn walk<'a>(
+            block: &'a WorkflowBlockProgram,
+            path: &str,
+            found: &mut Vec<AgentOverrideNode<'a>>,
+        ) {
+            for (id, node) in &block.nodes {
+                let path = format!("{path}.nodes.{id}");
+                match node {
+                    WorkflowNodeProgram::Agent(agent) => {
+                        if let Some(invocation_override) = &agent.invocation_override {
+                            found.push(AgentOverrideNode {
+                                path: format!("{path}.override"),
+                                profile: &agent.profile,
+                                invocation_override,
+                            });
+                        }
+                    }
+                    WorkflowNodeProgram::Loop { body, .. } => {
+                        walk(body, &format!("{path}.body"), found);
+                    }
+                    WorkflowNodeProgram::Parallel { branches, .. } => {
+                        for (key, branch) in branches {
+                            walk(
+                                &branch.block,
+                                &format!("{path}.branches.{key}.block"),
+                                found,
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut found = Vec::new();
+        walk(&self.block, "block", &mut found);
+        found
+    }
+}
+
+/// One Agent node's trusted static invocation override, with the authored
+/// path a diagnostic must name.
+#[derive(Debug, Clone)]
+pub struct AgentOverrideNode<'a> {
+    /// The precise authored path of the override, including nesting.
+    pub path: String,
+    /// The role the override specializes.
+    pub profile: &'a SubagentName,
+    /// The compiled override itself.
+    pub invocation_override: &'a crate::runtime::subagent::SubagentInvocationOverride,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -119,12 +177,30 @@ pub struct BlockInspection {
     pub nodes: BTreeMap<String, NodeInspection>,
 }
 
+/// The bounded projection of one Agent node's trusted static invocation
+/// override.
+///
+/// Presence is the fact this projection has to carry, so each dimension stays
+/// an `Option`: `None` is "this dimension keeps the role's default" and
+/// `Some` is "this dimension is replaced by exactly this". Only identities
+/// are exported — capability selectors, Skill names, and the composed
+/// extension names — never a Skill body, a prompt, a credential, or a
+/// materialization secret.
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentOverrideInspection {
+    pub tools: Option<Vec<crate::capabilities::selection::ToolSelector>>,
+    pub skills: Option<Vec<String>>,
+    pub extensions: Option<Vec<&'static str>>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct NodeInspection {
     pub kind: &'static str,
     pub edges: Vec<(WorkflowPort, String)>,
     pub bindings: BTreeMap<String, Value>,
     pub profile: Option<SubagentName>,
+    /// The node's invocation override, when it carries one.
+    pub invocation_override: Option<AgentOverrideInspection>,
     pub selector: Option<crate::capabilities::selection::ToolSelector>,
     pub output_schema: Option<Value>,
     pub result_part: Option<usize>,
@@ -180,6 +256,18 @@ impl WorkflowProgram {
         block(&self.block, "block", &mut result);
         result
     }
+}
+
+/// The composed extension names of one frozen composition, for the bounded
+/// authoring projection. Configuration values stay out of the report.
+fn composed_extension_names(
+    composition: &crate::extensions::NativeAgentExtensions,
+) -> Vec<&'static str> {
+    let mut names = Vec::new();
+    if composition.agent_status().is_some() {
+        names.push("agentStatus");
+    }
+    names
 }
 
 // Schema structure is real; authored constant/enum contents and annotations can
@@ -269,6 +357,7 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                 .collect(),
             bindings: BTreeMap::new(),
             profile: None,
+            invocation_override: None,
             selector: None,
             output_schema: None,
             result_part: None,
@@ -283,6 +372,22 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                 view.kind = "agent";
                 view.profile = Some(agent.profile.clone());
                 result.profiles.insert(agent.profile.clone());
+                if let Some(invocation_override) = &agent.invocation_override {
+                    result
+                        .runtime_requirements
+                        .insert("agent_override_reference_resolution_and_source_availability");
+                    view.invocation_override = Some(AgentOverrideInspection {
+                        tools: invocation_override
+                            .tools
+                            .as_ref()
+                            .map(super::super::subagent::invocation::SubagentInvocationOverride::canonical_selectors_of),
+                        skills: invocation_override.skills.clone(),
+                        extensions: invocation_override
+                            .extensions
+                            .as_ref()
+                            .map(|selection| composed_extension_names(&selection.resolve())),
+                    });
+                }
                 view.output_schema = Some(schema(&agent.output_schema));
                 view.bindings.extend(
                     agent
