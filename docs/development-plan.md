@@ -796,7 +796,7 @@ request-message copy, generic repository, or client recovery cache.
 M8 introduced development schema version 1. The current store gate is schema
 version 13; incompatible files fail explicitly at open. There is no migration
 framework, legacy reader, fallback, or dual write.
-File-backed SQLite uses WAL, `synchronous=FULL`, foreign keys, and a busy
+File-backed SQLite uses rollback journaling (`DELETE`), `synchronous=FULL`, foreign keys, and a busy
 timeout. Commit is the local durability linearization point.
 
 Semantic transitions are prepare → SQLite transaction → COMMIT → infallible

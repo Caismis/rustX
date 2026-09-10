@@ -329,23 +329,25 @@ async fn run_child(
     // If the lease itself cannot be created, execution still proceeds; the
     // failure is diagnosable in the child's private stderr log and through
     // the existing bounded Diagnostic frame.
-    let live_lease =
-        match LiveConversationInspectionLease::acquire(child_conversation_inspection_liveness_path(
+    let live_lease = match LiveConversationInspectionLease::acquire(
+        &spec.product_root,
+        &child_conversation_inspection_liveness_path(
             parent_runtime_root,
             &spec.child_conversation_id,
-        )) {
-            Ok(lease) => Some(lease),
-            Err(error) => {
-                let message = format!("live inspection liveness lease unavailable: {error}");
-                eprintln!("subagent child: {message}");
-                let _ = handle
-                    .send_reliable(ChildFrame::Diagnostic(DiagnosticFrame {
-                        message: bound_diagnostic(message),
-                    }))
-                    .await;
-                None
-            }
-        };
+        ),
+    ) {
+        Ok(lease) => Some(lease),
+        Err(error) => {
+            let message = format!("live inspection liveness lease unavailable: {error}");
+            eprintln!("subagent child: {message}");
+            let _ = handle
+                .send_reliable(ChildFrame::Diagnostic(DiagnosticFrame {
+                    message: bound_diagnostic(message),
+                }))
+                .await;
+            None
+        }
+    };
     let live_server = match LiveConversationInspectionServer::bind(
         child_conversation_inspection_socket_path(parent_runtime_root, &spec.child_conversation_id),
         host,
@@ -1639,6 +1641,7 @@ mod tests {
         let runtime_root = dir.path().join("child");
         let spec = SubagentChildSpec {
             protocol_version: SUBAGENT_IPC_VERSION,
+            product_root: dir.path().to_path_buf(),
             subagent_id: crate::runtime::identity::SubagentId::new("conv-issue145-race-subagent-1"),
             child_conversation_id: ConversationId::new("conv-issue145-race-subagent-1"),
             child_agent_id: AgentId::new("agent-child"),

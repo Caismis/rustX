@@ -1,5 +1,23 @@
 # Process-death conformance (FND-06 / Issue #111)
 
+## Session ownership and local lifecycle exclusion (Issue #254)
+
+Session deletion cascades along durable ownership, never provenance. `/tree`
+nodes belong to the same Session; `/fork` and `/clone` materialize independent
+Sessions. Catalog membership and native typed child ownership commits establish
+the finite target. Retained worktrees and branches are blockers requiring
+explicit disposal, not implicit cleanup targets. Shared environments, capability
+resources, caches, config, credentials and project files remain outside it.
+
+`SessionDeletionPreflight` acquires an exclusive OS lock on the canonical runtime
+root directory before observing ownership and retains it with the snapshot.
+Product controllers, child runtimes, catalog readers and inspection owners
+participate in compatible guards. OS process death releases access; aliases to
+the same root cannot form another domain. Management reads never create missing
+stores or directories. See [the ownership and storage contract](session-deletion-ownership.md)
+for authority sources, exact layout, revision observation and release points.
+
+
 FND-01 … FND-05 established the durable runtime contracts. This document is
 their proof against **real process death**: a real child process running the
 real runtime stack over a real durable file, frozen at a named durable

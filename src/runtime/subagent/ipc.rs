@@ -87,7 +87,7 @@ use crate::runtime::workspace::WorkspaceSnapshot;
 /// The current version adds typed native deadline interruption to interaction
 /// outcomes and durable approval settlement, without fabricating user intent.
 /// Version 19 carries Review and required Questionnaire invocation correlation.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 19;
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 20;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -189,6 +189,8 @@ pub(crate) struct SubagentChildSpec {
     /// diagnostics, Skills, and private Python state). It is never the stable
     /// semantic `SubagentId` grouping path.
     pub runtime_root: PathBuf,
+    /// Canonical product lifecycle domain, independent of child execution allocation.
+    pub product_root: PathBuf,
     /// The child terminal protocol. Workflow-owned children receive a
     /// frozen `workflow_output` schema; ordinary named subagents use the
     /// normal parent-inbound answer protocol.
@@ -1087,6 +1089,7 @@ mod tests {
             },
             workspace_snapshot: WorkspaceSnapshot::shared(PathBuf::from("/tmp/ws")),
             runtime_root: PathBuf::from("/tmp/rr"),
+            product_root: PathBuf::from("/tmp"),
             terminal: ChildTerminalMode::Normal,
         };
         write_parent_frame(&mut parent, &ParentFrame::Hello(Box::new(spec.clone())))

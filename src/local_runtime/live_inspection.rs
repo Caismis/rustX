@@ -31,16 +31,17 @@ pub(crate) const TEST_FAIL_BIND_ENV: &str = "RUSTX_TEST_LIVE_INSPECTION_BIND_FAI
 ///
 /// The file is kept beside the stable child store only as a routing marker.
 /// The exclusive OS lock is the liveness signal: it disappears automatically
-/// if the child is killed, while the owning child removes the marker during
-/// normal shutdown. No conversation or observation state is written here.
+/// if the child is killed, and the stable lock inode is retained across normal shutdown. No conversation or observation state is written here.
 pub(crate) struct LiveConversationInspectionLease {
-    path: PathBuf,
-    lock: Option<Flock<File>>,
+    _lock: Flock<File>,
+    _lifecycle: crate::runtime::local_storage::LocalStorageGuard,
 }
 
 impl LiveConversationInspectionLease {
     /// Acquires the child-owned liveness lease at the identity-derived path.
-    pub(crate) fn acquire(path: PathBuf) -> std::io::Result<Self> {
+    pub(crate) fn acquire(root: &Path, path: &Path) -> std::io::Result<Self> {
+        let lifecycle = crate::runtime::local_storage::LocalStorageGuard::access_existing(root)?;
+        let path = lifecycle.confined(path)?;
         let file = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -51,20 +52,9 @@ impl LiveConversationInspectionLease {
             std::io::Error::other(format!("lock {}: {error}", path.display()))
         })?;
         Ok(Self {
-            path,
-            lock: Some(lock),
+            _lock: lock,
+            _lifecycle: lifecycle,
         })
-    }
-}
-
-impl Drop for LiveConversationInspectionLease {
-    fn drop(&mut self) {
-        // Unlock before unlinking. A resolver that starts after the child has
-        // released the lease must either see the marker as stale or see no
-        // marker at all; it must never lose the live marker while the child
-        // still owns the lock.
-        drop(self.lock.take());
-        let _ = std::fs::remove_file(&self.path);
     }
 }
 
@@ -80,7 +70,6 @@ pub(crate) fn probe_liveness(path: &Path) -> std::io::Result<Option<bool>> {
     match Flock::lock(file, FlockArg::LockSharedNonblock) {
         Ok(lock) => {
             drop(lock);
-            let _ = std::fs::remove_file(path);
             Ok(Some(false))
         }
         Err((file, error)) if error == Errno::EWOULDBLOCK => {

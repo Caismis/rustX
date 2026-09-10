@@ -1,5 +1,23 @@
 # Runtime Invariants
 
+## Session ownership and local lifecycle exclusion (Issue #254)
+
+Session deletion cascades along durable ownership, never provenance. `/tree`
+nodes belong to the same Session; `/fork` and `/clone` materialize independent
+Sessions. Catalog membership and native typed child ownership commits establish
+the finite target. Retained worktrees and branches are blockers requiring
+explicit disposal, not implicit cleanup targets. Shared environments, capability
+resources, caches, config, credentials and project files remain outside it.
+
+`SessionDeletionPreflight` acquires an exclusive OS lock on the canonical runtime
+root directory before observing ownership and retains it with the snapshot.
+Product controllers, child runtimes, catalog readers and inspection owners
+participate in compatible guards. OS process death releases access; aliases to
+the same root cannot form another domain. Management reads never create missing
+stores or directories. See [the ownership and storage contract](session-deletion-ownership.md)
+for authority sources, exact layout, revision observation and release points.
+
+
 These invariants are architectural constraints. Implementations may change; these rules should change only through an explicit architecture decision.
 
 ## Configuration analysis and activation
@@ -78,8 +96,8 @@ revision, and keyed Ledger bodies.
 
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
-uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 31 is the only accepted schema; version 30 and every older
+uses rollback journaling (`DELETE`), `synchronous=FULL`, foreign keys, and a busy timeout. Development
+schema version 32 is the only accepted schema; version 31 and every older
 development schema fail explicitly at open and are not migrated. Version 31
 freezes the Issue #242 typed Questionnaire interaction audit — canonical
 requester identity, typed answer specifications, and option-index answers — so

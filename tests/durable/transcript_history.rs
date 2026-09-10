@@ -672,6 +672,11 @@ async fn requirement_06_headless_history_is_available_to_a_later_client() {
             .transcript_page(None, 64)
             .expect("headless page");
         assert_eq!(page_message_ids(&page), vec![accepted.message_id.as_str()]);
+        headless
+            .runtime()
+            .shutdown()
+            .await
+            .expect("release the native owner before reopening");
     }
 
     let interactive = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())

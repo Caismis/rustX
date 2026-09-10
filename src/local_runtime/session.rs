@@ -80,6 +80,10 @@ use crate::runtime::identity::{ConversationId, MessageId, ToolCallId};
 
 /// The persisted native session-catalog schema.
 ///
+/// Version 5 reserves node allocations exclusively for Conversation-private
+/// state; retained workspaces live in the separate product workspace domain.
+/// Version 4 allocations cannot prove this boundary and are refused.
+///
 /// The version gates *meaning*, not layout. Version 4 is the first catalog
 /// whose `Clone` and `Fork` origins promise that the destination lineage
 /// retained the source's Surface operation history — the provenance
@@ -98,7 +102,7 @@ use crate::runtime::identity::{ConversationId, MessageId, ToolCallId};
 /// the promise is refused rather than silently reinterpreted. Because a
 /// version-3 destination's real provenance was discarded at seed time, no
 /// migration can reconstruct it, and none is attempted.
-pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 4;
+pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 5;
 
 /// The largest display name a Session may carry.
 pub const SESSION_NAME_LIMIT: usize = 120;
@@ -472,6 +476,7 @@ pub struct SessionCatalog {
     /// it: [`Self::plan_unchanged`] plans that write, and it lands in the
     /// same single startup transaction as every other catalog decision.
     published: bool,
+    lifecycle: Option<std::sync::Arc<crate::runtime::local_storage::LocalStorageGuard>>,
     #[cfg(test)]
     write_fault: Arc<Mutex<Option<CatalogWriteFault>>>,
     /// Test-only gate parked between the Surface-head observation and the
@@ -482,6 +487,77 @@ pub struct SessionCatalog {
 }
 
 impl SessionCatalog {
+    /// Recover graph-owned stores before startup performs read-only selection.
+    /// Child references come only from existing typed durable ownership commits.
+    pub(crate) fn recover_storage(
+        &self,
+        guard: &std::sync::Arc<crate::runtime::local_storage::LocalStorageGuard>,
+    ) -> Result<(), SessionError> {
+        let mut pending: Vec<_> = self
+            .document
+            .sessions
+            .iter()
+            .flat_map(|(session, record)| {
+                record.nodes.values().map(|node| {
+                    (
+                        node.conversation_id.clone(),
+                        self.database_path(session, &node.conversation_id),
+                    )
+                })
+            })
+            .collect();
+        let mut seen = BTreeSet::new();
+        while let Some((id, path)) = pending.pop() {
+            validate_id(id.as_str(), "conversation")?;
+            if !seen.insert(id.clone()) {
+                return Err(SessionError::Catalog {
+                    detail: "ambiguous or cyclic durable ownership".into(),
+                });
+            }
+            let store = SqliteConversationStore::recover_existing(id, &path, guard)
+                .map_err(SessionError::Store)?;
+            let mut cursor = None;
+            loop {
+                let page = store
+                    .read_events(cursor, 256)
+                    .map_err(SessionError::Store)?;
+                if page.events.is_empty() {
+                    break;
+                }
+                cursor = page.next_sequence;
+                for event in page.events {
+                    if let crate::events::types::RuntimeEvent::SubagentOwnershipCommitted {
+                        child_conversation_id,
+                        ..
+                    } = event.event
+                    {
+                        validate_id(child_conversation_id.as_str(), "child conversation")?;
+                        let path = crate::runtime::subagent::child_conversation_store_path(
+                            guard.root(),
+                            &child_conversation_id,
+                        );
+                        pending.push((child_conversation_id, path));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn deletion_nodes(&self) -> BTreeMap<SessionId, Vec<SessionNode>> {
+        self.document
+            .sessions
+            .iter()
+            .map(|(id, session)| (id.clone(), session.nodes.values().cloned().collect()))
+            .collect()
+    }
+
+    pub(crate) fn retain_lifecycle(
+        &mut self,
+        guard: std::sync::Arc<crate::runtime::local_storage::LocalStorageGuard>,
+    ) {
+        self.lifecycle = Some(guard);
+    }
+
     /// Opens the native catalog when this product root already has one.
     ///
     /// This path never creates durable Session state. First-Session
@@ -492,12 +568,33 @@ impl SessionCatalog {
     ///
     /// Returns [`SessionError`] when the catalog cannot be read or validated.
     pub fn open_existing(runtime_root: &Path) -> Result<Option<Self>, SessionError> {
-        let root = runtime_root.join("sessions");
-        fs::create_dir_all(&root).map_err(|error| SessionError::Io {
-            path: root.clone(),
-            detail: error.to_string(),
-        })?;
-        let path = root.join("catalog.json");
+        if !runtime_root.exists() {
+            return Ok(None);
+        }
+        let guard = std::sync::Arc::new(
+            crate::runtime::local_storage::LocalStorageGuard::access_existing(runtime_root)
+                .map_err(|error| SessionError::Io {
+                    path: runtime_root.to_path_buf(),
+                    detail: error.to_string(),
+                })?,
+        );
+        let mut catalog = Self::read_under_guard(&guard)?;
+        if let Some(catalog) = &mut catalog {
+            catalog.retain_lifecycle(guard);
+        }
+        Ok(catalog)
+    }
+
+    pub(crate) fn read_under_guard(
+        guard: &crate::runtime::local_storage::LocalStorageGuard,
+    ) -> Result<Option<Self>, SessionError> {
+        let root = guard.root().join("sessions");
+        let path = guard
+            .confined(&root.join("catalog.json"))
+            .map_err(|error| SessionError::Io {
+                path: root.clone(),
+                detail: error.to_string(),
+            })?;
         if !path.exists() {
             return Ok(None);
         }
@@ -516,6 +613,7 @@ impl SessionCatalog {
             path,
             document,
             published: true,
+            lifecycle: None,
             #[cfg(test)]
             write_fault: Arc::new(Mutex::new(None)),
             #[cfg(test)]
@@ -638,6 +736,7 @@ impl SessionCatalog {
             path,
             document,
             published: false,
+            lifecycle: None,
             #[cfg(test)]
             write_fault: Arc::new(Mutex::new(None)),
             #[cfg(test)]
@@ -836,7 +935,7 @@ impl SessionCatalog {
             return Ok(false);
         }
         let path = self.database_path(&session.id, &node.conversation_id);
-        let store = SqliteConversationStore::open(node.conversation_id.clone(), &path)
+        let store = SqliteConversationStore::open_existing(node.conversation_id.clone(), &path)
             .map_err(SessionError::Store)?;
         let head = store.load_head().map_err(SessionError::Store)?;
         if head.revision != SurfaceRevision::INITIAL || !head.active_message_ids.is_empty() {
@@ -992,7 +1091,7 @@ impl SessionCatalog {
                 detail: format!("Session {} has no root node", session.id),
             })?;
         let path = self.database_path(&session.id, &root.conversation_id);
-        let store = SqliteConversationStore::open(root.conversation_id.clone(), &path)
+        let store = SqliteConversationStore::open_existing(root.conversation_id.clone(), &path)
             .map_err(SessionError::Store)?;
         let head = store.load_head().map_err(SessionError::Store)?;
         let page = store
@@ -1275,7 +1374,7 @@ impl SessionCatalog {
     ) -> Result<(), SessionError> {
         let (node, _) = self.lineage(session_id, node_id)?;
         let path = self.database_path(session_id, &node.conversation_id);
-        let store = SqliteConversationStore::open(node.conversation_id, &path)
+        let store = SqliteConversationStore::open_existing(node.conversation_id, &path)
             .map_err(SessionError::Store)?;
         store.load_head().map_err(SessionError::Store).map(|_| ())
     }
@@ -4564,4 +4663,5 @@ mod tests {
         assert_eq!(first.len(), 2);
         assert!(head.revision > SurfaceRevision::new(2));
     }
+    mod deletion_tests;
 }

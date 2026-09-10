@@ -158,6 +158,10 @@ impl SubagentSpawnPlan {
     ) -> SubagentChildSpec {
         SubagentChildSpec {
             protocol_version: super::ipc::SUBAGENT_IPC_VERSION,
+            product_root: self
+                .runtime_root
+                .canonicalize()
+                .expect("allocated product root"),
             subagent_id: subagent_id.clone(),
             child_conversation_id: child_conversation_id.clone(),
             child_agent_id: child_agent_id.clone(),
@@ -2583,6 +2587,7 @@ mod tests {
         };
         let mut spec = crate::runtime::subagent::ipc::SubagentChildSpec {
             protocol_version: crate::runtime::subagent::ipc::SUBAGENT_IPC_VERSION,
+            product_root: dir.path().to_path_buf(),
             subagent_id: crate::runtime::identity::SubagentId::new("conv-1-subagent-1"),
             child_conversation_id: crate::runtime::identity::ConversationId::new(
                 "conv-1-subagent-1",

@@ -1309,7 +1309,7 @@ async fn running_child_inspection_is_execution_independent() {
             .await;
         let Some(RuntimeClientResult::Snapshot {
             snapshot: parent_after_inspection,
-            ..
+            cursor: inspection_cursor,
         }) = response.result
         else {
             panic!("parent snapshot succeeds after inspection: {response:?}");
@@ -1350,54 +1350,50 @@ async fn running_child_inspection_is_execution_independent() {
             "inspection does not change child lifecycle"
         );
 
+        let subscription = parent
+            .request(|id| RuntimeClientRequest::SubscribeEvents {
+                id: rustx::runtime_client::RequestId::new(id),
+                after_cursor: inspection_cursor,
+            })
+            .await;
+        assert!(matches!(
+            subscription.result,
+            Some(RuntimeClientResult::Subscribed { .. })
+        ));
+        let preceding_attempt = parent_before_inspection
+            .attempt
+            .as_ref()
+            .expect("the delegating parent attempt exists")
+            .attempt_id
+            .clone();
         gate.release();
-        let mut final_snapshot = None;
-        for _ in 0..4_000 {
-            let response = parent
-                .request(|id| RuntimeClientRequest::SnapshotGet {
-                    id: rustx::runtime_client::RequestId::new(id),
-                })
-                .await;
-            let Some(RuntimeClientResult::Snapshot { snapshot, .. }) = response.result else {
-                panic!("parent snapshot succeeds after releasing the child: {response:?}");
-            };
-            let settled = snapshot.subagents.iter().any(|child| {
-                child.child_conversation_id == child_conversation_id
-                    && child.state == rustx::runtime::subagent::SubagentState::Succeeded
-            });
-            let child_answer_count = snapshot
-                .messages
-                .iter()
-                .filter(|message| match message {
-                    rustx::message::types::MessageBlock::User(user) => {
-                        user.content.iter().any(|block| {
-                            matches!(
-                                block,
-                                rustx::message::types::UserContentBlock::Text(text)
-                                    if text.text.contains("CHILD-ANSWER")
-                            )
-                        })
-                    }
-                    _ => false,
-                })
-                .count();
-            let parent_attempt_completed =
-                snapshot.attempt.as_ref().is_some_and(|attempt| {
-                    matches!(
-                        &attempt.phase,
-                        rustx::runtime_client::snapshot::RuntimeClientAttemptPhase::Settled {
-                            outcome:
-                                rustx::runtime_client::event::RuntimeClientOutcome::Completed { .. }
-                        }
-                    )
-                });
-            if settled && child_answer_count == 1 && parent_attempt_completed {
-                final_snapshot = Some(snapshot);
-                break;
+        // A settled *previous* parent attempt is not proof that the new child
+        // inbound was processed. Await the new attempt's native terminal event.
+        tokio::time::timeout(LIVENESS, async {
+            loop {
+                let mut record = String::new();
+                assert_ne!(parent.stdout.read_line(&mut record).await.unwrap(), 0);
+                let notification: RuntimeClientProtocolEvent = serde_json::from_str(record.trim()).unwrap();
+                if matches!(notification.event,
+                    rustx::runtime_client::event::RuntimeClientEvent::AttemptSettled {
+                        attempt_id,
+                        outcome: rustx::runtime_client::event::RuntimeClientOutcome::Completed { .. }
+                    } if attempt_id != preceding_attempt
+                ) { break; }
             }
-            tokio::task::yield_now().await;
-        }
-        let final_snapshot = final_snapshot.expect("the gated child settles exactly once");
+        }).await.expect("the child-answer attempt settles through its event channel");
+        let response = parent
+            .request(|id| RuntimeClientRequest::SnapshotGet {
+                id: rustx::runtime_client::RequestId::new(id),
+            })
+            .await;
+        let Some(RuntimeClientResult::Snapshot {
+            snapshot: final_snapshot,
+            ..
+        }) = response.result
+        else {
+            panic!("parent snapshot succeeds after the final attempt: {response:?}");
+        };
         let child_state = final_snapshot
             .subagents
             .iter()

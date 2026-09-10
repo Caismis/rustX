@@ -989,6 +989,12 @@ impl LocalConversationCore {
             },
             ConversationId::new("conversation-standalone"),
             paths.artifacts_root(),
+            Arc::new(
+                crate::runtime::local_storage::LocalStorageGuard::writer(&paths.runtime_root)
+                    .map_err(|e| LocalRuntimeError::ToolRuntime {
+                        detail: e.to_string(),
+                    })?,
+            ),
         )
         .await
     }
@@ -996,7 +1002,7 @@ impl LocalConversationCore {
     /// Composes one selected native `SessionNode`'s linear conversation from
     /// current runtime configuration plus the Session-local persistent state.
     /// This method never reads or writes `SessionCatalog` state.
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     pub(crate) async fn compose_from_config(
         paths: &ResolvedLaunch,
         dependencies: &LocalRuntimeDependencies,
@@ -1005,6 +1011,7 @@ impl LocalConversationCore {
         session_state: SessionPersistentState,
         conversation_id: ConversationId,
         artifacts_root: PathBuf,
+        lifecycle: Arc<crate::runtime::local_storage::LocalStorageGuard>,
     ) -> Result<Self, LocalRuntimeError> {
         // The current runtime default was validated by the composition
         // caller before any first-Session publication. Validate it here too
@@ -1030,6 +1037,7 @@ impl LocalConversationCore {
             &paths.workspace,
             artifacts_root.clone(),
         );
+        tool_runtime_config.lifecycle = Some(lifecycle);
         tool_runtime_config.environment = Some(base_environment.clone());
         let tool_runtime =
             ConversationToolRuntime::from_config(conversation_id.clone(), tool_runtime_config)
@@ -1104,7 +1112,7 @@ impl LocalConversationCore {
                 },
                 workspace: WorkspaceManager::new(
                     tool_runtime.workspace().root(),
-                    tool_runtime.artifacts().root(),
+                    paths.runtime_root.join("workspaces"),
                 ),
                 // Launch-scoped: capacity belongs to the live registry, and
                 // resource reload deliberately never resizes it.
@@ -1340,6 +1348,17 @@ impl LocalConversationCore {
         dependencies: &LocalRuntimeDependencies,
         preparation: &ChildPreparation,
     ) -> Result<Self, LocalRuntimeError> {
+        let lifecycle = Arc::new(
+            crate::runtime::local_storage::LocalStorageGuard::access_existing(&spec.product_root)
+                .map_err(|e| LocalRuntimeError::ToolRuntime {
+                detail: e.to_string(),
+            })?,
+        );
+        lifecycle
+            .confined(&spec.runtime_root)
+            .map_err(|e| LocalRuntimeError::ToolRuntime {
+                detail: e.to_string(),
+            })?;
         // 1-4. The child's model authority, materialized from the
         // parent-frozen resolved invocation. There is deliberately no model
         // catalog step here: `models.jsonc` is mutable, and reopening it
@@ -1372,6 +1391,7 @@ impl LocalConversationCore {
             &spec.workspace_snapshot.logical_workspace,
             spec.runtime_root.join("artifacts"),
         );
+        runtime_config.lifecycle = Some(lifecycle);
         runtime_config.environment = Some(base_environment.clone());
         let durable_store_path = spec
             .runtime_root
@@ -1390,7 +1410,8 @@ impl LocalConversationCore {
                         "open child durable conversation store {}: {error}",
                         durable_store_path.display()
                     ),
-                })?,
+                })?
+                .with_lifecycle(runtime_config.lifecycle.as_ref().unwrap().clone()),
         );
         runtime_config.durable_binding = Some(ConversationStoreBinding::new(durable_store));
         let tool_runtime = ConversationToolRuntime::from_config(
@@ -1774,11 +1795,20 @@ impl LocalSessionProduct {
         // runtime root with no catalog at all. The seeded conversation
         // database it leaves behind is not published state: nothing names
         // it, so it is neither selectable nor resumable.
-        let catalog = if let Some(catalog) = SessionCatalog::open_existing(&paths.runtime_root)? {
+        let lifecycle = Arc::new(
+            crate::runtime::local_storage::LocalStorageGuard::writer(&paths.runtime_root).map_err(
+                |e| LocalRuntimeError::ToolRuntime {
+                    detail: e.to_string(),
+                },
+            )?,
+        );
+        let mut catalog = if let Some(catalog) = SessionCatalog::open_existing(lifecycle.root())? {
             catalog
         } else {
-            SessionCatalog::create_unpublished(&paths.runtime_root, &state)?
+            SessionCatalog::create_unpublished(lifecycle.root(), &state)?
         };
+        catalog.recover_storage(&lifecycle)?;
+        catalog.retain_lifecycle(lifecycle.clone());
         // Startup is not a resume. A launch begins on an empty Session and
         // leaves every persisted Session as history reachable through
         // `/resume`; only an explicit request binds a persisted one. An
@@ -1857,6 +1887,7 @@ impl LocalSessionProduct {
             session_state,
             node.conversation_id,
             artifacts_root,
+            lifecycle,
         )
         .await?;
         let supervisor = Arc::new(LocalSessionSupervisor::new(catalog, default_model));
@@ -2004,6 +2035,7 @@ enum ConversationInspectionAuthority {
 pub struct LocalConversationInspection {
     conversation_id: ConversationId,
     authority: ConversationInspectionAuthority,
+    _lifecycle: Arc<crate::runtime::local_storage::LocalStorageGuard>,
 }
 
 impl std::fmt::Debug for LocalConversationInspection {
@@ -2017,7 +2049,7 @@ impl std::fmt::Debug for LocalConversationInspection {
                     ConversationInspectionAuthority::Durable(_) => "durable",
                 },
             )
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -2046,23 +2078,42 @@ impl LocalConversationInspection {
         paths: &LaunchLocations,
         conversation_id: &ConversationId,
     ) -> Result<Self, LocalRuntimeError> {
+        let lifecycle = Arc::new(
+            crate::runtime::local_storage::LocalStorageGuard::access_existing(&paths.runtime_root)
+                .map_err(|e| LocalRuntimeError::ToolRuntime {
+                    detail: e.to_string(),
+                })?,
+        );
         if !is_safe_child_conversation_component(conversation_id) {
             return Err(LocalRuntimeError::ConversationNotFound {
                 conversation_id: conversation_id.clone(),
                 path: child_conversation_store_path(&paths.runtime_root, conversation_id),
             });
         }
-        let socket_path =
-            child_conversation_inspection_socket_path(&paths.runtime_root, conversation_id);
+        let socket_path = lifecycle
+            .confined(&child_conversation_inspection_socket_path(
+                lifecycle.root(),
+                conversation_id,
+            ))
+            .map_err(|e| LocalRuntimeError::ToolRuntime {
+                detail: e.to_string(),
+            })?;
         if let Ok(stream) = crate::local_runtime::live_inspection::connect_live(&socket_path).await
         {
             return Ok(Self {
                 conversation_id: conversation_id.clone(),
                 authority: ConversationInspectionAuthority::Live(stream),
+                _lifecycle: lifecycle,
             });
         }
-        let liveness_path =
-            child_conversation_inspection_liveness_path(&paths.runtime_root, conversation_id);
+        let liveness_path = lifecycle
+            .confined(&child_conversation_inspection_liveness_path(
+                lifecycle.root(),
+                conversation_id,
+            ))
+            .map_err(|e| LocalRuntimeError::ToolRuntime {
+                detail: e.to_string(),
+            })?;
         match crate::local_runtime::live_inspection::probe_liveness(&liveness_path) {
             Ok(Some(true)) => {
                 return Err(LocalRuntimeError::LiveInspectionUnavailable {
@@ -2086,7 +2137,14 @@ impl LocalConversationInspection {
                 });
             }
         }
-        let database_path = child_conversation_store_path(&paths.runtime_root, conversation_id);
+        let database_path = lifecycle
+            .confined(&child_conversation_store_path(
+                lifecycle.root(),
+                conversation_id,
+            ))
+            .map_err(|e| LocalRuntimeError::ToolRuntime {
+                detail: e.to_string(),
+            })?;
         if !database_path.is_file() {
             return Err(LocalRuntimeError::ConversationNotFound {
                 conversation_id: conversation_id.clone(),
@@ -2094,15 +2152,16 @@ impl LocalConversationInspection {
             });
         }
         let store = Arc::new(
-            SqliteConversationStore::open(conversation_id.clone(), &database_path).map_err(
-                |error| LocalRuntimeError::DurableConversation {
+            SqliteConversationStore::open_existing(conversation_id.clone(), &database_path)
+                .map_err(|error| LocalRuntimeError::DurableConversation {
                     path: database_path.clone(),
                     detail: error.to_string(),
-                },
-            )?,
+                })?
+                .with_lifecycle(lifecycle.clone()),
         );
         Ok(Self {
             conversation_id: conversation_id.clone(),
+            _lifecycle: lifecycle,
             authority: ConversationInspectionAuthority::Durable(RuntimeClientHost::new_durable(
                 store, None,
             )?),
@@ -2499,6 +2558,7 @@ mod subagent_child_tests {
     ) -> SubagentChildSpec {
         SubagentChildSpec {
             protocol_version: SUBAGENT_IPC_VERSION,
+            product_root: root.to_path_buf(),
             subagent_id: SubagentId::new("conv-parent-subagent-1"),
             child_conversation_id: ConversationId::new("conv-parent-subagent-1"),
             child_agent_id: AgentId::new("agent-child"),
@@ -3567,7 +3627,8 @@ mod conversation_inspection_tests {
             .expect("child store");
         store.initialize(&[]).expect("child history");
         let lease = LiveConversationInspectionLease::acquire(
-            crate::runtime::subagent::child_conversation_inspection_liveness_path(
+            &runtime_root,
+            &crate::runtime::subagent::child_conversation_inspection_liveness_path(
                 &runtime_root,
                 &conversation_id,
             ),
@@ -3703,6 +3764,7 @@ mod composition_tests {
         ]
     }
 
+    #[allow(clippy::too_many_lines)] // Composes the real test runtime and its resource fixtures.
     async fn compose_fixture(test_name: &str, arguments: serde_json::Value) -> ComposedFixture {
         let root = tempfile::tempdir().expect("fixture root");
         let workspace = root.path().join("workspace");
@@ -3793,6 +3855,10 @@ mod composition_tests {
             },
             ConversationId::new("conv-163-composition"),
             root.path().join("artifacts"),
+            Arc::new(
+                crate::runtime::local_storage::LocalStorageGuard::writer(&launch.runtime_root)
+                    .unwrap(),
+            ),
         )
         .await
         .expect("real production composition");

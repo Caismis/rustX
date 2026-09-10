@@ -369,6 +369,10 @@ impl Child {
             },
             conversation_id,
             artifacts_root,
+            Arc::new(
+                crate::runtime::local_storage::LocalStorageGuard::writer(&launch.runtime_root)
+                    .unwrap(),
+            ),
         )
         .await
         .map_err(|error| format!("{error:?}"))?;
@@ -1201,6 +1205,10 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 },
                 ConversationId::new(CONVERSATION),
                 artifacts_root,
+                Arc::new(
+                    crate::runtime::local_storage::LocalStorageGuard::writer(&launch.runtime_root)
+                        .unwrap(),
+                ),
             )
             .await
             .expect("compose the FND-06 child runtime");

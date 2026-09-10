@@ -183,6 +183,8 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         model_set.result,
         Some(RuntimeClientResult::ModelSet { .. })
     ));
+    product.runtime().shutdown().await.unwrap();
+    drop(endpoint);
     drop(product);
 
     std::fs::remove_dir_all(skills_root.join("old-skill")).expect("remove old Skill");
@@ -315,6 +317,8 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         ),
         "unexpected SessionNew response: {new_session:?}"
     );
+    drop(snapshot);
+    drop(resumed_endpoint);
     drop(resumed);
     let fresh = LocalSessionProduct::compose(&(startup).resolve(), &dependencies())
         .await

@@ -166,13 +166,7 @@ async fn interactive_and_headless_share_one_semantic_composition() {
     let interactive = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies)
         .await
         .expect("the interactive composition succeeds");
-    let headless = HeadlessConversationRuntime::compose(&(paths).resolve(), &dependencies)
-        .await
-        .expect("the headless composition succeeds");
-
-    // Both final paths are already active.
     assert!(interactive.runtime().is_activated());
-    assert!(headless.runtime().is_activated());
 
     // The semantic composition resolves identically on both paths.
     let interactive_projection = semantic_projection(
@@ -183,6 +177,27 @@ async fn interactive_and_headless_share_one_semantic_composition() {
         interactive.tool_runtime(),
         interactive.capability(),
     );
+    assert!(
+        interactive.tool_runtime().is_runtime_client_bound(),
+        "the interactive runtime bound its Runtime Client"
+    );
+    // The interactive runtime's protocol surface still speaks for the same
+    // conversation.
+    let (attachment, result) = interactive
+        .host()
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .expect("attach");
+    assert!(matches!(
+        result,
+        rustx::runtime_client::types::RuntimeClientResult::Initialized { .. }
+    ));
+    interactive.runtime().shutdown().await.unwrap();
+    drop(attachment);
+    drop(interactive);
+    let headless = HeadlessConversationRuntime::compose(&(paths).resolve(), &dependencies)
+        .await
+        .expect("the headless composition succeeds after the first owner releases storage");
+    assert!(headless.runtime().is_activated());
     let headless_projection = semantic_projection(
         headless.runtime().conversation_id(),
         headless.runtime().agent_id(),
@@ -231,10 +246,6 @@ async fn interactive_and_headless_share_one_semantic_composition() {
     // The one protocol-shaped difference: the interactive runtime owns a
     // Runtime Client host, the headless runtime owns none.
     assert!(
-        interactive.tool_runtime().is_runtime_client_bound(),
-        "the interactive runtime bound its Runtime Client"
-    );
-    assert!(
         !headless.tool_runtime().is_runtime_client_bound(),
         "no Runtime Client host was ever constructed for the headless runtime"
     );
@@ -242,16 +253,6 @@ async fn interactive_and_headless_share_one_semantic_composition() {
         !headless.capability().is_runtime_client_bound(),
         "the headless runtime claimed no Runtime Client capability binding"
     );
-    // The interactive runtime's protocol surface still speaks for the same
-    // conversation.
-    let (_attachment, result) = interactive
-        .host()
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
-        .expect("attach");
-    assert!(matches!(
-        result,
-        rustx::runtime_client::types::RuntimeClientResult::Initialized { .. }
-    ));
 }
 
 /// The catalog for the emulator-driven tests, mirroring the issue 47
