@@ -813,22 +813,41 @@ describe("CommandDispatcher", () => {
     assert.ok(!COMMANDS.some(command => command.name === "/reasoning"));
   });
 
-  it("CFG238 selects generation-time reasoning through whole-state model_set", async () => {
+  for (const profile of ["default", "clear", "off", "set", "on", null]) {
+    it(`CFG238 profile grammar selects ${profile ?? "catalog default"} through whole-state model_set`, async () => {
+      const { peer, session, dispatcher } = await harness();
+      const before = structuredClone(session.state);
+      const command = dispatcher.submit(profile === null ? "/model profile clear" : `/model profile set ${profile}`);
+      await peer.awaitRequests(3);
+      assert.equal(peer.requests[2]?.method, "model_get");
+      const current = sessionModel("alpha/model-a");
+      current.configured.reasoningProfile = "previous";
+      current.configured.requestParams = { temperature: 0.5 };
+      current.configured.maxOutputTokens = 2048;
+      current.configured.summaryModel = { mode: "explicit", model: "alpha/summary", request_params: { temperature: 0.2 } };
+      peer.respond(3, { type: "model", model: current });
+      await peer.awaitRequests(4);
+      const request = peer.requests[3];
+      assert.equal(request?.method, "model_set");
+      const expected = { ...current.configured };
+      if (profile === null) delete expected.reasoningProfile;
+      else expected.reasoningProfile = profile;
+      if (request?.method === "model_set") assert.deepEqual(request.config, expected);
+      peer.respond(4, { type: "model_set", model: { ...current, configured: expected } });
+      assert.equal((await command).kind, "transient");
+      assert.equal(peer.requests.length, 4);
+      assert.deepEqual(session.state, before, "responses never mutate the semantic projection");
+    });
+  }
+
+  it("CFG238 rejects obsolete ambiguous profile syntax without a native operation", async () => {
     const { peer, dispatcher } = await harness();
-    const command = dispatcher.submit("/model profile off");
-    await peer.awaitRequests(3);
-    assert.equal(peer.requests[2]?.method, "model_get");
-    const current = sessionModel("alpha/model-a");
-    peer.respond(3, { type: "model", model: current });
-    await peer.awaitRequests(4);
-    const request = peer.requests[3];
-    assert.equal(request?.method, "model_set");
-    if (request?.method === "model_set") {
-      assert.deepEqual(request.config, { ...current.configured, reasoningProfile: "off" });
+    for (const text of ["/model profile default", "/model profile off", "/model profile set", "/model profile", "/model profile clear extra"]) {
+      const result = await dispatcher.submit(text);
+      assert.equal(result.kind, "transient");
+      if (result.kind === "transient") assert.equal(result.text, "usage: /model profile set <id> | /model profile clear");
     }
-    peer.respond(4, { type: "model_set", model: current });
-    assert.equal((await command).kind, "transient");
-    assert.equal(peer.requests.length, 4);
+    assert.equal(peer.requests.length, 2);
   });
 
   it("CFG238 save declares user scope, fields and caller revision without live mutation", async () => {

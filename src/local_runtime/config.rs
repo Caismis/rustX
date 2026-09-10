@@ -646,11 +646,7 @@ impl CurrentRuntimeConfig {
     /// The context policy supplied to the current runtime composition.
     #[must_use]
     pub const fn context_policy(&self) -> SessionContextPolicy {
-        SessionContextPolicy {
-            reserve_tokens: self.context.reserve_tokens,
-            keep_recent_tokens: self.context.keep_recent_tokens,
-            summary_output_cap: self.context.summary_output_cap,
-        }
+        self.context.to_policy()
     }
 
     /// The validated finite model request deadline policy for this runtime.
@@ -828,6 +824,18 @@ pub struct ContextPolicyDocument {
     /// through the runtime-owned protected max-output field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary_output_cap: Option<u32>,
+}
+
+impl ContextPolicyDocument {
+    /// The native context policy represented by this document.
+    #[must_use]
+    pub const fn to_policy(&self) -> SessionContextPolicy {
+        SessionContextPolicy {
+            reserve_tokens: self.reserve_tokens,
+            keep_recent_tokens: self.keep_recent_tokens,
+            summary_output_cap: self.summary_output_cap,
+        }
+    }
 }
 
 impl Default for ContextPolicyDocument {

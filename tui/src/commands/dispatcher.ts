@@ -480,13 +480,15 @@ export class CommandDispatcher {
   ): Promise<CommandOutcome> {
     // `show` is answered from the projection alone; every other spelling
     // needs the runtime's authoritative catalog.
-    if (argument.startsWith("profile ")) {
-      const profile = argument.slice("profile ".length).trim();
-      if (!profile || /\s/.test(profile)) return transient("error", "usage: /model profile <id|default>");
+    if (/^profile(?:\s|$)/.test(argument)) {
+      const parts = argument.split(/\s+/);
+      const clear = parts.length === 2 && parts[1] === "clear";
+      const profile = parts.length === 3 && parts[1] === "set" ? parts[2] : undefined;
+      if (!clear && !profile) return transient("error", "usage: /model profile set <id> | /model profile clear");
       const current = await session.modelGet();
       const configured = { ...current.configured };
-      if (profile === "default") delete configured.reasoningProfile;
-      else configured.reasoningProfile = profile;
+      if (clear) delete configured.reasoningProfile;
+      else if (profile !== undefined) configured.reasoningProfile = profile;
       const updated = await session.modelSet(configured);
       return transient("info", `Session reasoning profile -> ${updated.configured.reasoningProfile ?? "model default"}; next eligible admission. Defaults unchanged.`);
     }

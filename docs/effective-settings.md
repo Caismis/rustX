@@ -36,10 +36,12 @@ persisted Session-local model selection.
 - `/model` opens the native catalog selector; `/model provider/model` selects a
   model for the active Session. Primary overrides reset as documented by that
   control, while the independent summary policy is preserved.
-- `/model profile <id|default>` reads the whole current native model configuration,
-  replaces its reasoning-profile selection, and submits `model_set`. The native
+- `/model profile set <id>` and `/model profile clear` read the whole current native
+  model configuration, replace its reasoning-profile selection, and submit `model_set`. The native
   binding and context validators decide whether the complete selection is valid.
-  `default` clears the explicit selection and uses the catalog default profile.
+  `clear` removes the explicit selection and uses the catalog default profile.
+  Profile IDs are opaque: `set default` and `set clear` select those literal IDs.
+  The old `/model profile <id>` syntax is rejected; there is no sentinel or alias.
 - `/approval policy|full_access` requests the native safe-boundary transition.
 - `/show-reasoning on|off` changes rendering only: no provider parameters, model
   selection, tool invocation or canonical history changes. `/reasoning` is unknown;
@@ -149,9 +151,20 @@ LaunchRequest, reopen project configuration, resolve trust, reload the catalog, 
 inspect resource files. Full prospective launch readiness remains the job of
 `rustx config check`, `rustx config show --sources`, and normal launch resolution.
 
-The targeted model/profile passes the existing native `analyze_selection` path
-directly against that captured catalog, independently of project precedence. A
-valid project model cannot hide an invalid saved model/profile. Validation is
+A model save changes only `model.model` and `model.reasoningProfile`, but validates
+**the complete model object parsed from the staged bytes**, including preserved
+`requestParams`, `maxOutputTokens`, and `summaryModel`. The canonical
+`SessionModelConfig` schema supplies its defaults; `analyze_session_model_config`
+uses native `analyze_selection` semantics for the primary selection and any explicit
+summary, with their respective Session and summary request-parameter layers. The
+same native context-budget rule as launch is applied to the staged user context
+(with built-in defaults) and those model limits. Thus preserved settings cannot
+silently become invalid after changing model/profile. Approval-only saves retain
+the user schema/ownership gate but do not validate unrelated model semantics.
+
+This is user-document semantic validation against the captured catalog, independent
+of project precedence, not full current-project prospective launch resolution. A
+valid project model cannot hide an invalid staged user selection. Validation is
 offline and never resolves credentials or starts provider, process, or Session work.
 The writer then rereads the target for a **final fingerprint check**, and only then
 renames the candidate over it.
@@ -185,6 +198,19 @@ A → B → A edit is indistinguishable from unchanged content by design.
 | `cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_reconnect` | Init/check/composition, disk A, admission-gated C/on, later Session B/off, actual scripted provider requests, approval pending, separate save, busy/success/failed reload, detach/attach equality, fresh launch/Session observes saved B |
 
 Repair regressions additionally cover:
+- `cfg238_staged_model_preserved_output_budget_is_validated`: a valid A/4096 user
+  document cannot become B/4096 when B permits only 2048; rejection after staging
+  and before `Validated` preserves exact original bytes and revision.
+- `cfg238_staged_model_preserved_request_params_are_validated`: preserved `messages`
+  is legal as an opaque Responses parameter but protected for Chat Completions;
+  the same pre-publication rejection preserves bytes and revision.
+- `cfg238_staged_model_validates_user_context_with_builtin_defaults`: the existing
+  context-window/reserve/output rule rejects a newly impossible user budget.
+- `cfg238_approval_save_does_not_validate_unrelated_model_semantics`: approval
+  remains writable when unrelated model/context semantics are invalid.
+- `analyze_session_model_config_validates_primary_and_explicit_summary` and
+  `analyze_session_model_config_validates_complete_summary_selection`: native
+  primary/summary layers, effective budgets, and explicit summary failures.
 - `cfg238_user_write_does_not_reopen_mutable_project_or_catalog`: launch through an
   explicit project document, then delete/corrupt it and remove the catalog file;
   user save still succeeds and never modifies the project.

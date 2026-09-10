@@ -832,7 +832,8 @@ Pi source is copied into this repository.
 effective/pending approval, current resources and frozen attempt facts. It uses the
 native snapshot; reconnect replaces the view without replaying controls.
 
-Use `/model profile <id|default>` for generation-time reasoning, and
+Use `/model profile set <id>` or `/model profile clear` for generation-time reasoning
+(profile IDs such as `default` and `clear` remain selectable through `set`), and
 `/show-reasoning on|off` for display only. `/reasoning` is no longer a command.
 
 `/defaults user` reads the declared user document and its revision. Then

@@ -152,6 +152,28 @@ impl SessionModelConfig {
     }
 }
 
+/// Analyze the complete Session configuration without credentials, bindings, or I/O.
+/// Primary and explicit summary selections use the same static semantics and
+/// request-parameter layers as native binding. An absent summary follows primary.
+pub(crate) fn analyze_session_model_config(
+    catalog: &crate::model::catalog::ModelCatalog,
+    config: &SessionModelConfig,
+) -> Result<(ModelInvocationView, Option<ModelInvocationView>), ModelInvocationError> {
+    let analyze = |selection: ModelSelection, layer| {
+        crate::model::invocation::analyze_selection(
+            catalog.model(&selection.model)?,
+            &selection,
+            layer,
+        )
+    };
+    let primary = analyze(config.selection(), RequestParamsLayer::SessionOverrides)?;
+    let summary = config
+        .summary_selection()
+        .map(|selection| analyze(selection, RequestParamsLayer::SummaryOverrides))
+        .transpose()?;
+    Ok((primary, summary))
+}
+
 /// The frozen summary-model resolution of one attempt.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AttemptSummaryModel {
@@ -432,4 +454,73 @@ pub struct AttemptModelView {
     pub primary: ModelInvocationView,
     /// The attempt's frozen summary policy.
     pub summary: SummaryModelView,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::catalog::ModelCatalog;
+
+    #[test]
+    fn analyze_session_model_config_validates_primary_and_explicit_summary() {
+        let catalog = ModelCatalog::from_jsonc_slice(include_bytes!(
+            "../../examples/local-runtime/minimal/models.jsonc"
+        ))
+        .unwrap();
+        let mut config = SessionModelConfig::of(ModelRef::parse("example/demo-model").unwrap());
+        config.max_output_tokens = Some(2048);
+        config.summary_model = SummaryModelPolicy::Explicit {
+            model: config.model.clone(),
+            reasoning_profile: None,
+            request_params: RequestParams::new(),
+            max_output_tokens: Some(1024),
+        };
+        let (primary, summary) = analyze_session_model_config(&catalog, &config).unwrap();
+        assert_eq!(primary.max_output_tokens, 2048);
+        assert_eq!(summary.unwrap().max_output_tokens, 1024);
+
+        config
+            .request_params
+            .insert("messages".into(), serde_json::json!([]));
+        let ModelInvocationError::ProtectedKey(error) =
+            analyze_session_model_config(&catalog, &config).unwrap_err()
+        else {
+            panic!("primary protected key must fail");
+        };
+        assert_eq!(error.layer, RequestParamsLayer::SessionOverrides);
+        config.request_params.clear();
+        let SummaryModelPolicy::Explicit { request_params, .. } = &mut config.summary_model else {
+            unreachable!()
+        };
+        request_params.insert("messages".into(), serde_json::json!([]));
+        let ModelInvocationError::ProtectedKey(error) =
+            analyze_session_model_config(&catalog, &config).unwrap_err()
+        else {
+            panic!("summary protected key must fail");
+        };
+        assert_eq!(error.layer, RequestParamsLayer::SummaryOverrides);
+    }
+
+    #[test]
+    fn analyze_session_model_config_validates_complete_summary_selection() {
+        let catalog = ModelCatalog::from_jsonc_slice(include_bytes!(
+            "../../examples/local-runtime/minimal/models.jsonc"
+        ))
+        .unwrap();
+        let mut config = SessionModelConfig::of(ModelRef::parse("example/demo-model").unwrap());
+        for (model, profile, budget) in [
+            ("example/missing", None, None),
+            ("example/demo-model", Some("missing"), None),
+            ("example/demo-model", None, Some(0)),
+            ("example/demo-model", None, Some(4097)),
+        ] {
+            config.summary_model = SummaryModelPolicy::Explicit {
+                model: ModelRef::parse(model).unwrap(),
+                reasoning_profile: profile.map(|p| ReasoningProfileId::parse(p).unwrap()),
+                request_params: RequestParams::new(),
+                max_output_tokens: budget,
+            };
+            assert!(analyze_session_model_config(&catalog, &config).is_err());
+        }
+    }
 }

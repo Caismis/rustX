@@ -691,31 +691,16 @@ pub fn analyze(
         .to_policy()
         .map_err(|e| e.clone())?;
     config.tool_environment().map_err(|e| e.to_string())?;
-    models
-        .model(&config.model.model)
-        .map_err(|e| e.to_string())?;
-    let mut budgets = Vec::new();
-    for (selection, layer) in std::iter::once((
-        config.model.selection(),
-        crate::model::invocation::RequestParamsLayer::SessionOverrides,
-    ))
-    .chain(config.model.summary_selection().map(|selection| {
-        (
-            selection,
-            crate::model::invocation::RequestParamsLayer::SummaryOverrides,
-        )
-    })) {
-        let view = crate::model::invocation::analyze_selection(
-            models.model(&selection.model).map_err(|e| e.to_string())?,
-            &selection,
-            layer,
-        )
-        .map_err(|e| e.to_string())?;
-        budgets.push((view.context_window, view.max_output_tokens));
-    }
+    let (primary, summary) =
+        crate::model::session::analyze_session_model_config(&models, &config.model)
+            .map_err(|e| e.to_string())?;
+    let summary = summary.as_ref().unwrap_or(&primary);
     config
         .context_policy()
-        .validate_budgets(budgets[0], *budgets.last().expect("primary budget"))
+        .validate_budgets(
+            (primary.context_window, primary.max_output_tokens),
+            (summary.context_window, summary.max_output_tokens),
+        )
         .map_err(|error| {
             LaunchFailure::at(
                 Some(user_path.clone()),
@@ -1221,6 +1206,26 @@ fn apply_defaults(target: &mut Map<String, Value>, provenance: &mut BTreeMap<Str
             }
         }
     }
+}
+
+/// Materialize only the model-dependent user sections from an already parsed
+/// layer. Deserialize whole sections through the native schemas, never recreate
+/// a selection from the finite mutation. No project precedence or I/O is involved.
+pub(super) fn user_model_sections(
+    mut layer: Map<String, Value>,
+) -> Result<
+    (
+        crate::model::session::SessionModelConfig,
+        super::config::ContextPolicyDocument,
+    ),
+    LaunchFailure,
+> {
+    apply_defaults(&mut layer, &mut BTreeMap::new());
+    let model = serde_json::from_value(layer.remove("model").ok_or("missing user model")?)
+        .map_err(|e| e.to_string())?;
+    let context = serde_json::from_value(layer.remove("context").expect("built-in context"))
+        .map_err(|e| e.to_string())?;
+    Ok((model, context))
 }
 
 #[allow(clippy::too_many_lines)] // One finite authoring/field-authority boundary.

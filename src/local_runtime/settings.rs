@@ -269,18 +269,20 @@ impl UserDefaults {
         let bytes = crate::config_format::read_bounded(staged.path()).map_err(io_failure)?;
         // Reuse the canonical user-layer schema/ownership parser. This validates
         // the document, not readiness of any mutable project or resource files.
-        super::launch::parse_layer(&target, &bytes, false).map_err(invalid)?;
-        if let DefaultValue::ModelSelection { selection } = &value {
-            let mut config = crate::model::session::SessionModelConfig::of(selection.model.clone());
-            config
-                .reasoning_profile
-                .clone_from(&selection.reasoning_profile);
-            crate::model::invocation::analyze_selection(
-                self.models.model(&config.model).map_err(invalid)?,
-                &config.selection(),
-                crate::model::invocation::RequestParamsLayer::SessionOverrides,
-            )
-            .map_err(invalid)?;
+        let layer = super::launch::parse_layer(&target, &bytes, false).map_err(invalid)?;
+        if matches!(value, DefaultValue::ModelSelection { .. }) {
+            let (config, context) = super::launch::user_model_sections(layer).map_err(invalid)?;
+            let (primary, summary) =
+                crate::model::session::analyze_session_model_config(&self.models, &config)
+                    .map_err(invalid)?;
+            let summary = summary.as_ref().unwrap_or(&primary);
+            context
+                .to_policy()
+                .validate_budgets(
+                    (primary.context_window, primary.max_output_tokens),
+                    (summary.context_window, summary.max_output_tokens),
+                )
+                .map_err(invalid)?;
         }
         frontier(Frontier::Validated)?;
         check_revision(&target, expected)?;
@@ -391,6 +393,145 @@ mod tests {
             .admit(|| crate::credentials::CredentialSnapshot::new([]))
             .unwrap();
         (root, UserDefaults::new(&launch), project)
+    }
+
+    fn model_change_fixture(preserved: &str) -> (tempfile::TempDir, UserDefaults) {
+        let (root, owner) = fixture();
+        let mut catalog: serde_json::Value = crate::config_format::parse(include_bytes!(
+            "../../examples/local-runtime/minimal/models.jsonc"
+        ))
+        .unwrap();
+        let mut a = catalog["providers"]["example"]["models"][0].clone();
+        a["id"] = "a".into();
+        a["protocol"] = "openai_responses".into();
+        a.as_object_mut().unwrap().remove("compat");
+        let mut b = a.clone();
+        b["id"] = "b".into();
+        b["protocol"] = "openai_chat_completions".into();
+        b["compat"] = serde_json::json!({"chatReasoningReplay": "omit"});
+        b["maxOutputTokens"] = 2048.into();
+        b["contextWindow"] = 8192.into();
+        catalog["providers"]["example"]["models"] = serde_json::json!([a, b]);
+        std::fs::write(
+            owner.directory.join("models.jsonc"),
+            serde_json::to_vec(&catalog).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            owner.target(),
+            format!(
+                r#"{{ // preserved settings
+          "model": {{ "model": "example/a", {preserved} }}
+        }}"#
+            ),
+        )
+        .unwrap();
+        let workspace = root.path().join("workspace");
+        let host =
+            HostEnvironment::from_paths(workspace.clone(), root.path().join("home"), None, None)
+                .unwrap();
+        let launch = super::super::launch::analyze(
+            &LaunchRequest {
+                workspace: Some(workspace),
+                ..LaunchRequest::default()
+            },
+            &host,
+        )
+        .unwrap()
+        .admit(|| crate::credentials::CredentialSnapshot::new([]))
+        .unwrap();
+        let owner = UserDefaults::new(&launch);
+        std::fs::remove_file(owner.directory.join("models.jsonc")).unwrap();
+        (root, owner)
+    }
+
+    fn assert_preserved_model_setting_rejected(preserved: &str) {
+        let (_root, owner) = model_change_fixture(preserved);
+        let before = std::fs::read(owner.target()).unwrap();
+        let expected = current(&owner);
+        let value = DefaultValue::ModelSelection {
+            selection: ModelDefault {
+                model: crate::model::catalog::ModelRef::parse("example/b").unwrap(),
+                reasoning_profile: None,
+            },
+        };
+        let mut staged = false;
+        let mut validated = false;
+        let result = owner.save_at(DefaultScope::User, &expected, value, |point| {
+            staged |= point == Frontier::Staged;
+            validated |= point == Frontier::Validated;
+            Ok(())
+        });
+        let error = result.expect_err("the actual staged model must be rejected");
+        assert!(
+            !serde_json::to_string(&error)
+                .unwrap()
+                .contains("SECRET_SENTINEL")
+        );
+        assert!(
+            staged && !validated,
+            "rejection precedes the publication frontier"
+        );
+        assert_eq!(std::fs::read(owner.target()).unwrap(), before);
+        assert_eq!(current(&owner), expected);
+    }
+
+    #[test]
+    fn cfg238_staged_model_preserved_output_budget_is_validated() {
+        assert_preserved_model_setting_rejected(r#""maxOutputTokens": 4096"#);
+    }
+
+    #[test]
+    fn cfg238_staged_model_preserved_request_params_are_validated() {
+        // `messages` is opaque to Responses but runtime-owned by Chat Completions.
+        assert_preserved_model_setting_rejected(
+            r#""requestParams": {"messages": ["SECRET_SENTINEL"]}"#,
+        );
+    }
+
+    #[test]
+    fn cfg238_staged_model_validates_user_context_with_builtin_defaults() {
+        let (_root, owner) = model_change_fixture(r#""requestParams": {}"#);
+        // Valid for A/128000; B/8192 cannot fit this reserve plus its 2048
+        // output budget. Other context fields use the canonical built-in defaults.
+        let bytes = br#"{"model":{"model":"example/a"},"context":{"reserveTokens":6144}}"#;
+        std::fs::write(owner.target(), bytes).unwrap();
+        let expected = current(&owner);
+        let value = DefaultValue::ModelSelection {
+            selection: ModelDefault {
+                model: crate::model::catalog::ModelRef::parse("example/b").unwrap(),
+                reasoning_profile: None,
+            },
+        };
+        let mut validated = false;
+        assert!(
+            owner
+                .save_at(DefaultScope::User, &expected, value, |point| {
+                    validated |= point == Frontier::Validated;
+                    Ok(())
+                })
+                .is_err()
+        );
+        assert!(!validated);
+        assert_eq!(std::fs::read(owner.target()).unwrap(), bytes);
+        assert_eq!(current(&owner), expected);
+    }
+
+    #[test]
+    fn cfg238_approval_save_does_not_validate_unrelated_model_semantics() {
+        let (_root, owner) = fixture();
+        let bytes = br#"{"model":{"model":"example/missing","maxOutputTokens":0},"context":{"summaryOutputCap":0}}"#;
+        std::fs::write(owner.target(), bytes).unwrap();
+        let result = owner
+            .save_sync(DefaultScope::User, &current(&owner), approval())
+            .unwrap();
+        let after: serde_json::Value =
+            crate::config_format::parse(&std::fs::read(owner.target()).unwrap()).unwrap();
+        let before: serde_json::Value = crate::config_format::parse(bytes).unwrap();
+        assert_eq!(after["model"], before["model"]);
+        assert_eq!(after["context"], before["context"]);
+        assert_eq!(after["approvalMode"], "full_access");
+        assert_eq!(current(&owner), result.revision);
     }
 
     #[test]

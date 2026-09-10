@@ -27,13 +27,13 @@ export interface CommandSpec {
 export const COMMANDS: readonly CommandSpec[] = [
   { name: "/settings", description: "Inspect native settings, captured sources, and application boundaries." },
   { name: "/defaults", description: "Read the user default document and its revision (separate from live settings).", argumentHint: "user" },
-  { name: "/save-default", description: "Explicitly save selected model/profile or effective approval to user defaults; live state is unchanged.", argumentHint: "user <model|approval> <revision>" },
+  { name: "/save-default", description: "Explicitly save selected model/profile or desired approval to user defaults; live state is unchanged.", argumentHint: "user <model|approval> <revision>" },
   { name: "/help", description: "List the available commands." },
   {
     name: "/model",
     description:
       "Open the searchable model selector, or select one directly; selection resets primary overrides and preserves summary policy.",
-    argumentHint: "[show|provider/model|profile <id|default>]",
+    argumentHint: "[show|provider/model|profile set <id>|profile clear]",
   },
   { name: "/new", description: "Create a new independent local session." },
   {
