@@ -2851,10 +2851,13 @@ after ChildGuidanceOutcome::Accepted:
   either `UnixStream`; there is no listener and no network service.
 - **Anchor acknowledgements route by exact typed identity.** Two units with
   outstanding offers cannot open each other's start gates.
-- **The subagent IPC version is 21 and there is no compatibility decoding.** A
+- **The subagent IPC version is 22 and there is no compatibility decoding.** A
   peer that does not speak exactly this version exits before composing
-  anything. Version 21 adds canonical product-root identity for child lifecycle
-  participation (Issue #254). Version 20 removed the inherited launch-scoped Agent Status
+  anything. Version 22 removes the independently authored absolute child runtime
+  path: the child derives its private allocation from canonical `ProductRoot`,
+  child `ConversationId`, and incarnation identity. Version 21 introduced
+  canonical product-root identity for child lifecycle participation (Issue #254).
+  Version 20 removed the inherited launch-scoped Agent Status
   configuration from `SubagentChildSpec` and carries the child's own frozen
   native Agent Extension composition inside `resolved` instead (Issue #256):
   root and named-role extension sets are independently authored, so this
