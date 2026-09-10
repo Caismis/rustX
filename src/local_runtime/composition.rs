@@ -2587,6 +2587,184 @@ mod subagent_child_tests {
         dir
     }
 
+    /// The effective-extension projection one composed child publishes over
+    /// its own Runtime Client host — the exact surface a live child
+    /// inspection connects to.
+    fn child_projection(
+        child: &super::LocalConversationRuntime,
+    ) -> Option<crate::runtime_client::settings::EffectiveNativeAgentExtensions> {
+        child
+            .host()
+            .snapshot()
+            .expect("the child host projects its snapshot")
+            .0
+            .effective_extensions
+    }
+
+    /// Issue #256 regressions 6, 7 and 8: a child's Runtime Client
+    /// projection is its own frozen `ResolvedSubagentSpec::extensions`, and
+    /// nothing else.
+    ///
+    /// The lab deliberately carries a *root-shaped* `rustx.jsonc` beside the
+    /// child, declaring a conflicting Agent Status composition. That
+    /// document stands in for every rereadable authority at once — root
+    /// launch configuration, the child workspace's own configuration, and a
+    /// newer role/resource generation published after the child was frozen:
+    /// the child never opens any of them, so a projection that agreed with
+    /// this file could only have got there by rereading configuration.
+    ///
+    /// Three frozen specifications are composed and projected:
+    ///
+    /// - one frozen with an explicit Asia/Shanghai Time and Background off
+    ///   (the "R1" decision) — projected exactly, even though the document
+    ///   beside it says `America/New_York` with Background on ("R2");
+    /// - one frozen with no extension at all — projected as
+    ///   `agent_status = None`, never widened by the enabled document;
+    /// - the R1 specification after crossing its real serialization
+    ///   contract, which is how it actually reaches a child process.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::too_many_lines)]
+    async fn ext256_a_child_projects_only_its_frozen_extension_composition() {
+        use crate::runtime_client::settings::{
+            EffectiveAgentStatusExtension, EffectiveBackgroundStatus,
+            EffectiveNativeAgentExtensions, EffectiveTimeStatus, SettingsBoundary,
+        };
+
+        let dir = lab();
+        // The conflicting ambient authority: a root document that both
+        // enables the extension and configures it differently.
+        std::fs::write(
+            dir.path().join("workspace/rustx.jsonc"),
+            serde_json::json!({
+                "schemaVersion": 8,
+                "agentId": "agent-host",
+                "model": {"model": "local/model-a"},
+                "context": {"reserveTokens": 0, "keepRecentTokens": 0},
+                "extensions": {"agentStatus": {
+                    "enabled": true,
+                    "time": {"enabled": true, "timezone": "America/New_York"},
+                    "background": {"enabled": true}
+                }}
+            })
+            .to_string(),
+        )
+        .expect("an ambient root configuration a rereading child would observe");
+
+        let r1 = serde_json::from_value::<crate::extensions::NativeAgentExtensionsDocument>(
+            serde_json::json!({"agentStatus": {
+                "enabled": true,
+                "time": {"enabled": true, "timezone": "Asia/Shanghai"},
+                "background": {"enabled": false}
+            }}),
+        )
+        .expect("the role extension document parses")
+        .resolve();
+        let expected_r1 = EffectiveNativeAgentExtensions {
+            agent_status: Some(EffectiveAgentStatusExtension {
+                time: EffectiveTimeStatus {
+                    enabled: true,
+                    timezone: Some(chrono_tz::Asia::Shanghai),
+                },
+                background: EffectiveBackgroundStatus { enabled: false },
+            }),
+        };
+
+        // A child frozen on R1, composed and projected while R2 sits on disk.
+        let child = LocalConversationCore::compose_subagent_child(
+            &spec_with_extensions(
+                dir.path(),
+                vec![builtin("read")],
+                Vec::new(),
+                Vec::new(),
+                r1.clone(),
+            ),
+            &dependencies(),
+            &ChildPreparation::detached(),
+        )
+        .await
+        .expect("the child composes")
+        .into_bound_with_control(None)
+        .expect("the child binds its own Runtime Client host");
+        let (snapshot, _) = child.host().snapshot().expect("child snapshot");
+        assert_eq!(
+            snapshot.effective_extensions,
+            Some(expected_r1.clone()),
+            "the child projects the composition its invoking generation froze"
+        );
+        // One source of truth on the child side too.
+        assert_eq!(
+            snapshot.effective_extensions,
+            Some(EffectiveNativeAgentExtensions::project(
+                &child.runtime().native_extensions()
+            ))
+        );
+        // Root configuration cannot leak in: neither the enabled Background
+        // nor the America/New_York timezone beside the child appears.
+        let projected = snapshot
+            .effective_extensions
+            .clone()
+            .expect("a composed child always projects one");
+        let status = projected.agent_status.expect("Agent Status is composed");
+        assert_eq!(status.time.timezone, Some(chrono_tz::Asia::Shanghai));
+        assert!(!status.background.enabled);
+        // A child's composition is a frozen execution profile, not a launch
+        // capture, and the lifetime vocabulary says exactly that.
+        assert_eq!(
+            snapshot.settings_evidence,
+            crate::runtime_client::settings::SettingsEvidence::FrozenChild
+        );
+        assert_eq!(
+            snapshot.settings_lifetimes.extensions,
+            SettingsBoundary::FrozenAdmission
+        );
+        assert_eq!(snapshot.launch_settings, None);
+
+        // A child frozen with no extension is not widened by the enabled
+        // document beside it.
+        let bare = LocalConversationCore::compose_subagent_child(
+            &spec_with_extensions(
+                dir.path(),
+                vec![builtin("read")],
+                Vec::new(),
+                Vec::new(),
+                crate::extensions::NativeAgentExtensions::none(),
+            ),
+            &dependencies(),
+            &ChildPreparation::detached(),
+        )
+        .await
+        .expect("the child composes")
+        .into_bound_with_control(None)
+        .expect("the child binds its own Runtime Client host");
+        assert_eq!(
+            child_projection(&bare),
+            Some(EffectiveNativeAgentExtensions { agent_status: None }),
+            "an absent frozen extension stays absent in the projection"
+        );
+
+        // And the R1 decision survives its real cross-process encoding.
+        let decoded = serde_json::from_slice::<crate::extensions::NativeAgentExtensions>(
+            &serde_json::to_vec(&r1).expect("encode"),
+        )
+        .expect("decode");
+        let staged = LocalConversationCore::compose_subagent_child(
+            &spec_with_extensions(
+                dir.path(),
+                vec![builtin("read")],
+                Vec::new(),
+                Vec::new(),
+                decoded,
+            ),
+            &dependencies(),
+            &ChildPreparation::detached(),
+        )
+        .await
+        .expect("the child composes")
+        .into_bound_with_control(None)
+        .expect("the child binds its own Runtime Client host");
+        assert_eq!(child_projection(&staged), Some(expected_r1));
+    }
+
     /// Issue #256 regression 9: child materialization never rereads host,
     /// project, or root configuration to widen or reinterpret its native
     /// Agent Extension set.

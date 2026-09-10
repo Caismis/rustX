@@ -22,6 +22,7 @@ use rustx::runtime::subagent::{
     ResolvedSubagentSpec, ResolvedSubagentTool, SubagentDefinitionDigest, SubagentName,
     SubagentResolutionError, SubagentResolver,
 };
+use rustx::runtime_client::settings::EffectiveNativeAgentExtensions;
 
 const KEY_ENV: &str = "RUSTX_ISSUE144_KEY";
 const EXPLORE_AGENTS: &str = ".agents/subagents/explore/AGENTS.md";
@@ -1893,13 +1894,46 @@ async fn ext256_root_extension_configuration_never_reaches_a_named_role() {
     );
 
     // The silent role composed the built-in defaults, not the root's.
-    let silent = frozen_extensions(&resources, "research");
-    let silent = silent
+    let silent_frozen = frozen_extensions(&resources, "research");
+    let silent = silent_frozen
         .agent_status()
         .expect("an omitted role composition is the role's own default");
     assert!(silent.time.enabled);
     assert_eq!(silent.time.timezone, None);
     assert!(silent.background.enabled);
+
+    // Issue #256 regression 8: root extension configuration cannot leak
+    // into a child's Runtime Client projection. The root and each child
+    // project different values, and neither child's projection carries the
+    // root's timezone or its disabled Background.
+    let root_projection = EffectiveNativeAgentExtensions::project(&runtime.native_extensions());
+    assert_eq!(
+        root_projection
+            .agent_status
+            .expect("the root composes Agent Status")
+            .time
+            .timezone,
+        Some(chrono_tz::America::New_York)
+    );
+    for child in [
+        frozen_extensions(&resources, "explore"),
+        silent_frozen.clone(),
+    ] {
+        let projected = EffectiveNativeAgentExtensions::project(&child);
+        assert_ne!(
+            projected, root_projection,
+            "a child projection is never the root's composition"
+        );
+        let status = projected.agent_status.expect("the child composes one");
+        assert_eq!(
+            status.time.timezone, None,
+            "the root's frozen timezone never appears in a child projection"
+        );
+        assert!(
+            status.background.enabled,
+            "nor does the root's disabled Background"
+        );
+    }
 
     product.runtime().shutdown().await.unwrap();
 }
@@ -2063,6 +2097,31 @@ async fn ext256_a_child_frozen_on_r1_keeps_r1_extensions_after_r2_publishes() {
         "R2 is authoritative for children resolved after it"
     );
     assert_ne!(next.definition_digest, r1_digest);
+
+    // Issue #256 regression 7: the Runtime Client effective-extension
+    // projection of that committed child is R1's, taken after R2 published.
+    // The projection has exactly one input — the frozen specification the
+    // child carries — so a child staged from `retained` reports R1 while a
+    // child staged from `next` reports absence.
+    let projected = EffectiveNativeAgentExtensions::project(&retained.extensions);
+    assert_eq!(
+        projected
+            .agent_status
+            .expect("R1 composed Agent Status")
+            .time
+            .timezone,
+        Some(chrono_tz::Asia::Shanghai),
+        "the projection of a frozen child is its own R1 composition"
+    );
+    assert_eq!(
+        EffectiveNativeAgentExtensions::project(&next.extensions),
+        EffectiveNativeAgentExtensions { agent_status: None },
+        "and a child frozen on R2 projects R2's composition, not R1's"
+    );
+    assert_ne!(
+        EffectiveNativeAgentExtensions::project(&retained.extensions),
+        EffectiveNativeAgentExtensions::project(&next.extensions)
+    );
 
     product.runtime().shutdown().await.unwrap();
 }

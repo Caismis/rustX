@@ -1224,6 +1224,75 @@ outside that seam, so an inconsistent execution state fails identically whether
 or not the launch composed Agent Status. An empty extension set is therefore an
 ordinary runtime with nothing added, never a second semantic runtime mode.
 
+### Runtime Client effective-extension projection
+
+The frozen composition is externally observable, because "which extensions is
+this Agent actually running with?" is a question about the attached runtime,
+not about a document:
+
+```text
+root Agent                              named Subagent
+  CurrentRuntimeConfig                    SubagentDefinition
+        |                                       |
+        v                                 SubagentResolver
+  NativeAgentExtensionsDocument                 |
+        | resolve()                             v
+        v                                 ResolvedSubagentSpec.extensions
+  NativeAgentExtensions                         | frozen before staging
+        | frozen at compose                     |
+        +--> runtime materialization            +--> child runtime materialization
+        |                                       |
+        +--> Runtime Client projection          +--> Runtime Client projection
+```
+
+The invariant:
+
+> Runtime Client reports the extension composition owned by the attached Agent
+> runtime. It never rereads authoring configuration to reconstruct or guess
+> effective extensions.
+
+`ConversationRuntime::native_extensions()` is the one source. It reads the
+composition straight back off the extension owners that composition
+materialized (`NativeAgentExtensions::from_materialized`), so the projected
+value and the executed value are the same value by construction — there is no
+second stored field that could drift, and no path from the projection to a
+configuration document, a `ProspectiveLaunch`, a `RuntimeResourceSnapshot`, an
+Agent Status observation, a context message, or the Event Journal.
+`RuntimeClientHost::construct` installs it once, from the runtime it binds, for
+a root host and a subagent-child host alike; there is no later mutation seam.
+
+The wire vocabulary is closed and typed — `EffectiveNativeAgentExtensions` with
+one named member per native extension, mirrored in
+`tui/src/protocol/types.ts` — never `serde_json::Value`, a
+`HashMap<String, Value>`, generic extension metadata, a plugin descriptor, or a
+dynamic registry view. It grows only when a native extension is deliberately
+added to it. The projection reports what was *already* successfully composed
+and frozen; it decides no extension scope of its own, which is what leaves
+Issue #258/#84's pre-spawn extension-scope validation free to live in the
+resolver where it belongs.
+
+Two nullabilities meet here and mean different things:
+
+| Value | Meaning |
+| --- | --- |
+| `effective_extensions: null` | No authoritative Agent composition exists to project — historical-only durable inspection. Never filled from today's disk configuration, built-in defaults, or the latest runtime configuration. |
+| `agent_status: null` | The extension is not part of this Agent's composition. |
+| `agent_status: { time, background }` | The extension is composed; its frozen contributor configuration is reported as frozen, including `timezone: null` for "no explicit timezone". |
+
+A composed extension with both contributors disabled is therefore a different
+projected value from an absent extension, and Agent Status *observations* are
+not extension-configuration authority in either direction: a runtime with the
+extension enabled and no eligible status contribution for this step still
+projects the extension as composed, and a history that contains canonical Agent
+Status messages does not make a durable projection claim one.
+
+`settings_lifetimes.extensions` reuses the existing settings-lifetime
+vocabulary rather than inventing a configuration epoch: `launch_capture` for a
+root Agent (launch-frozen — reload cannot recompose it, restart may compose a
+different one) and `frozen_admission` for a `frozen_child` snapshot (the child
+execution profile its invoking generation resolved and froze). The Runtime
+Client protocol version carrying this is **26**.
+
 ## 2. Layer model
 
 ### Layer 0: Domain and protocol types

@@ -3429,6 +3429,31 @@ impl ConversationRuntime {
         &self.inner.context
     }
 
+    /// The frozen native Agent Extension composition this runtime executes
+    /// against (Issue #256).
+    ///
+    /// This is the **one** source of the Runtime Client effective-extension
+    /// projection, for a root runtime and for a Subagent child alike. It is
+    /// read straight back off the extension owners this composition
+    /// materialized — see
+    /// [`NativeAgentExtensions::from_materialized`](crate::extensions::NativeAgentExtensions::from_materialized)
+    /// — so it cannot disagree
+    /// with what the runtime actually runs, and there is no path from here to
+    /// a configuration document, a `ProspectiveLaunch`, a
+    /// `RuntimeResourceSnapshot`, an Agent Status observation, or the Event
+    /// Journal.
+    ///
+    /// Its lifetime is therefore the runtime's own: a resource reload
+    /// republishes resources without reaching this value, and only a new
+    /// launch (root) or a newly resolved child specification (child) can
+    /// produce a different one.
+    #[must_use]
+    pub fn native_extensions(&self) -> crate::extensions::NativeAgentExtensions {
+        crate::extensions::NativeAgentExtensions::from_materialized(
+            self.inner.context.status_engine.as_ref(),
+        )
+    }
+
     /// The one capability coordinator of this runtime.
     #[must_use]
     pub fn capability(&self) -> &CapabilityCoordinator {

@@ -3267,6 +3267,33 @@ the launch-boundary policy inheritance.
   `SubagentDefinitionDigest`. The child materializes that frozen decision and
   never rereads `rustx.jsonc`, host or project configuration, role files, or a
   later resource generation to reinterpret which extensions it owns.
+- **Runtime Client reports the extension composition owned by the attached
+  Agent runtime; it never rereads authoring configuration to reconstruct or
+  guess effective extensions (Issue #256).**
+  `RuntimeClientSnapshot::effective_extensions` is projected from
+  `ConversationRuntime::native_extensions()`, which reads the composition back
+  off the extension owners that composition materialized. The projected value
+  and the executed value are therefore the same value by construction — no
+  second stored field can drift — and the projection path reaches no
+  configuration document, `ProspectiveLaunch`, `RuntimeResourceSnapshot`, Agent
+  Status observation, context message, or Event Journal entry. A root host
+  projects the value frozen at `LocalConversationCore::compose`
+  (`launch_capture`); a child host projects the value its invoking generation
+  froze into `ResolvedSubagentSpec::extensions` (`frozen_admission` under
+  `frozen_child` evidence), so a child frozen under R1 keeps reporting R1 after
+  R2 publishes and root configuration cannot reach it. Resource reload has no
+  seam into the projection at all; only a new launch or a newly resolved child
+  specification produces a different one. Absence is typed twice and precisely:
+  a `null` snapshot field means no authoritative composition exists to project
+  (historical-only inspection, never filled from today's disk or built-in
+  defaults), while `agent_status: null` means the extension is not part of this
+  composition — which is a different fact from a composed extension whose
+  contributors are all disabled. Agent Status observations are not extension
+  configuration authority in either direction. The wire vocabulary is a closed
+  typed record with one member per native extension, mirrored in the
+  TypeScript protocol; it is never generic metadata, a plugin descriptor, or a
+  dynamic registry view, and it reports what was already composed rather than
+  deciding any extension's scope.
 - **An empty extension composition is an ordinary runtime, not a second
   runtime mode (Issue #256).** `Option<AgentStatusEngine>` is the entire
   representation of "no Agent Status": the Agent Loop consults the extension

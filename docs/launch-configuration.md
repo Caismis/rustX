@@ -320,6 +320,22 @@ terminal events, canonical history, and provider-independent messages exactly
 as they are with the extension present; the only difference is that no Agent
 Status is composed or emitted.
 
+### Inspecting what an Agent is actually running with
+
+This document is the **prospective** authority: `rustx config show --sources`
+reports what a next launch would resolve from it, and from which authored
+layer. It is deliberately not a report of the running Agent.
+
+For the running Agent, `/settings` renders the frozen effective composition the
+attached runtime projects — `RuntimeClientSnapshot.effective_extensions` — for
+a root Agent and for a Subagent child alike. That projection is read from the
+composition the runtime already materialized; asking for it opens no
+configuration file and consults no resource generation. Editing this document
+after launch therefore makes the two views disagree, and that disagreement is
+the point: one describes the next launch, the other describes the Agent that is
+running. See [effective settings and configuration
+lifetimes](effective-settings.md) for the full ownership matrix.
+
 ## Session publication and frozen execution
 
 Discovery never implies resume. Fresh/unused empty Session startup remains the

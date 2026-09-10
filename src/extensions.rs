@@ -200,6 +200,27 @@ impl NativeAgentExtensions {
         self.agent_status.is_none()
     }
 
+    /// Recovers this composition from the runtime extension owners it
+    /// materialized.
+    ///
+    /// This is deliberately **not** a second stored copy of the frozen
+    /// decision. The Agent Status engine a composition materializes carries
+    /// the exact frozen contributor configuration it was built from, and
+    /// whether that engine exists at all *is* the composed/absent fact. So
+    /// reading the owners back yields the same value by construction: there
+    /// is no second field that could drift from the materialization, and no
+    /// path here that could consult a configuration document instead.
+    ///
+    /// [`ConversationRuntime::native_extensions`](crate::runtime::ConversationRuntime::native_extensions)
+    /// is the one caller: it is how the Runtime Client effective-extension
+    /// projection reads the composition of the attached Agent runtime.
+    #[must_use]
+    pub fn from_materialized(status_engine: Option<&AgentStatusEngine>) -> Self {
+        Self {
+            agent_status: status_engine.map(|engine| engine.config().clone()),
+        }
+    }
+
     /// Materializes the attempt-owned Agent Status engine of this frozen
     /// composition.
     ///
@@ -341,6 +362,30 @@ mod tests {
             framings.len(),
             "every semantic composition frames differently"
         );
+    }
+
+    /// The Runtime Client effective-extension projection reads the frozen
+    /// composition back off the owners it materialized. That round trip is
+    /// the whole reason there is only one source of truth, so it is proven
+    /// for every semantic composition rather than assumed.
+    #[test]
+    fn ext256_materialized_owners_recover_the_exact_frozen_composition() {
+        for composition in [
+            NativeAgentExtensions::none(),
+            document(serde_json::json!({})).resolve(),
+            document(serde_json::json!({"agentStatus": {"time": {"enabled": false}}})).resolve(),
+            document(serde_json::json!({"agentStatus": {"background": {"enabled": false}}}))
+                .resolve(),
+            document(serde_json::json!({"agentStatus": {"time": {"timezone": "Asia/Shanghai"}}}))
+                .resolve(),
+        ] {
+            let engine = composition.agent_status_engine(Arc::new(crate::context::SystemClock));
+            assert_eq!(
+                NativeAgentExtensions::from_materialized(engine.as_ref()),
+                composition,
+                "the materialized owners recover exactly what was frozen"
+            );
+        }
     }
 
     /// The frozen composition is what crosses the subagent process

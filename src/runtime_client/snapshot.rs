@@ -70,6 +70,27 @@ pub struct RuntimeClientSnapshot {
     pub settings_evidence: super::settings::SettingsEvidence,
     /// Immutable resolver facts; unavailable for durable-only or frozen-child attachment.
     pub launch_settings: Option<super::settings::LaunchSettings>,
+    /// The frozen effective native Agent Extension composition of the Agent
+    /// runtime this snapshot projects (Issue #256).
+    ///
+    /// This is the composition the attached runtime is *already executing
+    /// against*, read from the extension owners it materialized — the value
+    /// frozen at `LocalConversationCore::compose` for a root, and the value
+    /// carried in `ResolvedSubagentSpec::extensions` for a Subagent child.
+    /// Nothing on this path rereads `rustx.jsonc`, project or host
+    /// configuration, a role document, a `ProspectiveLaunch`, or the latest
+    /// `RuntimeResourceSnapshot`, and nothing infers it from Agent Status
+    /// observations, context messages, or the Event Journal. It is therefore
+    /// deliberately distinct from `rustx config show --sources`, which
+    /// describes a *prospective next launch* and may legitimately disagree
+    /// after a configuration edit.
+    ///
+    /// `None` means no authoritative Agent composition is available to
+    /// project — historical-only durable inspection. It is never filled from
+    /// current disk configuration or built-in defaults. Inside the value,
+    /// `agent_status: None` is the separate fact that the extension is not
+    /// part of this Agent's composition at all.
+    pub effective_extensions: Option<super::settings::EffectiveNativeAgentExtensions>,
     /// Application boundaries of the existing canonical sections.
     pub settings_lifetimes: super::settings::SettingsLifetimes,
     /// Bounded native Workflow state, never reconstructed from the journal.
