@@ -29,36 +29,94 @@ root must not become an unconditional recursive deletion target.
 
 ## Final authority and exclusion contract
 
-`SessionDeletionPreflight::acquire` opens and locks the canonical runtime root
-**before** reading any ownership. It returns a guard-bearing snapshot, not a
-plan that may be used after releasing exclusion. The snapshot includes every
-node lineage and transitive child exactly once, a digest of observed catalog
-and typed durable facts, and separate workspace blockers. Catalog-wide unique
-ownership is checked; ambiguous ownership, cycles, missing stores and unsafe
-identities fail closed. Provenance is not traversed. No deletion operation is
-implemented.
+`SessionDeletionPreflight::acquire` returns a finite native target, workspace
+blockers, a semantic ownership revision and retained OS exclusion. It never
+traverses provenance, scans directories for ownership, or performs deletion.
+Catalog-wide unique ownership is checked; ambiguity, cycles, missing stores and
+unsafe identities fail closed. The Session graph stays above linear stores.
 
-Root identity is `canonicalize`, followed by an `O_DIRECTORY | O_NOFOLLOW`
-open. The directory inode itself is locked with nonblocking `flock`: shared
-for participants, exclusive for preflight. It is never deleted or replaced by
-product lifecycle work. A permanent `.product-writer.lock` additionally admits
-one native Session controller. The controller acquires both before opening the
-catalog or composing storage. Child IPC explicitly carries the canonical
-`product_root`; children acquire shared access before preparing storage.
-Inspection acquires shared access before routing or opening a durable store.
-Native runtime/store handles retain their access guards. Last guard release
-ends access; abnormal process exit closes descriptors through OS semantics.
-Equivalent spellings and symlinks to the root identify the same inode; distinct
-roots are independent. This is a local Unix product boundary, not a lock
-against a hostile administrator replacing the directory inode.
+### Four separate responsibilities
 
-The exclusive OS acquisition is the authority point. Native ownership reads,
-live-owner exclusion, and the revision observation all occur while that guard
-is held. A live participant causes `WouldBlock` before snapshot derivation.
-Workspace blockers still prohibit any future cleanup even under exclusion.
-Dropping the snapshot releases exclusivity. A copied identity/path does not
-carry authority. Future physical cleanup must remain under the guard and use
-non-following filesystem operations; this issue implements no such cleanup.
+- `ProductRoot` establishes canonical identity with `canonicalize` and an
+  `O_DIRECTORY | O_NOFOLLOW` directory open. Identity alone claims no access.
+- `ProductController` holds an exclusive nonblocking `flock` on permanent
+  `.product-writer.lock`. This admits one native Session/catalog controller.
+  It does **not** lock every Conversation or exclude its own preflight.
+- `ConversationAccess` holds a shared `flock` on the native allocation directory
+  selected by catalog ConversationId or typed durable child ownership. This is
+  an identity-derived allocation, not a recursive filesystem discovery rule.
+  Native runtime, durable store, artifact/output store clones and streaming
+  writers retain the guard. Child composition, inspection and liveness leases
+  acquire the same allocation access before touching private state.
+- `OwnershipSnapshot` exclusively locks the canonical product-root directory
+  against **ownership transitions only**. Catalog publication and typed durable
+  child/workspace ownership or disposal transactions take short compatible
+  `OwnershipMutation` guards. Ordinary user/model/assistant/tool execution facts
+  do not take this root lock. Target `ConversationExclusion` guards provide the
+  separate exclusive private-resource access authority.
+
+### Ordering and linearization
+
+1. Controller admission linearizes at acquisition of `.product-writer.lock`,
+   before native catalog mutation/composition. Its lifetime is independent of a
+   deletion preview.
+2. Preflight acquires `OwnershipSnapshot` before reading the catalog or durable
+   ownership facts. This freezes graph/blocker transitions and global uniqueness
+   evidence throughout derivation, acquisition and snapshot lifetime.
+3. Under that freeze, derive the target and validate global unique ownership.
+   Each journal traversal captures a finite high watermark before paging; later
+   unrelated ordinary events cannot extend the traversal indefinitely.
+   Unrelated ordinary activity is permitted and is not revision input.
+4. Acquire exclusive target allocation guards in ascending `ConversationId`
+   order. The final successful acquisition is **exclusive deletion authority**.
+   A live target Conversation, child, inspector or detached private writer makes
+   acquisition fail. Partial acquisition is dropped without cleanup.
+5. Compute the canonical semantic revision while the freeze and target guards
+   remain held. Return those guards together with the snapshot. No detached
+   target list or copied token carries authority.
+6. Drop the snapshot to release all target locks and the ownership freeze.
+   Abnormal process death closes descriptors through OS semantics.
+
+All acquisitions are nonblocking. A writer already holding Conversation access
+must acquire the ownership-mutation guard before its SQLite transaction or
+catalog publication; conflict returns an error before mutation. Preflight takes
+root ownership freeze then sorted target locks. There is no blocking wait cycle,
+lock upgrade, release/reacquire gap, or deletion based on a pre-lock snapshot.
+Ownership-changing work is serialized for the bounded preflight lifetime;
+unrelated ordinary execution continues. Preview callers must drop the snapshot
+before awaiting human confirmation. A later operation reacquires and compares
+the semantic token under fresh authority; #255 owns that product workflow.
+
+A live product controlling A can call `LocalSessionSupervisor::deletion_preflight`
+for historical B without switching, detaching or restarting A. A's controller
+admission and Conversation access do not conflict with B's target locks.
+Unrelated live children likewise do not block B. Actual target access does.
+
+Equivalent root spellings and symlinks resolve to the same inode; distinct roots
+are independent. Stable lock/allocation inodes must not be replaced by product
+cleanup while authority is retained. This is local Unix coordination, not a
+boundary against an administrator replacing inodes. Retained workspace blockers
+still prohibit future physical cleanup even with target exclusivity.
+
+### Semantic ownership revision
+
+The length-delimited canonical vocabulary starts with
+`rustx/session-deletion-ownership/v1`, followed by target SessionId, sorted node
+membership `(node id, parent node id, ConversationId)`, sorted owned Conversation
+edges and root-relative private allocation identities, and sorted workspace
+blockers. Each blocker includes owning Conversation, native resource identity,
+repository/worktree/branch authority, and final disposal-relevant state (owned,
+retained exact head/dirty state, unresolved safety reason, or branch-only).
+Diagnostics are excluded. Fully disposed resources disappear from blockers.
+
+The revision changes for target node/child/nested ownership changes and blocker
+transitions. It does not change for unrelated activity or metadata, target
+ordinary execution, messages, model/tool history, timestamps, journal sequence,
+request identities, provenance, selection, catalog formatting/order or mtimes.
+A Workflow run's attempt identity is included only as part of its actual native
+workspace resource identity. Global uniqueness checks inspect broader state but
+never hash that unrelated state. A conflicting claim fails closed instead of
+producing a normal new revision.
 
 The inspection liveness file remains a distinct stable lock inode. Its mere
 presence has no ownership meaning. Probing an unlocked stale file does not
@@ -84,7 +142,7 @@ compatibility reader. Child IPC **19 -> 20** adds explicit product-root identity
 Authoritative layout:
 
 ```text
-runtime/                              stable lifecycle directory inode
+runtime/                              stable ownership-transition lock inode
   .product-writer.lock                permanent controller lock inode
   sessions/catalog.json               shared file; target is one Session record
   sessions/<SessionId>/conversations/<ConversationId>/
@@ -110,29 +168,31 @@ durable disposal records intact.
 
 ## Deterministic regression map
 
-| Issue requirement | Regression |
-| --- | --- |
-| 1. All `/tree` nodes exactly once | `deletion_tree_membership_excludes_independent_fork_clone_and_shared_resources` |
-| 2. Independent fork excluded | Same test uses native fork preparation/publication |
-| 3. Independent clone excluded | Same test uses native clone preparation/publication |
-| 4. Ownership survives parent process death | `deletion_cross_process_parent_death_preserves_nested_ownership` (real subprocess, committed-facts gate, kill/reap) |
-| 5. Nested descendants exactly once | `deletion_nested_durable_children_restart_and_workspace_blocker`, plus the real parent-death test |
-| 6. Unrelated ownership excluded | Tree/fork/clone test and nested test's unreferenced child allocation |
-| 7. Shared resources excluded | Tree/fork/clone test creates separate shared classes and checks exact private membership |
-| 8. Worktree is blocker | `deletion_nested_durable_children_restart_and_workspace_blocker` checks blocker path is outside every private target |
-| 9. Cross-process conflicts | `cross_process_writer_exclusion_aliases_and_crash_release` (real process gate) |
-| 10. Abnormal exit releases lock | Same real-process test uses kill/reap, then acquires a successor |
-| 11. Aliases / symlinks share domain | Same real-process test checks canonical, lexical and symlink spellings |
-| 12. Independent roots | Same real-process test acquires another root while the first is held |
-| 13. Live child / inspection blocks | `cross_process_child_or_inspector_blocks_exclusive_until_release` (real process), `deletion_live_inspection_blocks_and_stale_marker_is_reusable` (native inspection lease) |
-| 14. Stale marker recovery | Native inspection lease test drops owner, probes stale inode, reacquires |
-| 15. Non-creating unknown lookup | `deletion_unknown_and_missing_lookup_never_creates_state`, `management_lock_lookup_is_noncreating_and_paths_fail_closed` |
-| 16. Malformed/cyclic/escaped metadata | `deletion_tampered_catalog_and_symlink_escape_fail_closed`, `deletion_duplicate_and_cyclic_child_identity_fail_closed` |
+The original tree/fork/clone, nested restart ownership, unknown/missing lookup,
+malformed/cyclic metadata, retained workspace and stale-inspection regressions
+remain. The revised exclusion and semantic-token contracts are proved by:
 
-The process helpers `lifecycle_process_gate` and `deletion_process_writer_gate`
-are inert without their test environment rendezvous. Readiness is announced only
-after acquisition/commit; commands or process death determine release. No sleeps,
-arbitrary delays or probabilistic race windows establish these assertions.
+| Contract | Exact regression |
+| --- | --- |
+| Real live product A completes work while B preflight is retained; target A blocks | `active_session_a_executes_while_historical_b_preflight_retains_authority` (real provider emulator, Runtime Client, native product) |
+| Target child blocks; unrelated child does not | `deletion_target_child_access_blocks_but_unrelated_child_access_does_not` |
+| Target inspection blocks; stale marker reused | `deletion_live_inspection_blocks_and_stale_marker_is_reusable` |
+| Cross-process access/destructive conflict, SIGKILL release, aliases, distinct roots | `cross_process_target_conflicts_aliases_death_and_independent_roots` (**real subprocess**) |
+| Actual target preflight versus target/unrelated child access and competing preflight | `deletion_cross_process_target_child_unrelated_child_and_destructive_conflict` (**real subprocesses, kill/reap**) |
+| Controller excludes another controller but coexists with preflight | `cross_process_controller_admission_is_independent_of_target_exclusion` (**real subprocess**) |
+| Parent death retains nested durable ownership | `deletion_cross_process_parent_death_preserves_nested_ownership` (**real subprocess**) |
+| Non-creating identity/access lookup and confinement | `management_lock_lookup_is_noncreating_and_paths_fail_closed`, `deletion_unknown_and_missing_lookup_never_creates_state` |
+| Unrelated metadata/activity, target ordinary events and catalog encoding preserve token | `deletion_revision_ignores_unrelated_metadata_and_irrelevant_execution_history`, plus the real A/B product test |
+| Target nodes, children and nested children change token | `deletion_revision_changes_for_target_nodes_children_and_nested_children` |
+| Retention, partial disposal and full disposal change token | `deletion_revision_tracks_retained_and_partial_and_complete_disposal` |
+| No ownership transition races the snapshot; ordinary events still succeed | `deletion_snapshot_freezes_native_ownership_commits_but_not_ordinary_events` |
+| Detached artifact/output stores and streaming writers retain access | `deletion_detached_private_stores_and_writers_retain_target_access` |
+| Cross-Session claims fail rather than yield a token | `deletion_cross_session_child_claim_is_ambiguous_not_a_revision_change` |
+| Cycles, malformed identities and symlink escapes fail | `deletion_duplicate_and_cyclic_child_identity_fail_closed`, `deletion_tampered_catalog_and_symlink_escape_fail_closed` |
+
+Process helpers announce readiness only after acquisition/commit; stdin gates or
+kill/reap determine release. No sleeps or probabilistic race windows prove these
+contracts. The provider-backed product test awaits native settlement.
 
 The implementation does not add nested child execution to the local child
 composer. The recursive projection consumes native descendant facts if present;

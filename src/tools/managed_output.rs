@@ -147,12 +147,21 @@ struct ManagedOutputState {
 /// writes append through the returned file handle.
 #[derive(Clone, Debug)]
 pub struct ManagedToolOutput {
+    lifecycle: Option<Arc<crate::runtime::local_storage::ConversationAccess>>,
     conversation_id: ConversationId,
     root: PathBuf,
     state: Arc<Mutex<ManagedOutputState>>,
 }
 
 impl ManagedToolOutput {
+    pub(crate) fn with_lifecycle(
+        mut self,
+        access: Option<Arc<crate::runtime::local_storage::ConversationAccess>>,
+    ) -> Self {
+        self.lifecycle = access;
+        self
+    }
+
     /// Creates the managed tool-output store rooted at `root`.
     ///
     /// The root and its two dedicated subdirectories (`results/` for
@@ -197,6 +206,7 @@ impl ManagedToolOutput {
         }
         let next = spill_high_water(&canonical.join(RESULTS_DIR))?;
         Ok(Self {
+            lifecycle: None,
             conversation_id,
             root: canonical,
             state: Arc::new(Mutex::new(ManagedOutputState {
@@ -335,6 +345,7 @@ impl ManagedToolOutput {
             match File::options().create_new(true).write(true).open(&path) {
                 Ok(file) => {
                     return Ok(ResultSpill {
+                        _lifecycle: self.lifecycle.clone(),
                         file,
                         path,
                         #[cfg(test)]
@@ -486,6 +497,7 @@ impl ManagedToolOutput {
             .expect("managed tool-output allocation lock poisoned")
             .fail_writes_after;
         Ok(BackgroundOutput {
+            _lifecycle: self.lifecycle.clone(),
             file,
             path,
             #[cfg(test)]
@@ -546,6 +558,7 @@ fn spill_high_water(results: &Path) -> Result<u64, ManagedOutputError> {
 /// contains the complete result.
 #[derive(Debug)]
 pub struct ResultSpill {
+    _lifecycle: Option<Arc<crate::runtime::local_storage::ConversationAccess>>,
     file: File,
     path: PathBuf,
     /// Test-only write-failure allowance: once exhausted, every further
@@ -587,6 +600,7 @@ impl ResultSpill {
 /// it explicitly as incomplete output at settlement.
 #[derive(Debug)]
 pub struct BackgroundOutput {
+    _lifecycle: Option<Arc<crate::runtime::local_storage::ConversationAccess>>,
     file: File,
     path: PathBuf,
     /// Test-only write-failure allowance: once exhausted, every further

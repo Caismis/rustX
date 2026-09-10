@@ -285,7 +285,7 @@ pub(crate) enum RequestStartFaultOperation {
 pub struct SqliteConversationStore {
     conversation_id: ConversationId,
     conn: Arc<Mutex<Connection>>,
-    lifecycle: Option<Arc<crate::runtime::local_storage::LocalStorageGuard>>,
+    lifecycle: Option<Arc<crate::runtime::local_storage::ConversationAccess>>,
     #[cfg(test)]
     pub(crate) fail_accept_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
@@ -330,9 +330,47 @@ impl std::fmt::Debug for SqliteConversationStore {
 }
 
 impl SqliteConversationStore {
+    /// Bound a management traversal while unrelated execution may append events.
+    pub(crate) fn event_high_watermark(&self) -> Result<u64, ConversationStoreError> {
+        self.lock()?
+            .query_row("SELECT coalesce(max(sequence),0) FROM events", [], |row| {
+                row.get(0)
+            })
+            .map_err(|e| storage(format!("event high watermark: {e}")))
+    }
+
+    fn ownership_transition(
+        &self,
+        event: &RuntimeEvent,
+    ) -> Result<Option<crate::runtime::local_storage::OwnershipMutation>, ConversationStoreError>
+    {
+        if matches!(
+            event,
+            RuntimeEvent::SubagentOwnershipCommitted { .. }
+                | RuntimeEvent::SubagentTerminalPublished { .. }
+                | RuntimeEvent::SubagentTerminalSettled { .. }
+                | RuntimeEvent::SubagentWorkspaceDisposalStarted { .. }
+                | RuntimeEvent::SubagentWorkspaceDisposalSettled { .. }
+                | RuntimeEvent::WorkflowWorkspaceOwned { .. }
+                | RuntimeEvent::WorkflowWorkspaceSettled { .. }
+                | RuntimeEvent::WorkflowWorkspaceDisposalSettled { .. }
+        ) {
+            self.lifecycle
+                .as_ref()
+                .map(|access| {
+                    access
+                        .ownership_mutation()
+                        .map_err(|e| storage(e.to_string()))
+                })
+                .transpose()
+        } else {
+            Ok(None)
+        }
+    }
+
     pub(crate) fn with_lifecycle(
         mut self,
-        guard: Arc<crate::runtime::local_storage::LocalStorageGuard>,
+        guard: Arc<crate::runtime::local_storage::ConversationAccess>,
     ) -> Self {
         self.lifecycle = Some(guard);
         self
@@ -384,20 +422,24 @@ impl SqliteConversationStore {
     pub(crate) fn recover_existing(
         conversation_id: ConversationId,
         path: &Path,
-        guard: &Arc<crate::runtime::local_storage::LocalStorageGuard>,
+        guard: &Arc<crate::runtime::local_storage::ProductController>,
     ) -> Result<Self, ConversationStoreError> {
-        if !guard.is_writer() {
-            return Err(storage("recovery requires product writer authority"));
-        }
         let path = guard
             .confined(path)
             .map_err(|error| storage(error.to_string()))?;
+        let access = Arc::new(
+            crate::runtime::local_storage::ConversationAccess::existing_for_controller(
+                guard.clone(),
+                path.parent().ok_or_else(|| storage("missing allocation"))?,
+            )
+            .map_err(|e| storage(e.to_string()))?,
+        );
         Self::open_bound_existing(
             conversation_id,
             &path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
         )
-        .map(|store| store.with_lifecycle(guard.clone()))
+        .map(|store| store.with_lifecycle(access))
     }
 
     fn open_bound_existing(
@@ -895,6 +937,7 @@ impl SqliteConversationStore {
         &self,
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        let _ownership = self.ownership_transition(&event.event)?;
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1039,6 +1082,7 @@ impl ConversationStore for SqliteConversationStore {
         ),
         ConversationStoreError,
     > {
+        let _ownership = self.ownership_transition(&event.event)?;
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1977,6 +2021,7 @@ impl ConversationStore for SqliteConversationStore {
                     .to_owned(),
             ));
         }
+        let _ownership = self.ownership_transition(&event.event)?;
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -2038,6 +2083,7 @@ impl ConversationStore for SqliteConversationStore {
             ));
         }
 
+        let _ownership = self.ownership_transition(&terminal.event)?;
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -2594,6 +2640,7 @@ fn commit_subagent_workspace_disposal_transition(
     event: RuntimeEventEnvelope,
     phase: &str,
 ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+    let _ownership = store.ownership_transition(&event.event)?;
     let mut connection = store.lock()?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)

@@ -1,85 +1,45 @@
-//! OS-backed access to one canonical local product root.
-//!
-//! The directory inode is the lifecycle lock, so management never creates a
-//! lock file. It must never be removed or replaced by product cleanup. A
-//! separate permanent writer file admits one Session controller; child and
-//! inspection access share the directory lock without claiming controller status.
-
+//! Canonical product identity, controller admission and Conversation lifecycle access.
+use nix::fcntl::{Flock, FlockArg};
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use nix::fcntl::{Flock, FlockArg};
-
-/// An access capability retained for the complete lifetime of native access.
-#[derive(Debug)]
-pub struct LocalStorageGuard {
+/// Canonical product identity; this is not a live storage-access guard.
+#[derive(Debug, Clone)]
+pub struct ProductRoot {
     root: PathBuf,
-    writer: Option<Flock<File>>,
-    _lifecycle: Flock<File>,
 }
-
-impl LocalStorageGuard {
-    /// Admits one product writer, creating the root only for explicit startup.
-    ///
+impl ProductRoot {
+    /// Resolve existing native product state without creating anything.
     /// # Errors
-    /// Fails if another controller or exclusive lifecycle owner is present.
-    pub fn writer(root: &Path) -> io::Result<Self> {
-        std::fs::create_dir_all(root)?;
-        let mut guard = Self::acquire(root, FlockArg::LockSharedNonblock)?;
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(guard.root.join(".product-writer.lock"))?;
-        guard.writer = Some(lock(file, FlockArg::LockExclusiveNonblock)?);
-        Ok(guard)
-    }
-
-    /// Opens existing product state for a child or inspection participant.
-    ///
-    /// # Errors
-    /// Fails for a missing root or an exclusive lifecycle owner.
-    pub fn access_existing(root: &Path) -> io::Result<Self> {
-        Self::acquire(root, FlockArg::LockSharedNonblock)
-    }
-
-    /// Acquires exclusive lifecycle authority before any ownership read.
-    /// This does not create, recover, dispose, or delete anything.
-    ///
-    /// # Errors
-    /// Fails for a missing root or any live participant.
-    pub(crate) fn exclusive_existing(root: &Path) -> io::Result<Self> {
-        Self::acquire(root, FlockArg::LockExclusiveNonblock)
-    }
-
-    fn acquire(root: &Path, mode: FlockArg) -> io::Result<Self> {
+    /// Missing roots and filesystem errors are returned.
+    pub fn existing(root: &Path) -> io::Result<Self> {
         let root = root.canonicalize()?;
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(&root)?;
-        let lifecycle = lock(file, mode)?;
-        Ok(Self {
-            root,
-            writer: None,
-            _lifecycle: lifecycle,
-        })
+        directory(&root)?;
+        Ok(Self { root })
     }
-
-    pub(crate) fn is_writer(&self) -> bool {
-        self.writer.is_some()
-    }
-
-    /// Canonical identity established before acquiring the OS lock.
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
     }
-
+    /// Freeze native ownership transitions, without excluding ordinary activity.
+    /// # Errors
+    /// A concurrent ownership transaction or preflight returns `WouldBlock`.
+    pub(crate) fn freeze_ownership(&self) -> io::Result<OwnershipSnapshot> {
+        Ok(OwnershipSnapshot {
+            _lock: lock(directory(&self.root)?, FlockArg::LockExclusiveNonblock)?,
+        })
+    }
+    /// Enter a native ownership transaction before accessing SQLite/catalog state.
+    /// # Errors
+    /// An ownership snapshot returns `WouldBlock`; callers must not mutate.
+    pub(crate) fn ownership_mutation(&self) -> io::Result<OwnershipMutation> {
+        Ok(OwnershipMutation {
+            _lock: lock(directory(&self.root)?, FlockArg::LockSharedNonblock)?,
+        })
+    }
     /// Validates an identity-derived allocation, including missing leaves.
     /// No symlink below the canonical product root is a storage identity.
     ///
@@ -110,6 +70,112 @@ impl LocalStorageGuard {
     }
 }
 
+/// The sole native Session/catalog controller, independent of target access.
+#[derive(Debug)]
+pub struct ProductController {
+    root: ProductRoot,
+    _lock: Flock<File>,
+}
+impl std::ops::Deref for ProductController {
+    type Target = ProductRoot;
+    fn deref(&self) -> &ProductRoot {
+        &self.root
+    }
+}
+impl ProductController {
+    /// Admit a controller at explicit startup, creating only startup metadata.
+    /// # Errors
+    /// Another controller or invalid storage returns an error.
+    pub fn acquire(root: &Path) -> io::Result<Self> {
+        std::fs::create_dir_all(root)?;
+        let root = ProductRoot::existing(root)?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(root.root().join(".product-writer.lock"))?;
+        Ok(Self {
+            root,
+            _lock: lock(file, FlockArg::LockExclusiveNonblock)?,
+        })
+    }
+}
+#[derive(Debug)]
+pub(crate) struct OwnershipSnapshot {
+    _lock: Flock<File>,
+}
+#[derive(Debug)]
+pub(crate) struct OwnershipMutation {
+    _lock: Flock<File>,
+}
+
+/// Shared native access to one authoritative Conversation allocation.
+#[derive(Debug)]
+pub struct ConversationAccess {
+    root: ProductRoot,
+    _lock: Flock<File>,
+    controller: Option<Arc<ProductController>>,
+}
+impl std::ops::Deref for ConversationAccess {
+    type Target = ProductRoot;
+    fn deref(&self) -> &ProductRoot {
+        &self.root
+    }
+}
+impl ConversationAccess {
+    /// Access an existing identity-derived allocation without creating it.
+    /// # Errors
+    /// Missing/unsafe allocations or a destructive owner are rejected.
+    pub fn existing(root: &ProductRoot, allocation: &Path) -> io::Result<Self> {
+        let path = root.confined(allocation)?;
+        Ok(Self {
+            root: root.clone(),
+            _lock: lock(directory(&path)?, FlockArg::LockSharedNonblock)?,
+            controller: None,
+        })
+    }
+    pub(crate) fn existing_for_controller(
+        controller: Arc<ProductController>,
+        allocation: &Path,
+    ) -> io::Result<Self> {
+        let mut access = Self::existing(&controller, allocation)?;
+        access.controller = Some(controller);
+        Ok(access)
+    }
+
+    /// Explicit runtime startup reserves an allocation before any private writes.
+    /// # Errors
+    /// Unsafe paths or a destructive owner are rejected.
+    pub(crate) fn start(controller: Arc<ProductController>, allocation: &Path) -> io::Result<Self> {
+        let path = controller.confined(allocation)?;
+        let _mutation = controller.ownership_mutation()?;
+        std::fs::create_dir_all(&path)?;
+        Self::existing_for_controller(controller, &path)
+    }
+}
+/// Exclusive access acquired in sorted authoritative `ConversationId` order.
+#[derive(Debug)]
+pub(crate) struct ConversationExclusion {
+    _lock: Flock<File>,
+}
+impl ConversationExclusion {
+    pub(crate) fn acquire(root: &ProductRoot, allocation: &Path) -> io::Result<Self> {
+        Ok(Self {
+            _lock: lock(
+                directory(&root.confined(allocation)?)?,
+                FlockArg::LockExclusiveNonblock,
+            )?,
+        })
+    }
+}
+fn directory(path: &Path) -> io::Result<File> {
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+}
 fn lock(file: File, mode: FlockArg) -> io::Result<Flock<File>> {
     Flock::lock(file, mode).map_err(|(_, error)| {
         if error == nix::errno::Errno::EWOULDBLOCK {
@@ -128,38 +194,38 @@ mod tests {
 
     #[test]
     fn lifecycle_process_gate() {
-        let Some(root) = std::env::var_os("RUSTX_254_LOCK_ROOT") else {
+        let Some(root) = std::env::var_os("RUSTX_260_LOCK_ROOT") else {
             return;
         };
-        let mode = std::env::var("RUSTX_254_LOCK_MODE").unwrap();
-        let root = Path::new(&root);
-        let _guard = match mode.as_str() {
-            "writer" => LocalStorageGuard::writer(root),
-            "access" => LocalStorageGuard::access_existing(root),
-            "exclusive" => LocalStorageGuard::exclusive_existing(root),
-            _ => panic!("invalid process mode"),
-        }
-        .unwrap();
+        let root = ProductRoot::existing(Path::new(&root)).unwrap();
+        let allocation = root.root().join("conversation-b");
+        let _guard: Box<dyn std::any::Any> = match std::env::var("RUSTX_260_LOCK_MODE")
+            .unwrap()
+            .as_str()
+        {
+            "controller" => Box::new(ProductController::acquire(root.root()).unwrap()),
+            "access" => Box::new(ConversationAccess::existing(&root, &allocation).unwrap()),
+            "exclusive" => Box::new(ConversationExclusion::acquire(&root, &allocation).unwrap()),
+            _ => panic!("invalid gate mode"),
+        };
         println!("LIFECYCLE_ACQUIRED");
         std::io::stdout().flush().unwrap();
-        let mut byte = [0];
-        std::io::stdin().read_exact(&mut byte).unwrap();
+        std::io::stdin().read_exact(&mut [0]).unwrap();
     }
-
     fn owner(root: &Path, mode: &str) -> std::process::Child {
-        let mut child = Command::new(std::env::current_exe().unwrap())
+        let mut process = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
                 "runtime::local_storage::tests::lifecycle_process_gate",
                 "--nocapture",
             ])
-            .env("RUSTX_254_LOCK_ROOT", root)
-            .env("RUSTX_254_LOCK_MODE", mode)
+            .env("RUSTX_260_LOCK_ROOT", root)
+            .env("RUSTX_260_LOCK_MODE", mode)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
             .unwrap();
-        let mut output = BufReader::new(child.stdout.take().unwrap());
+        let mut output = BufReader::new(process.stdout.take().unwrap());
         loop {
             let mut line = String::new();
             assert_ne!(
@@ -171,70 +237,80 @@ mod tests {
                 break;
             }
         }
-        child.stdout = Some(output.into_inner());
-        child
+        process.stdout = Some(output.into_inner());
+        process
     }
-
     #[test]
-    fn cross_process_writer_exclusion_aliases_and_crash_release() {
-        let root = tempfile::tempdir().unwrap();
-        let other = tempfile::tempdir().unwrap();
+    fn cross_process_target_conflicts_aliases_death_and_independent_roots() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = ProductRoot::existing(directory.path()).unwrap();
+        let allocation = root.root().join("conversation-b");
+        std::fs::create_dir(&allocation).unwrap();
         let aliases = tempfile::tempdir().unwrap();
         let alias = aliases.path().join("alias");
-        std::os::unix::fs::symlink(root.path(), &alias).unwrap();
-        let mut child = owner(root.path(), "writer");
-        for path in [
-            root.path().to_path_buf(),
-            alias,
-            root.path()
-                .join("../")
-                .join(root.path().file_name().unwrap()),
-        ] {
-            assert_eq!(
-                LocalStorageGuard::writer(&path).unwrap_err().kind(),
-                io::ErrorKind::WouldBlock
-            );
-            assert_eq!(
-                LocalStorageGuard::exclusive_existing(&path)
+        std::os::unix::fs::symlink(root.root(), &alias).unwrap();
+        for mode in ["access", "exclusive"] {
+            let mut process = owner(root.root(), mode);
+            for spelling in [
+                root.root().to_path_buf(),
+                alias.clone(),
+                root.root()
+                    .join("../")
+                    .join(root.root().file_name().unwrap()),
+            ] {
+                let identity = ProductRoot::existing(&spelling).unwrap();
+                assert_eq!(
+                    ConversationExclusion::acquire(
+                        &identity,
+                        &identity.root().join("conversation-b")
+                    )
                     .unwrap_err()
                     .kind(),
-                io::ErrorKind::WouldBlock
-            );
+                    io::ErrorKind::WouldBlock
+                );
+            }
+            let independent = tempfile::tempdir().unwrap();
+            let other = ProductRoot::existing(independent.path()).unwrap();
+            std::fs::create_dir(other.root().join("conversation-b")).unwrap();
+            let _unrelated =
+                ConversationExclusion::acquire(&other, &other.root().join("conversation-b"))
+                    .unwrap();
+            process.kill().unwrap();
+            process.wait().unwrap();
+            let exclusive = ConversationExclusion::acquire(&root, &allocation).unwrap();
+            assert!(ConversationAccess::existing(&root, &allocation).is_err());
+            drop(exclusive);
+            assert!(ConversationAccess::existing(&root, &allocation).is_ok());
         }
-        let independent = LocalStorageGuard::writer(other.path()).unwrap();
-        child.kill().unwrap();
-        child.wait().unwrap();
-        let exclusive = LocalStorageGuard::exclusive_existing(root.path()).unwrap();
-        assert!(LocalStorageGuard::access_existing(root.path()).is_err());
-        drop(exclusive);
-        let _successor = LocalStorageGuard::writer(root.path()).unwrap();
-        drop(independent);
     }
-
     #[test]
-    fn cross_process_child_or_inspector_blocks_exclusive_until_release() {
-        let root = tempfile::tempdir().unwrap();
-        let mut child = owner(root.path(), "access");
+    fn cross_process_controller_admission_is_independent_of_target_exclusion() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = ProductRoot::existing(directory.path()).unwrap();
+        std::fs::create_dir(root.root().join("conversation-b")).unwrap();
+        let mut process = owner(root.root(), "controller");
         assert_eq!(
-            LocalStorageGuard::exclusive_existing(root.path())
-                .unwrap_err()
-                .kind(),
+            ProductController::acquire(root.root()).unwrap_err().kind(),
             io::ErrorKind::WouldBlock
         );
-        child.stdin.take().unwrap().write_all(b"x").unwrap();
-        assert!(child.wait().unwrap().success());
-        let _exclusive = LocalStorageGuard::exclusive_existing(root.path()).unwrap();
+        let _snapshot = root.freeze_ownership().unwrap();
+        let _target =
+            ConversationExclusion::acquire(&root, &root.root().join("conversation-b")).unwrap();
+        process.stdin.take().unwrap().write_all(b"x").unwrap();
+        assert!(process.wait().unwrap().success());
+        assert!(ProductController::acquire(root.root()).is_ok());
     }
-
     #[test]
     fn management_lock_lookup_is_noncreating_and_paths_fail_closed() {
-        let root = tempfile::tempdir().unwrap();
-        let missing = root.path().join("unknown");
-        assert!(LocalStorageGuard::exclusive_existing(&missing).is_err());
+        let directory = tempfile::tempdir().unwrap();
+        let root = ProductRoot::existing(directory.path()).unwrap();
+        let missing = root.root().join("unknown");
+        assert!(ProductRoot::existing(&missing).is_err());
+        assert!(ConversationAccess::existing(&root, &missing).is_err());
+        assert!(ConversationExclusion::acquire(&root, &missing).is_err());
         assert!(!missing.exists());
-        let guard = LocalStorageGuard::exclusive_existing(root.path()).unwrap();
-        std::os::unix::fs::symlink("/tmp", root.path().join("escape")).unwrap();
-        assert!(guard.confined(&root.path().join("escape/unknown")).is_err());
-        assert!(guard.confined(&root.path().join("../outside")).is_err());
+        std::os::unix::fs::symlink("/tmp", root.root().join("escape")).unwrap();
+        assert!(root.confined(&root.root().join("escape/unknown")).is_err());
+        assert!(root.confined(&root.root().join("../outside")).is_err());
     }
 }

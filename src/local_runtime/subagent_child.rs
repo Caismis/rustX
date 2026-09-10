@@ -1680,6 +1680,15 @@ mod tests {
             runtime_root: runtime_root.clone(),
             terminal: crate::runtime::subagent::ipc::ChildTerminalMode::Normal,
         };
+        std::fs::create_dir_all(
+            crate::runtime::subagent::child_conversation_store_path(
+                &spec.product_root,
+                &spec.child_conversation_id,
+            )
+            .parent()
+            .unwrap(),
+        )
+        .unwrap();
         let gate = crate::local_runtime::composition::arm_test_preparation_gate(&runtime_root);
 
         let (parent, child) = tokio::net::UnixStream::pair().expect("control pair");

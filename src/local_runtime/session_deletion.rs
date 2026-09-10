@@ -13,9 +13,11 @@ use crate::events::types::{
     RuntimeEvent, SubagentWorkspaceDisposalSettlement, SubagentWorkspaceTerminalResource,
 };
 use crate::runtime::identity::ConversationId;
-use crate::runtime::local_storage::LocalStorageGuard;
+use crate::runtime::local_storage::{ConversationExclusion, OwnershipSnapshot, ProductRoot};
 use crate::runtime::subagent::child_conversation_store_path;
-use crate::runtime::workspace::{WorkspaceCleanup, WorkspaceDisposalSettlement, WorkspaceSnapshot};
+use crate::runtime::workspace::{
+    WorkspaceDisposalSettlement, WorkspaceSettlementDisposition, WorkspaceSnapshot,
+};
 
 /// A lineage and its exclusive private allocation, never a workspace allocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +35,16 @@ pub struct WorkspaceBlocker {
     pub conversation_id: ConversationId,
     pub resource_id: String,
     pub workspace: WorkspaceSnapshot,
+    pub state: WorkspaceBlockerState,
+}
+
+/// Final disposal-relevant state; diagnostics and execution history are excluded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceBlockerState {
+    Owned,
+    Retained { head_commit: String, dirty: bool },
+    Unresolved(crate::runtime::workspace::WorkspaceUnresolvedReason),
+    BranchOnly,
 }
 
 /// An authoritative snapshot whose OS exclusion remains held until it is dropped.
@@ -44,21 +56,21 @@ pub struct SessionDeletionPreflight {
     conversations: Vec<OwnedConversation>,
     workspace_blockers: Vec<WorkspaceBlocker>,
     revision: [u8; 32],
-    _authority: LocalStorageGuard,
+    _targets: Vec<ConversationExclusion>,
+    _authority: OwnershipSnapshot,
 }
 
 impl SessionDeletionPreflight {
-    /// Acquire exclusive lifecycle authority, then read and validate ownership.
-    ///
-    /// The successful OS acquisition is the exclusion linearization point.
-    /// The returned value retains it across the complete snapshot lifetime.
-    /// Live controllers, children and inspection readers cause `WouldBlock`.
+    /// Freeze ownership transitions, derive the target, then acquire exclusive
+    /// allocation guards in `ConversationId` order. The final target acquisition
+    /// linearizes exclusive authority. All guards remain held by the snapshot.
+    /// Live target access causes `WouldBlock`; unrelated runtimes remain usable.
     ///
     /// # Errors
     /// Missing or ambiguous ownership, invalid metadata and live access fail closed.
     pub fn acquire(root: &Path, session_id: &SessionId) -> std::io::Result<Self> {
-        let authority = LocalStorageGuard::exclusive_existing(root)?;
-        let catalog_path = authority.confined(&authority.root().join("sessions/catalog.json"))?;
+        let authority = ProductRoot::existing(root)?;
+        let freeze = authority.freeze_ownership()?;
         let catalog = SessionCatalog::read_under_guard(&authority)
             .map_err(invalid)?
             .ok_or_else(|| invalid("unknown Session catalog"))?;
@@ -67,8 +79,6 @@ impl SessionDeletionPreflight {
             .get(session_id)
             .ok_or_else(|| invalid("unknown Session"))?
             .clone();
-        let mut digest = Sha256::new();
-        digest.update(std::fs::read(catalog_path)?);
         let mut all = BTreeMap::new();
         let mut blockers = Vec::new();
         // Check ownership uniqueness across all native Sessions. An ambiguous
@@ -110,7 +120,7 @@ impl SessionDeletionPreflight {
             authority.confined(&owned.private_root.join("tool-output"))?;
             let store =
                 SqliteConversationStore::open_existing(id.clone(), &database).map_err(invalid)?;
-            let facts = read_facts(&store, &mut digest)?;
+            let facts = read_facts(&store)?;
             for child in facts.children {
                 safe_identity(&child)?;
                 let database =
@@ -118,30 +128,38 @@ impl SessionDeletionPreflight {
                 pending.push((owner.clone(), child, Some(id.clone()), database));
             }
             if owner == *session_id {
-                blockers.extend(facts.blockers.into_iter().map(|(resource_id, workspace)| {
-                    WorkspaceBlocker {
+                blockers.extend(facts.blockers.into_iter().map(
+                    |(resource_id, (workspace, state))| WorkspaceBlocker {
                         conversation_id: id.clone(),
                         resource_id,
                         workspace,
-                    }
-                }));
+                        state,
+                    },
+                ));
             }
             all.insert(id, (owner, owned));
         }
-        let conversations = all
+        let conversations: Vec<_> = all
             .into_values()
             .filter_map(|(owner, lineage)| (owner == *session_id).then_some(lineage))
             .collect();
         blockers.sort_by(|a, b| {
             (&a.conversation_id, &a.resource_id).cmp(&(&b.conversation_id, &b.resource_id))
         });
+        let targets = conversations
+            .iter()
+            .map(|c| ConversationExclusion::acquire(&authority, &c.private_root))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        let revision =
+            ownership_revision(&authority, session_id, &nodes, &conversations, &blockers)?;
         Ok(Self {
             session_id: session_id.clone(),
             nodes,
             conversations,
             workspace_blockers: blockers,
-            revision: digest.finalize().into(),
-            _authority: authority,
+            revision,
+            _targets: targets,
+            _authority: freeze,
         })
     }
 
@@ -161,7 +179,7 @@ impl SessionDeletionPreflight {
     pub fn workspace_blockers(&self) -> &[WorkspaceBlocker] {
         &self.workspace_blockers
     }
-    /// Equality token for the observed catalog and native durable facts.
+    /// Canonical semantic token for target ownership and final blocker state.
     #[must_use]
     pub fn ownership_revision(&self) -> &[u8; 32] {
         &self.revision
@@ -187,18 +205,19 @@ fn safe_identity(id: &ConversationId) -> std::io::Result<()> {
 
 struct Facts {
     children: BTreeSet<ConversationId>,
-    blockers: BTreeMap<String, WorkspaceSnapshot>,
+    blockers: BTreeMap<String, (WorkspaceSnapshot, WorkspaceBlockerState)>,
 }
 
 // Reuse the existing typed native ownership and disposal authority. This is
 // neither a text search nor a second subagent lifecycle persistence system.
 #[allow(clippy::too_many_lines)] // One closed native ownership/disposal vocabulary.
-fn read_facts(store: &SqliteConversationStore, digest: &mut Sha256) -> std::io::Result<Facts> {
+fn read_facts(store: &SqliteConversationStore) -> std::io::Result<Facts> {
     let mut children = BTreeSet::new();
     let mut blockers = BTreeMap::new();
     let mut resources = BTreeSet::new();
     let mut cursor = None;
-    loop {
+    let through = store.event_high_watermark().map_err(invalid)?;
+    while cursor.unwrap_or(0) < through {
         let page = store.read_events(cursor, 256).map_err(invalid)?;
         if page.events.is_empty() {
             break;
@@ -208,10 +227,12 @@ fn read_facts(store: &SqliteConversationStore, digest: &mut Sha256) -> std::io::
         }
         cursor = page.next_sequence;
         for envelope in page.events {
+            if envelope.sequence > through {
+                break;
+            }
             if envelope.conversation_id != *store.conversation_id() {
                 return Err(invalid("foreign ownership envelope"));
             }
-            digest.update(serde_json::to_vec(&envelope).map_err(invalid)?);
             match envelope.event {
                 RuntimeEvent::SubagentOwnershipCommitted {
                     subagent_id,
@@ -233,7 +254,7 @@ fn read_facts(store: &SqliteConversationStore, digest: &mut Sha256) -> std::io::
                         return Err(invalid("duplicate resource ownership"));
                     }
                     if workspace.is_isolated() {
-                        blockers.insert(key, workspace);
+                        blockers.insert(key, (workspace, WorkspaceBlockerState::Owned));
                     }
                 }
                 RuntimeEvent::SubagentTerminalPublished {
@@ -250,21 +271,52 @@ fn read_facts(store: &SqliteConversationStore, digest: &mut Sha256) -> std::io::
                     if !resources.contains(&key) {
                         return Err(invalid("terminal without ownership"));
                     }
-                    if matches!(workspace_resource, SubagentWorkspaceTerminalResource::None) {
-                        blockers.remove(&key);
+                    match workspace_resource {
+                        SubagentWorkspaceTerminalResource::None => {
+                            blockers.remove(&key);
+                        }
+                        SubagentWorkspaceTerminalResource::Retained { handoff } => {
+                            let (workspace, state) = blockers
+                                .get_mut(&key)
+                                .ok_or_else(|| invalid("retained resource without ownership"))?;
+                            validate_handoff(workspace, &handoff)?;
+                            *state = WorkspaceBlockerState::Retained {
+                                head_commit: handoff.head_commit,
+                                dirty: handoff.dirty,
+                            };
+                        }
+                        SubagentWorkspaceTerminalResource::PreservedUnresolved {
+                            reason, ..
+                        } => {
+                            blockers
+                                .get_mut(&key)
+                                .ok_or_else(|| invalid("unresolved resource without ownership"))?
+                                .1 = WorkspaceBlockerState::Unresolved(reason);
+                        }
                     }
                 }
                 RuntimeEvent::SubagentWorkspaceDisposalSettled {
                     subagent_id,
-                    settlement: SubagentWorkspaceDisposalSettlement::Disposed,
+                    settlement,
                     ..
                 } => {
                     let key = format!("child:{subagent_id}");
                     if !resources.contains(&key) {
                         return Err(invalid("disposal without ownership"));
                     }
-                    blockers.remove(&key);
+                    match settlement {
+                        SubagentWorkspaceDisposalSettlement::Disposed => {
+                            blockers.remove(&key);
+                        }
+                        SubagentWorkspaceDisposalSettlement::WorktreeRemoved => {
+                            blockers
+                                .get_mut(&key)
+                                .ok_or_else(|| invalid("partial disposal without resource"))?
+                                .1 = WorkspaceBlockerState::BranchOnly;
+                        }
+                    }
                 }
+
                 RuntimeEvent::WorkflowWorkspaceOwned { run_id, workspace } => {
                     workspace.validate().map_err(invalid)?;
                     if run_id.conversation_id != *store.conversation_id() {
@@ -278,7 +330,7 @@ fn read_facts(store: &SqliteConversationStore, digest: &mut Sha256) -> std::io::
                         return Err(invalid("duplicate Workflow ownership"));
                     }
                     if workspace.is_isolated() {
-                        blockers.insert(key, workspace);
+                        blockers.insert(key, (workspace, WorkspaceBlockerState::Owned));
                     }
                 }
                 RuntimeEvent::WorkflowWorkspaceSettled {
@@ -291,16 +343,29 @@ fn read_facts(store: &SqliteConversationStore, digest: &mut Sha256) -> std::io::
                     if !resources.contains(&key) {
                         return Err(invalid("settlement without ownership"));
                     }
-                    if workspace.cleanup() != WorkspaceCleanup::Preserved {
-                        blockers.remove(&key);
+                    match workspace.disposition {
+                        WorkspaceSettlementDisposition::Retained { handoff, .. } => {
+                            let (owned, state) = blockers
+                                .get_mut(&key)
+                                .ok_or_else(|| invalid("retained workflow without ownership"))?;
+                            validate_handoff(owned, &handoff)?;
+                            *state = WorkspaceBlockerState::Retained {
+                                head_commit: handoff.head_commit,
+                                dirty: handoff.dirty,
+                            };
+                        }
+                        WorkspaceSettlementDisposition::PreservedUnresolved { reason, .. } => {
+                            blockers
+                                .get_mut(&key)
+                                .ok_or_else(|| invalid("unresolved workflow without ownership"))?
+                                .1 = WorkspaceBlockerState::Unresolved(reason);
+                        }
+                        _ => {
+                            blockers.remove(&key);
+                        }
                     }
                 }
-                RuntimeEvent::WorkflowWorkspaceDisposalSettled {
-                    run_id,
-                    settlement:
-                        WorkspaceDisposalSettlement::Disposed
-                        | WorkspaceDisposalSettlement::AlreadyDisposed,
-                } => {
+                RuntimeEvent::WorkflowWorkspaceDisposalSettled { run_id, settlement } => {
                     let key = format!(
                         "workflow:{}",
                         serde_json::to_string(&run_id).map_err(invalid)?
@@ -308,11 +373,124 @@ fn read_facts(store: &SqliteConversationStore, digest: &mut Sha256) -> std::io::
                     if !resources.contains(&key) {
                         return Err(invalid("disposal without ownership"));
                     }
-                    blockers.remove(&key);
+                    match settlement {
+                        WorkspaceDisposalSettlement::Disposed
+                        | WorkspaceDisposalSettlement::AlreadyDisposed => {
+                            blockers.remove(&key);
+                        }
+                        WorkspaceDisposalSettlement::WorktreeRemoved { .. } => {
+                            blockers
+                                .get_mut(&key)
+                                .ok_or_else(|| {
+                                    invalid("partial workflow disposal without resource")
+                                })?
+                                .1 = WorkspaceBlockerState::BranchOnly;
+                        }
+                        WorkspaceDisposalSettlement::NothingRemoved { .. } => {}
+                    }
                 }
+
                 _ => {}
             }
         }
     }
     Ok(Facts { children, blockers })
+}
+
+// Explicit length-delimited semantic vocabulary. No event envelopes or catalog
+// serialization enter this digest. Collection tags/counts make it unambiguous.
+fn ownership_revision(
+    root: &ProductRoot,
+    session: &SessionId,
+    nodes: &[SessionNode],
+    conversations: &[OwnedConversation],
+    blockers: &[WorkspaceBlocker],
+) -> std::io::Result<[u8; 32]> {
+    fn field(hash: &mut Sha256, value: &[u8]) {
+        hash.update((value.len() as u64).to_be_bytes());
+        hash.update(value);
+    }
+    fn text(hash: &mut Sha256, value: &str) {
+        field(hash, value.as_bytes());
+    }
+    fn path(hash: &mut Sha256, value: &Path) {
+        field(hash, value.as_os_str().as_encoded_bytes());
+    }
+    let mut hash = Sha256::new();
+    text(&mut hash, "rustx/session-deletion-ownership/v1");
+    text(&mut hash, session.as_str());
+    let mut nodes: Vec<_> = nodes.iter().collect();
+    nodes.sort_by(|a, b| a.id.cmp(&b.id));
+    for node in nodes {
+        text(&mut hash, "node");
+        text(&mut hash, node.id.as_str());
+        text(&mut hash, node.parent.as_ref().map_or("", |id| id.as_str()));
+        text(&mut hash, node.conversation_id.as_str());
+    }
+    for conversation in conversations {
+        text(&mut hash, "conversation");
+        text(&mut hash, conversation.conversation_id.as_str());
+        text(
+            &mut hash,
+            conversation
+                .parent_conversation
+                .as_ref()
+                .map_or("", |id| id.as_str()),
+        );
+        path(
+            &mut hash,
+            conversation
+                .private_root
+                .strip_prefix(root.root())
+                .map_err(invalid)?,
+        );
+    }
+    for blocker in blockers {
+        text(&mut hash, "workspace-blocker");
+        text(&mut hash, blocker.conversation_id.as_str());
+        text(&mut hash, &blocker.resource_id);
+        let workspace = blocker
+            .workspace
+            .git_worktree()
+            .ok_or_else(|| invalid("blocker without physical ownership"))?;
+        path(&mut hash, &workspace.source_repository_root);
+        path(&mut hash, &workspace.physical_worktree_root);
+        text(&mut hash, &workspace.branch);
+        text(&mut hash, &workspace.base_commit);
+        path(&mut hash, &workspace.repository_relative_workspace);
+        path(&mut hash, &blocker.workspace.logical_workspace);
+        match &blocker.state {
+            WorkspaceBlockerState::Owned => text(&mut hash, "owned"),
+            WorkspaceBlockerState::Retained { head_commit, dirty } => {
+                text(&mut hash, "retained");
+                text(&mut hash, head_commit);
+                text(&mut hash, if *dirty { "dirty" } else { "clean" });
+            }
+            WorkspaceBlockerState::Unresolved(reason) => {
+                text(&mut hash, match reason {
+                    crate::runtime::workspace::WorkspaceUnresolvedReason::PhysicalSettlement => "unresolved-physical",
+                    crate::runtime::workspace::WorkspaceUnresolvedReason::NestedContainment => "unresolved-containment",
+                });
+            }
+            WorkspaceBlockerState::BranchOnly => text(&mut hash, "branch-only"),
+        }
+    }
+    Ok(hash.finalize().into())
+}
+
+fn validate_handoff(
+    workspace: &WorkspaceSnapshot,
+    handoff: &crate::runtime::workspace::WorkspaceHandoff,
+) -> std::io::Result<()> {
+    let tree = workspace
+        .git_worktree()
+        .ok_or_else(|| invalid("handoff without worktree"))?;
+    if handoff.physical_worktree_root != tree.physical_worktree_root
+        || handoff.branch != tree.branch
+        || handoff.base_commit != tree.base_commit
+        || handoff.logical_workspace != workspace.logical_workspace
+    {
+        return Err(invalid("foreign workspace handoff"));
+    }
+    Ok(())
 }

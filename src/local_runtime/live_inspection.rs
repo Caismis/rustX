@@ -34,13 +34,18 @@ pub(crate) const TEST_FAIL_BIND_ENV: &str = "RUSTX_TEST_LIVE_INSPECTION_BIND_FAI
 /// if the child is killed, and the stable lock inode is retained across normal shutdown. No conversation or observation state is written here.
 pub(crate) struct LiveConversationInspectionLease {
     _lock: Flock<File>,
-    _lifecycle: crate::runtime::local_storage::LocalStorageGuard,
+    _lifecycle: crate::runtime::local_storage::ConversationAccess,
 }
 
 impl LiveConversationInspectionLease {
     /// Acquires the child-owned liveness lease at the identity-derived path.
     pub(crate) fn acquire(root: &Path, path: &Path) -> std::io::Result<Self> {
-        let lifecycle = crate::runtime::local_storage::LocalStorageGuard::access_existing(root)?;
+        let root = crate::runtime::local_storage::ProductRoot::existing(root)?;
+        let lifecycle = crate::runtime::local_storage::ConversationAccess::existing(
+            &root,
+            path.parent()
+                .ok_or_else(|| std::io::Error::other("missing child allocation"))?,
+        )?;
         let path = lifecycle.confined(path)?;
         let file = OpenOptions::new()
             .create(true)

@@ -148,7 +148,7 @@ fn deletion_tree_membership_excludes_independent_fork_clone_and_shared_resources
         c.private_root
             .starts_with(directory.path().join("sessions").join(session.as_str()))
     }));
-    assert!(crate::runtime::local_storage::LocalStorageGuard::writer(directory.path()).is_err());
+    assert!(SessionDeletionPreflight::acquire(directory.path(), &session).is_err());
     let revision = *preflight.ownership_revision();
     drop(preflight);
     assert_eq!(
@@ -304,10 +304,19 @@ fn deletion_process_writer_gate() {
         return;
     };
     let root = std::path::Path::new(&root);
-    let _authority = crate::runtime::local_storage::LocalStorageGuard::writer(root).unwrap();
+    let _authority = crate::runtime::local_storage::ProductController::acquire(root).unwrap();
     let catalog = SessionCatalog::create(root, &state()).unwrap();
     let (session, node, _) = catalog.active_lineage().unwrap();
     let store = store_for(&catalog, &session, &node.conversation_id);
+    let identity = crate::runtime::local_storage::ProductRoot::existing(root).unwrap();
+    let _access = crate::runtime::local_storage::ConversationAccess::existing(
+        &identity,
+        catalog
+            .database_path(&session, &node.conversation_id)
+            .parent()
+            .unwrap(),
+    )
+    .unwrap();
     let child_id = child(root, &store, 1, false);
     let child_store = SqliteConversationStore::open(
         child_id.clone(),
@@ -459,7 +468,7 @@ fn deletion_hot_journal_reads_are_nonmutating_and_startup_recovers_owned_stores(
     assert_eq!(before, std::fs::read(&database).unwrap());
     assert_eq!(journal_before, std::fs::read(&journal).unwrap());
     let writer = std::sync::Arc::new(
-        crate::runtime::local_storage::LocalStorageGuard::writer(root.path()).unwrap(),
+        crate::runtime::local_storage::ProductController::acquire(root.path()).unwrap(),
     );
     let catalog = SessionCatalog::open_existing(root.path()).unwrap().unwrap();
     catalog.recover_storage(&writer).unwrap();
@@ -496,4 +505,483 @@ fn deletion_wal_metadata_is_rejected_before_sqlite_can_create_sidecars() {
     assert!(SessionDeletionPreflight::acquire(root.path(), &session).is_err());
     assert_eq!(before_names, entries());
     assert_eq!(before, std::fs::read(database).unwrap());
+}
+
+fn revision(root: &std::path::Path, session: &SessionId) -> [u8; 32] {
+    *SessionDeletionPreflight::acquire(root, session)
+        .unwrap()
+        .ownership_revision()
+}
+
+fn activity(store: &SqliteConversationStore, ordinal: u64) {
+    let attempt = crate::runtime::identity::AttemptId::new(format!("ordinary-{ordinal}"));
+    store
+        .append_event(crate::events::types::RuntimeEventEnvelope {
+            schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
+            event_id: crate::runtime::identity::EventId::new(format!("ordinary-{ordinal}")),
+            sequence: 0,
+            conversation_id: store.conversation_id().clone(),
+            attempt_id: Some(attempt.clone()),
+            turn_id: None,
+            timestamp: Utc::now(),
+            event: crate::events::types::RuntimeEvent::AttemptStarted {
+                attempt_id: attempt,
+            },
+        })
+        .unwrap();
+}
+
+#[test]
+fn deletion_revision_ignores_unrelated_metadata_and_irrelevant_execution_history() {
+    let (root, mut catalog, _) = open_catalog();
+    let (conversation, target, node) = append_history(&catalog, &source_history());
+    let store = store_for(&catalog, &target, &conversation);
+    let source = lineage_at(&store, &conversation, store.load_head().unwrap().revision);
+    let prepared = catalog.prepare_clone_session(&state(), &source).unwrap();
+    catalog
+        .publish_session(&prepared, SessionNodeOrigin::New)
+        .unwrap();
+    let other = prepared.session_id.clone();
+    let other_store = store_for(&catalog, &other, &prepared.conversation_id);
+    let expected = revision(root.path(), &target);
+    activity(&other_store, 1);
+    other_store
+        .append_canonical(&user("unrelated-user", "unrelated text"))
+        .unwrap();
+    assert_eq!(
+        revision(root.path(), &target),
+        expected,
+        "unrelated ordinary execution and message content are not ownership"
+    );
+    other_store
+        .append_canonical(&MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("unrelated-assistant"),
+            content: vec![AssistantContentBlock::ToolCall(ToolCall {
+                id: ToolCallId::new("unrelated-call"),
+                tool_id: ToolId::new("tool-test"),
+                name: "test_tool".into(),
+                arguments: serde_json::json!({}),
+            })],
+        }))
+        .unwrap();
+    other_store
+        .append_event(crate::events::types::RuntimeEventEnvelope {
+            schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
+            event_id: crate::runtime::identity::EventId::new("unrelated-tool-start"),
+            sequence: 0,
+            conversation_id: other_store.conversation_id().clone(),
+            attempt_id: None,
+            turn_id: None,
+            timestamp: Utc::now(),
+            event: crate::events::types::RuntimeEvent::ToolExecutionStarted {
+                tool_call_id: ToolCallId::new("unrelated-call"),
+                tool_id: ToolId::new("tool-test"),
+            },
+        })
+        .unwrap();
+    assert_eq!(
+        revision(root.path(), &target),
+        expected,
+        "unrelated assistant/tool activity is not target ownership"
+    );
+    catalog.rename(&other, "unrelated label").unwrap();
+    assert_eq!(
+        revision(root.path(), &target),
+        expected,
+        "unrelated presentation metadata is not target ownership"
+    );
+    catalog.select(&target, Some(&node)).unwrap();
+    assert_eq!(
+        revision(root.path(), &target),
+        expected,
+        "selection does not change membership"
+    );
+    activity(&store, 2);
+    activity(&store, 3);
+    assert_eq!(
+        revision(root.path(), &target),
+        expected,
+        "target event timestamps, identities, sequences and history do not change ownership"
+    );
+    let bytes = std::fs::read(root.path().join("sessions/catalog.json")).unwrap();
+    let document: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    std::fs::write(
+        root.path().join("sessions/catalog.json"),
+        serde_json::to_vec(&document).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        revision(root.path(), &target),
+        expected,
+        "catalog encoding order/whitespace is not semantic authority"
+    );
+}
+
+#[test]
+fn deletion_revision_changes_for_target_nodes_children_and_nested_children() {
+    let (root, mut catalog, _) = open_catalog();
+    let (conversation, session, node) = append_history(&catalog, &source_history());
+    let store = store_for(&catalog, &session, &conversation);
+    let source = lineage_at(&store, &conversation, store.load_head().unwrap().revision);
+    let initial = revision(root.path(), &session);
+    let (prepared, _) = catalog
+        .prepare_tree_node_at_user_message(
+            &session,
+            &state(),
+            &source,
+            &MessageId::new("source-user-a"),
+        )
+        .unwrap();
+    catalog
+        .publish_node(&session, &prepared, node, SessionNodeOrigin::New)
+        .unwrap();
+    let with_node = revision(root.path(), &session);
+    assert_ne!(
+        initial, with_node,
+        "a target node adds a cleanup allocation"
+    );
+    let id = child(root.path(), &store, 1, false);
+    let with_child = revision(root.path(), &session);
+    assert_ne!(with_node, with_child, "a durable child adds owned scope");
+    let nested_parent = SqliteConversationStore::open(
+        id.clone(),
+        &crate::runtime::subagent::child_conversation_store_path(root.path(), &id),
+    )
+    .unwrap();
+    child(root.path(), &nested_parent, 1, false);
+    assert_ne!(
+        with_child,
+        revision(root.path(), &session),
+        "nested ownership is part of target scope"
+    );
+}
+
+#[test]
+fn deletion_revision_tracks_retained_and_partial_and_complete_disposal() {
+    use crate::events::types::SubagentWorkspaceDisposalSettlement;
+    let (root, catalog, _) = open_catalog();
+    let (session, node, _) = catalog.active_lineage().unwrap();
+    let parent = store_for(&catalog, &session, &node.conversation_id);
+    let initial = revision(root.path(), &session);
+    child(root.path(), &parent, 1, true);
+    let preflight = SessionDeletionPreflight::acquire(root.path(), &session).unwrap();
+    let retained = *preflight.ownership_revision();
+    assert_ne!(initial, retained);
+    let workspace = &preflight.workspace_blockers()[0].workspace;
+    let tree = workspace.git_worktree().unwrap();
+    let handoff = crate::runtime::workspace::WorkspaceHandoff {
+        logical_workspace: workspace.logical_workspace.clone(),
+        physical_worktree_root: tree.physical_worktree_root.clone(),
+        branch: tree.branch.clone(),
+        base_commit: tree.base_commit.clone(),
+        head_commit: tree.base_commit.clone(),
+        dirty: true,
+    };
+    drop(preflight);
+    let id = SubagentId::for_conversation(&node.conversation_id, 1);
+    parent
+        .commit_subagent_workspace_disposal_intent(
+            crate::runtime::subagent::workspace_disposal_started_event(
+                &node.conversation_id,
+                &id,
+                &handoff,
+                Utc::now(),
+            ),
+        )
+        .unwrap();
+    assert_eq!(
+        revision(root.path(), &session),
+        retained,
+        "intent alone removes no blocker or allocation"
+    );
+    parent
+        .commit_subagent_workspace_disposal_settlement(
+            crate::runtime::subagent::workspace_disposal_settled_event(
+                &node.conversation_id,
+                &id,
+                &handoff,
+                SubagentWorkspaceDisposalSettlement::WorktreeRemoved,
+                Utc::now(),
+            ),
+        )
+        .unwrap();
+    let branch_only = revision(root.path(), &session);
+    assert_ne!(
+        retained, branch_only,
+        "partial disposal leaves only a branch blocker"
+    );
+    parent
+        .commit_subagent_workspace_disposal_settlement(
+            crate::runtime::subagent::workspace_disposal_settled_event(
+                &node.conversation_id,
+                &id,
+                &handoff,
+                SubagentWorkspaceDisposalSettlement::Disposed,
+                Utc::now(),
+            ),
+        )
+        .unwrap();
+    let disposed = SessionDeletionPreflight::acquire(root.path(), &session).unwrap();
+    assert!(disposed.workspace_blockers().is_empty());
+    assert_ne!(
+        &branch_only,
+        disposed.ownership_revision(),
+        "complete disposal clears the blocker"
+    );
+}
+
+#[test]
+fn deletion_target_child_access_blocks_but_unrelated_child_access_does_not() {
+    use crate::runtime::local_storage::{ConversationAccess, ProductRoot};
+    let (root, mut catalog, _) = open_catalog();
+    let (conversation, target, _) = append_history(&catalog, &source_history());
+    let store = store_for(&catalog, &target, &conversation);
+    let target_child = child(root.path(), &store, 1, false);
+    let source = lineage_at(&store, &conversation, store.load_head().unwrap().revision);
+    let other = catalog.prepare_clone_session(&state(), &source).unwrap();
+    catalog
+        .publish_session(&other, SessionNodeOrigin::New)
+        .unwrap();
+    let other_store = store_for(&catalog, &other.session_id, &other.conversation_id);
+    let unrelated = child(root.path(), &other_store, 1, false);
+    let identity = ProductRoot::existing(root.path()).unwrap();
+    let _unrelated = ConversationAccess::existing(
+        &identity,
+        crate::runtime::subagent::child_conversation_store_path(root.path(), &unrelated)
+            .parent()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(SessionDeletionPreflight::acquire(root.path(), &target).is_ok());
+    let target_access = ConversationAccess::existing(
+        &identity,
+        crate::runtime::subagent::child_conversation_store_path(root.path(), &target_child)
+            .parent()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        SessionDeletionPreflight::acquire(root.path(), &target)
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    drop(target_access);
+    assert!(SessionDeletionPreflight::acquire(root.path(), &target).is_ok());
+}
+
+#[test]
+fn deletion_snapshot_freezes_native_ownership_commits_but_not_ordinary_events() {
+    use crate::runtime::local_storage::{ConversationAccess, ProductRoot};
+    let (root, mut catalog, _) = open_catalog();
+    let (conversation, target, _) = append_history(&catalog, &source_history());
+    let source_store = store_for(&catalog, &target, &conversation);
+    let source = lineage_at(
+        &source_store,
+        &conversation,
+        source_store.load_head().unwrap().revision,
+    );
+    let other = catalog.prepare_clone_session(&state(), &source).unwrap();
+    catalog
+        .publish_session(&other, SessionNodeOrigin::New)
+        .unwrap();
+    let identity = ProductRoot::existing(root.path()).unwrap();
+    let access = std::sync::Arc::new(
+        ConversationAccess::existing(
+            &identity,
+            catalog
+                .database_path(&other.session_id, &other.conversation_id)
+                .parent()
+                .unwrap(),
+        )
+        .unwrap(),
+    );
+    let store =
+        store_for(&catalog, &other.session_id, &other.conversation_id).with_lifecycle(access);
+    let snapshot = SessionDeletionPreflight::acquire(root.path(), &target).unwrap();
+    activity(&store, 42);
+    let id = SubagentId::for_conversation(&other.conversation_id, 1);
+    let event = crate::runtime::subagent::ownership_event(
+        &other.conversation_id,
+        &id,
+        &AgentId::new("agent"),
+        &ConversationId::new(id.as_str()),
+        &ToolCallId::new("call"),
+        &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
+        &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
+        crate::events::types::SubagentOwnershipKind::Normal,
+        &WorkspaceSnapshot::shared(root.path().join("external")),
+        Utc::now(),
+    );
+    assert!(
+        store.append_event(event.clone()).is_err(),
+        "no graph transition can race the retained ownership freeze"
+    );
+    assert!(
+        catalog
+            .rename(&other.session_id, "blocked publication")
+            .is_err()
+    );
+    drop(snapshot);
+    store.append_event(event).unwrap();
+}
+
+#[test]
+fn deletion_cross_session_child_claim_is_ambiguous_not_a_revision_change() {
+    let (root, mut catalog, _) = open_catalog();
+    let (conversation, target, _) = append_history(&catalog, &source_history());
+    let store = store_for(&catalog, &target, &conversation);
+    let owned_child = child(root.path(), &store, 1, false);
+    let source = lineage_at(&store, &conversation, store.load_head().unwrap().revision);
+    let other = catalog.prepare_clone_session(&state(), &source).unwrap();
+    catalog
+        .publish_session(&other, SessionNodeOrigin::New)
+        .unwrap();
+    let other_store = store_for(&catalog, &other.session_id, &other.conversation_id);
+    let id = SubagentId::for_conversation(&other.conversation_id, 1);
+    let event = crate::runtime::subagent::ownership_event(
+        &other.conversation_id,
+        &id,
+        &AgentId::new("agent"),
+        &owned_child,
+        &ToolCallId::new("call"),
+        &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
+        &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
+        crate::events::types::SubagentOwnershipKind::Normal,
+        &WorkspaceSnapshot::shared(root.path().join("external")),
+        Utc::now(),
+    );
+    other_store.append_event(event).unwrap();
+    assert!(
+        SessionDeletionPreflight::acquire(root.path(), &target).is_err(),
+        "a foreign ownership claim must fail closed, not merely yield a different token"
+    );
+}
+
+#[test]
+fn deletion_detached_private_stores_and_writers_retain_target_access() {
+    use crate::runtime::local_storage::{ConversationAccess, ProductRoot};
+    let (root, catalog, _) = open_catalog();
+    let (session, node, _) = catalog.active_lineage().unwrap();
+    let allocation = catalog
+        .database_path(&session, &node.conversation_id)
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let identity = ProductRoot::existing(root.path()).unwrap();
+    let access = std::sync::Arc::new(ConversationAccess::existing(&identity, &allocation).unwrap());
+    let artifacts =
+        crate::tools::artifacts::ArtifactStore::new(node.conversation_id.clone(), &allocation)
+            .unwrap()
+            .with_lifecycle(Some(access.clone()));
+    let output = crate::tools::managed_output::ManagedToolOutput::new(
+        node.conversation_id.clone(),
+        allocation.join("tool-output"),
+    )
+    .unwrap()
+    .with_lifecycle(Some(access.clone()));
+    let writer = artifacts
+        .open_writer(&artifacts.create_artifact().unwrap())
+        .unwrap();
+    drop(access);
+    drop(artifacts);
+    assert!(SessionDeletionPreflight::acquire(root.path(), &session).is_err());
+    drop(output);
+    assert!(
+        SessionDeletionPreflight::acquire(root.path(), &session).is_err(),
+        "the streaming writer independently retains target access"
+    );
+    drop(writer);
+    assert!(SessionDeletionPreflight::acquire(root.path(), &session).is_ok());
+}
+
+#[test]
+fn deletion_target_process_gate() {
+    use crate::runtime::local_storage::{ConversationAccess, ProductRoot};
+    use std::io::{Read, Write};
+    let Some(root) = std::env::var_os("RUSTX_260_TARGET_ROOT") else {
+        return;
+    };
+    let root = ProductRoot::existing(std::path::Path::new(&root)).unwrap();
+    let _owner: Box<dyn std::any::Any> = if let Ok(id) = std::env::var("RUSTX_260_TARGET_CHILD") {
+        let database = crate::runtime::subagent::child_conversation_store_path(
+            root.root(),
+            &ConversationId::new(id),
+        );
+        Box::new(ConversationAccess::existing(&root, database.parent().unwrap()).unwrap())
+    } else {
+        Box::new(
+            SessionDeletionPreflight::acquire(
+                root.root(),
+                &SessionId::new(std::env::var("RUSTX_260_TARGET_SESSION").unwrap()),
+            )
+            .unwrap(),
+        )
+    };
+    println!("TARGET_ACQUIRED");
+    std::io::stdout().flush().unwrap();
+    std::io::stdin().read_exact(&mut [0]).unwrap();
+}
+
+#[test]
+fn deletion_cross_process_target_child_unrelated_child_and_destructive_conflict() {
+    use std::io::{BufRead, BufReader};
+    let (root, mut catalog, _) = open_catalog();
+    let (conversation, target, _) = append_history(&catalog, &source_history());
+    let store = store_for(&catalog, &target, &conversation);
+    let target_child = child(root.path(), &store, 1, false);
+    let source = lineage_at(&store, &conversation, store.load_head().unwrap().revision);
+    let other = catalog.prepare_clone_session(&state(), &source).unwrap();
+    catalog
+        .publish_session(&other, SessionNodeOrigin::New)
+        .unwrap();
+    let other_store = store_for(&catalog, &other.session_id, &other.conversation_id);
+    let unrelated_child = child(root.path(), &other_store, 1, false);
+    for (key, value, blocks) in [
+        ("RUSTX_260_TARGET_CHILD", unrelated_child.as_str(), false),
+        ("RUSTX_260_TARGET_CHILD", target_child.as_str(), true),
+        ("RUSTX_260_TARGET_SESSION", target.as_str(), true),
+    ] {
+        let mut process = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "local_runtime::session::tests::deletion_tests::deletion_target_process_gate",
+                "--nocapture",
+            ])
+            .env("RUSTX_260_TARGET_ROOT", root.path())
+            .env(key, value)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut output = BufReader::new(process.stdout.take().unwrap());
+        loop {
+            let mut line = String::new();
+            assert_ne!(
+                output.read_line(&mut line).unwrap(),
+                0,
+                "target owner exited before gate"
+            );
+            if line.trim() == "TARGET_ACQUIRED" {
+                break;
+            }
+        }
+        process.stdout = Some(output.into_inner());
+        let result = SessionDeletionPreflight::acquire(root.path(), &target);
+        if blocks {
+            assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        } else {
+            assert_eq!(
+                result.unwrap().conversations().len(),
+                2,
+                "unrelated live child does not block complete B scope"
+            );
+        }
+        process.kill().unwrap();
+        process.wait().unwrap();
+        assert!(
+            SessionDeletionPreflight::acquire(root.path(), &target).is_ok(),
+            "kernel authority is released after process death"
+        );
+    }
 }

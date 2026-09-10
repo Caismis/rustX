@@ -60,12 +60,21 @@ struct ArtifactStoreState {
 /// conversation.
 #[derive(Clone, Debug)]
 pub struct ArtifactStore {
+    lifecycle: Option<Arc<crate::runtime::local_storage::ConversationAccess>>,
     conversation_id: ConversationId,
     root: PathBuf,
     state: Arc<Mutex<ArtifactStoreState>>,
 }
 
 impl ArtifactStore {
+    pub(crate) fn with_lifecycle(
+        mut self,
+        access: Option<Arc<crate::runtime::local_storage::ConversationAccess>>,
+    ) -> Self {
+        self.lifecycle = access;
+        self
+    }
+
     /// The synchronized allocation state.
     fn state(&self) -> std::sync::MutexGuard<'_, ArtifactStoreState> {
         self.state
@@ -91,6 +100,7 @@ impl ArtifactStore {
             ArtifactError::RootUnavailable(format!("{}: {error}", root.display()))
         })?;
         Ok(Self {
+            lifecycle: None,
             conversation_id,
             root,
             state: Arc::new(Mutex::new(ArtifactStoreState { next: 0 })),
@@ -151,7 +161,10 @@ impl ArtifactStore {
             .truncate(true)
             .open(&path)
             .map_err(|error| ArtifactError::WriteFailed(format!("{}: {error}", path.display())))?;
-        Ok(ArtifactWriter { file })
+        Ok(ArtifactWriter {
+            file,
+            _lifecycle: self.lifecycle.clone(),
+        })
     }
 
     /// The physical path of an allocated artifact.
@@ -165,6 +178,7 @@ impl ArtifactStore {
 /// Writing appends bytes to the artifact; the file is persisted on drop.
 /// This is not a durable recovery backend: fsync guarantees are outside M5.
 pub struct ArtifactWriter {
+    _lifecycle: Option<Arc<crate::runtime::local_storage::ConversationAccess>>,
     file: File,
 }
 

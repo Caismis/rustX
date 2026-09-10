@@ -131,7 +131,8 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
         crate::runtime::identity::ConversationId::new("cfg238"),
         launch.artifacts_root(),
         std::sync::Arc::new(
-            crate::runtime::local_storage::LocalStorageGuard::writer(&launch.runtime_root).unwrap(),
+            crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root)
+                .unwrap(),
         ),
     )
     .await

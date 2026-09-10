@@ -476,7 +476,7 @@ pub struct SessionCatalog {
     /// it: [`Self::plan_unchanged`] plans that write, and it lands in the
     /// same single startup transaction as every other catalog decision.
     published: bool,
-    lifecycle: Option<std::sync::Arc<crate::runtime::local_storage::LocalStorageGuard>>,
+    lifecycle: Option<std::sync::Arc<crate::runtime::local_storage::ProductController>>,
     #[cfg(test)]
     write_fault: Arc<Mutex<Option<CatalogWriteFault>>>,
     /// Test-only gate parked between the Surface-head observation and the
@@ -487,11 +487,36 @@ pub struct SessionCatalog {
 }
 
 impl SessionCatalog {
+    pub(crate) fn deletion_preflight(
+        &self,
+        id: &SessionId,
+    ) -> std::io::Result<super::session_deletion::SessionDeletionPreflight> {
+        super::session_deletion::SessionDeletionPreflight::acquire(
+            self.root.parent().expect("catalog root"),
+            id,
+        )
+    }
+
+    fn inspect_store(
+        &self,
+        id: ConversationId,
+        path: &Path,
+    ) -> Result<SqliteConversationStore, ConversationStoreError> {
+        use crate::runtime::local_storage::{ConversationAccess, ProductRoot};
+        let access = ProductRoot::existing(self.root.parent().expect("catalog root"))
+            .and_then(|root| {
+                ConversationAccess::existing(&root, path.parent().expect("allocation"))
+            })
+            .map_err(|e| ConversationStoreError::Storage(e.to_string()))?;
+        SqliteConversationStore::open_existing(id, path)
+            .map(|store| store.with_lifecycle(std::sync::Arc::new(access)))
+    }
+
     /// Recover graph-owned stores before startup performs read-only selection.
     /// Child references come only from existing typed durable ownership commits.
     pub(crate) fn recover_storage(
         &self,
-        guard: &std::sync::Arc<crate::runtime::local_storage::LocalStorageGuard>,
+        guard: &std::sync::Arc<crate::runtime::local_storage::ProductController>,
     ) -> Result<(), SessionError> {
         let mut pending: Vec<_> = self
             .document
@@ -553,7 +578,7 @@ impl SessionCatalog {
 
     pub(crate) fn retain_lifecycle(
         &mut self,
-        guard: std::sync::Arc<crate::runtime::local_storage::LocalStorageGuard>,
+        guard: std::sync::Arc<crate::runtime::local_storage::ProductController>,
     ) {
         self.lifecycle = Some(guard);
     }
@@ -571,22 +596,17 @@ impl SessionCatalog {
         if !runtime_root.exists() {
             return Ok(None);
         }
-        let guard = std::sync::Arc::new(
-            crate::runtime::local_storage::LocalStorageGuard::access_existing(runtime_root)
-                .map_err(|error| SessionError::Io {
-                    path: runtime_root.to_path_buf(),
-                    detail: error.to_string(),
-                })?,
-        );
-        let mut catalog = Self::read_under_guard(&guard)?;
-        if let Some(catalog) = &mut catalog {
-            catalog.retain_lifecycle(guard);
-        }
-        Ok(catalog)
+        let root = crate::runtime::local_storage::ProductRoot::existing(runtime_root).map_err(
+            |error| SessionError::Io {
+                path: runtime_root.to_path_buf(),
+                detail: error.to_string(),
+            },
+        )?;
+        Self::read_under_guard(&root)
     }
 
     pub(crate) fn read_under_guard(
-        guard: &crate::runtime::local_storage::LocalStorageGuard,
+        guard: &crate::runtime::local_storage::ProductRoot,
     ) -> Result<Option<Self>, SessionError> {
         let root = guard.root().join("sessions");
         let path = guard
@@ -935,7 +955,8 @@ impl SessionCatalog {
             return Ok(false);
         }
         let path = self.database_path(&session.id, &node.conversation_id);
-        let store = SqliteConversationStore::open_existing(node.conversation_id.clone(), &path)
+        let store = self
+            .inspect_store(node.conversation_id.clone(), &path)
             .map_err(SessionError::Store)?;
         let head = store.load_head().map_err(SessionError::Store)?;
         if head.revision != SurfaceRevision::INITIAL || !head.active_message_ids.is_empty() {
@@ -1091,7 +1112,8 @@ impl SessionCatalog {
                 detail: format!("Session {} has no root node", session.id),
             })?;
         let path = self.database_path(&session.id, &root.conversation_id);
-        let store = SqliteConversationStore::open_existing(root.conversation_id.clone(), &path)
+        let store = self
+            .inspect_store(root.conversation_id.clone(), &path)
             .map_err(SessionError::Store)?;
         let head = store.load_head().map_err(SessionError::Store)?;
         let page = store
@@ -1374,7 +1396,8 @@ impl SessionCatalog {
     ) -> Result<(), SessionError> {
         let (node, _) = self.lineage(session_id, node_id)?;
         let path = self.database_path(session_id, &node.conversation_id);
-        let store = SqliteConversationStore::open_existing(node.conversation_id, &path)
+        let store = self
+            .inspect_store(node.conversation_id, &path)
             .map_err(SessionError::Store)?;
         store.load_head().map_err(SessionError::Store).map(|_| ())
     }
@@ -1612,6 +1635,18 @@ impl SessionCatalog {
     }
 
     fn persist(&self, document: &CatalogDocument) -> Result<(), SessionError> {
+        let root = crate::runtime::local_storage::ProductRoot::existing(
+            self.root.parent().expect("catalog product root"),
+        )
+        .map_err(|e| SessionError::Catalog {
+            detail: e.to_string(),
+        })?;
+        let _mutation = root
+            .ownership_mutation()
+            .map_err(|e| SessionError::Catalog {
+                detail: e.to_string(),
+            })?;
+
         let bytes =
             serde_json::to_vec_pretty(document).map_err(|error| SessionError::CatalogCommit {
                 error: CatalogCommitError::NotCommitted {

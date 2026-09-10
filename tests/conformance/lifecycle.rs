@@ -395,3 +395,124 @@ async fn interactive_production_turn_still_builds_over_the_same_composition() {
     assert_eq!(requests.len(), 1);
     emulator.finish().await;
 }
+
+/// A real native controller and Runtime Client stay attached throughout B's
+/// preflight while A executes a complete provider-backed ordinary turn.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn active_session_a_executes_while_historical_b_preflight_retains_authority() {
+    use rustx::durable::{ConversationStore, SqliteConversationStore};
+    use rustx::local_runtime::composition::LocalSessionProduct;
+    use rustx::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClientResult};
+    let Some(emulator) = ProviderEmulator::start("openai_chat_streamed_turn").await else {
+        return;
+    };
+    let root = tempfile::tempdir().unwrap();
+    let paths = startup(
+        root.path(),
+        &emulator_models_json(&emulator),
+        &emulator_session_json(),
+    );
+    let historical = LocalSessionProduct::compose(&paths.clone().resolve(), &dependencies())
+        .await
+        .unwrap();
+    let b = historical.supervisor().current().await.unwrap();
+    let database = paths
+        .runtime_root
+        .join("sessions")
+        .join(b.id.as_str())
+        .join("conversations")
+        .join(b.active_conversation_id.as_str())
+        .join("conversation.sqlite");
+    let store = SqliteConversationStore::open(b.active_conversation_id.clone(), &database).unwrap();
+    store
+        .append_canonical(&rustx::message::types::MessageBlock::User(
+            rustx::message::types::UserMessageBlock {
+                id: rustx::runtime::identity::MessageId::new("historical-user"),
+                content: submit_content("historical work"),
+                source: rustx::message::types::UserSource::Human,
+                kind: rustx::message::types::InboundKind::Message,
+                timestamp: None,
+            },
+        ))
+        .unwrap();
+    drop(store);
+    historical.runtime().shutdown().await.unwrap();
+    drop(historical);
+    let product = LocalSessionProduct::compose(&paths.clone().resolve(), &dependencies())
+        .await
+        .unwrap();
+    let a = product.supervisor().current().await.unwrap();
+    assert_ne!(a.id, b.id);
+    let endpoint = product.endpoint();
+    assert!(matches!(
+        endpoint
+            .handle_request(RuntimeClientRequest::Initialize {
+                id: RequestId::new(1),
+                protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION
+            })
+            .result,
+        Some(RuntimeClientResult::Initialized { .. })
+    ));
+    assert!(
+        product
+            .supervisor()
+            .deletion_preflight(&a.id)
+            .await
+            .is_err(),
+        "the actual live target Conversation blocks"
+    );
+    let preflight = product
+        .supervisor()
+        .deletion_preflight(&b.id)
+        .await
+        .unwrap();
+    assert_eq!(preflight.conversations().len(), 1);
+    assert_eq!(
+        preflight.conversations()[0].conversation_id,
+        b.active_conversation_id
+    );
+    let revision = *preflight.ownership_revision();
+    assert!(product.runtime().is_activated());
+    let submitted = endpoint
+        .handle_request_async(RuntimeClientRequest::SubmitInbound {
+            id: RequestId::new(2),
+            content: submit_content("conformance: turn one"),
+        })
+        .await;
+    assert!(matches!(
+        submitted.result,
+        Some(RuntimeClientResult::InboundAccepted { .. })
+    ));
+    product.runtime().settlement_signal().notified().await;
+    assert_eq!(emulator.requests().await.len(), 1);
+    assert_eq!(
+        crate::common::request_snapshots(&product.runtime().request_history()).len(),
+        1
+    );
+    assert_eq!(
+        product
+            .supervisor()
+            .current()
+            .await
+            .unwrap()
+            .active_conversation_id,
+        a.active_conversation_id
+    );
+    assert!(
+        product.runtime().is_activated(),
+        "no switch or restart occurred"
+    );
+    drop(preflight);
+    assert_eq!(
+        product
+            .supervisor()
+            .deletion_preflight(&b.id)
+            .await
+            .unwrap()
+            .ownership_revision(),
+        &revision,
+        "A's user/model/assistant activity does not change B ownership"
+    );
+    product.runtime().shutdown().await.unwrap();
+    emulator.finish().await;
+}

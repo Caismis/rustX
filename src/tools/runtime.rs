@@ -218,7 +218,7 @@ pub struct ConversationRuntimeConfig {
     /// owning conversation runtime.
     pub durable_binding: Option<ConversationStoreBinding>,
     /// Local product lifecycle access, retained by all runtime clones.
-    pub lifecycle: Option<Arc<crate::runtime::local_storage::LocalStorageGuard>>,
+    pub lifecycle: Option<Arc<crate::runtime::local_storage::ConversationAccess>>,
     /// The runtime clock stamping terminal inbound messages; the system
     /// clock is used when omitted.
     pub clock: Option<Arc<dyn RuntimeClock>>,
@@ -273,7 +273,7 @@ pub struct ConversationToolRuntime {
     /// Shared by every clone, so cloning a runtime handle never creates a
     /// second bindable identity.
     runtime_client: Arc<RuntimeClientBinding>,
-    _lifecycle: Option<Arc<crate::runtime::local_storage::LocalStorageGuard>>,
+    _lifecycle: Option<Arc<crate::runtime::local_storage::ConversationAccess>>,
 }
 
 impl core::fmt::Debug for ConversationToolRuntime {
@@ -399,7 +399,8 @@ impl ConversationToolRuntime {
             durable_binding.inbound_capability(),
         );
         let artifacts = ArtifactStore::new(conversation_id.clone(), &artifacts_root)
-            .map_err(ConversationRuntimeError::Artifacts)?;
+            .map_err(ConversationRuntimeError::Artifacts)?
+            .with_lifecycle(config.lifecycle.clone());
         // The managed tool-output root is a *dedicated* region below the
         // runtime-private root: textual spill files must be model-readable
         // through the read-only filesystem tools, but the enclosing
@@ -409,7 +410,8 @@ impl ConversationToolRuntime {
         // ManagedToolOutput rejects model-originated mutation there.
         let tool_output =
             ManagedToolOutput::new(conversation_id.clone(), artifacts_root.join("tool-output"))
-                .map_err(ConversationRuntimeError::ManagedOutput)?;
+                .map_err(ConversationRuntimeError::ManagedOutput)?
+                .with_lifecycle(config.lifecycle.clone());
         validate_managed_output_root(workspace.root(), &artifacts_root, tool_output.root())?;
         let clock = config
             .clock

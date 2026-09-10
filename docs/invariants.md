@@ -9,13 +9,18 @@ the finite target. Retained worktrees and branches are blockers requiring
 explicit disposal, not implicit cleanup targets. Shared environments, capability
 resources, caches, config, credentials and project files remain outside it.
 
-`SessionDeletionPreflight` acquires an exclusive OS lock on the canonical runtime
-root directory before observing ownership and retains it with the snapshot.
-Product controllers, child runtimes, catalog readers and inspection owners
-participate in compatible guards. OS process death releases access; aliases to
-the same root cannot form another domain. Management reads never create missing
-stores or directories. See [the ownership and storage contract](session-deletion-ownership.md)
-for authority sources, exact layout, revision observation and release points.
+Canonical `ProductRoot` identity, `ProductController` admission and target
+Conversation lifecycle access are separate. Preflight freezes ownership
+transitions, derives native ownership, then locks only target Conversation
+allocations exclusively in sorted identity order. A live unrelated Session and
+its Runtime Client remain usable; actual target runtime/child/inspection/private
+writer access blocks exclusivity. Ordinary activity does not hold the ownership
+freeze. Guards release through drop or OS process death; aliases share identity.
+The semantic revision hashes only target membership, owned allocations and
+final workspace-blocker state, never raw catalog bytes or execution history.
+Management reads never create missing stores or directories. See
+[the ownership and storage contract](session-deletion-ownership.md) for the exact
+lock order, acquisition/release points, participant lifetimes and regression map.
 
 
 These invariants are architectural constraints. Implementations may change; these rules should change only through an explicit architecture decision.

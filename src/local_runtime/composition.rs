@@ -990,7 +990,7 @@ impl LocalConversationCore {
             ConversationId::new("conversation-standalone"),
             paths.artifacts_root(),
             Arc::new(
-                crate::runtime::local_storage::LocalStorageGuard::writer(&paths.runtime_root)
+                crate::runtime::local_storage::ProductController::acquire(&paths.runtime_root)
                     .map_err(|e| LocalRuntimeError::ToolRuntime {
                         detail: e.to_string(),
                     })?,
@@ -1011,7 +1011,7 @@ impl LocalConversationCore {
         session_state: SessionPersistentState,
         conversation_id: ConversationId,
         artifacts_root: PathBuf,
-        lifecycle: Arc<crate::runtime::local_storage::LocalStorageGuard>,
+        lifecycle: Arc<crate::runtime::local_storage::ProductController>,
     ) -> Result<Self, LocalRuntimeError> {
         // The current runtime default was validated by the composition
         // caller before any first-Session publication. Validate it here too
@@ -1037,7 +1037,12 @@ impl LocalConversationCore {
             &paths.workspace,
             artifacts_root.clone(),
         );
-        tool_runtime_config.lifecycle = Some(lifecycle);
+        tool_runtime_config.lifecycle = Some(Arc::new(
+            crate::runtime::local_storage::ConversationAccess::start(lifecycle, &artifacts_root)
+                .map_err(|e| LocalRuntimeError::ToolRuntime {
+                    detail: e.to_string(),
+                })?,
+        ));
         tool_runtime_config.environment = Some(base_environment.clone());
         let tool_runtime =
             ConversationToolRuntime::from_config(conversation_id.clone(), tool_runtime_config)
@@ -1349,10 +1354,18 @@ impl LocalConversationCore {
         preparation: &ChildPreparation,
     ) -> Result<Self, LocalRuntimeError> {
         let lifecycle = Arc::new(
-            crate::runtime::local_storage::LocalStorageGuard::access_existing(&spec.product_root)
+            crate::runtime::local_storage::ProductRoot::existing(&spec.product_root)
+                .and_then(|root| {
+                    crate::runtime::local_storage::ConversationAccess::existing(
+                        &root,
+                        child_conversation_store_path(root.root(), &spec.child_conversation_id)
+                            .parent()
+                            .unwrap(),
+                    )
+                })
                 .map_err(|e| LocalRuntimeError::ToolRuntime {
-                detail: e.to_string(),
-            })?,
+                    detail: e.to_string(),
+                })?,
         );
         lifecycle
             .confined(&spec.runtime_root)
@@ -1796,11 +1809,10 @@ impl LocalSessionProduct {
         // database it leaves behind is not published state: nothing names
         // it, so it is neither selectable nor resumable.
         let lifecycle = Arc::new(
-            crate::runtime::local_storage::LocalStorageGuard::writer(&paths.runtime_root).map_err(
-                |e| LocalRuntimeError::ToolRuntime {
+            crate::runtime::local_storage::ProductController::acquire(&paths.runtime_root)
+                .map_err(|e| LocalRuntimeError::ToolRuntime {
                     detail: e.to_string(),
-                },
-            )?,
+                })?,
         );
         let mut catalog = if let Some(catalog) = SessionCatalog::open_existing(lifecycle.root())? {
             catalog
@@ -2035,7 +2047,7 @@ enum ConversationInspectionAuthority {
 pub struct LocalConversationInspection {
     conversation_id: ConversationId,
     authority: ConversationInspectionAuthority,
-    _lifecycle: Arc<crate::runtime::local_storage::LocalStorageGuard>,
+    _lifecycle: Arc<crate::runtime::local_storage::ConversationAccess>,
 }
 
 impl std::fmt::Debug for LocalConversationInspection {
@@ -2079,7 +2091,15 @@ impl LocalConversationInspection {
         conversation_id: &ConversationId,
     ) -> Result<Self, LocalRuntimeError> {
         let lifecycle = Arc::new(
-            crate::runtime::local_storage::LocalStorageGuard::access_existing(&paths.runtime_root)
+            crate::runtime::local_storage::ProductRoot::existing(&paths.runtime_root)
+                .and_then(|root| {
+                    crate::runtime::local_storage::ConversationAccess::existing(
+                        &root,
+                        child_conversation_store_path(root.root(), conversation_id)
+                            .parent()
+                            .ok_or_else(|| std::io::Error::other("missing child allocation"))?,
+                    )
+                })
                 .map_err(|e| LocalRuntimeError::ToolRuntime {
                     detail: e.to_string(),
                 })?,
@@ -2556,6 +2576,7 @@ mod subagent_child_tests {
         project_instructions: Vec<ProjectContextFile>,
         skills: Vec<crate::runtime::subagent::ResolvedSubagentSkill>,
     ) -> SubagentChildSpec {
+        std::fs::create_dir_all(root.join("subagents/conv-parent-subagent-1")).unwrap();
         SubagentChildSpec {
             protocol_version: SUBAGENT_IPC_VERSION,
             product_root: root.to_path_buf(),
@@ -3854,9 +3875,9 @@ mod composition_tests {
                 model: runtime_config.model.clone(),
             },
             ConversationId::new("conv-163-composition"),
-            root.path().join("artifacts"),
+            launch.runtime_root.join("artifacts"),
             Arc::new(
-                crate::runtime::local_storage::LocalStorageGuard::writer(&launch.runtime_root)
+                crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root)
                     .unwrap(),
             ),
         )
