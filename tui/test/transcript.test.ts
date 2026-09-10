@@ -456,17 +456,21 @@ describe("durable transcript audits", () => {
               interaction_id: "interaction-1",
               subject: {
                 type: "questionnaire",
+                requester: { tool_id: "tool-ask-user", tool_name: "ask_user", origin: "builtin" },
                 invocation_id: { caller: "agent", call_id: "questionnaire-call" },
                 questionnaire: {
                   questions: [
                     {
                       question: "Which environment?",
                       header: "Environment",
-                      options: [
+                      answer: {
+                        type: "single_choice",
+                        options: [
                         { label: "staging", description: "A safe test environment." },
                         { label: "production", description: "The live environment." },
                       ],
-                      multi_select: false,
+                        allow_custom: true,
+                      },
                     },
                   ],
                 },
@@ -488,7 +492,7 @@ describe("durable transcript audits", () => {
                   answers: [
                     {
                       question_index: 0,
-                      answer: { type: "single_option", value: { label: "staging" } },
+                      answer: { type: "option", value: { option_index: 0 } },
                     },
                   ],
                 },
@@ -503,7 +507,7 @@ describe("durable transcript audits", () => {
     assert.match(rendered, /historical interaction · requested · not actionable/);
     assert.match(rendered, /Which environment/);
     assert.match(rendered, /historical interaction · settled · questionnaire submitted/);
-    assert.match(rendered, /single_option/);
+    assert.match(rendered, /option/);
     assert.doesNotMatch(rendered, /respond|pending prompt|approve action/i);
   });
 

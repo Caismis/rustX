@@ -150,7 +150,7 @@ describe("human-input surface", () => {
       "[implement]",
       "[reviewer]",
       "Approval · bash",
-      "Question · Environment",
+      "Question · ask_user · Environment",
     ]) {
       assert.ok(text.includes(marker), `queue must show ${marker}`);
     }
@@ -263,7 +263,7 @@ describe("human-input surface", () => {
             answers: [
               {
                 question_index: 0,
-                answer: { type: "single_option", value: { label: "staging" } },
+                answer: { type: "option", value: { option_index: 0 } },
               },
             ],
           },
@@ -377,7 +377,7 @@ describe("human-input surface", () => {
             answers: [
               {
                 question_index: 0,
-                answer: { type: "single_option", value: { label: "staging" } },
+                answer: { type: "option", value: { option_index: 0 } },
               },
             ],
           },

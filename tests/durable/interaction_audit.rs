@@ -36,11 +36,12 @@ use rustx::durable::{
     interaction_audit_capability,
 };
 use rustx::events::interaction::{
-    CustomAnswer, InteractionSettlement, InteractionSubject, MAX_APPROVAL_REQUEST_REASON_CHARS,
-    MAX_OPTION_LABEL_CHARS, MAX_QUESTION_TEXT_CHARS, MAX_QUESTIONNAIRE_QUESTIONS,
-    MultipleOptionAnswer, OptionSpecification, QuestionSpecification, QuestionnaireAnswer,
+    AnswerSpecification, CustomAnswer, InteractionRequester, InteractionSettlement,
+    InteractionSubject, MAX_APPROVAL_REQUEST_REASON_CHARS, MAX_OPTION_LABEL_CHARS,
+    MAX_QUESTION_TEXT_CHARS, MAX_QUESTIONNAIRE_QUESTIONS, MultiChoiceSpecification, OptionAnswer,
+    OptionSpecification, OptionsAnswer, QuestionSpecification, QuestionnaireAnswer,
     QuestionnaireAnswerEntry, QuestionnaireSpecification, QuestionnaireSubmission,
-    SingleOptionAnswer, interaction_arguments_digest,
+    SingleChoiceSpecification, interaction_arguments_digest,
 };
 use rustx::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use rustx::message::types::{
@@ -174,45 +175,68 @@ fn approval_subject() -> InteractionSubject {
     }
 }
 
+fn option(label: &str, description: &str) -> OptionSpecification {
+    OptionSpecification {
+        label: label.to_owned(),
+        description: description.to_owned(),
+        preview: None,
+    }
+}
+
+fn ask_user_requester() -> InteractionRequester {
+    InteractionRequester {
+        tool_id: ToolId::new("tool-ask-user"),
+        tool_name: "ask_user".to_owned(),
+        origin: rustx::tools::types::ToolOrigin::Builtin,
+    }
+}
+
 fn questionnaire_specification() -> QuestionnaireSpecification {
     QuestionnaireSpecification {
         questions: vec![QuestionSpecification {
             question: "Which target?".to_owned(),
             header: "Target".to_owned(),
-            options: vec![
-                OptionSpecification {
-                    label: "staging".to_owned(),
-                    description: "A safe test environment.".to_owned(),
-                    preview: None,
-                },
-                OptionSpecification {
-                    label: "production".to_owned(),
-                    description: "The live environment.".to_owned(),
-                    preview: None,
-                },
-            ],
-            multi_select: false,
+            answer: AnswerSpecification::SingleChoice(SingleChoiceSpecification {
+                options: vec![
+                    option("staging", "A safe test environment."),
+                    option("production", "The live environment."),
+                ],
+                allow_custom: true,
+            }),
         }],
     }
 }
 
-fn questionnaire_subject() -> InteractionSubject {
+fn questionnaire_options(
+    questionnaire: &mut QuestionnaireSpecification,
+) -> &mut Vec<OptionSpecification> {
+    match &mut questionnaire.questions[0].answer {
+        AnswerSpecification::SingleChoice(single) => &mut single.options,
+        AnswerSpecification::MultiChoice(multi) => &mut multi.options,
+        _ => panic!("the fixture question is a choice question"),
+    }
+}
+
+fn questionnaire_subject_of(questionnaire: QuestionnaireSpecification) -> InteractionSubject {
     InteractionSubject::Questionnaire {
         invocation_id: rustx::tools::types::ToolInvocationId::Agent {
             call_id: rustx::runtime::identity::ToolCallId::new("questionnaire-call"),
         },
-        questionnaire: questionnaire_specification(),
+        requester: ask_user_requester(),
+        questionnaire,
     }
 }
 
-fn submitted_option(label: &str) -> InteractionSettlement {
+fn questionnaire_subject() -> InteractionSubject {
+    questionnaire_subject_of(questionnaire_specification())
+}
+
+fn submitted_option(option_index: usize) -> InteractionSettlement {
     InteractionSettlement::QuestionnaireSubmitted {
         submission: QuestionnaireSubmission {
             answers: vec![QuestionnaireAnswerEntry {
                 question_index: 0,
-                answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
-                    label: label.to_owned(),
-                }),
+                answer: QuestionnaireAnswer::Option(OptionAnswer { option_index }),
             }],
         },
     }
@@ -1366,12 +1390,7 @@ fn interaction_audit_payload_bounds_are_durable_invariants() {
     let mut oversized_question = questionnaire_specification();
     oversized_question.questions[0].question = "p".repeat(MAX_QUESTION_TEXT_CHARS + 1);
     refused(
-        InteractionSubject::Questionnaire {
-            invocation_id: rustx::tools::types::ToolInvocationId::Agent {
-                call_id: rustx::runtime::identity::ToolCallId::new("questionnaire-call"),
-            },
-            questionnaire: oversized_question,
-        },
+        questionnaire_subject_of(oversized_question),
         "oversized question text",
     );
     let mut oversized_count = questionnaire_specification();
@@ -1379,74 +1398,45 @@ fn interaction_audit_payload_bounds_are_durable_invariants() {
         .map(|index| QuestionSpecification {
             question: format!("Question {index}"),
             header: format!("Q{index}"),
-            options: vec![
-                OptionSpecification {
-                    label: "A".to_owned(),
-                    description: "A".to_owned(),
-                    preview: None,
-                },
-                OptionSpecification {
-                    label: "B".to_owned(),
-                    description: "B".to_owned(),
-                    preview: None,
-                },
-            ],
-            multi_select: false,
+            answer: AnswerSpecification::SingleChoice(SingleChoiceSpecification {
+                options: vec![option("A", "A"), option("B", "B")],
+                allow_custom: true,
+            }),
         })
         .collect();
     refused(
-        InteractionSubject::Questionnaire {
-            invocation_id: rustx::tools::types::ToolInvocationId::Agent {
-                call_id: rustx::runtime::identity::ToolCallId::new("questionnaire-call"),
-            },
-            questionnaire: oversized_count,
-        },
+        questionnaire_subject_of(oversized_count),
         "oversized question count",
     );
     let mut oversized_label = questionnaire_specification();
-    oversized_label.questions[0].options[0].label = "c".repeat(MAX_OPTION_LABEL_CHARS + 1);
+    questionnaire_options(&mut oversized_label)[0].label = "c".repeat(MAX_OPTION_LABEL_CHARS + 1);
     refused(
-        InteractionSubject::Questionnaire {
-            invocation_id: rustx::tools::types::ToolInvocationId::Agent {
-                call_id: rustx::runtime::identity::ToolCallId::new("questionnaire-call"),
-            },
-            questionnaire: oversized_label,
-        },
+        questionnaire_subject_of(oversized_label),
         "oversized option label",
     );
     let mut duplicate_labels = questionnaire_specification();
-    duplicate_labels.questions[0].options[1].label = "staging".to_owned();
+    questionnaire_options(&mut duplicate_labels)[1].label = "staging".to_owned();
     refused(
-        InteractionSubject::Questionnaire {
-            invocation_id: rustx::tools::types::ToolInvocationId::Agent {
-                call_id: rustx::runtime::identity::ToolCallId::new("questionnaire-call"),
-            },
-            questionnaire: duplicate_labels,
-        },
+        questionnaire_subject_of(duplicate_labels),
         "duplicate option labels",
     );
     let mut too_few_options = questionnaire_specification();
-    too_few_options.questions[0].options.clear();
+    questionnaire_options(&mut too_few_options).clear();
     refused(
-        InteractionSubject::Questionnaire {
-            invocation_id: rustx::tools::types::ToolInvocationId::Agent {
-                call_id: rustx::runtime::identity::ToolCallId::new("questionnaire-call"),
-            },
-            questionnaire: too_few_options,
-        },
+        questionnaire_subject_of(too_few_options),
         "an empty authored option list",
     );
     let mut reserved_label = questionnaire_specification();
-    reserved_label.questions[0].options[0].label = "Type something.".to_owned();
+    questionnaire_options(&mut reserved_label)[0].label = "Type something.".to_owned();
     refused(
-        InteractionSubject::Questionnaire {
-            invocation_id: rustx::tools::types::ToolInvocationId::Agent {
-                call_id: rustx::runtime::identity::ToolCallId::new("questionnaire-call"),
-            },
-            questionnaire: reserved_label,
-        },
+        questionnaire_subject_of(reserved_label),
         "a client-reserved option label",
     );
+    let mut anonymous_requester = questionnaire_subject();
+    if let InteractionSubject::Questionnaire { requester, .. } = &mut anonymous_requester {
+        requester.tool_name = String::new();
+    }
+    refused(anonymous_requester, "an unnamed interaction requester");
     refused(
         InteractionSubject::Approval {
             invocation_id: rustx::tools::types::ToolInvocationId::Agent { call_id: call_id() },
@@ -1491,7 +1481,7 @@ fn a_questionnaire_settlement_must_satisfy_the_exact_requested_facts() {
         .expect("requested");
     assert!(
         matches!(
-            store.append_interaction_audit(settled(&choices_only, submitted_option("canary"),)),
+            store.append_interaction_audit(settled(&choices_only, submitted_option(7),)),
             Err(ConversationStoreError::InvalidReference(_))
         ),
         "an option the requested questionnaire never offered is refused"
@@ -1517,13 +1507,13 @@ fn a_questionnaire_settlement_must_satisfy_the_exact_requested_facts() {
 
     let multi = InteractionId::for_attempt(&attempt(), 2);
     let mut multi_spec = questionnaire_specification();
-    multi_spec.questions[0].multi_select = true;
-    let multi_subject = InteractionSubject::Questionnaire {
-        invocation_id: rustx::tools::types::ToolInvocationId::Agent {
-            call_id: rustx::runtime::identity::ToolCallId::new("questionnaire-call"),
-        },
-        questionnaire: multi_spec,
-    };
+    multi_spec.questions[0].answer = AnswerSpecification::MultiChoice(MultiChoiceSpecification {
+        options: questionnaire_options(&mut questionnaire_specification()).clone(),
+        min_selected: 1,
+        max_selected: 2,
+        allow_custom: true,
+    });
+    let multi_subject = questionnaire_subject_of(multi_spec);
     store
         .append_interaction_audit(requested(&multi, multi_subject))
         .expect("requested");
@@ -1535,8 +1525,8 @@ fn a_questionnaire_settlement_must_satisfy_the_exact_requested_facts() {
                     submission: QuestionnaireSubmission {
                         answers: vec![QuestionnaireAnswerEntry {
                             question_index: 0,
-                            answer: QuestionnaireAnswer::MultipleOption(MultipleOptionAnswer {
-                                selected: vec!["staging".to_owned(), "staging".to_owned()],
+                            answer: QuestionnaireAnswer::Options(OptionsAnswer {
+                                option_indices: vec![0, 0],
                             }),
                         }],
                     },
@@ -1636,7 +1626,7 @@ fn settlements_retain_the_exact_decision_by_value() {
         .append_interaction_audit(requested(&answered, questionnaire_subject()))
         .expect("requested");
     store
-        .append_interaction_audit(settled(&answered, submitted_option("staging")))
+        .append_interaction_audit(settled(&answered, submitted_option(0)))
         .expect("questionnaire submitted");
 
     let facts = interaction_facts(&store);
@@ -1654,8 +1644,8 @@ fn settlements_retain_the_exact_decision_by_value() {
             ..
         } if matches!(
             &submission.answers[0].answer,
-            QuestionnaireAnswer::SingleOption(SingleOptionAnswer { label })
-                if label == "staging"
+            QuestionnaireAnswer::Option(OptionAnswer { option_index })
+                if *option_index == 0
         )
     ));
 
@@ -1674,23 +1664,40 @@ fn settlements_retain_the_exact_decision_by_value() {
 /// The interaction audit changed the durable event vocabulary incompatibly, so
 /// the store schema version was bumped and an older development database is
 /// rejected outright. There is no migration and no compatibility layer.
+///
+/// Issue #242 is the latest such change: the typed Questionnaire vocabulary
+/// replaced the choice-only request shape and the label-addressed answers, and
+/// added canonical requester identity, so the **immediately preceding**
+/// version is refused as flatly as a long-obsolete one. The rejection is by
+/// version at open; no obsolete audit row is ever handed to the typed decoder.
 #[test]
 fn an_older_development_database_is_rejected() {
-    let durable = Durable::new();
-    {
-        let store = durable.open();
-        store.initialize(&[]).expect("initialize");
-    }
-    let connection = rusqlite_open(&durable.path);
-    connection
-        .execute("UPDATE rustx_store SET schema_version=6 WHERE id=1", [])
-        .expect("downgrade the stored schema version");
-    drop(connection);
+    for stored_version in [6, rustx::durable::sqlite::SQLITE_SCHEMA_VERSION - 1] {
+        let durable = Durable::new();
+        {
+            let store = durable.open();
+            store.initialize(&[]).expect("initialize");
+        }
+        let connection = rusqlite_open(&durable.path);
+        connection
+            .execute(
+                "UPDATE rustx_store SET schema_version=?1 WHERE id=1",
+                [stored_version],
+            )
+            .expect("downgrade the stored schema version");
+        drop(connection);
 
-    assert!(matches!(
-        SqliteConversationStore::open(conversation_id(), &durable.path),
-        Err(ConversationStoreError::SchemaVersionMismatch { stored: 6, .. })
-    ));
+        let refused = SqliteConversationStore::open(conversation_id(), &durable.path);
+        assert!(
+            matches!(
+                refused,
+                Err(ConversationStoreError::SchemaVersionMismatch { stored, expected })
+                    if stored == stored_version
+                        && expected == rustx::durable::sqlite::SQLITE_SCHEMA_VERSION
+            ),
+            "schema {stored_version} must be refused at open: {refused:?}"
+        );
+    }
 }
 
 fn rusqlite_open(path: &std::path::Path) -> rusqlite::Connection {

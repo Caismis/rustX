@@ -148,6 +148,34 @@ before reporting remote uncertainty. A remote `isError` is known failure;
 post-dispatch transport loss without a correlated result is unknown outcome.
 Python packages are managed MCP servers and use that same boundary.
 
+An MCP `2026-07-28` server may answer `tools/call` with an
+`InputRequiredResult` (SEP-2322). That is an intermediate state of the same
+invocation, never a terminal result: the executor may perform up to
+`MCP_MRTR_MAX_ROUNDS` bounded rounds (the initial call is round 1), publish
+0..N runtime-owned Questionnaires through the crate-private
+`QuestionnaireRequester` between them, and still settles exactly one
+`ToolExecutionResult`. Approval is evaluated once, before the single
+`ToolExecutor::start`; the opaque `requestState` lives on the executor stack
+and never becomes canonical or durable state; and the continuation dispatch
+frontier is the existing pre-dispatch cancellation checkpoint, so cancellation
+that wins there dispatches no further round.
+
+Each requested schema is translated into the provider-independent typed
+question vocabulary (`Text`, `Number`, `Integer`, `Boolean`, `SingleChoice`,
+`MultiChoice`) with every supported constraint preserved. Each scalar shape
+names exactly one domain across the whole path — `Number` is the finite
+binary64 rmcp's own `NumberSchema` bounds already are, carried over the Runtime
+Client protocol as canonical binary64 text (the value's own bit pattern,
+because `JSON.stringify` cannot preserve binary64 identity), and `Integer` is
+the exact `i64` rmcp's `IntegerSchema` bounds already are, carried over that
+protocol as canonical decimal text — so the value the runtime validated is the
+value the server receives. Each published
+Questionnaire carries the canonical `InteractionRequester` of the MCP tool
+that asked. A schema rustX cannot faithfully represent fails the invocation
+deterministically; a human answer the declared shape refuses is an interaction
+response refusal that leaves the interaction pending and the invocation
+running. See `docs/invariants.md` for the full contract.
+
 ## Detached ownership
 
 `commit_dispatch` is the registry's ownership-transfer point: a prepared runner
@@ -198,7 +226,7 @@ Workflow, or Subagent canonical lifecycle was introduced.
 | Native Read document task | Blocking decoder cancellation waits for join; JoinError already typed; unchanged | Read document cancellation/decoder tests |
 | Native todo and ask_user | Business errors already typed; broken interaction authority deliberately fails outside business results | Native tests; scripted interaction and Agent policy suites |
 | Bash foreground/background | Process semantics conform; capture drain abandoned siblings on early error and did not join aborted tasks; fixed | Capture panic/abort regression; Bash boundary and #204 deadline suites |
-| MCP stdio/HTTP | Remote error, pre-dispatch refusal, post-dispatch uncertainty, local ownership release, progress, and reconnect already conform | `tests/boundary/mcp_recovery.rs`; MCP output/remote-error tests |
+| MCP stdio/HTTP | Remote error, pre-dispatch refusal, post-dispatch uncertainty, local ownership release, progress, and reconnect already conform; a bounded multi-round-trip invocation composes them per round and still settles once | `tests/boundary/mcp_recovery.rs`; MCP output/remote-error tests; `src/tools/mcp/mrtr_execution.rs` |
 | Managed Python packages | No separate executor: package preparation precedes capability admission, invocation uses MCP; unchanged | Python package and MCP provider boundary suites |
 | Subagent Tool | Parse/resolve/prepare/commit failures already typed; accepted creation transfers child authority; unchanged | Native subagent and staged-child boundary suites |
 | Workflow Tool | Command rejection already Failed; typed cancellation and Workflow-owned child settlement retained | Workflow scripted/boundary suites |

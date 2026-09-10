@@ -1,0 +1,1 @@
+{"method":"interaction_respond","interaction":{"conversation_id":"conv-number-v24","interaction_id":"interaction-number-v24"},"response":{"type":"questionnaire","response":{"type":"submitted","value":{"answers":[{"question_index":0,"answer":{"type":"number","value":{"value":"43e0000000000000"}}}]}}},"id":1}

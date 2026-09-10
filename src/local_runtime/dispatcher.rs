@@ -1510,23 +1510,32 @@ mod tests {
                 invocation_id: crate::tools::types::ToolInvocationId::Agent {
                     call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
                 },
+                requester: crate::events::InteractionRequester {
+                    tool_id: crate::runtime::identity::ToolId::new("tool-ask-user"),
+                    tool_name: "ask_user".to_owned(),
+                    origin: crate::tools::types::ToolOrigin::Builtin,
+                },
                 questionnaire: crate::runtime::interaction::QuestionnaireSpecification {
                     questions: vec![crate::runtime::interaction::QuestionSpecification {
                         question: "Which target?".to_owned(),
                         header: "Target".to_owned(),
-                        options: vec![
-                            crate::runtime::interaction::OptionSpecification {
-                                label: "staging".to_owned(),
-                                description: "safe".to_owned(),
-                                preview: None,
+                        answer: crate::runtime::interaction::AnswerSpecification::SingleChoice(
+                            crate::runtime::interaction::SingleChoiceSpecification {
+                                options: vec![
+                                    crate::runtime::interaction::OptionSpecification {
+                                        label: "staging".to_owned(),
+                                        description: "safe".to_owned(),
+                                        preview: None,
+                                    },
+                                    crate::runtime::interaction::OptionSpecification {
+                                        label: "production".to_owned(),
+                                        description: "live".to_owned(),
+                                        preview: None,
+                                    },
+                                ],
+                                allow_custom: true,
                             },
-                            crate::runtime::interaction::OptionSpecification {
-                                label: "production".to_owned(),
-                                description: "live".to_owned(),
-                                preview: None,
-                            },
-                        ],
-                        multi_select: false,
+                        ),
                     }],
                 },
             },

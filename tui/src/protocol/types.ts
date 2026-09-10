@@ -48,8 +48,19 @@
  * `physical_worktree_root`); version 12's routed live interactions;
  * version 11's subagent activity projection; and version 9's closed
  * `interrupted` lifecycle vocabulary. Older schemas are not decoded.
+ *
+ * Version 24 replaces the choice-only Questionnaire with the typed question
+ * vocabulary — `text`, `number`, `integer`, `boolean`, `single_choice`,
+ * `multi_choice` — where each question declares the exact shape of a legal
+ * answer, addresses choices by option index rather than display label, and
+ * carries the canonical `requester` identity (including MCP server origin) on
+ * every Questionnaire request and durable subject. There is no compatibility
+ * decoding of version 23. Within version 24 the `Number` domain carries its
+ * bounds and answers as the canonical binary64 text of `src/protocol/number.ts`
+ * rather than as JSON numbers, because `JSON.stringify` cannot preserve
+ * binary64 identity.
  */
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 23;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 24;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -375,31 +386,151 @@ export type ApprovalDecision =
   | { type: "allow" }
   | { type: "deny"; reason: string };
 
+/**
+ * One authored option in a choice question.
+ *
+ * The label is presentation only. A response addresses an option by its
+ * zero-based index in the question's own `options`, so a duplicated,
+ * reserved, or forged display string can never select a different value.
+ */
 export type OptionSpecification = {
   label: string;
   description: string;
   preview?: string;
 };
 
+/** The bounded set of text shapes the runtime validates deterministically. */
+export type TextFormat = "date" | "date_time" | "uri";
+
+export type TextAnswerSpecification = {
+  min_length?: number;
+  max_length?: number;
+  format?: TextFormat;
+};
+
+/**
+ * The canonical wire spelling of one `Number` value: the finite binary64's own
+ * IEEE-754 bit pattern, as exactly 16 lowercase hexadecimal digits.
+ *
+ * It is a `string`, and this alias exists so a reader never mistakes it for a
+ * human decimal. `src/protocol/number.ts` owns the only conversion between
+ * this spelling and a JavaScript `number`, and documents why a JSON number
+ * cannot carry binary64 identity across this protocol.
+ */
+export type FiniteNumberWire = string;
+
+/**
+ * A finite-binary64 numeric question, carried as canonical binary64 **text**.
+ *
+ * The runtime's canonical `Number` domain is the finite IEEE-754 binary64, the
+ * very domain a JavaScript `number` holds — but `JSON.stringify` renders a
+ * `number` as the shortest decimal that round-trips it, not as the exact value
+ * it denotes, so a JSON number cannot carry binary64 *identity* across this
+ * protocol. The bounds therefore cross as the value's own bit pattern and are
+ * decoded exactly once, through {@link finiteNumberFromWire}; see
+ * `src/protocol/number.ts` for the full contract.
+ *
+ * A client must never compare these lexically. Decode both sides to `number`
+ * and compare in the domain they belong to.
+ */
+export type NumberAnswerSpecification = {
+  minimum?: FiniteNumberWire;
+  maximum?: FiniteNumberWire;
+};
+
+/**
+ * A whole-number question, carried as canonical decimal **strings**.
+ *
+ * The runtime's canonical `Integer` domain is the exact `i64`, which a
+ * JavaScript `number` cannot hold above `2^53`. The bounds and the answer
+ * therefore cross this protocol as decimal text and are parsed exactly once,
+ * by the runtime. A client must compare and edit them as text (`BigInt`, not
+ * `Number`), or it will silently round the very values this representation
+ * exists to preserve.
+ */
+export type IntegerAnswerSpecification = { minimum?: string; maximum?: string };
+
+export type SingleChoiceSpecification = {
+  options: OptionSpecification[];
+  allow_custom: boolean;
+};
+
+export type MultiChoiceSpecification = {
+  options: OptionSpecification[];
+  min_selected: number;
+  max_selected: number;
+  allow_custom: boolean;
+};
+
+/**
+ * The exact shape of a legal answer to one question.
+ *
+ * The client renders and pre-validates according to this declaration; the
+ * runtime re-validates every response against the very same immutable facts
+ * and remains the authority. Client-side validation is UX only.
+ */
+export type AnswerSpecification =
+  | ({ type: "text" } & TextAnswerSpecification)
+  | ({ type: "number" } & NumberAnswerSpecification)
+  | ({ type: "integer" } & IntegerAnswerSpecification)
+  | { type: "boolean" }
+  | ({ type: "single_choice" } & SingleChoiceSpecification)
+  | ({ type: "multi_choice" } & MultiChoiceSpecification);
+
 export type QuestionSpecification = {
   question: string;
   header: string;
-  options: OptionSpecification[];
-  multi_select: boolean;
+  answer: AnswerSpecification;
 };
 
 export type QuestionnaireSpecification = {
   questions: QuestionSpecification[];
 };
 
-export type SingleOptionAnswer = { label: string };
+/**
+ * The canonical, provider-independent identity of whoever asked the human.
+ *
+ * This is what lets a client say "Requested by MCP server: github" without
+ * inferring anything from the prompt text, and it is independent of
+ * `InteractionSource`, which says where the interaction came from.
+ */
+export type InteractionRequester = {
+  tool_id: ToolId;
+  tool_name: string;
+  origin: ToolOrigin;
+};
+
+/**
+ * A text answer.
+ *
+ * An **omitted** answer and an explicit `{ value: "" }` are different facts:
+ * omitting the entry says the user did not answer, while the empty string is a
+ * real answer, legal whenever the question declares no `min_length` or a
+ * `min_length` of `0`, and delivered to a provider as an empty value. A client
+ * must therefore track answer presence separately from draft length.
+ */
+export type TextAnswer = { value: string };
+/**
+ * A finite numeric answer, as the canonical spelling of the binary64 value the
+ * client selected — never as the human's original decimal, which is
+ * client-local presentation, and never as a JSON number.
+ */
+export type NumberAnswer = { value: FiniteNumberWire };
+/** A whole-number answer, as its canonical decimal spelling. */
+export type IntegerAnswer = { value: string };
+export type BooleanAnswer = { value: boolean };
+export type OptionAnswer = { option_index: number };
+export type OptionsAnswer = { option_indices: number[] };
 export type CustomAnswer = { answer: string };
-export type MultipleOptionAnswer = { selected: string[] };
 
 export type QuestionnaireAnswer =
-  | { type: "single_option"; value: SingleOptionAnswer }
-  | { type: "custom"; value: CustomAnswer }
-  | { type: "multiple_option"; value: MultipleOptionAnswer };
+  | { type: "text"; value: TextAnswer }
+  | { type: "number"; value: NumberAnswer }
+  | { type: "integer"; value: IntegerAnswer }
+  | { type: "boolean"; value: BooleanAnswer }
+  | { type: "option"; value: OptionAnswer }
+  | { type: "options"; value: OptionsAnswer }
+  | { type: "custom"; value: CustomAnswer };
 
 export type QuestionnaireAnswerEntry = {
   question_index: number;
@@ -475,6 +606,7 @@ export type InteractionRequest = {
     | {
         type: "questionnaire";
         questionnaire: QuestionnaireSpecification;
+        requester: InteractionRequester;
         invocation_id: ToolInvocationId;
       };
 };
@@ -516,6 +648,7 @@ export type InteractionSubject =
   | {
       type: "questionnaire";
       questionnaire: QuestionnaireSpecification;
+      requester: InteractionRequester;
       invocation_id: ToolInvocationId;
     };
 

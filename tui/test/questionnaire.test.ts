@@ -3,8 +3,16 @@ import { describe, it } from "node:test";
 
 import { visibleWidth } from "@earendil-works/pi-tui";
 
-import { QuestionnaireOverlay } from "../src/ui/components/questionnaire.ts";
-import type { QuestionnaireResponse, QuestionnaireSpecification } from "../src/protocol/types.ts";
+import { QuestionnaireOverlay, readNumberDraft } from "../src/ui/components/questionnaire.ts";
+import {
+  finiteNumberFromWire,
+  finiteNumberToWire,
+} from "../src/protocol/number.ts";
+import type {
+  InteractionRequester,
+  QuestionnaireResponse,
+  QuestionnaireSpecification,
+} from "../src/protocol/types.ts";
 import { plainText } from "../src/ui/theme.ts";
 
 function questionnaire(): QuestionnaireSpecification {
@@ -13,7 +21,9 @@ function questionnaire(): QuestionnaireSpecification {
       {
         question: "Which visual direction should I use?",
         header: "Visual style",
-        options: [
+        answer: {
+          type: "single_choice",
+          options: [
           {
             label: "Swiss / Klein blue",
             description: "Information-first typography with strong hierarchy.",
@@ -24,20 +34,40 @@ function questionnaire(): QuestionnaireSpecification {
             description: "A warmer editorial composition with serif typography.",
           },
         ],
-        multi_select: false,
+          allow_custom: true,
+        },
       },
       {
         question: "Which elements should be enabled?",
         header: "Elements",
-        options: [
+        answer: {
+          type: "multi_choice",
+          options: [
           { label: "Charts", description: "Show quantitative charts." },
           { label: "Comments", description: "Show reviewer comments." },
         ],
-        multi_select: true,
+          min_selected: 1,
+          max_selected: 2,
+          allow_custom: true,
+        },
       },
     ],
   };
 }
+
+/** The native `ask_user` requester: built-in, never labelled as MCP. */
+const NATIVE_REQUESTER: InteractionRequester = {
+  tool_id: "tool-ask-user",
+  tool_name: "ask_user",
+  origin: "builtin",
+};
+
+/** An MCP-served tool's requester, carrying its canonical server identity. */
+const MCP_REQUESTER: InteractionRequester = {
+  tool_id: "mcp:github:create_issue",
+  tool_name: "create_issue",
+  origin: { mcp: { server_id: "github" } },
+};
 
 function overlay(
   onSubmit: (response: QuestionnaireResponse) => void,
@@ -47,6 +77,7 @@ function overlay(
   return new QuestionnaireOverlay({
     interactionId: "attempt-1-interaction-questionnaire-1",
     questionnaire: questionnaire(),
+    requester: NATIVE_REQUESTER,
     onSubmit,
     onDecline,
     onInterrupt,
@@ -66,6 +97,7 @@ function singleOverlay(
   return new QuestionnaireOverlay({
     interactionId: "interaction-single",
     questionnaire: specification,
+    requester: NATIVE_REQUESTER,
     onSubmit,
     onDecline: () => {},
     onInterrupt: () => {},
@@ -77,6 +109,9 @@ function focusCustom(view: QuestionnaireOverlay, optionCount: number): void {
     view.handleInput("\u001b[B");
   }
 }
+
+/** The DEL byte a terminal sends for Backspace. */
+const BACKSPACE = "\u007f";
 
 function submitSingle(view: QuestionnaireOverlay): void {
   view.handleInput("\t");
@@ -133,6 +168,7 @@ describe("QuestionnaireOverlay", () => {
     const view = new QuestionnaireOverlay({
       interactionId: "interaction-1",
       questionnaire: questionnaire(),
+      requester: NATIVE_REQUESTER,
       onSubmit: (response) => {
         submitted = response;
       },
@@ -156,7 +192,7 @@ describe("QuestionnaireOverlay", () => {
       value: {
         answers: [{
           question_index: 0,
-          answer: { type: "single_option", value: { label: "Swiss / Klein blue" } },
+          answer: { type: "option", value: { option_index: 0 } },
         }],
       },
     });
@@ -182,8 +218,8 @@ describe("QuestionnaireOverlay", () => {
         answers: [{
           question_index: 1,
           answer: {
-            type: "multiple_option",
-            value: { selected: ["Charts", "Comments"] },
+            type: "options",
+            value: { option_indices: [0, 1] },
           },
         }],
       },
@@ -354,12 +390,15 @@ describe("QuestionnaireOverlay", () => {
     const specification = singleQuestionnaire({
       question: "q".repeat(4096),
       header: "Maximum",
-      options: labels.map((label, index) => ({
-        label,
-        description: `${index}${"d".repeat(1023)}`,
-        ...(index === 0 ? { preview: "preview-000 " + "p".repeat(8192) } : {}),
-      })),
-      multi_select: false,
+      answer: {
+        type: "single_choice",
+        options: labels.map((label, index) => ({
+          label,
+          description: `${index}${"d".repeat(1023)}`,
+          ...(index === 0 ? { preview: "preview-000 " + "p".repeat(8192) } : {}),
+        })),
+        allow_custom: true,
+      },
     });
     const view = singleOverlay(specification, () => {});
     view.setBodyHeight(16);
@@ -391,11 +430,14 @@ describe("QuestionnaireOverlay", () => {
     const specification = singleQuestionnaire({
       question: "Which preview?",
       header: "Preview",
-      options: [
+      answer: {
+        type: "single_choice",
+        options: [
         { label: "First", description: "First option.", preview },
         { label: "Second", description: "Second option." },
       ],
-      multi_select: false,
+        allow_custom: true,
+      },
     });
     const view = singleOverlay(specification, () => {});
     view.setBodyHeight(14);
@@ -425,11 +467,14 @@ describe("QuestionnaireOverlay", () => {
         singleQuestionnaire({
           question: "Which preview should be inspected?",
           header: "Preview",
-          options: [
+          answer: {
+            type: "single_choice",
+            options: [
             { label: "First option", description: "The initially focused option.", preview },
             { label: "Second option", description: "Another option with its own preview.", preview },
           ],
-          multi_select: false,
+            allow_custom: true,
+          },
         }),
         () => {},
       );
@@ -496,11 +541,14 @@ describe("QuestionnaireOverlay", () => {
         singleQuestionnaire({
           question: "Which numbered preview should be inspected?",
           header: "Preview",
-          options: [
+          answer: {
+            type: "single_choice",
+            options: [
             { label: "First option", description: "The initially focused option.", preview },
             { label: "Second option", description: "Another preview-bearing option.", preview },
           ],
-          multi_select: false,
+            allow_custom: true,
+          },
         }),
         () => {},
       );
@@ -567,11 +615,14 @@ describe("QuestionnaireOverlay", () => {
       singleQuestionnaire({
         question: ("A long wrapped question intro ".repeat(200)).slice(0, 4096),
         header: "Preview",
-        options: [
+        answer: {
+          type: "single_choice",
+          options: [
           { label: "First option", description: "The initially focused option.", preview },
           { label: "Second option", description: "Another preview-bearing option.", preview },
         ],
-        multi_select: false,
+          allow_custom: true,
+        },
       }),
       () => {},
     );
@@ -605,5 +656,778 @@ describe("QuestionnaireOverlay", () => {
     const review = view.render(120).map(plainText);
     assertBounded(review, 120, 14);
     assert.ok(review.some((line) => line.includes("›") && line.includes("Submit")));
+  });
+  // -------------------------------------------------------------------------
+  // The typed question vocabulary (Issue #242)
+  // -------------------------------------------------------------------------
+
+  function typedOverlay(
+    specification: QuestionnaireSpecification,
+    requester: InteractionRequester = NATIVE_REQUESTER,
+    onSubmit: (response: QuestionnaireResponse) => void = () => {},
+  ): QuestionnaireOverlay {
+    return new QuestionnaireOverlay({
+      interactionId: "interaction-typed",
+      questionnaire: specification,
+      requester,
+      onSubmit,
+      onDecline: () => {},
+      onInterrupt: () => {},
+    });
+  }
+
+  function type(view: QuestionnaireOverlay, value: string): void {
+    for (const scalar of value) view.handleInput(scalar);
+  }
+
+  it("names the MCP server that asked, and never labels a native prompt as MCP", () => {
+    const mcp = typedOverlay(
+      { questions: [{ question: "Which channel?", header: "Channel", answer: { type: "boolean" } }] },
+      MCP_REQUESTER,
+    );
+    const rendered = plainText(mcp.render(80).join("\n"));
+    assert.match(rendered, /Requested by MCP server: github/);
+    assert.match(rendered, /Tool: create_issue/);
+    assert.equal(mcp.popupTitle(), "MCP elicitation · github");
+
+    const native = typedOverlay(
+      { questions: [{ question: "Which channel?", header: "Channel", answer: { type: "boolean" } }] },
+    );
+    const nativeRendered = plainText(native.render(80).join("\n"));
+    assert.doesNotMatch(nativeRendered, /MCP/);
+    assert.match(nativeRendered, /Requested by ask_user/);
+    assert.equal(native.popupTitle(), "Ask user · questionnaire");
+  });
+
+  it("renders a text question as an input field with no manufactured options", () => {
+    let submitted: QuestionnaireResponse | undefined;
+    const view = typedOverlay(
+      {
+        questions: [{
+          question: "What is your GitHub username?",
+          header: "Operator",
+          answer: { type: "text", min_length: 1, max_length: 39 },
+        }],
+      },
+      MCP_REQUESTER,
+      (response) => {
+        submitted = response;
+      },
+    );
+    const rendered = plainText(view.render(80).join("\n"));
+    assert.doesNotMatch(rendered, /Type something\./);
+    assert.match(rendered, /Type your answer\./);
+    assert.match(rendered, /1–39 characters/);
+
+    type(view, "octocat");
+    submitSingle(view);
+    assert.deepEqual(submitted, {
+      type: "submitted",
+      value: {
+        answers: [{ question_index: 0, answer: { type: "text", value: { value: "octocat" } } }],
+      },
+    });
+  });
+
+  it("keeps an invalid numeric edit inside the interaction and submits a typed value", () => {
+    const integerQuestionnaire: QuestionnaireSpecification = {
+      questions: [{
+        question: "How many attempts?",
+        header: "Attempts",
+        answer: { type: "integer", minimum: "1", maximum: "5" },
+      }],
+    };
+    // A fractional value is not an integer: the surface says so concisely and
+    // refuses to submit, keeping the user inside the interaction. Nothing here
+    // can fail the enclosing MCP invocation.
+    let submitted: QuestionnaireResponse | undefined;
+    const fractional = typedOverlay(integerQuestionnaire, MCP_REQUESTER, (response) => {
+      submitted = response;
+    });
+    type(fractional, "1.5");
+    assert.match(plainText(fractional.render(80).join("\n")), /Enter a whole number\./);
+    submitSingle(fractional);
+    assert.equal(submitted, undefined, "an invalid draft never submits");
+    // The blocked submission returns focus to the offending question and names
+    // it on the review surface.
+    fractional.handleInput("\t");
+    assert.match(
+      plainText(fractional.render(80).join("\n")),
+      /Correct Attempts before submitting\./,
+    );
+
+    // Out of range is refused too, with the request's own bound explained.
+    const outOfRange = typedOverlay(integerQuestionnaire, MCP_REQUESTER, () => {
+      assert.fail("an out-of-range draft never submits");
+    });
+    type(outOfRange, "9");
+    assert.match(plainText(outOfRange.render(80).join("\n")), /at most 5/);
+    submitSingle(outOfRange);
+
+    let valid: QuestionnaireResponse | undefined;
+    const view = typedOverlay(integerQuestionnaire, MCP_REQUESTER, (response) => {
+      valid = response;
+    });
+    type(view, "3");
+    submitSingle(view);
+    assert.deepEqual(valid, {
+      type: "submitted",
+      value: {
+        answers: [{ question_index: 0, answer: { type: "integer", value: { value: "3" } } }],
+      },
+    });
+  });
+
+  it("keeps an exact whole number above the JavaScript safe range", () => {
+    // The entire legal answer set lies above 2^53, so a client that stored the
+    // draft as a JavaScript number could not represent a single valid answer.
+    const ledgerQuestionnaire: QuestionnaireSpecification = {
+      questions: [{
+        question: "Which ledger entry?",
+        header: "Ledger",
+        answer: {
+          type: "integer",
+          minimum: "9007199254740992",
+          maximum: "9223372036854775807",
+        },
+      }],
+    };
+
+    for (const exact of ["9007199254740993", "9223372036854775807"]) {
+      let submitted: QuestionnaireResponse | undefined;
+      const view = typedOverlay(ledgerQuestionnaire, MCP_REQUESTER, (response) => {
+        submitted = response;
+      });
+      type(view, exact);
+      submitSingle(view);
+      assert.deepEqual(submitted, {
+        type: "submitted",
+        value: {
+          answers: [{ question_index: 0, answer: { type: "integer", value: { value: exact } } }],
+        },
+      }, `${exact} must survive the client unchanged`);
+      // The proof that no JavaScript number was ever the authority: `Number`
+      // cannot even hold these values, so a rounded draft would differ here.
+      assert.notEqual(String(Number(exact)), exact);
+    }
+
+    // Bounds are compared exactly at that magnitude, one step out on each side.
+    for (const outside of ["9007199254740991", "9223372036854775808"]) {
+      const view = typedOverlay(ledgerQuestionnaire, MCP_REQUESTER, () => {
+        assert.fail(`${outside} is outside the declared range`);
+      });
+      type(view, outside);
+      submitSingle(view);
+    }
+
+    // Fractional, exponential, signed-plus, and malformed drafts are refused.
+    for (const malformed of ["1.5", "1e3", "+9007199254740993", "12abc", "-"]) {
+      const view = typedOverlay(ledgerQuestionnaire, MCP_REQUESTER, () => {
+        assert.fail(`${malformed} is not a whole number`);
+      });
+      type(view, malformed);
+      assert.match(plainText(view.render(80).join("\n")), /Enter a whole number/);
+      submitSingle(view);
+    }
+
+    // The widest question accepts both 64-bit extremes.
+    const widest: QuestionnaireSpecification = {
+      questions: [{
+        question: "Which offset?",
+        header: "Offset",
+        answer: {
+          type: "integer",
+          minimum: "-9223372036854775808",
+          maximum: "9223372036854775807",
+        },
+      }],
+    };
+    for (const extreme of ["-9223372036854775808", "9223372036854775807"]) {
+      let submitted: QuestionnaireResponse | undefined;
+      const view = typedOverlay(widest, MCP_REQUESTER, (response) => {
+        submitted = response;
+      });
+      type(view, extreme);
+      submitSingle(view);
+      assert.deepEqual(
+        submitted?.type === "submitted" ? submitted.value.answers[0]!.answer : undefined,
+        { type: "integer", value: { value: extreme } },
+      );
+    }
+    // One step past the domain overflows and is refused.
+    const overflow = typedOverlay(widest, MCP_REQUESTER, () => {
+      assert.fail("an out-of-domain integer never submits");
+    });
+    type(overflow, "9223372036854775808");
+    assert.match(plainText(overflow.render(80).join("\n")), /inside the 64-bit range/);
+    submitSingle(overflow);
+  });
+
+  it("refuses a number the runtime could not represent exactly", () => {
+    const view = typedOverlay(
+      {
+        questions: [{
+          question: "How much?",
+          header: "Amount",
+          answer: { type: "number" },
+        }],
+      },
+      MCP_REQUESTER,
+      () => {
+        assert.fail("an inexact number never submits");
+      },
+    );
+    // The runtime's Number domain is the finite binary64, so this whole number
+    // has no exact representation. The client refuses it rather than
+    // submitting the rounded value the user did not type.
+    type(view, "9007199254740993");
+    assert.match(plainText(view.render(80).join("\n")), /represent exactly/);
+    submitSingle(view);
+  });
+
+  it("refuses an inexact whole number however it is spelled", () => {
+    // Every one of these spells the same integer, `2^53 + 1`, which binary64
+    // cannot hold. Checking exactness only when the draft *looks* like a plain
+    // integer let the decimal and exponent forms through, and `Number` then
+    // rounded them to 9007199254740992 — a value the user never typed, which
+    // the runtime could not detect because by then it was exact.
+    const inexact = [
+      "9007199254740993",
+      "9007199254740993.0",
+      "9.007199254740993e15",
+      "90071992547409930e-1",
+      "-9007199254740993",
+      "-9007199254740993.0",
+      "-9.007199254740993e15",
+    ];
+    for (const draft of inexact) {
+      const view = typedOverlay(
+        {
+          questions: [{
+            question: "How much?",
+            header: "Amount",
+            answer: { type: "number" },
+          }],
+        },
+        MCP_REQUESTER,
+        () => {
+          assert.fail(`${draft} must never reach a submission`);
+        },
+      );
+      type(view, draft);
+      assert.match(
+        plainText(view.render(80).join("\n")),
+        /represent exactly/,
+        `${draft} must be refused`,
+      );
+      // Refused at the gate, not merely annotated: `submitSingle` walks to the
+      // review tab and presses Enter, and the `onSubmit` above would fire. The
+      // blocked submission returns focus to the offending question and names
+      // it back on the review surface.
+      submitSingle(view);
+      view.handleInput("\t");
+      assert.match(
+        plainText(view.render(80).join("\n")),
+        /Correct Amount before submitting\./,
+      );
+      // The defect this closes, stated directly: `Number` collapses every one
+      // of these onto 2^53, so a client that converted before checking could
+      // no longer tell which integer the user had typed.
+      assert.equal(
+        Math.abs(Number(draft)),
+        9007199254740992,
+        `${draft} is exactly the class Number silently rounds`,
+      );
+    }
+  });
+
+  it("submits the exact binary64 value a whole-number spelling denotes", () => {
+    // Each spelling denotes a whole number binary64 holds exactly, so the
+    // submitted value is the same mathematical number the user entered — the
+    // point of the exactness gate is that respelling never changes acceptance.
+    const exact: Array<[draft: string, value: number]> = [
+      ["9007199254740991", 9007199254740991],
+      ["9007199254740992", 9007199254740992],
+      ["9007199254740991.0", 9007199254740991],
+      ["9007199254740992.0", 9007199254740992],
+      ["9.007199254740991e15", 9007199254740991],
+      ["9.007199254740992e15", 9007199254740992],
+      ["-9007199254740992", -9007199254740992],
+      ["-9007199254740992.0", -9007199254740992],
+      ["-9.007199254740992e15", -9007199254740992],
+      // Exponent syntax is not itself suspicious: an ordinary integral value
+      // written with it must still submit the integer it denotes.
+      ["1.5e3", 1500],
+      ["1500.0", 1500],
+      ["-2.5e+4", -25000],
+      // Fractional values keep the declared contract: the nearest binary64,
+      // which is what a JSON number means at every stage of the pipeline.
+      ["0.1", 0.1],
+      ["1.5", 1.5],
+      ["-2.75", -2.75],
+      ["1e-6", 1e-6],
+      ["1E-2", 0.01],
+      [".5", 0.5],
+      ["1.", 1],
+    ];
+    for (const [draft, value] of exact) {
+      let submitted: QuestionnaireResponse | undefined;
+      const view = typedOverlay(
+        {
+          questions: [{
+            question: "How much?",
+            header: "Amount",
+            answer: { type: "number" },
+          }],
+        },
+        MCP_REQUESTER,
+        (response) => {
+          submitted = response;
+        },
+      );
+      type(view, draft);
+      submitSingle(view);
+      assert.deepEqual(submitted, {
+        type: "submitted",
+        value: {
+          answers: [{
+            question_index: 0,
+            answer: { type: "number", value: { value: finiteNumberToWire(value) } },
+          }],
+        },
+      }, `${draft} must submit exactly ${value}`);
+      // And the wire spelling reconstructs the very same binary64: the value
+      // the gate admitted is the value the runtime will read.
+      const wire = (submitted as { value: { answers: Array<{ answer: { value: { value: string } } }> } })
+        .value.answers[0]!.answer.value.value;
+      assert.equal(finiteNumberFromWire(wire), value, `${draft} must survive its own wire form`);
+    }
+  });
+
+  it("checks the declared bounds only after the value is known to be exact", () => {
+    const bounded: QuestionnaireSpecification = {
+      questions: [{
+        question: "How much?",
+        header: "Amount",
+        answer: {
+          type: "number",
+          minimum: finiteNumberToWire(0),
+          maximum: finiteNumberToWire(9007199254740992),
+        },
+      }],
+    };
+    // 2^53 + 1 rounds *down* into range, so a client that compared the rounded
+    // value against `maximum` would report a value inside the bounds and
+    // submit it. Admissibility to the domain is settled first, so the user is
+    // told the real reason instead.
+    const inexact = typedOverlay(bounded, MCP_REQUESTER, () => {
+      assert.fail("an inexact draft never submits, in range or not");
+    });
+    type(inexact, "9007199254740993.0");
+    const rendered = plainText(inexact.render(80).join("\n"));
+    assert.match(rendered, /represent exactly/);
+    assert.doesNotMatch(rendered, /at most/);
+    submitSingle(inexact);
+
+    // An exact value outside the bounds still gets the range message.
+    const high = typedOverlay(bounded, MCP_REQUESTER, () => {
+      assert.fail("an out-of-range draft never submits");
+    });
+    type(high, "9.007199254740994e15");
+    assert.match(plainText(high.render(80).join("\n")), /at most/);
+    submitSingle(high);
+  });
+
+  it("answers a Number question pinned to 2^63, the value JSON.stringify cannot spell", () => {
+    // `2^63` is exactly representable in binary64 — it is a power of two — but
+    // `JSON.stringify(2 ** 63)` prints `9223372036854776000`, a *different*
+    // mathematical integer. The bound and the answer therefore cross this
+    // protocol as canonical binary64 text, and the client never has to hope
+    // that JavaScript's decimal rendering of a `number` preserved its
+    // identity.
+    const two63 = 2 ** 63;
+    assert.equal(JSON.stringify(two63), "9223372036854776000");
+    assert.notEqual(JSON.stringify(two63), "9223372036854775808");
+    assert.equal(finiteNumberToWire(two63), "43e0000000000000");
+
+    const pinned: QuestionnaireSpecification = {
+      questions: [{
+        question: "How much?",
+        header: "Amount",
+        answer: {
+          type: "number",
+          minimum: finiteNumberToWire(two63),
+          maximum: finiteNumberToWire(two63),
+        },
+      }],
+    };
+    // The bound reaches the human as an ordinary decimal, never as the bits —
+    // and as the decimal they can actually type: `String(2 ** 63)` is the
+    // shortest *round-tripping* spelling, which this client refuses as a whole
+    // number binary64 cannot hold.
+    const shown = plainText(typedOverlay(pinned, MCP_REQUESTER).render(80).join("\n"));
+    assert.match(shown, /Number between 9223372036854775808 and 9223372036854775808/);
+    assert.doesNotMatch(shown, /43e0000000000000/);
+    assert.equal(readNumberDraft(String(two63)).kind, "inexact");
+    assert.deepEqual(readNumberDraft("9223372036854775808"), { kind: "value", value: two63 });
+
+    // The one admissible answer submits, as the exact bits of 2^63.
+    let submitted: QuestionnaireResponse | undefined;
+    const exact = typedOverlay(pinned, MCP_REQUESTER, (response) => {
+      submitted = response;
+    });
+    type(exact, "9223372036854775808");
+    submitSingle(exact);
+    assert.deepEqual(submitted, {
+      type: "submitted",
+      value: {
+        answers: [{
+          question_index: 0,
+          answer: { type: "number", value: { value: "43e0000000000000" } },
+        }],
+      },
+    });
+    assert.equal(finiteNumberFromWire("43e0000000000000"), two63);
+
+    // The next binary64 below the bound is an exact value that is simply out
+    // of range. In this binade consecutive binary64 values are 1024 apart, so
+    // it is `2^63 - 1024`, and the message is about the range.
+    const below = typedOverlay(pinned, MCP_REQUESTER, () => {
+      assert.fail("a value below the minimum never submits");
+    });
+    type(below, "9223372036854774784");
+    assert.match(plainText(below.render(80).join("\n")), /at least/);
+    submitSingle(below);
+
+    // Neighbouring integers are not members of the domain at all, and the
+    // domain question is answered first: `2^63 - 1` and `2^63 + 1` are odd
+    // integers far past `2^53`, so no binary64 holds either. Reporting them as
+    // out-of-range would be the wrong fact about the wrong value — each rounds
+    // *to* `2^63`, so a client that converted before checking would have found
+    // them perfectly in range.
+    for (const inadmissible of ["9223372036854775807", "9223372036854775809"]) {
+      const view = typedOverlay(pinned, MCP_REQUESTER, () => {
+        assert.fail(`${inadmissible} is outside the Number domain and never submits`);
+      });
+      type(view, inadmissible);
+      const rejected = plainText(view.render(80).join("\n"));
+      assert.match(rejected, /represent exactly/, inadmissible);
+      assert.doesNotMatch(rejected, /at most|at least/, inadmissible);
+      assert.equal(Number(inadmissible), two63, `${inadmissible} rounds into range`);
+      submitSingle(view);
+    }
+  });
+
+  it("distinguishes an untouched text field from an explicitly empty one", () => {
+    const optional: QuestionnaireSpecification = {
+      questions: [{
+        question: "Any note for the reviewer?",
+        header: "Note",
+        answer: { type: "text", min_length: 0 },
+      }],
+    };
+
+    // Untouched: the question is simply unanswered, and a questionnaire with
+    // no answers at all is a decline, not an empty-string submission.
+    let untouched: QuestionnaireResponse | undefined;
+    const idle = typedOverlay(optional, MCP_REQUESTER, (response) => {
+      untouched = response;
+    });
+    submitSingle(idle);
+    assert.deepEqual(untouched, { type: "submitted", value: { answers: [] } });
+
+    // Explicitly committed with Enter on the field: a real `Text("")`.
+    let committed: QuestionnaireResponse | undefined;
+    const explicit = typedOverlay(optional, MCP_REQUESTER, (response) => {
+      committed = response;
+    });
+    explicit.handleInput("\r");
+    // The review surface names the committed empty answer rather than showing
+    // the question as unanswered.
+    explicit.handleInput("\t");
+    assert.match(plainText(explicit.render(80).join("\n")), /\(empty\)/);
+    explicit.handleInput("\r");
+    assert.deepEqual(committed, {
+      type: "submitted",
+      value: {
+        answers: [{ question_index: 0, answer: { type: "text", value: { value: "" } } }],
+      },
+    });
+
+    // Typed and then erased is the same explicit empty answer: the user who
+    // cleared their draft answered, they did not un-answer.
+    let erased: QuestionnaireResponse | undefined;
+    const cleared = typedOverlay(optional, MCP_REQUESTER, (response) => {
+      erased = response;
+    });
+    type(cleared, "x");
+    cleared.handleInput(BACKSPACE);
+    submitSingle(cleared);
+    assert.deepEqual(erased, {
+      type: "submitted",
+      value: {
+        answers: [{ question_index: 0, answer: { type: "text", value: { value: "" } } }],
+      },
+    });
+
+    // Non-empty text is unaffected by the presence bit.
+    let typed: QuestionnaireResponse | undefined;
+    const filled = typedOverlay(optional, MCP_REQUESTER, (response) => {
+      typed = response;
+    });
+    type(filled, "looks good");
+    submitSingle(filled);
+    assert.deepEqual(typed, {
+      type: "submitted",
+      value: {
+        answers: [{ question_index: 0, answer: { type: "text", value: { value: "looks good" } } }],
+      },
+    });
+  });
+
+  it("cannot submit an empty text answer below a positive minimum length", () => {
+    const required: QuestionnaireSpecification = {
+      questions: [{
+        question: "What is the ticket id?",
+        header: "Ticket",
+        answer: { type: "text", min_length: 1 },
+      }],
+    };
+    const view = typedOverlay(required, MCP_REQUESTER, () => {
+      assert.fail("an empty answer never submits below a positive minimum");
+    });
+    // Committing the empty field is refused, and the user stays here.
+    view.handleInput("\r");
+    assert.match(plainText(view.render(80).join("\n")), /Enter at least 1 characters\./);
+    submitSingle(view);
+    view.handleInput("\t");
+    assert.match(plainText(view.render(80).join("\n")), /Correct Ticket before submitting\./);
+  });
+
+  it("submits a boolean as true/false while displaying Yes/No", () => {
+    for (const [row, value] of [[0, true], [1, false]] as const) {
+      let submitted: QuestionnaireResponse | undefined;
+      const view = typedOverlay(
+        { questions: [{ question: "Notify?", header: "Notify", answer: { type: "boolean" } }] },
+        MCP_REQUESTER,
+        (response) => {
+          submitted = response;
+        },
+      );
+      const rendered = plainText(view.render(80).join("\n"));
+      assert.match(rendered, /Yes/);
+      assert.match(rendered, /No/);
+      for (let index = 0; index < row; index += 1) view.handleInput("\u001b[B");
+      view.handleInput("\r");
+      submitSingle(view);
+      assert.deepEqual(submitted, {
+        type: "submitted",
+        value: {
+          answers: [{ question_index: 0, answer: { type: "boolean", value: { value } } }],
+        },
+      });
+    }
+  });
+
+  it("offers no custom-answer row for a bounded MCP choice", () => {
+    const view = typedOverlay(
+      {
+        questions: [{
+          question: "Which channel?",
+          header: "Channel",
+          answer: {
+            type: "single_choice",
+            options: [
+              { label: "stable", description: "MCP value: \"stable\"" },
+              { label: "beta", description: "MCP value: \"beta\"" },
+            ],
+            allow_custom: false,
+          },
+        }],
+      },
+      MCP_REQUESTER,
+    );
+    const rendered = plainText(view.render(80).join("\n"));
+    assert.doesNotMatch(rendered, /Type something\./);
+    // Only the two declared rows exist: moving down twice cannot leave them.
+    view.handleInput("\u001b[B");
+    view.handleInput("\u001b[B");
+    const focused = view.render(80).filter((line) => plainText(line).includes("›"));
+    assert.equal(focused.length, 1);
+    assert.match(plainText(focused[0]!), /beta/);
+  });
+
+  it("shows multi-select bounds, refuses to exceed them, and blocks a short submission", () => {
+    let submitted: QuestionnaireResponse | undefined;
+    const view = typedOverlay(
+      {
+        questions: [{
+          question: "Which regions?",
+          header: "Regions",
+          answer: {
+            type: "multi_choice",
+            options: [
+              { label: "eu", description: "Europe." },
+              { label: "us", description: "Americas." },
+              { label: "ap", description: "Asia-Pacific." },
+            ],
+            min_selected: 2,
+            max_selected: 2,
+            allow_custom: false,
+          },
+        }],
+      },
+      MCP_REQUESTER,
+      (response) => {
+        submitted = response;
+      },
+    );
+    assert.match(plainText(view.render(80).join("\n")), /Select exactly 2/);
+
+    // One selection is below the declared minimum: submission is blocked.
+    view.handleInput(" ");
+    submitSingle(view);
+    assert.equal(submitted, undefined);
+
+    // A third selection is refused client-side rather than silently sent.
+    view.handleInput("\u001b[B");
+    view.handleInput(" ");
+    view.handleInput("\u001b[B");
+    view.handleInput(" ");
+    submitSingle(view);
+    assert.deepEqual(submitted, {
+      type: "submitted",
+      value: {
+        answers: [{
+          question_index: 0,
+          answer: { type: "options", value: { option_indices: [0, 1] } },
+        }],
+      },
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The Number input boundary (Issue #242)
+// ---------------------------------------------------------------------------
+
+describe("readNumberDraft", () => {
+  it("reads the value a decimal spelling denotes, not the value Number() lands on", () => {
+    // The runtime's Number domain is the finite binary64. A *fractional*
+    // decimal means the nearest binary64 — that is what a JSON number means
+    // everywhere. A *whole* decimal names one specific integer, and the one
+    // binary64 cannot hold is refused rather than rounded, on the value and
+    // never on the spelling: `9007199254740993`, `9007199254740993.0` and
+    // `9.007199254740993e15` are one case, decided identically.
+    const cases: Array<[draft: string, expected: number | "malformed" | "not-finite" | "inexact"]> = [
+      // Plain integers, either side of the 2^53 frontier.
+      ["0", 0],
+      ["-0", -0],
+      ["1", 1],
+      ["-1", -1],
+      ["9007199254740991", 9007199254740991],
+      ["9007199254740992", 9007199254740992],
+      ["-9007199254740992", -9007199254740992],
+      ["9007199254740993", "inexact"],
+      ["-9007199254740993", "inexact"],
+      // The same integers written with a decimal point. These are the
+      // spellings a lexical `^-?\d+$` exactness check could not see.
+      ["9007199254740991.0", 9007199254740991],
+      ["9007199254740992.0", 9007199254740992],
+      ["9007199254740993.0", "inexact"],
+      ["-9007199254740993.0", "inexact"],
+      ["9007199254740993.00000", "inexact"],
+      // And with an exponent, in both directions.
+      ["9.007199254740991e15", 9007199254740991],
+      ["9.007199254740992e15", 9007199254740992],
+      ["9.007199254740993e15", "inexact"],
+      ["-9.007199254740993e15", "inexact"],
+      ["90071992547409930e-1", "inexact"],
+      ["900719925474099300e-2", "inexact"],
+      // The rule generalises past 2^53: exactness is the odd part fitting in
+      // 53 bits, so 2^53 + 2 is exact and 2^54 + 1 is not.
+      ["9007199254740994", 9007199254740994],
+      ["9007199254740994.0", 9007199254740994],
+      ["18014398509481984", 18014398509481984],
+      ["18014398509481985", "inexact"],
+      ["-18014398509481985", "inexact"],
+      // Ordinary fractions keep the declared binary64 meaning.
+      ["0.1", 0.1],
+      ["1.5", 1.5],
+      ["-2.75", -2.75],
+      ["1e-6", 1e-6],
+      ["1E-2", 0.01],
+      [".5", 0.5],
+      ["1.", 1],
+      ["-2.5e+4", -25000],
+      // Exponent syntax on an integral value is ordinary, not suspicious.
+      ["1.5e3", 1500],
+      ["1500.0", 1500],
+      ["1e3", 1000],
+      // A fraction that is not whole is never subject to the whole-number
+      // rule, even where its nearest binary64 happens to be an integer.
+      ["9007199254740992.4", 9007199254740992],
+      // Beyond the finite range.
+      ["1e400", "not-finite"],
+      ["-1e400", "not-finite"],
+      // Zero absorbs any exponent, and an underflowing fraction is the
+      // nearest binary64 like every other fraction.
+      ["0e999999999", 0],
+      ["1e-999999999999", 0],
+      // The syntax refused before any of this runs, unchanged by this repair.
+      ["", "malformed"],
+      [".", "malformed"],
+      ["-", "malformed"],
+      ["e3", "malformed"],
+      ["+1", "malformed"],
+      ["1e", "malformed"],
+      ["1.2.3", "malformed"],
+      ["12abc", "malformed"],
+      ["0x10", "malformed"],
+      ["Infinity", "malformed"],
+      ["NaN", "malformed"],
+    ];
+
+    for (const [draft, expected] of cases) {
+      const reading = readNumberDraft(draft);
+      if (typeof expected === "string") {
+        assert.equal(reading.kind, expected, `${JSON.stringify(draft)} must read as ${expected}`);
+        continue;
+      }
+      assert.equal(reading.kind, "value", `${JSON.stringify(draft)} must read as a value`);
+      assert.equal(
+        reading.kind === "value" ? reading.value : undefined,
+        expected,
+        `${JSON.stringify(draft)} must denote ${expected}`,
+      );
+    }
+  });
+
+  it("decides the same integer identically however it is spelled", () => {
+    // The invariant the repair exists for: acceptance is a property of the
+    // number, so no lexical form is a way around the domain.
+    const spellings = (digits: string): string[] => [
+      digits,
+      `${digits}.0`,
+      `${digits}.000`,
+      `${digits}0e-1`,
+      `${digits.slice(0, 1)}.${digits.slice(1)}e${digits.length - 1}`,
+    ];
+    for (const digits of ["9007199254740991", "9007199254740992", "9007199254740994"]) {
+      for (const draft of spellings(digits)) {
+        const reading = readNumberDraft(draft);
+        assert.equal(reading.kind, "value", `${draft} must be accepted like ${digits}`);
+        assert.equal(
+          reading.kind === "value" ? reading.value : undefined,
+          Number(digits),
+          `${draft} must denote ${digits}`,
+        );
+      }
+    }
+    for (const digits of ["9007199254740993", "18014398509481985"]) {
+      for (const draft of [...spellings(digits), ...spellings(`-${digits}`).slice(0, 4)]) {
+        assert.equal(readNumberDraft(draft).kind, "inexact", `${draft} must be refused like ${digits}`);
+      }
+    }
   });
 });

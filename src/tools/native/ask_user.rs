@@ -7,10 +7,13 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::events::InteractionRequester;
 use crate::events::{
-    CustomAnswer, MultipleOptionAnswer, OptionSpecification, QuestionSpecification,
-    QuestionnaireAnswer, QuestionnaireAnswerEntry, QuestionnaireResponse,
-    QuestionnaireSpecification, QuestionnaireSubmission, SingleOptionAnswer,
+    AnswerSpecification, BooleanAnswer, CustomAnswer, IntegerAnswer, MAX_QUESTIONNAIRE_OPTIONS,
+    MIN_QUESTIONNAIRE_OPTIONS, MultiChoiceSpecification, NumberAnswer, OptionAnswer,
+    OptionSpecification, OptionsAnswer, QuestionSpecification, QuestionnaireAnswer,
+    QuestionnaireAnswerEntry, QuestionnaireResponse, QuestionnaireSpecification,
+    QuestionnaireSubmission, SingleChoiceSpecification, TextAnswer,
     normalize_questionnaire_response, validate_questionnaire,
 };
 use crate::runtime::interaction::QuestionnaireFacts;
@@ -84,9 +87,29 @@ impl AskUserInput {
     fn from_wire(arguments: &serde_json::Value) -> Result<Self, String> {
         let input: Self = serde_json::from_value(arguments.clone())
             .map_err(|error| format!("invalid ask_user arguments: {error}"))?;
-        validate_questionnaire(&input.specification())
+        input
+            .validate_authoring_bounds()
+            .and_then(|()| validate_questionnaire(&input.specification()))
             .map_err(|error| format!("invalid ask_user arguments: {error}"))?;
         Ok(input)
+    }
+
+    /// The **model-facing** authoring bounds of `ask_user`, which are narrower
+    /// than the shared typed-choice contract on purpose: the tool asks its
+    /// author for a genuine decision between 2–4 named alternatives, while the
+    /// shared vocabulary must also carry, for example, a single-member MCP
+    /// `enum`.
+    fn validate_authoring_bounds(&self) -> Result<(), String> {
+        for (index, question) in self.questions.iter().enumerate() {
+            let count = question.options.len();
+            if !(MIN_QUESTIONNAIRE_OPTIONS..=MAX_QUESTIONNAIRE_OPTIONS).contains(&count) {
+                return Err(format!(
+                    "question {index} options must contain \
+                     {MIN_QUESTIONNAIRE_OPTIONS}–{MAX_QUESTIONNAIRE_OPTIONS} options"
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn normalize(arguments: &serde_json::Value) -> Result<serde_json::Value, String> {
@@ -95,15 +118,27 @@ impl AskUserInput {
             .map_err(|error| format!("failed to normalize ask_user arguments: {error}"))
     }
 
+    /// Maps the model-authored questionnaire onto the shared typed vocabulary.
+    ///
+    /// Native `ask_user` is exactly "authored choices **plus** a custom answer",
+    /// which is now one point in that vocabulary rather than the whole of it:
+    ///
+    /// ```text
+    /// multi_select: false -> SingleChoice { options, allow_custom: true }
+    /// multi_select: true  -> MultiChoice  { options, 1..=options.len(),
+    ///                                       allow_custom: true }
+    /// ```
+    ///
+    /// Every existing native behaviour — authored options, descriptions,
+    /// previews, multi-select, custom text answers, explicit decline — is
+    /// preserved by that mapping; nothing about it is MCP-specific.
     fn specification(&self) -> QuestionnaireSpecification {
         QuestionnaireSpecification {
             questions: self
                 .questions
                 .iter()
-                .map(|question| QuestionSpecification {
-                    question: question.question.clone(),
-                    header: question.header.clone(),
-                    options: question
+                .map(|question| {
+                    let options: Vec<OptionSpecification> = question
                         .options
                         .iter()
                         .map(|option| OptionSpecification {
@@ -111,11 +146,45 @@ impl AskUserInput {
                             description: option.description.clone(),
                             preview: option.preview.clone(),
                         })
-                        .collect(),
-                    multi_select: question.multi_select,
+                        .collect();
+                    let answer = if question.multi_select {
+                        let max_selected = u32::try_from(options.len()).unwrap_or(u32::MAX);
+                        AnswerSpecification::MultiChoice(MultiChoiceSpecification {
+                            options,
+                            // A submitted multi-select answer selects at least
+                            // one option; leaving the question unanswered is
+                            // still expressed by omitting it entirely.
+                            min_selected: 1,
+                            max_selected,
+                            allow_custom: true,
+                        })
+                    } else {
+                        AnswerSpecification::SingleChoice(SingleChoiceSpecification {
+                            options,
+                            allow_custom: true,
+                        })
+                    };
+                    QuestionSpecification {
+                        question: question.question.clone(),
+                        header: question.header.clone(),
+                        answer,
+                    }
                 })
                 .collect(),
         }
+    }
+}
+
+/// The canonical requester identity of the native questionnaire tool.
+///
+/// `ask_user` is a built-in tool, so its requester origin is
+/// [`ToolOrigin::Builtin`] and never an MCP server. That is what keeps a
+/// native prompt from being labelled as MCP by any Runtime Client.
+fn ask_user_requester() -> InteractionRequester {
+    InteractionRequester {
+        tool_id: crate::runtime::identity::ToolId::new("tool-ask-user"),
+        tool_name: ASK_USER_NAME.to_owned(),
+        origin: ToolOrigin::Builtin,
     }
 }
 
@@ -172,6 +241,7 @@ impl ToolExecutor for AskUserExecutor {
                 let outcome = requester
                     .request_questionnaire(QuestionnaireFacts {
                         invocation_id: invocation.id,
+                        requester: ask_user_requester(),
                         turn: 0,
                         questionnaire: specification.clone(),
                     })
@@ -228,18 +298,57 @@ fn questionnaire_result(
                         "question": question.question,
                         "header": question.header,
                     });
+                    // The model-facing result stays label-shaped, because the
+                    // labels are what the model authored. The *canonical*
+                    // identity on the wire is the option index; the label is
+                    // resolved here, from the same immutable request facts.
+                    let options = question.answer.options();
                     match entry.answer {
-                        QuestionnaireAnswer::SingleOption(SingleOptionAnswer { label }) => {
+                        QuestionnaireAnswer::Option(OptionAnswer { option_index }) => {
                             result["kind"] = serde_json::json!("option");
-                            result["answer"] = serde_json::json!(label);
+                            result["answer"] =
+                                serde_json::json!(options[option_index].label.clone());
                         }
                         QuestionnaireAnswer::Custom(CustomAnswer { answer }) => {
                             result["kind"] = serde_json::json!("custom");
                             result["answer"] = serde_json::json!(answer);
                         }
-                        QuestionnaireAnswer::MultipleOption(MultipleOptionAnswer { selected }) => {
+                        QuestionnaireAnswer::Options(OptionsAnswer { option_indices }) => {
                             result["kind"] = serde_json::json!("multiple");
-                            result["selected"] = serde_json::json!(selected);
+                            result["selected"] = serde_json::json!(
+                                option_indices
+                                    .into_iter()
+                                    .map(|index| options[index].label.clone())
+                                    .collect::<Vec<_>>()
+                            );
+                        }
+                        // The remaining typed shapes are never produced by the
+                        // native tool's own SingleChoice/MultiChoice questions,
+                        // but the mapping stays total rather than panicking.
+                        QuestionnaireAnswer::Text(TextAnswer { value }) => {
+                            result["kind"] = serde_json::json!("text");
+                            result["answer"] = serde_json::json!(value);
+                        }
+                        QuestionnaireAnswer::Number(NumberAnswer { value }) => {
+                            result["kind"] = serde_json::json!("number");
+                            // `FiniteNumber` cannot be NaN or infinite, so the
+                            // JSON number always exists; the fallback exists
+                            // only to keep this mapping total without a panic.
+                            result["answer"] = value
+                                .to_json_number()
+                                .map_or(serde_json::Value::Null, serde_json::Value::Number);
+                        }
+                        QuestionnaireAnswer::Integer(IntegerAnswer { value }) => {
+                            result["kind"] = serde_json::json!("integer");
+                            // The model-facing result carries the exact whole
+                            // number as a JSON integer: this is a Rust->model
+                            // hop, not the Runtime Client wire, so no binary64
+                            // stage exists to round it.
+                            result["answer"] = serde_json::json!(value.get());
+                        }
+                        QuestionnaireAnswer::Boolean(BooleanAnswer { value }) => {
+                            result["kind"] = serde_json::json!("boolean");
+                            result["answer"] = serde_json::json!(value);
                         }
                     }
                     result
@@ -374,18 +483,17 @@ mod tests {
 
     #[test]
     fn result_is_derived_from_request_facts_and_canonical_answers() {
-        let mut specification = AskUserInput::from_wire(&valid(2))
-            .expect("fixture questionnaire")
-            .specification();
-        specification.questions[1].multi_select = true;
+        let mut input = AskUserInput::from_wire(&valid(2)).expect("fixture questionnaire");
+        input.questions[1].multi_select = true;
+        let specification = input.specification();
         let result = questionnaire_result(
             &specification,
             &QuestionnaireResponse::Submitted(QuestionnaireSubmission {
                 answers: vec![
                     QuestionnaireAnswerEntry {
                         question_index: 1,
-                        answer: QuestionnaireAnswer::MultipleOption(MultipleOptionAnswer {
-                            selected: vec!["Second".to_owned(), "First".to_owned()],
+                        answer: QuestionnaireAnswer::Options(OptionsAnswer {
+                            option_indices: vec![0, 1],
                         }),
                     },
                     QuestionnaireAnswerEntry {
@@ -551,6 +659,48 @@ mod tests {
         preview_on_multi["questions"][0]["multi_select"] = true.into();
         preview_on_multi["questions"][0]["options"][0]["preview"] = "# preview".into();
         rejected(preview_on_multi);
+    }
+
+    /// Native `ask_user` maps onto the shared typed vocabulary as
+    /// "authored choices **plus** a custom answer", and its requester is a
+    /// built-in tool that no Runtime Client can mistake for MCP.
+    #[test]
+    fn native_ask_user_is_a_builtin_choice_question_with_a_custom_answer() {
+        let requester = ask_user_requester();
+        assert_eq!(requester.origin, ToolOrigin::Builtin);
+        assert_eq!(requester.tool_name, ASK_USER_NAME);
+        assert!(requester.mcp_server().is_none(), "ask_user is never MCP");
+        assert!(requester.validate().is_ok());
+
+        let mut input = AskUserInput::from_wire(&valid(2)).expect("fixture questionnaire");
+        input.questions[1].multi_select = true;
+        let specification = input.specification();
+        let AnswerSpecification::SingleChoice(single) = &specification.questions[0].answer else {
+            panic!("a single-select ask_user question is a SingleChoice");
+        };
+        assert!(
+            single.allow_custom,
+            "native ask_user keeps its custom answer"
+        );
+        assert_eq!(single.options.len(), 2);
+        let AnswerSpecification::MultiChoice(multi) = &specification.questions[1].answer else {
+            panic!("a multi-select ask_user question is a MultiChoice");
+        };
+        assert!(multi.allow_custom);
+        assert_eq!((multi.min_selected, multi.max_selected), (1, 2));
+
+        // Previews, descriptions, and the decline response are unchanged.
+        let mut with_preview = valid(1);
+        with_preview["questions"][0]["options"][0]["preview"] = "# preview".into();
+        let previewed = AskUserInput::from_wire(&with_preview)
+            .expect("previews remain a native option facet")
+            .specification();
+        assert_eq!(
+            previewed.questions[0].answer.options()[0]
+                .preview
+                .as_deref(),
+            Some("# preview")
+        );
     }
 
     #[test]

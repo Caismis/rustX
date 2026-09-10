@@ -41,6 +41,12 @@
 //!   servers: the configured-server fixture (this binary re-executed in
 //!   fixture mode) and the managed Python package projection (a real,
 //!   network-bound `uv` build serving a real `FastMCP` child).
+//! - [`mcp_mrtr`] — MCP multi-round-trip (SEP-2322) execution against a real
+//!   MCP `2026-07-28` stdio child: one invocation, N bounded rounds, the
+//!   runtime-owned Interaction between them, and the cancellation frontiers
+//!   around each dispatch.
+//! - [`mcp_mrtr_managed`] — the same contract end to end against a real
+//!   managed `FastMCP` 4 child built by a real, network-bound `uv`.
 //! - [`tool_deadline`] — the generic Issue #204 hard deadline bounding a
 //!   real foreground Bash process: process-group kill and reap are the
 //!   physical settlement behind the proven `TimedOut`.
@@ -59,6 +65,9 @@ pub(crate) use crate::scripted_suites::support;
 mod background;
 mod durable;
 mod managed_selection;
+#[cfg(feature = "mcp-fixture")]
+mod mcp_mrtr;
+mod mcp_mrtr_managed;
 mod mcp_recovery;
 mod runtime_client;
 mod subagent;

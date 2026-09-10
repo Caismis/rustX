@@ -67,9 +67,12 @@ use crate::runtime::types::{CancellationReason, ConversationLifecycle, Lifecycle
 use crate::tools::types::{ToolInvocationMode, ToolOrigin};
 
 pub use crate::events::interaction::{
-    CustomAnswer, MultipleOptionAnswer, OptionSpecification, QuestionSpecification,
-    QuestionnaireAnswer, QuestionnaireAnswerEntry, QuestionnaireDeclined, QuestionnaireResponse,
-    QuestionnaireSpecification, QuestionnaireSubmission, SingleOptionAnswer,
+    AnswerSpecification, BooleanAnswer, CustomAnswer, ExactInteger, FiniteNumber, IntegerAnswer,
+    IntegerAnswerSpecification, InteractionRequester, MultiChoiceSpecification, NumberAnswer,
+    NumberAnswerSpecification, OptionAnswer, OptionSpecification, OptionsAnswer,
+    QuestionSpecification, QuestionnaireAnswer, QuestionnaireAnswerEntry, QuestionnaireDeclined,
+    QuestionnaireResponse, QuestionnaireSpecification, QuestionnaireSubmission,
+    SingleChoiceSpecification, TextAnswer, TextAnswerSpecification, TextFormat,
 };
 
 /// The bounded native interaction vocabulary of the 0.1 protocol.
@@ -103,6 +106,11 @@ pub enum InteractionKind {
     /// interaction, not a sequence of old single-question interactions.
     Questionnaire {
         invocation_id: crate::tools::types::ToolInvocationId,
+        /// The canonical identity of the tool that asked — a native tool, or
+        /// an MCP-served tool whose `ToolOrigin` names its server. Every
+        /// Runtime Client renders the requester from these facts and never
+        /// infers the source from the prompt text.
+        requester: InteractionRequester,
         /// The complete immutable facts shown to the Runtime Client.
         questionnaire: QuestionnaireSpecification,
     },
@@ -465,6 +473,10 @@ impl ApprovalFacts {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct QuestionnaireFacts {
     pub(crate) invocation_id: crate::tools::types::ToolInvocationId,
+    /// The canonical identity of the tool that asked. It is carried by value
+    /// from here all the way to the Runtime Client and the Event Journal, so
+    /// no layer has to infer whether an MCP server or a native tool is asking.
+    pub(crate) requester: InteractionRequester,
     /// The model turn or tool turn that owns the question.
     pub(crate) turn: u32,
     /// The complete immutable questionnaire specification.
@@ -486,6 +498,7 @@ impl QuestionnaireFacts {
     pub(crate) fn validate(&self) -> Result<(), String> {
         validate_interaction_subject(&InteractionSubject::Questionnaire {
             invocation_id: self.invocation_id.clone(),
+            requester: self.requester.clone(),
             questionnaire: self.questionnaire.clone(),
         })
     }
@@ -501,6 +514,7 @@ impl QuestionnaireFacts {
     ) -> (InteractionRequest, InteractionSubject) {
         let subject = InteractionSubject::Questionnaire {
             invocation_id: self.invocation_id.clone(),
+            requester: self.requester.clone(),
             questionnaire: self.questionnaire.clone(),
         };
         let request = InteractionRequest {
@@ -510,6 +524,7 @@ impl QuestionnaireFacts {
             turn: self.turn,
             kind: InteractionKind::Questionnaire {
                 invocation_id: self.invocation_id.clone(),
+                requester: self.requester,
                 questionnaire: self.questionnaire,
             },
         };
@@ -1104,7 +1119,8 @@ pub(crate) struct InteractionCoordinator {
     wait_cancellation_gate: Mutex<Option<Arc<InteractionWaitCancellationGate>>>,
 }
 
-/// The bounded native Questionnaire capability bound to one Agent Loop attempt.
+/// The bounded runtime Questionnaire capability bound to one Agent Loop
+/// attempt.
 ///
 /// This is intentionally a concrete crate-private value rather than a public
 /// generic interaction trait. It carries only the attempt identity, a read-only
@@ -1112,6 +1128,28 @@ pub(crate) struct InteractionCoordinator {
 /// Its sole operation is to publish and await a Questionnaire; it cannot request
 /// cancellation, arbitrate model-turn start, settle Approval, or mutate
 /// canonical history.
+///
+/// # Two consumers, one mechanism (Issue #242)
+///
+/// It is no longer exclusive to the native `ask_user` tool. The MCP adapter's
+/// multi-round-trip (SEP-2322) elicitation path consumes the *same* capability
+/// so that a server-driven `input_required` round becomes an ordinary
+/// runtime-owned Questionnaire instead of a second pending-user state machine:
+///
+/// ```text
+///                InteractionCoordinator          (one owner)
+///                        ^
+///                        |
+///              QuestionnaireRequester            (crate-private, bounded)
+///                   |          |
+///              ask_user     MCP MRTR elicitation
+/// ```
+///
+/// Both consumers are rustX-owned code inside this crate. The capability is
+/// reachable only through the crate-private
+/// [`ToolExecutionContext`](crate::tools::executor::ToolExecutionContext)
+/// seam, so a third-party `ToolExecutor` still cannot acquire any interaction
+/// authority.
 #[derive(Clone)]
 pub(crate) struct QuestionnaireRequester {
     coordinator: Arc<InteractionCoordinator>,
@@ -2371,24 +2409,34 @@ mod tests {
         coordinator.publish_approval(AttemptId::new(attempt), facts(call))
     }
 
+    fn option(label: &str, description: &str) -> OptionSpecification {
+        OptionSpecification {
+            label: label.to_owned(),
+            description: description.to_owned(),
+            preview: None,
+        }
+    }
+
+    fn ask_user_requester() -> InteractionRequester {
+        InteractionRequester {
+            tool_id: ToolId::new("tool-ask-user"),
+            tool_name: "ask_user".to_owned(),
+            origin: ToolOrigin::Builtin,
+        }
+    }
+
     fn questionnaire_specification() -> QuestionnaireSpecification {
         QuestionnaireSpecification {
             questions: vec![QuestionSpecification {
                 question: "Choose a deployment target".to_owned(),
                 header: "Target".to_owned(),
-                options: vec![
-                    OptionSpecification {
-                        label: "staging".to_owned(),
-                        description: "A safe test environment.".to_owned(),
-                        preview: None,
-                    },
-                    OptionSpecification {
-                        label: "production".to_owned(),
-                        description: "The live environment.".to_owned(),
-                        preview: None,
-                    },
-                ],
-                multi_select: false,
+                answer: AnswerSpecification::SingleChoice(SingleChoiceSpecification {
+                    options: vec![
+                        option("staging", "A safe test environment."),
+                        option("production", "The live environment."),
+                    ],
+                    allow_custom: true,
+                }),
             }],
         }
     }
@@ -2398,6 +2446,7 @@ mod tests {
             invocation_id: crate::tools::types::ToolInvocationId::Agent {
                 call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
             },
+            requester: ask_user_requester(),
             turn: 4,
             questionnaire: questionnaire_specification(),
         }
@@ -2408,40 +2457,39 @@ mod tests {
             invocation_id: crate::tools::types::ToolInvocationId::Agent {
                 call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
             },
+            requester: ask_user_requester(),
             turn: 5,
             questionnaire: QuestionnaireSpecification {
                 questions: vec![QuestionSpecification {
                     question: "Which review surfaces should be enabled?".to_owned(),
                     header: "Surfaces".to_owned(),
-                    options: vec![
-                        OptionSpecification {
-                            label: "Charts".to_owned(),
-                            description: "Show quantitative charts.".to_owned(),
-                            preview: None,
-                        },
-                        OptionSpecification {
-                            label: "Comments".to_owned(),
-                            description: "Show reviewer comments.".to_owned(),
-                            preview: None,
-                        },
-                    ],
-                    multi_select: true,
+                    answer: AnswerSpecification::MultiChoice(MultiChoiceSpecification {
+                        options: vec![
+                            option("Charts", "Show quantitative charts."),
+                            option("Comments", "Show reviewer comments."),
+                        ],
+                        min_selected: 1,
+                        max_selected: 2,
+                        allow_custom: true,
+                    }),
                 }],
             },
         }
     }
 
-    fn single_response(label: &str) -> InteractionResponse {
+    fn single_response(option_index: usize) -> InteractionResponse {
         InteractionResponse::Questionnaire {
             response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
                 answers: vec![QuestionnaireAnswerEntry {
                     question_index: 0,
-                    answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
-                        label: label.to_owned(),
-                    }),
+                    answer: QuestionnaireAnswer::Option(OptionAnswer { option_index }),
                 }],
             }),
         }
+    }
+
+    fn selected(option_indices: Vec<usize>) -> QuestionnaireAnswer {
+        QuestionnaireAnswer::Options(OptionsAnswer { option_indices })
     }
 
     fn publish_questionnaire(
@@ -2931,7 +2979,7 @@ mod tests {
             }] if questionnaire == &expected.questionnaire
         ));
         let waiter = coordinator.wait(ticket, owner.execution_cancellation());
-        let response = single_response("staging");
+        let response = single_response(0);
         coordinator
             .respond(&id, response.clone())
             .expect("questionnaire submitted");
@@ -2976,7 +3024,7 @@ mod tests {
             })
         );
         assert_eq!(
-            coordinator.respond(&interaction_id, single_response("staging"),),
+            coordinator.respond(&interaction_id, single_response(0),),
             Err(InteractionError::NotPending { interaction_id })
         );
     }
@@ -2997,9 +3045,7 @@ mod tests {
                     response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
                         answers: vec![QuestionnaireAnswerEntry {
                             question_index: 0,
-                            answer: QuestionnaireAnswer::MultipleOption(MultipleOptionAnswer {
-                                selected: vec!["staging".to_owned()],
-                            }),
+                            answer: selected(vec![0]),
                         }],
                     }),
                 },
@@ -3007,7 +3053,7 @@ mod tests {
             Err(InteractionError::InvalidResponse { .. })
         ));
         coordinator
-            .respond(&id, single_response("production"))
+            .respond(&id, single_response(1))
             .expect("valid answer");
         assert!(matches!(waiter.await, InteractionOutcome::Responded { .. }));
     }
@@ -3032,49 +3078,37 @@ mod tests {
             QuestionnaireResponse::Submitted(QuestionnaireSubmission {
                 answers: vec![QuestionnaireAnswerEntry {
                     question_index: 1,
-                    answer: QuestionnaireAnswer::MultipleOption(MultipleOptionAnswer {
-                        selected: vec!["Charts".to_owned()],
-                    }),
+                    answer: selected(vec![0]),
                 }],
             }),
             QuestionnaireResponse::Submitted(QuestionnaireSubmission {
                 answers: vec![
                     QuestionnaireAnswerEntry {
                         question_index: 0,
-                        answer: QuestionnaireAnswer::MultipleOption(MultipleOptionAnswer {
-                            selected: vec!["Charts".to_owned()],
-                        }),
+                        answer: selected(vec![0]),
                     },
                     QuestionnaireAnswerEntry {
                         question_index: 0,
-                        answer: QuestionnaireAnswer::MultipleOption(MultipleOptionAnswer {
-                            selected: vec!["Comments".to_owned()],
-                        }),
+                        answer: selected(vec![1]),
                     },
                 ],
             }),
             QuestionnaireResponse::Submitted(QuestionnaireSubmission {
                 answers: vec![QuestionnaireAnswerEntry {
                     question_index: 0,
-                    answer: QuestionnaireAnswer::MultipleOption(MultipleOptionAnswer {
-                        selected: vec!["Unknown".to_owned()],
-                    }),
+                    answer: selected(vec![7]),
                 }],
             }),
             QuestionnaireResponse::Submitted(QuestionnaireSubmission {
                 answers: vec![QuestionnaireAnswerEntry {
                     question_index: 0,
-                    answer: QuestionnaireAnswer::MultipleOption(MultipleOptionAnswer {
-                        selected: vec!["Charts".to_owned(), "Charts".to_owned()],
-                    }),
+                    answer: selected(vec![0, 0]),
                 }],
             }),
             QuestionnaireResponse::Submitted(QuestionnaireSubmission {
                 answers: vec![QuestionnaireAnswerEntry {
                     question_index: 0,
-                    answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
-                        label: "Charts".to_owned(),
-                    }),
+                    answer: QuestionnaireAnswer::Option(OptionAnswer { option_index: 0 }),
                 }],
             }),
         ];
@@ -3092,9 +3126,7 @@ mod tests {
                     response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
                         answers: vec![QuestionnaireAnswerEntry {
                             question_index: 0,
-                            answer: QuestionnaireAnswer::MultipleOption(MultipleOptionAnswer {
-                                selected: vec!["Comments".to_owned(), "Charts".to_owned()],
-                            }),
+                            answer: selected(vec![1, 0]),
                         }],
                     }),
                 },
@@ -3107,9 +3139,7 @@ mod tests {
                     response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
                         answers: vec![QuestionnaireAnswerEntry {
                             question_index: 0,
-                            answer: QuestionnaireAnswer::MultipleOption(MultipleOptionAnswer {
-                                selected: vec!["Charts".to_owned(), "Comments".to_owned()],
-                            }),
+                            answer: selected(vec![0, 1]),
                         }],
                     }),
                 },
@@ -3172,7 +3202,7 @@ mod tests {
             }
         );
         assert_eq!(
-            coordinator.respond(&id, single_response("staging"),),
+            coordinator.respond(&id, single_response(0),),
             Err(InteractionError::NotPending { interaction_id: id })
         );
     }
@@ -3247,7 +3277,7 @@ mod tests {
                 InteractionKind::Approval { .. } => InteractionResponse::Approval {
                     decision: ApprovalDecision::Allow,
                 },
-                InteractionKind::Questionnaire { .. } => single_response("staging"),
+                InteractionKind::Questionnaire { .. } => single_response(0),
                 InteractionKind::Review { .. } => panic!("this fixture has no Review"),
             };
             coordinator
@@ -3314,7 +3344,7 @@ mod tests {
         for request in requested {
             assert_eq!(
                 coordinator
-                    .respond_async(&request.id, single_response("stale"))
+                    .respond_async(&request.id, single_response(0))
                     .await,
                 Err(InteractionError::NotPending {
                     interaction_id: request.id,
@@ -3985,31 +4015,34 @@ mod tests {
         let mut too_long = questionnaire_specification();
         too_long.questions[0].question = "p".repeat(MAX_QUESTION_TEXT_CHARS + 1);
         let mut duplicate_options = questionnaire_specification();
-        duplicate_options.questions[0].options[1].label = "staging".to_owned();
-        let mut too_few = questionnaire_specification();
-        too_few.questions[0].options.truncate(1);
+        match &mut duplicate_options.questions[0].answer {
+            AnswerSpecification::SingleChoice(single) => {
+                single.options[1].label = "staging".to_owned();
+            }
+            _ => panic!("choice question"),
+        }
+        let mut no_options = questionnaire_specification();
+        match &mut no_options.questions[0].answer {
+            AnswerSpecification::SingleChoice(single) => single.options.clear(),
+            _ => panic!("choice question"),
+        }
+        let facts_of = |questionnaire| QuestionnaireFacts {
+            invocation_id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
+            },
+            requester: ask_user_requester(),
+            turn: 4,
+            questionnaire,
+        };
+        // An unnamed requester is refused for the same reason an unanswerable
+        // questionnaire is: the human could not be told who is asking.
+        let mut anonymous = facts_of(questionnaire_specification());
+        anonymous.requester.tool_name = String::new();
         for facts in [
-            QuestionnaireFacts {
-                invocation_id: crate::tools::types::ToolInvocationId::Agent {
-                    call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
-                },
-                turn: 4,
-                questionnaire: too_long,
-            },
-            QuestionnaireFacts {
-                invocation_id: crate::tools::types::ToolInvocationId::Agent {
-                    call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
-                },
-                turn: 4,
-                questionnaire: duplicate_options,
-            },
-            QuestionnaireFacts {
-                invocation_id: crate::tools::types::ToolInvocationId::Agent {
-                    call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
-                },
-                turn: 4,
-                questionnaire: too_few,
-            },
+            facts_of(too_long),
+            facts_of(duplicate_options),
+            facts_of(no_options),
+            anonymous,
         ] {
             assert!(matches!(
                 coordinator.publish_questionnaire_with_cancellation(
@@ -4042,7 +4075,7 @@ mod tests {
         let wait = coordinator.wait(ticket, cancellation.execution_cancellation());
 
         assert!(matches!(
-            coordinator.respond(&id, single_response("canary"),),
+            coordinator.respond(&id, single_response(9),),
             Err(InteractionError::InvalidResponse { .. })
         ));
         assert!(
@@ -4054,7 +4087,7 @@ mod tests {
         );
 
         coordinator
-            .respond(&id, single_response("staging"))
+            .respond(&id, single_response(0))
             .expect("an offered choice is accepted");
         let _ = wait.await;
 

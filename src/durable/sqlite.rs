@@ -203,7 +203,31 @@ use super::inbox::{
 /// disposal authority and are rejected without migration.
 /// Version 29 adds Review audit and required Questionnaire invocation identity.
 /// Version 30 adds bounded Loop iteration settlement and explicit exit facts.
-pub const SQLITE_SCHEMA_VERSION: i64 = 30;
+///
+/// Version 31 freezes Issue #242's provider-independent typed Questionnaire
+/// interaction audit representation. A requested Questionnaire subject now
+/// carries the canonical `InteractionRequester` identity and, for each
+/// question, a typed `AnswerSpecification` (`Text`, `Number`, `Integer`,
+/// `Boolean`, `SingleChoice`, `MultiChoice`) in place of the obsolete
+/// choice-only `options` / `multi_select` pair. A settled submission carries
+/// typed scalar answers and addresses a choice by its zero-based option
+/// **index** rather than by the authored label the old
+/// `single_option`/`multiple_option` answers echoed back. Finite `Number`
+/// values are stored in their canonical binary64 encoding.
+///
+/// This is a semantic format change with no table change, and it is exactly
+/// the kind that must gate open: a v30 journal can contain the obsolete
+/// Questionnaire payload, which the typed vocabulary cannot interpret — an
+/// authored label is not an option index, and a v30 request records no
+/// requester identity at all. Refusing the file states that honestly rather
+/// than decoding an old audit fact under invented semantics.
+///
+/// The Runtime Client protocol version and the
+/// [`EVENT_SCHEMA_VERSION`](crate::events::EVENT_SCHEMA_VERSION) envelope
+/// framing are independent version domains and are unchanged by this: the
+/// envelope shape did not move, only the semantic vocabulary stored inside
+/// `events.event_json`.
+pub const SQLITE_SCHEMA_VERSION: i64 = 31;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -12071,6 +12095,126 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
+    }
+
+    /// The exact `events.event_json` a schema-30 runtime writes for a
+    /// Questionnaire request, produced by `origin/main`'s own serializer.
+    ///
+    /// It is the obsolete choice-only shape: each question carries `options`
+    /// and `multi_select` instead of a typed `answer`, and the subject records
+    /// no requester identity at all.
+    const V30_QUESTIONNAIRE_REQUESTED: &str = r#"{"schema_version":1,"event_id":"interaction-requested-v30","sequence":1,"conversation_id":"conv-v30","timestamp":"2026-01-01T00:00:00Z","event":{"type":"interaction_requested","interaction_id":"interaction-v30","subject":{"type":"questionnaire","invocation_id":{"caller":"agent","call_id":"legacy-call"},"questionnaire":{"questions":[{"question":"Which direction?","header":"Direction","options":[{"label":"First","description":"The first authored option."},{"label":"Second","description":"The second authored option."}],"multi_select":false}]}}}}"#;
+
+    /// The matching schema-30 settlement: the answer names the authored
+    /// **label**, which the typed vocabulary replaced with an option index.
+    const V30_QUESTIONNAIRE_SETTLED: &str = r#"{"schema_version":1,"event_id":"interaction-settled-v30","sequence":2,"conversation_id":"conv-v30","timestamp":"2026-01-01T00:00:01Z","event":{"type":"interaction_settled","interaction_id":"interaction-v30","settlement":{"type":"questionnaire_submitted","submission":{"answers":[{"question_index":0,"answer":{"type":"single_option","value":{"label":"First"}}}]}}}}"#;
+
+    /// Issue #242 changed the durable *semantic vocabulary* of the
+    /// Questionnaire interaction audit, so the store version must gate open.
+    ///
+    /// A version-30 journal can hold the obsolete choice-only payload above.
+    /// Under the typed vocabulary an authored label is not an option index and
+    /// a request has no requester identity to recover, so there is nothing a
+    /// v31 reader could honestly make of those rows. The contract is
+    ///
+    /// ```text
+    /// incompatible durable semantic format -> store-open rejection
+    /// ```
+    ///
+    /// and never "open, then fail later while decoding an old record". This
+    /// proves both halves: `open` refuses the file, and the rows it refused
+    /// really are undecodable under the current vocabulary — so the gate is
+    /// what keeps the typed decoder from ever seeing them.
+    #[test]
+    fn a_version_30_questionnaire_journal_is_refused_at_open_never_decoded() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("questionnaire-v30.sqlite");
+        let conversation_id = ConversationId::new("conv-v30");
+        {
+            // A fully-shaped store at the current schema, carrying the exact
+            // rows a schema-30 runtime would have written, then downgraded to
+            // the version that actually wrote them. The table shape is
+            // unchanged — only the meaning of `event_json` moved, which is
+            // precisely the class of change the version exists to gate.
+            let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
+            let connection = store.conn.lock().unwrap();
+            for (sequence, event_id, payload) in [
+                (
+                    1i64,
+                    "interaction-requested-v30",
+                    V30_QUESTIONNAIRE_REQUESTED,
+                ),
+                (2i64, "interaction-settled-v30", V30_QUESTIONNAIRE_SETTLED),
+            ] {
+                connection
+                    .execute(
+                        "INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json) VALUES(?1,?2,?3,?4,NULL,NULL,?5)",
+                        params![
+                            sequence,
+                            event_id,
+                            i64::from(EVENT_SCHEMA_VERSION),
+                            conversation_id.as_str(),
+                            payload
+                        ],
+                    )
+                    .unwrap();
+            }
+            connection
+                .execute(
+                    "UPDATE rustx_store SET schema_version = 30, next_event_sequence = 2 WHERE id = 1",
+                    [],
+                )
+                .unwrap();
+        }
+
+        // The gate refuses the file, by version, at `open`. No store handle
+        // exists afterwards, so no Event Journal read of those rows is
+        // reachable at all.
+        assert!(matches!(
+            SqliteConversationStore::open(conversation_id, &path),
+            Err(ConversationStoreError::SchemaVersionMismatch {
+                stored: 30,
+                expected: 31
+            })
+        ));
+        assert_eq!(SQLITE_SCHEMA_VERSION, 31);
+
+        // And the refusal is not ceremony: had the gate admitted the file,
+        // these are the rows the typed decoder would have had to interpret,
+        // and it cannot. The envelope framing is unchanged (still
+        // `EVENT_SCHEMA_VERSION`), which is exactly why the *store* version —
+        // not the envelope version — is the one that had to move.
+        for payload in [V30_QUESTIONNAIRE_REQUESTED, V30_QUESTIONNAIRE_SETTLED] {
+            let framing: serde_json::Value = serde_json::from_str(payload).unwrap();
+            assert_eq!(framing["schema_version"], i64::from(EVENT_SCHEMA_VERSION));
+            assert!(
+                serde_json::from_str::<RuntimeEventEnvelope>(payload).is_err(),
+                "the typed vocabulary cannot interpret a schema-30 Questionnaire payload: {payload}"
+            );
+        }
+    }
+
+    /// The other half of the gate: a store this runtime creates records the
+    /// version this runtime speaks, and reopens.
+    #[test]
+    fn a_current_store_records_the_typed_interaction_audit_schema_version() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("current.sqlite");
+        let conversation_id = ConversationId::new("conv-current");
+        let stored: i64 = {
+            let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
+            let connection = store.conn.lock().unwrap();
+            connection
+                .query_row(
+                    "SELECT schema_version FROM rustx_store WHERE id=1",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(stored, 31);
+        assert_eq!(stored, SQLITE_SCHEMA_VERSION);
+        SqliteConversationStore::open(conversation_id, &path).expect("a current store reopens");
     }
 
     #[test]

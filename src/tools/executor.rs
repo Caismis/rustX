@@ -79,12 +79,13 @@ pub trait ProgressReporter: Send + Sync {
 /// conversation identity, execution identity when background, the
 /// owner-observing runtime cancellation view, the workspace boundary, the progress reporter,
 /// the artifact store, the managed tool-output store, and the explicit
-/// authorized environment. The native `ask_user` executor additionally
-/// receives one crate-private, attempt-bound Questionnaire requester. It cannot
-/// obtain the Agent Loop's cancellation authority or any generic interaction
-/// extension seam. Executor-specific resources (process ids, MCP SDK types)
-/// belong inside executor implementations and never
-/// appear here.
+/// authorized environment. **rustX-owned** executors additionally receive one
+/// crate-private, attempt-bound Questionnaire requester: the native
+/// `ask_user` tool, and (Issue #242) the MCP adapter's multi-round-trip
+/// elicitation path. Neither can obtain the Agent Loop's cancellation
+/// authority or any generic interaction extension seam. Executor-specific
+/// resources (process ids, MCP SDK types) belong inside executor
+/// implementations and never appear here.
 pub struct ToolExecutionContext<'a> {
     /// The owning conversation of the invocation.
     pub conversation_id: &'a ConversationId,
@@ -121,10 +122,23 @@ pub struct ToolExecutionContext<'a> {
     pub tool_output: &'a ManagedToolOutput,
     /// The explicit authorized tool environment.
     pub environment: &'a ToolEnvironment,
-    /// The one bounded native Questionnaire capability. This is intentionally not
-    /// public: generic `ToolExecutor` implementations can observe only
-    /// [`ExecutionCancellation`], while the native `ask_user` path receives a
+    /// The one bounded runtime Questionnaire capability. This is intentionally
+    /// not public: generic `ToolExecutor` implementations can observe only
+    /// [`ExecutionCancellation`], while rustX-owned execution paths receive a
     /// runtime-bound requester through an internal construction seam.
+    ///
+    /// Two consumers share it, and both are rustX's own code in this crate:
+    /// the native `ask_user` tool, and the MCP adapter's multi-round-trip
+    /// elicitation path (Issue #242). Sharing the seam is deliberate — a
+    /// second interaction mechanism would mean a second pending-user state
+    /// machine — and it stays narrow: the requester can publish and await one
+    /// bounded Questionnaire and nothing else.
+    ///
+    /// An invocation with no requester has **no** runtime-owned interaction
+    /// path, and that fact is load-bearing rather than incidental: the MCP
+    /// adapter advertises the MCP elicitation capability per `tools/call`
+    /// exactly when this field is present, so a detached background execution
+    /// never tells a server that a human can answer it.
     pub(crate) questionnaire_requester: Option<QuestionnaireRequester>,
     /// The task-list authority of the `ToolResult` batch this invocation
     /// belongs to, when it belongs to one.
@@ -180,9 +194,12 @@ impl<'a> ToolExecutionContext<'a> {
         }
     }
 
-    /// Constructs a detached execution context without native interaction
-    /// authority. Runtime-owned foreground dispatch adds its bounded
-    /// Questionnaire requester through the crate-private builder below.
+    /// Constructs an execution context **without** runtime-owned interaction
+    /// authority. Runtime-owned foreground dispatch (and Workflow native
+    /// invocation) add the bounded Questionnaire requester through the
+    /// crate-private builder below; a detached background execution does not,
+    /// because no attempt is waiting for it and rustX has no background
+    /// human-interaction domain.
     #[must_use]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -257,7 +274,10 @@ impl<'a> ToolExecutionContext<'a> {
         self.todos.as_ref()
     }
 
-    /// Adds the one runtime-bound native Questionnaire requester.
+    /// Adds the one runtime-bound Questionnaire requester.
+    ///
+    /// Foreground Agent Loop dispatch and Workflow native invocation are the
+    /// two callers; a detached background execution deliberately has none.
     #[must_use]
     pub(crate) fn with_questionnaire_requester(
         mut self,
@@ -267,10 +287,14 @@ impl<'a> ToolExecutionContext<'a> {
         self
     }
 
-    /// Returns the bounded questionnaire requester to the native `ask_user` implementation.
-    /// The concrete type and this accessor are crate-private, so external
-    /// `ToolExecutor` implementations cannot acquire native interaction
-    /// authority.
+    /// Returns the bounded questionnaire requester to the rustX-owned
+    /// execution paths that may use it: the native `ask_user` tool and the
+    /// MCP multi-round-trip elicitation path (Issue #242).
+    ///
+    /// The concrete type and this accessor are crate-private, so a
+    /// third-party or externally registered `ToolExecutor` cannot acquire
+    /// interaction authority at all — it can only observe
+    /// [`ExecutionCancellation`].
     pub(crate) fn questionnaire_requester(&self) -> Option<&QuestionnaireRequester> {
         self.questionnaire_requester.as_ref()
     }

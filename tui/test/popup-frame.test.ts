@@ -323,17 +323,21 @@ function questionnaire(): QuestionnaireOverlay {
       {
         question: "Which visual direction should I use?",
         header: "Visual style",
-        options: [
+        answer: {
+          type: "single_choice",
+          options: [
           { label: "Swiss / Klein blue", description: "Information-first typography." },
           { label: "Electronic magazine", description: "A warmer editorial composition." },
         ],
-        multi_select: false,
+          allow_custom: true,
+        },
       },
     ],
   };
   return new QuestionnaireOverlay({
     interactionId: "interaction-1",
     questionnaire: specification,
+    requester: { tool_id: "tool-ask-user", tool_name: "ask_user", origin: "builtin" },
     onSubmit: () => {},
     onDecline: () => {},
     onInterrupt: () => {},

@@ -9,28 +9,54 @@ import {
 } from "@earendil-works/pi-tui";
 
 import type {
+  AnswerSpecification,
+  FiniteNumberWire,
+  InteractionRequester,
+  OptionSpecification,
   QuestionSpecification,
   QuestionnaireAnswer,
   QuestionnaireAnswerEntry,
   QuestionnaireResponse,
   QuestionnaireSpecification,
 } from "../../protocol/types.ts";
+import {
+  finiteNumberDecimal,
+  finiteNumberFromWire,
+  finiteNumberToWire,
+} from "../../protocol/number.ts";
 import { markdownTheme, role } from "../theme.ts";
 import type { PopupContent } from "./popup-frame.ts";
 
 const MAX_CUSTOM_ANSWER_CHARS = 4096;
+const MAX_TEXT_ANSWER_CHARS = 4096;
 const PREVIEW_CONTENT_LINES = 12;
 
-const POPUP_TITLE = "Ask user · questionnaire";
+const NATIVE_POPUP_TITLE = "Ask user · questionnaire";
 const POPUP_FOOTER =
   "Tab/Shift+Tab tabs · arrows rows · Enter choose/submit · Space toggle · PageUp/PageDown preview · Esc decline · Ctrl+C cancel attempt";
+
+/** The typed rows one question's answer surface presents. */
+type RowKind =
+  | { kind: "option"; optionIndex: number }
+  | { kind: "boolean"; value: boolean }
+  | { kind: "scalar" }
+  | { kind: "custom" };
 
 export interface QuestionnaireOverlayOptions {
   interactionId: string;
   questionnaire: QuestionnaireSpecification;
   /**
+   * The canonical identity of the tool that asked. It is projected by the
+   * runtime, never inferred here, so an MCP-originated prompt can name its
+   * server and a native `ask_user` prompt is never labelled as MCP.
+   */
+  requester: InteractionRequester;
+  /**
    * The routed source label ("Question from reviewer"), when the interaction
    * did not originate in the conversation this client is attached to.
+   *
+   * It is deliberately independent of {@link requester}: this says *where* the
+   * interaction came from, the requester says *who* asked.
    */
   sourceLabel?: string;
   onSubmit: (response: QuestionnaireResponse) => void;
@@ -44,26 +70,383 @@ type RenderedBody = {
   focusLine: number;
 };
 
+/** The declared options of a choice question, or an empty list. */
+export function choiceOptions(question: QuestionSpecification): OptionSpecification[] {
+  const answer = question.answer;
+  return answer.type === "single_choice" || answer.type === "multi_choice"
+    ? answer.options
+    : [];
+}
+
+/** Whether a question accepts a free-text answer outside its options. */
+function allowsCustom(answer: AnswerSpecification): boolean {
+  return (answer.type === "single_choice" || answer.type === "multi_choice") &&
+    answer.allow_custom;
+}
+
+/** The ordered rows one question's answer surface presents. */
+function rowsOf(question: QuestionSpecification): RowKind[] {
+  const answer = question.answer;
+  switch (answer.type) {
+    case "text":
+    case "number":
+    case "integer":
+      return [{ kind: "scalar" }];
+    case "boolean":
+      return [{ kind: "boolean", value: true }, { kind: "boolean", value: false }];
+    default: {
+      const rows: RowKind[] = answer.options.map((_, optionIndex) => ({
+        kind: "option" as const,
+        optionIndex,
+      }));
+      if (answer.allow_custom) rows.push({ kind: "custom" });
+      return rows;
+    }
+  }
+}
+
+/**
+ * The human-readable statement of a multi-choice question's own bounds.
+ *
+ * The bounds come from the request; the client only explains and pre-checks
+ * them. The runtime re-validates every submission against the same facts.
+ */
+export function selectionBoundsLabel(min: number, max: number): string {
+  if (min === max) return `Select exactly ${min}`;
+  if (min === 0) return `Select up to ${max}`;
+  return `Select ${min}–${max}`;
+}
+
+/** The inclusive bounds of the runtime's canonical `Integer` domain. */
+const I64_MIN = -(2n ** 63n);
+const I64_MAX = 2n ** 63n - 1n;
+
+/**
+ * One `Number` draft's decimal syntax, split into the parts its exact value is
+ * built from: integer digits, fraction digits, and a signed exponent.
+ *
+ * The accepted spellings are `123`, `-123`, `1.5`, `.5`, `1.`, `1e3`, `1.5e3`,
+ * `1E-2`, `-2.5e+4`. A leading `+`, a bare `.`, and a bare exponent are not
+ * numbers; the digit check below refuses the two the pattern alone would let
+ * through.
+ */
+const NUMBER_DRAFT = /^-?(\d*)(?:\.(\d*))?(?:[eE]([+-]?)(\d+))?$/;
+
+/** `2^53`: the first magnitude at which binary64 stops holding every whole number. */
+const EXACT_WHOLE_FRONTIER = 2n ** 53n;
+
+/** What one `Number` draft denotes, or why it denotes nothing submittable. */
+export type NumberDraftReading =
+  /** The finite binary64 value the draft denotes exactly. */
+  | { readonly kind: "value"; readonly value: number }
+  /** Not the syntax of a number. */
+  | { readonly kind: "malformed" }
+  /** Beyond the finite binary64 range. */
+  | { readonly kind: "not-finite" }
+  /** A whole number binary64 cannot hold exactly. */
+  | { readonly kind: "inexact" };
+
+/**
+ * Reads one `Number` draft as the value the runtime would receive.
+ *
+ * This is the single point where a human's decimal spelling becomes a
+ * JavaScript `number`, and it is deliberately taken **on the original string**:
+ * `Number(...)` rounds, and rounding is precisely the information this has to
+ * inspect. Asking whether the draft is exact after `Number(...)` has already
+ * run can only ever confirm that a rounded value is equal to itself.
+ *
+ * The runtime's `Number` domain is the finite binary64 (`FiniteNumber`), and a
+ * fractional decimal *means* the nearest binary64 — that is what a JSON number
+ * means everywhere, and where the MCP server's own parse lands. A **whole**
+ * number is different: `9007199254740993` names one specific integer, and
+ * binary64 cannot hold it, so `FiniteNumber` refuses it rather than rounding it
+ * to `9007199254740992`. That rule is about the *value*, so it cannot be evaded
+ * by respelling: `9007199254740993.0`, `9.007199254740993e15` and
+ * `90071992547409930e-1` all denote the same refused integer, and this reads
+ * every one of them out of the decimal itself rather than out of the rounded
+ * `Number`.
+ *
+ * Nothing here widens the domain: no arbitrary-precision value crosses the
+ * wire. The exact arithmetic exists only to decide whether one lossy
+ * conversion is faithful, and the value submitted is the ordinary binary64.
+ */
+export function readNumberDraft(draft: string): NumberDraftReading {
+  const spelling = draft.trim();
+  const match = NUMBER_DRAFT.exec(spelling);
+  if (match === null) return { kind: "malformed" };
+  const [, integerDigits = "", fractionDigits = "", exponentSign, exponentDigits] = match;
+  // `.` and `e3` match the pattern but spell no digits, so they are not numbers.
+  if (integerDigits.length + fractionDigits.length === 0) return { kind: "malformed" };
+
+  const value = Number(spelling);
+  if (!Number.isFinite(value)) return { kind: "not-finite" };
+
+  const magnitude = exponentDigits === undefined ? 0n : BigInt(exponentDigits);
+  const exponent = exponentSign === "-" ? -magnitude : magnitude;
+  const whole = decimalWholeValue(integerDigits, fractionDigits, exponent);
+  if (whole !== undefined && !isExactBinary64Whole(whole)) return { kind: "inexact" };
+  return { kind: "value", value };
+}
+
+/**
+ * The exact integer a well-formed decimal spelling denotes, or `undefined`
+ * when it denotes a fractional value.
+ *
+ * The digits are one integer scaled by a power of ten: `1.5e3` is `15` scaled
+ * by `10^2`. A negative scale is cancelled one digit at a time, which both
+ * decides wholeness and terminates immediately on the first non-zero digit
+ * below the point — so an absurd exponent like `1e-999999999` costs one step
+ * rather than a `10^999999999`.
+ *
+ * The sign is dropped: binary64 exactness is symmetric, so `-9007199254740993`
+ * and `9007199254740993` are decided identically.
+ *
+ * The caller has already proven the draft finite. That bounds a non-zero
+ * `scale` at 308, because the value is at least `10^scale` and a finite
+ * binary64 is below `2^1024`; zero is returned before `scale` is used at all.
+ */
+function decimalWholeValue(
+  integerDigits: string,
+  fractionDigits: string,
+  exponent: bigint,
+): bigint | undefined {
+  let significand = BigInt(`${integerDigits}${fractionDigits}`);
+  // Every spelling of zero is whole, and no exponent can change that — which
+  // is also what keeps `0e999999999` from reaching the exponentiation below.
+  if (significand === 0n) return 0n;
+  let scale = exponent - BigInt(fractionDigits.length);
+  while (scale < 0n) {
+    if (significand % 10n !== 0n) return undefined;
+    significand /= 10n;
+    scale += 1n;
+  }
+  return significand * 10n ** scale;
+}
+
+/**
+ * Whether binary64 holds this whole number exactly.
+ *
+ * Every whole number is an odd number times a power of two, and binary64's
+ * significand is 53 bits, so it is exact when that odd part fits in 53 bits.
+ * This is the same rule the runtime applies in `is_exact_binary64_whole`,
+ * stated over `BigInt` instead of `u64` — the client is therefore never looser
+ * than the boundary it is about to submit to.
+ */
+function isExactBinary64Whole(value: bigint): boolean {
+  let odd = value < 0n ? -value : value;
+  if (odd === 0n) return true;
+  while (odd % 2n === 0n) odd >>= 1n;
+  return odd < EXACT_WHOLE_FRONTIER;
+}
+
+/**
+ * Validates one scalar draft against its declared answer shape.
+ *
+ * Returns `undefined` when the draft is acceptable. This is **UX only**: the
+ * runtime validates the very same facts again and stays authoritative, and an
+ * invalid draft keeps the user inside the interaction rather than failing the
+ * tool invocation.
+ */
+export function scalarValidationError(
+  answer: AnswerSpecification,
+  draft: string,
+): string | undefined {
+  const value = draft.trim();
+  switch (answer.type) {
+    case "text": {
+      const length = [...draft].length;
+      if (answer.min_length !== undefined && length < answer.min_length) {
+        return `Enter at least ${answer.min_length} characters.`;
+      }
+      if (answer.max_length !== undefined && length > answer.max_length) {
+        return `Enter at most ${answer.max_length} characters.`;
+      }
+      if (answer.format === "date" && !isCalendarDate(draft)) {
+        return "Enter a date as YYYY-MM-DD.";
+      }
+      if (answer.format === "date_time" && Number.isNaN(Date.parse(draft))) {
+        return "Enter an RFC 3339 date-time.";
+      }
+      if (answer.format === "uri" && !isAbsoluteUri(draft)) {
+        return "Enter an absolute URI.";
+      }
+      return undefined;
+    }
+    case "number": {
+      // Syntax, then finiteness, then admissibility to the canonical domain,
+      // and only then the declared bounds: a value is never compared against
+      // `minimum`/`maximum` before it is established that it is the value the
+      // user actually entered.
+      const reading = readNumberDraft(value);
+      if (reading.kind === "malformed") return "Enter a number.";
+      if (reading.kind === "not-finite") return "Enter a finite number.";
+      if (reading.kind === "inexact") {
+        return "Enter a number this runtime can represent exactly.";
+      }
+      const parsed = reading.value;
+      // The bounds are canonical binary64 text, so they are decoded through
+      // the one seam that reconstructs a `number` exactly and then compared in
+      // the domain both sides belong to. Comparing the wire spellings as
+      // strings would be a lexical comparison of bit patterns, which is not
+      // the numeric order.
+      const minimum = numberBound(answer.minimum);
+      const maximum = numberBound(answer.maximum);
+      if (minimum !== undefined && parsed < minimum) {
+        return `Enter a number at least ${minimum}.`;
+      }
+      if (maximum !== undefined && parsed > maximum) {
+        return `Enter a number at most ${maximum}.`;
+      }
+      return undefined;
+    }
+    case "integer": {
+      // Never `Number(...)`: the runtime's Integer domain is the exact i64,
+      // and a JavaScript number would silently round every value above 2^53 —
+      // the whole reason this field crosses the wire as decimal text. The
+      // draft is compared as a `BigInt` and submitted as the user's own
+      // digits; the runtime performs the one authoritative parse.
+      if (!/^-?\d+$/.test(value)) return "Enter a whole number.";
+      const parsed = BigInt(value);
+      if (parsed < I64_MIN || parsed > I64_MAX) {
+        return "Enter a whole number inside the 64-bit range.";
+      }
+      if (answer.minimum !== undefined && parsed < BigInt(answer.minimum)) {
+        return `Enter a whole number at least ${answer.minimum}.`;
+      }
+      if (answer.maximum !== undefined && parsed > BigInt(answer.maximum)) {
+        return `Enter a whole number at most ${answer.maximum}.`;
+      }
+      return undefined;
+    }
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * One declared `Number` bound as a JavaScript `number`.
+ *
+ * Every `Number` bound in this client is decoded here, so no second parser can
+ * disagree with the one the answer is encoded through.
+ */
+function numberBound(bound: FiniteNumberWire | undefined): number | undefined {
+  return bound === undefined ? undefined : finiteNumberFromWire(bound);
+}
+
+/**
+ * One declared `Number` bound as the decimal a human reads — and can type
+ * back, which `String(value)` would not guarantee for a large whole number.
+ */
+function numberBoundLabel(bound: FiniteNumberWire | undefined): string | undefined {
+  const value = numberBound(bound);
+  return value === undefined ? undefined : finiteNumberDecimal(value);
+}
+
+function isCalendarDate(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (match === null) return false;
+  const [, year, month, day] = match;
+  const date = new Date(`${year}-${month}-${day}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) &&
+    date.getUTCFullYear() === Number(year) &&
+    date.getUTCMonth() + 1 === Number(month) &&
+    date.getUTCDate() === Number(day);
+}
+
+function isAbsoluteUri(value: string): boolean {
+  try {
+    // eslint-disable-next-line no-new
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The presentation label of an MCP or native requester.
+ *
+ * The words come from canonical facts, so a native `ask_user` prompt is never
+ * described as MCP and an MCP prompt always names its server.
+ */
+export function requesterLines(requester: InteractionRequester): string[] {
+  if (requester.origin === "builtin") {
+    return [`Requested by ${requester.tool_name}`];
+  }
+  return [
+    `Requested by MCP server: ${requester.origin.mcp.server_id}`,
+    `Tool: ${requester.tool_name}`,
+  ];
+}
+
+/**
+ * The compact requester name used by queue rows and activity lines.
+ *
+ * It is derived from canonical origin facts, so a native tool is never
+ * presented as MCP and an MCP tool always carries its server identity.
+ */
+export function requesterName(requester: InteractionRequester): string {
+  return requester.origin === "builtin"
+    ? requester.tool_name
+    : `mcp:${requester.origin.mcp.server_id}/${requester.tool_name}`;
+}
+
+/** The popup frame title for one requester. */
+export function requesterTitle(requester: InteractionRequester): string {
+  return requester.origin === "builtin"
+    ? NATIVE_POPUP_TITLE
+    : `MCP elicitation · ${requester.origin.mcp.server_id}`;
+}
+
 /**
  * One ephemeral questionnaire surface.
  *
- * The overlay owns only focus, selections, and unsubmitted custom-answer
- * drafts. Pi's single-line Input owns editing semantics, including bracketed
- * paste, Kitty printable input, grapheme-aware cursor movement, and deletion.
- * The runtime remains authoritative: the surface sends a response once, and
- * disappears when the pending interaction leaves the projection.
+ * The overlay owns only focus, selections, and unsubmitted drafts. Pi's
+ * single-line Input owns editing semantics, including bracketed paste, Kitty
+ * printable input, grapheme-aware cursor movement, and deletion. The runtime
+ * remains authoritative: the surface sends a response once, and disappears
+ * when the pending interaction leaves the projection.
+ *
+ * Every question is rendered **according to its declared answer shape**: a
+ * text/number/integer question shows an input field and no manufactured
+ * option rows, a boolean question shows an explicit true/false choice, and a
+ * choice question shows a custom-answer row only when the request allows one.
  */
 export class QuestionnaireOverlay implements PopupContent {
   readonly interactionId: string;
   readonly questionnaire: QuestionnaireSpecification;
+  readonly requester: InteractionRequester;
   readonly #sourceLabel: string | undefined;
   readonly #onSubmit: (response: QuestionnaireResponse) => void;
   readonly #onDecline: () => void;
   readonly #onInterrupt: () => void;
   readonly #onChange: (() => void) | undefined;
-  readonly #selected: Array<Set<string>>;
-  readonly #custom: Array<string | undefined>;
-  readonly #customInputs: Input[];
+  /** Selected option indices, per question. */
+  readonly #selected: Array<Set<number>>;
+  /** The chosen boolean, per question. */
+  readonly #boolean: Array<boolean | undefined>;
+  /** The scalar or custom-answer draft, per question. */
+  readonly #draft: Array<string | undefined>;
+  readonly #inputs: Input[];
+  /** Whether the user has interacted with a question at all. */
+  readonly #touched: boolean[];
+  /**
+   * Whether the user has explicitly committed this question's scalar field.
+   *
+   * This is the **answer-presence bit**, and it is deliberately independent of
+   * the draft's length. For a text question an omitted answer and an explicit
+   * empty string are different facts: the first says nothing was answered, the
+   * second is a real `Text("")` the runtime accepts whenever `min_length` is
+   * absent or `0`, and which reaches an MCP server as `""` rather than a
+   * decline. Inferring presence from `draft.length > 0` would collapse the two
+   * and make an intentional empty answer unsubmittable.
+   *
+   * It is set by editing the field — typing a character and erasing it again
+   * is an explicit empty answer — and by pressing Enter on the field, which
+   * commits the current draft as it stands. An untouched field is never
+   * committed, so a blank questionnaire still submits nothing.
+   */
+  readonly #committed: boolean[];
   #tab = 0;
   #row = 0;
   #submitting = false;
@@ -71,18 +454,23 @@ export class QuestionnaireOverlay implements PopupContent {
   #previewOffset = 0;
   #previewLineCount = 0;
   #previewContentViewport = PREVIEW_CONTENT_LINES;
+  #notice: string | undefined;
 
   constructor(options: QuestionnaireOverlayOptions) {
     this.interactionId = options.interactionId;
     this.questionnaire = options.questionnaire;
+    this.requester = options.requester;
     this.#sourceLabel = options.sourceLabel;
     this.#onSubmit = options.onSubmit;
     this.#onDecline = options.onDecline;
     this.#onInterrupt = options.onInterrupt;
     this.#onChange = options.onChange;
-    this.#selected = options.questionnaire.questions.map(() => new Set<string>());
-    this.#custom = options.questionnaire.questions.map(() => undefined);
-    this.#customInputs = options.questionnaire.questions.map(() => new Input());
+    this.#selected = options.questionnaire.questions.map(() => new Set<number>());
+    this.#boolean = options.questionnaire.questions.map(() => undefined);
+    this.#draft = options.questionnaire.questions.map(() => undefined);
+    this.#inputs = options.questionnaire.questions.map(() => new Input());
+    this.#touched = options.questionnaire.questions.map(() => false);
+    this.#committed = options.questionnaire.questions.map(() => false);
   }
 
   invalidate(): void {
@@ -90,9 +478,9 @@ export class QuestionnaireOverlay implements PopupContent {
     // replacement creates a new instance and therefore discards only drafts.
   }
 
-  /** The popup's frame title. */
+  /** The popup's frame title, which names an MCP requester when there is one. */
   popupTitle(): string {
-    return POPUP_TITLE;
+    return requesterTitle(this.requester);
   }
 
   /** The popup's help line, contained by the frame below the body. */
@@ -115,6 +503,7 @@ export class QuestionnaireOverlay implements PopupContent {
   /** Re-enables the surface when the Runtime Client rejects the response. */
   submissionFailed(): void {
     this.#submitting = false;
+    this.#notice = "The runtime refused that response. Correct it and submit again.";
     this.#changed();
   }
 
@@ -166,45 +555,70 @@ export class QuestionnaireOverlay implements PopupContent {
     }
 
     if (this.#tab < this.questionnaire.questions.length) {
-      const question = this.questionnaire.questions[this.#tab]!;
-      const customRow = question.options.length;
-      if (this.#row === customRow) {
-        if (matchesKey(data, Key.enter)) {
-          if ((this.#custom[this.#tab] ?? "").length > 0) {
-            this.#selected[this.#tab]!.clear();
-            this.#changed();
-          }
-          return;
-        }
-        // Delegate every editing path to Pi's established primitive. This
-        // includes raw bracketed-paste markers, multi-character batches,
-        // Kitty printable sequences, Unicode graphemes, cursor movement, and
-        // backspace/delete. Only the questionnaire's focus/cancellation keys
-        // are intercepted above.
-        this.#handleCustomInput(data);
-        return;
-      }
-      if (matchesKey(data, Key.space) && question.multi_select) {
-        this.#toggleOption(question.options[this.#row]!.label);
-        return;
-      }
-      if (matchesKey(data, Key.enter)) {
-        if (question.multi_select) {
-          this.#toggleOption(question.options[this.#row]!.label);
-        } else {
-          this.#selected[this.#tab]!.clear();
-          this.#selected[this.#tab]!.add(question.options[this.#row]!.label);
-          this.#clearCustom(this.#tab);
-          this.#changed();
-        }
-      }
+      this.#handleQuestionInput(data);
       return;
     }
 
     if (matchesKey(data, Key.enter) && this.#row === 0) {
-      this.#submitting = true;
-      this.#onSubmit(this.#submission());
-      this.#changed();
+      this.#submit();
+    }
+  }
+
+  #handleQuestionInput(data: string): void {
+    const question = this.questionnaire.questions[this.#tab]!;
+    const rows = rowsOf(question);
+    const row = rows[this.#row];
+    if (row === undefined) return;
+    if (row.kind === "scalar" || row.kind === "custom") {
+      if (row.kind === "custom" && matchesKey(data, Key.enter)) {
+        if ((this.#draft[this.#tab] ?? "").length > 0) {
+          this.#selected[this.#tab]!.clear();
+          this.#changed();
+        }
+        return;
+      }
+      if (row.kind === "scalar" && matchesKey(data, Key.enter)) {
+        // Enter commits the field exactly as it stands. That is the one
+        // deterministic way to answer a text question with the empty string
+        // without typing and erasing a character first.
+        this.#committed[this.#tab] = true;
+        this.#touched[this.#tab] = true;
+        this.#notice = undefined;
+        this.#changed();
+        return;
+      }
+      // Delegate every editing path to Pi's established primitive. This
+      // includes raw bracketed-paste markers, multi-character batches, Kitty
+      // printable sequences, Unicode graphemes, cursor movement, and
+      // backspace/delete. Only the questionnaire's focus/cancellation keys
+      // are intercepted above.
+      this.#handleDraftInput(data, row.kind === "custom");
+      return;
+    }
+    if (row.kind === "boolean") {
+      if (matchesKey(data, Key.enter) || matchesKey(data, Key.space)) {
+        this.#boolean[this.#tab] = row.value;
+        this.#touched[this.#tab] = true;
+        this.#changed();
+      }
+      return;
+    }
+    const answer = question.answer;
+    const multi = answer.type === "multi_choice";
+    if (matchesKey(data, Key.space) && multi) {
+      this.#toggleOption(row.optionIndex);
+      return;
+    }
+    if (matchesKey(data, Key.enter)) {
+      if (multi) {
+        this.#toggleOption(row.optionIndex);
+      } else {
+        this.#selected[this.#tab]!.clear();
+        this.#selected[this.#tab]!.add(row.optionIndex);
+        this.#clearDraft(this.#tab);
+        this.#touched[this.#tab] = true;
+        this.#changed();
+      }
     }
   }
 
@@ -212,6 +626,9 @@ export class QuestionnaireOverlay implements PopupContent {
     const safeWidth = Math.max(1, Math.floor(width));
     const header = [
       fitLine(role.meta(`interaction ${this.interactionId}`), safeWidth),
+      ...requesterLines(this.requester).map((line) =>
+        fitLine(role.meta(line), safeWidth)
+      ),
       ...(this.#sourceLabel === undefined
         ? []
         : [fitLine(role.meta(this.#sourceLabel), safeWidth)]),
@@ -259,7 +676,12 @@ export class QuestionnaireOverlay implements PopupContent {
   #renderQuestion(width: number, viewportHeight: number): RenderedBody {
     const question = this.questionnaire.questions[this.#tab]!;
     const questionLines = wrapStyled(role.strong(question.question), width);
-    const intro = ["", ...questionLines.map((line) => fitLine(line, width))];
+    const guidance = this.#guidance(question);
+    const intro = [
+      "",
+      ...questionLines.map((line) => fitLine(line, width)),
+      ...(guidance === undefined ? [] : [fitLine(role.meta(guidance), width)]),
+    ];
     const preview = this.#focusedPreview(question);
 
     if (preview !== undefined && width >= 100) {
@@ -334,46 +756,93 @@ export class QuestionnaireOverlay implements PopupContent {
     };
   }
 
+  /** The concise explanation of what a legal answer to this question is. */
+  #guidance(question: QuestionSpecification): string | undefined {
+    const answer = question.answer;
+    switch (answer.type) {
+      case "multi_choice":
+        return selectionBoundsLabel(answer.min_selected, answer.max_selected);
+      case "integer":
+        return boundsSentence("Whole number", answer.minimum, answer.maximum);
+      case "number":
+        // A human reads decimals, never the protocol's bit pattern.
+        return boundsSentence(
+          "Number",
+          numberBoundLabel(answer.minimum),
+          numberBoundLabel(answer.maximum),
+        );
+      case "text":
+        return textGuidance(answer);
+      default:
+        return undefined;
+    }
+  }
+
   #renderQuestionRows(question: QuestionSpecification, width: number): RenderedBody {
     const lines: string[] = [];
     let focusLine = 0;
-    for (const [index, option] of question.options.entries()) {
+    const rows = rowsOf(question);
+    const options = choiceOptions(question);
+    const multi = question.answer.type === "multi_choice";
+    for (const [index, row] of rows.entries()) {
       if (index === this.#row) focusLine = lines.length;
-      const selected = this.#selected[this.#tab]!.has(option.label);
-      const marker = question.multi_select
-        ? selected ? "[x]" : "[ ]"
-        : selected ? "●" : "○";
+      const marker = index === this.#row ? role.accent("›") : " ";
+      if (row.kind === "option") {
+        const option = options[row.optionIndex]!;
+        const selected = this.#selected[this.#tab]!.has(row.optionIndex);
+        const box = multi
+          ? selected ? "[x]" : "[ ]"
+          : selected ? "●" : "○";
+        lines.push(fitLine(`${marker} ${box} ${role.strong(option.label)}`, width));
+        const descriptionWidth = Math.max(1, width - 2);
+        for (const line of wrapStyled(role.meta(option.description), descriptionWidth)) {
+          lines.push(fitLine(`  ${line}`, width));
+        }
+        continue;
+      }
+      if (row.kind === "boolean") {
+        const chosen = this.#boolean[this.#tab] === row.value;
+        lines.push(
+          fitLine(
+            `${marker} ${chosen ? "●" : "○"} ${role.strong(row.value ? "Yes" : "No")}`,
+            width,
+          ),
+        );
+        lines.push(
+          fitLine(`  ${role.meta(row.value ? "true" : "false")}`, width),
+        );
+        continue;
+      }
+      // A scalar input row, or the custom-answer row of a choice question
+      // that explicitly allows one. No option rows are manufactured for a
+      // free-form question, and no custom row exists for a bounded one.
       lines.push(
         fitLine(
-          `${index === this.#row ? role.accent("›") : " "} ${marker} ${role.strong(option.label)}`,
+          `${marker} ${role.accent(row.kind === "custom" ? "Type something." : scalarPrompt(question.answer))}`,
           width,
         ),
       );
-      const descriptionWidth = Math.max(1, width - 2);
-      for (const line of wrapStyled(role.meta(option.description), descriptionWidth)) {
-        lines.push(fitLine(`  ${line}`, width));
+      const input = this.#inputs[this.#tab]!;
+      input.focused = index === this.#row;
+      const inputLine = input.render(Math.max(1, width - 2))[0] ?? "";
+      input.focused = false;
+      const draft = this.#draft[this.#tab];
+      if (draft !== undefined || index === this.#row) {
+        lines.push(fitLine(`  ${inputLine}`, width));
+      } else {
+        lines.push(
+          fitLine(
+            `  ${role.meta(row.kind === "custom" ? "Enter a custom answer" : "Enter a value")}`,
+            width,
+          ),
+        );
       }
     }
 
-    const customRow = question.options.length;
-    if (this.#row === customRow) focusLine = lines.length;
-    lines.push(
-      fitLine(
-        `${this.#row === customRow ? role.accent("›") : " "} ${role.accent("Type something.")}`,
-        width,
-      ),
-    );
-    const draft = this.#custom[this.#tab];
-    const input = this.#customInputs[this.#tab]!;
-    input.focused = this.#row === customRow;
-    const inputLine = input.render(Math.max(1, width - 2))[0] ?? "";
-    input.focused = false;
-    if (draft !== undefined || this.#row === customRow) {
-      lines.push(fitLine(`  ${inputLine}`, width));
-    } else {
-      lines.push(fitLine(`  ${role.meta("Enter a custom answer")}`, width));
+    const error = this.#answerError(this.#tab);
+    if (error !== undefined) {
+      lines.push(fitLine(role.warning(error), width));
     }
-
     return { lines, focusLine };
   }
 
@@ -416,15 +885,21 @@ export class QuestionnaireOverlay implements PopupContent {
   #renderReview(width: number, viewportHeight: number): RenderedBody {
     const lines: string[] = ["", fitLine(role.strong("Review your answers"), width)];
     for (const [index, question] of this.questionnaire.questions.entries()) {
+      const error = this.#answerError(index);
       const answer = this.#answerFor(index);
       lines.push(
         fitLine(
-          answer === undefined
-            ? role.warning(`${question.header}: unanswered`)
-            : role.success(`${question.header}: ${answer}`),
+          error !== undefined
+            ? role.warning(`${question.header}: ${error}`)
+            : answer === undefined
+              ? role.warning(`${question.header}: unanswered`)
+              : role.success(`${question.header}: ${answer}`),
           width,
         ),
       );
+    }
+    if (this.#notice !== undefined) {
+      lines.push(fitLine(role.warning(this.#notice), width));
     }
     lines.push(
       "",
@@ -443,73 +918,219 @@ export class QuestionnaireOverlay implements PopupContent {
   }
 
   #focusedPreview(question: QuestionSpecification): string | undefined {
-    if (this.#row >= question.options.length) return undefined;
-    return question.options[this.#row]?.preview;
+    const row = rowsOf(question)[this.#row];
+    if (row === undefined || row.kind !== "option") return undefined;
+    return choiceOptions(question)[row.optionIndex]?.preview;
+  }
+
+  /**
+   * The concise reason this question's current draft is not submittable, or
+   * `undefined` when it is. An unanswered question is not an error: a partial
+   * questionnaire is a legal submission.
+   */
+  #answerError(index: number): string | undefined {
+    const question = this.questionnaire.questions[index]!;
+    const answer = question.answer;
+    const draft = this.#draft[index];
+    if (answer.type === "text") {
+      // An uncommitted field is simply unanswered, which is legal. A committed
+      // one is validated as it stands — including the empty string, which a
+      // positive `min_length` must still refuse.
+      if (!this.#committed[index]) return undefined;
+      return scalarValidationError(answer, draft ?? "");
+    }
+    if (answer.type === "number" || answer.type === "integer") {
+      // There is no empty number: an empty draft is an unanswered question.
+      if (draft === undefined || draft.length === 0) return undefined;
+      return scalarValidationError(answer, draft);
+    }
+    if (draft !== undefined && draft.length > 0) {
+      return [...draft].length > MAX_CUSTOM_ANSWER_CHARS
+        ? `Enter at most ${MAX_CUSTOM_ANSWER_CHARS} characters.`
+        : undefined;
+    }
+    if (answer.type === "multi_choice") {
+      const count = this.#selected[index]!.size;
+      if (count === 0 && !this.#touched[index]) return undefined;
+      if (count < answer.min_selected) {
+        return selectionBoundsLabel(answer.min_selected, answer.max_selected);
+      }
+      if (count > answer.max_selected) {
+        return selectionBoundsLabel(answer.min_selected, answer.max_selected);
+      }
+    }
+    return undefined;
   }
 
   #answerFor(index: number): string | undefined {
-    const custom = this.#custom[index];
-    if (custom !== undefined && custom.length > 0) return `custom: ${custom}`;
     const question = this.questionnaire.questions[index]!;
-    const labels = question.options
-      .filter((option) => this.#selected[index]!.has(option.label))
-      .map((option) => option.label);
-    return labels.length === 0 ? undefined : labels.join(", ");
+    const answer = question.answer;
+    const draft = this.#draft[index];
+    if (answer.type === "text") {
+      if (!this.#committed[index]) return undefined;
+      return draft === undefined || draft.length === 0 ? "(empty)" : draft;
+    }
+    if (answer.type === "number" || answer.type === "integer") {
+      return draft !== undefined && draft.length > 0 ? draft : undefined;
+    }
+    if (answer.type === "boolean") {
+      const value = this.#boolean[index];
+      return value === undefined ? undefined : value ? "Yes (true)" : "No (false)";
+    }
+    if (draft !== undefined && draft.length > 0) return `custom: ${draft}`;
+    const selected = this.#selected[index]!;
+    if (selected.size === 0) {
+      return answer.type === "multi_choice" && answer.min_selected === 0 &&
+          this.#touched[index]
+        ? "(none)"
+        : undefined;
+    }
+    return answer.options
+      .filter((_, optionIndex) => selected.has(optionIndex))
+      .map((option) => option.label)
+      .join(", ");
   }
 
   #hasAnswers(): boolean {
     return this.questionnaire.questions.some((_, index) => this.#answerFor(index) !== undefined);
   }
 
+  /** Submits, unless a draft is invalid — an invalid draft keeps the user here. */
+  #submit(): void {
+    const invalid = this.questionnaire.questions.findIndex(
+      (_, index) => this.#answerError(index) !== undefined,
+    );
+    if (invalid >= 0) {
+      this.#notice = `Correct ${this.questionnaire.questions[invalid]!.header} before submitting.`;
+      this.#tab = invalid;
+      this.#row = 0;
+      this.#changed();
+      return;
+    }
+    this.#notice = undefined;
+    this.#submitting = true;
+    this.#onSubmit(this.#submission());
+    this.#changed();
+  }
+
   #submission(): QuestionnaireResponse {
     const answers: QuestionnaireAnswerEntry[] = [];
     for (const [questionIndex, question] of this.questionnaire.questions.entries()) {
-      const custom = this.#custom[questionIndex];
-      let answer: QuestionnaireAnswer | undefined;
-      if (custom !== undefined && custom.length > 0) {
-        answer = { type: "custom", value: { answer: custom } };
-      } else {
-        const selected = question.options
-          .filter((option) => this.#selected[questionIndex]!.has(option.label))
-          .map((option) => option.label);
-        if (selected.length > 0) {
-          answer = question.multi_select
-            ? { type: "multiple_option", value: { selected } }
-            : { type: "single_option", value: { label: selected[0]! } };
-        }
-      }
+      const answer = this.#typedAnswer(questionIndex, question);
       if (answer !== undefined) answers.push({ question_index: questionIndex, answer });
     }
     return { type: "submitted", value: { answers } };
   }
 
-  #handleCustomInput(data: string): void {
+  #typedAnswer(
+    index: number,
+    question: QuestionSpecification,
+  ): QuestionnaireAnswer | undefined {
+    const answer = question.answer;
+    const draft = this.#draft[index];
+    const filled = draft !== undefined && draft.length > 0;
+    switch (answer.type) {
+      case "text":
+        // Presence, not length: a committed field answers, even with "".
+        return this.#committed[index]
+          ? { type: "text", value: { value: draft ?? "" } }
+          : undefined;
+      case "number": {
+        // The same reading that admitted the draft produces the value that
+        // crosses the wire, so the one lossy conversion is the one already
+        // proven faithful to the spelling the user typed. A draft that has no
+        // reading is left out rather than rounded into an answer — the submit
+        // gate refuses it first, and this cannot invent a value behind it.
+        if (!filled) return undefined;
+        const reading = readNumberDraft(draft);
+        // The accepted binary64 — not the human's spelling — is what crosses
+        // the wire, encoded through the one seam that preserves it exactly.
+        // `JSON.stringify` of the same `number` would print the shortest
+        // decimal that round-trips it, which is a different integer for a
+        // value like `2^63` and is the failure this encoding exists to close.
+        return reading.kind === "value"
+          ? { type: "number", value: { value: finiteNumberToWire(reading.value) } }
+          : undefined;
+      }
+      case "integer":
+        // The user's own digits cross the wire. Converting to a JavaScript
+        // number here would round every answer above 2^53 before the runtime
+        // ever performed its authoritative parse.
+        return filled ? { type: "integer", value: { value: draft.trim() } } : undefined;
+      case "boolean": {
+        const value = this.#boolean[index];
+        return value === undefined ? undefined : { type: "boolean", value: { value } };
+      }
+      default: {
+        // A custom answer exists only where the request allows one, so this
+        // branch cannot fabricate a response shape the runtime would refuse.
+        if (filled && allowsCustom(answer)) {
+          return { type: "custom", value: { answer: draft } };
+        }
+        const selected = [...this.#selected[index]!].sort((a, b) => a - b);
+        if (answer.type === "single_choice") {
+          return selected.length === 0
+            ? undefined
+            : { type: "option", value: { option_index: selected[0]! } };
+        }
+        if (selected.length === 0 && !(answer.min_selected === 0 && this.#touched[index])) {
+          return undefined;
+        }
+        return { type: "options", value: { option_indices: selected } };
+      }
+    }
+  }
+
+  #handleDraftInput(data: string, custom: boolean): void {
     const index = this.#tab;
-    const input = this.#customInputs[index]!;
+    const input = this.#inputs[index]!;
     const before = input.getValue();
     input.handleInput(data);
     const value = input.getValue();
-    const bounded = scalarPrefix(value, MAX_CUSTOM_ANSWER_CHARS);
+    const bounded = scalarPrefix(
+      value,
+      custom ? MAX_CUSTOM_ANSWER_CHARS : MAX_TEXT_ANSWER_CHARS,
+    );
     if (bounded !== value) input.setValue(bounded);
     const next = bounded.length > 0 ? bounded : undefined;
-    if (next !== this.#custom[index]) {
-      this.#custom[index] = next;
-      if (next !== undefined) this.#selected[index]!.clear();
+    if (next !== this.#draft[index]) {
+      this.#draft[index] = next;
+      this.#touched[index] = true;
+      // Editing the field is an explicit answer, including editing it back to
+      // empty: the user who erased their draft answered with "".
+      this.#committed[index] = true;
+      if (next !== undefined && custom) this.#selected[index]!.clear();
     }
     // Cursor-only edits do not change the draft but still need a redraw.
     if (before !== input.getValue() || data.length > 0) this.#changed();
   }
 
-  #clearCustom(index: number): void {
-    this.#custom[index] = undefined;
-    this.#customInputs[index]!.setValue("");
+  #clearDraft(index: number): void {
+    this.#draft[index] = undefined;
+    this.#inputs[index]!.setValue("");
   }
 
-  #toggleOption(label: string): void {
+  /**
+   * Toggles one multi-choice option, refusing to select above the request's
+   * own `max_selected`. Preventing the obviously invalid selection is UX; the
+   * runtime enforces the same bound authoritatively.
+   */
+  #toggleOption(optionIndex: number): void {
+    const question = this.questionnaire.questions[this.#tab]!;
     const selected = this.#selected[this.#tab]!;
-    if (selected.has(label)) selected.delete(label);
-    else selected.add(label);
-    this.#clearCustom(this.#tab);
+    this.#touched[this.#tab] = true;
+    if (selected.has(optionIndex)) {
+      selected.delete(optionIndex);
+    } else {
+      const answer = question.answer;
+      if (answer.type === "multi_choice" && selected.size >= answer.max_selected) {
+        this.#notice = selectionBoundsLabel(answer.min_selected, answer.max_selected);
+        this.#changed();
+        return;
+      }
+      selected.add(optionIndex);
+    }
+    this.#clearDraft(this.#tab);
     this.#changed();
   }
 
@@ -526,7 +1147,7 @@ export class QuestionnaireOverlay implements PopupContent {
   #moveRow(delta: number): void {
     const max = this.#tab === this.questionnaire.questions.length
       ? 0
-      : this.questionnaire.questions[this.#tab]!.options.length;
+      : Math.max(0, rowsOf(this.questionnaire.questions[this.#tab]!).length - 1);
     const next = Math.max(0, Math.min(max, this.#row + delta));
     if (next === this.#row) return;
     this.#row = next;
@@ -554,6 +1175,55 @@ export class QuestionnaireOverlay implements PopupContent {
   #changed(): void {
     this.#onChange?.();
   }
+}
+
+function scalarPrompt(answer: AnswerSpecification): string {
+  switch (answer.type) {
+    case "number":
+      return "Enter a number.";
+    case "integer":
+      return "Enter a whole number.";
+    default:
+      return "Type your answer.";
+  }
+}
+
+/**
+ * The human-facing statement of a scalar question's declared bounds.
+ *
+ * Both scalar domains hand it decimal *text*: `Integer` bounds are already the
+ * canonical decimal the runtime published, and `Number` bounds have been
+ * decoded from their canonical binary64 spelling into the decimal a human
+ * reads. Neither domain's wire form is ever shown.
+ */
+function boundsSentence(
+  noun: string,
+  minimum: string | undefined,
+  maximum: string | undefined,
+): string | undefined {
+  if (minimum !== undefined && maximum !== undefined) {
+    return `${noun} between ${minimum} and ${maximum}`;
+  }
+  if (minimum !== undefined) return `${noun} at least ${minimum}`;
+  if (maximum !== undefined) return `${noun} at most ${maximum}`;
+  return undefined;
+}
+
+function textGuidance(
+  answer: Extract<AnswerSpecification, { type: "text" }>,
+): string | undefined {
+  const parts: string[] = [];
+  if (answer.min_length !== undefined && answer.max_length !== undefined) {
+    parts.push(`${answer.min_length}–${answer.max_length} characters`);
+  } else if (answer.min_length !== undefined) {
+    parts.push(`at least ${answer.min_length} characters`);
+  } else if (answer.max_length !== undefined) {
+    parts.push(`at most ${answer.max_length} characters`);
+  }
+  if (answer.format === "date") parts.push("as YYYY-MM-DD");
+  if (answer.format === "date_time") parts.push("as an RFC 3339 date-time");
+  if (answer.format === "uri") parts.push("as an absolute URI");
+  return parts.length === 0 ? undefined : `Text ${parts.join(", ")}`;
 }
 
 function scalarPrefix(value: string, maximum: number): string {

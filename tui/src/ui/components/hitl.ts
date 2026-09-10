@@ -78,7 +78,7 @@ import {
 import { hardWrapLossless } from "../text-wrap.ts";
 import { role, style } from "../theme.ts";
 import { windowAroundSelected, type PopupContent } from "./popup-frame.ts";
-import { QuestionnaireOverlay } from "./questionnaire.ts";
+import { QuestionnaireOverlay, requesterName } from "./questionnaire.ts";
 import {
   clipText,
   formatJson,
@@ -386,7 +386,7 @@ export class HumanInteractionOverlay implements PopupContent {
       kind.type === "approval"
         ? `Approval · ${kind.tool_name}`
         : kind.type === "review" ? `Review · ${kind.review.instance.node}`
-        : `Question · ${kind.questionnaire.questions[0]?.header ?? "questionnaire"}`;
+        : `Question · ${requesterName(kind.requester)} · ${kind.questionnaire.questions[0]?.header ?? "questionnaire"}`;
     const marker = focused ? role.accent("›") : " ";
     return `${marker} ${role.accent(`[${source}]`)} ${clipText(summary, HEADER_BUDGET.maxChars)}`;
   }
@@ -645,6 +645,7 @@ export class HumanInteractionOverlay implements PopupContent {
     const panel = new QuestionnaireOverlay({
       interactionId: interactionRefLabel(ref),
       questionnaire: routed.request.kind.questionnaire,
+      requester: routed.request.kind.requester,
       sourceLabel:
         routed.source.type === "primary"
           ? undefined

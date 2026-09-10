@@ -34,10 +34,11 @@ import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 
 import { ChildRuntimeProcess } from "../src/runtime/child-process.ts";
-import { RuntimeClientConnection } from "../src/runtime/connection.ts";
+import { RuntimeClientConnection, RuntimeRequestError } from "../src/runtime/connection.ts";
 import { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
 import { CommandDispatcher } from "../src/commands/dispatcher.ts";
-import { QuestionnaireOverlay } from "../src/ui/components/questionnaire.ts";
+import { QuestionnaireOverlay, readNumberDraft } from "../src/ui/components/questionnaire.ts";
+import { finiteNumberToWire } from "../src/protocol/number.ts";
 import type { RuntimeClientProtocolEvent } from "../src/protocol/types.ts";
 import { ProviderEmulator } from "./support/provider-emulator.ts";
 import { TempFixture } from "./support/temp-fixture.ts";
@@ -766,11 +767,16 @@ describe("real rustx structured ask_user questionnaire", { skip: SKIP }, () => {
     assert.equal(pending.request.kind.type, "questionnaire");
     if (pending.request.kind.type !== "questionnaire") throw new Error("not a questionnaire");
     assert.equal(pending.request.kind.questionnaire.questions.length, 2);
-    assert.equal(pending.request.kind.questionnaire.questions[1]?.multi_select, true);
     assert.equal(
-      pending.request.kind.questionnaire.questions[0]?.options[0]?.label,
-      "Swiss / Klein blue",
+      pending.request.kind.questionnaire.questions[1]?.answer.type,
+      "multi_choice",
     );
+    const firstAnswer = pending.request.kind.questionnaire.questions[0]?.answer;
+    assert.equal(firstAnswer?.type, "single_choice");
+    if (firstAnswer?.type !== "single_choice") throw new Error("not a single choice");
+    assert.equal(firstAnswer.options[0]?.label, "Swiss / Klein blue");
+    // A native `ask_user` prompt is never labelled as MCP.
+    assert.equal(pending.request.kind.requester.origin, "builtin");
 
     // The authoritative snapshot reconstructs the same request facts; no
     // client-side draft or echoed prose is needed to restore the overlay.
@@ -792,6 +798,7 @@ describe("real rustx structured ask_user questionnaire", { skip: SKIP }, () => {
     const overlay = new QuestionnaireOverlay({
       interactionId: `${reconstructed.interaction.conversation_id}::${reconstructed.interaction.interaction_id}`,
       questionnaire: reconstructed.request.kind.questionnaire,
+      requester: reconstructed.request.kind.requester,
       onSubmit: (response) => {
         submitted = response;
       },
@@ -813,10 +820,7 @@ describe("real rustx structured ask_user questionnaire", { skip: SKIP }, () => {
         answers: [
           {
             question_index: 0,
-            answer: {
-              type: "single_option",
-              value: { label: "Swiss / Klein blue" },
-            },
+            answer: { type: "option", value: { option_index: 0 } },
           },
         ],
       },
@@ -853,6 +857,62 @@ describe("real rustx structured ask_user questionnaire", { skip: SKIP }, () => {
     // the model's next turn with rustX's canonical structured result.
     const requests = await harness.provider.requests();
     assert.equal(requests.length, 2);
+  });
+
+  /**
+   * The `Number` wire, across two real processes.
+   *
+   * The shared fixtures prove the byte contract deterministically; this proves
+   * that the shipped `rustx` binary really decodes those bytes off its own
+   * stdio transport. `2^63` is the value that matters: it is an exact
+   * binary64, but `JSON.stringify(2 ** 63)` prints `9223372036854776000`, a
+   * different mathematical integer, so a raw JSON number could not carry it.
+   *
+   * The interaction is deliberately unknown to the runtime, because the
+   * *decode* is the subject. A record the runtime cannot deserialize is a
+   * malformed record, which is transport-fatal: the connection would close and
+   * this request would reject with a transport failure rather than with the
+   * semantic `interaction_not_pending`. Receiving the semantic error is
+   * therefore proof that `FiniteNumber` was reconstructed from the bytes the
+   * TypeScript client actually wrote.
+   */
+  it("carries an exact 2^63 Number answer into the real runtime's decoder", async () => {
+    assert.ok(harness);
+    const { child, session } = harness;
+
+    const draft = "9223372036854775808";
+    const reading = readNumberDraft(draft);
+    assert.deepEqual(reading, { kind: "value", value: 2 ** 63 });
+    const wire = finiteNumberToWire(reading.kind === "value" ? reading.value : Number.NaN);
+    assert.equal(wire, "43e0000000000000");
+    assert.notEqual(JSON.stringify(2 ** 63), draft);
+
+    const stale = { conversation_id: "no-such-conversation", interaction_id: "no-such-interaction" };
+    await assert.rejects(
+      session.respondInteraction(stale, {
+        type: "questionnaire",
+        response: {
+          type: "submitted",
+          value: {
+            answers: [
+              { question_index: 0, answer: { type: "number", value: { value: wire } } },
+            ],
+          },
+        },
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof RuntimeRequestError, String(error));
+        assert.equal(
+          error.error.type,
+          "interaction_not_pending",
+          "a decode failure would have closed the transport instead",
+        );
+        return true;
+      },
+    );
+
+    // The connection survived, so nothing about the record was malformed.
+    assert.equal(session.state?.pendingInteractions.length, 0);
     child.closeStdin();
   });
 });

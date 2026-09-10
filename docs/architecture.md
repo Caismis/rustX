@@ -51,7 +51,13 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 30. Version 30 adds concrete Loop
+The SQLite schema is development schema version 31. Version 31 freezes Issue
+#242's provider-independent typed Questionnaire interaction audit: a requested
+subject carries canonical requester identity and a typed `AnswerSpecification`
+per question, and a settled submission carries typed scalar answers addressing
+choices by option index rather than by authored label. A version-30 journal can
+hold the obsolete choice-only payload, so it is refused at store open rather
+than decoded under the new vocabulary. Version 30 adds concrete Loop
 iteration admission/settlement and satisfied/exhausted exit facts. Existing
 Runtime Client 21 and child IPC 19 identity vectors represent nested iterations.
 Version 29 adds native Review
@@ -501,16 +507,232 @@ values, descriptions to 1024, previews to 8192, and custom answers to 4096:
 }
 ```
 
-Custom text is always available as a client-owned row; the model never sends
-`allow_free_text` and never authors an `Other` sentinel. Related blocking
+Custom text is always available as a client-owned row **for `ask_user`**,
+because every question it authors declares `allow_custom` (see the typed
+vocabulary below); the model never sends `allow_free_text` and never authors an
+`Other` sentinel. Related blocking
 questions belong in one call. A client response carries only question indices
-and typed option/custom decisions. Submitted answers may be partial; accepted
-answers are normalized into question order and authored option order. Previews
-are rendered for single-select questions. With no interaction-capable client,
+and typed decisions. Submitted answers may be partial; accepted answers are
+normalized into question order and canonical option order. Previews are
+rendered for single-select questions. With no interaction-capable client,
 `ask_user` returns an explicit failed ToolResult. A user decline is a successful
 result `{ "cancelled": true, "answers": [] }`, while attempt cancellation
 remains `ToolExecutionStatus::Cancelled`; neither response can replace the
 original Tool arguments.
+
+##### The typed question vocabulary (Issue #242)
+
+Those model-facing arguments are **`ask_user`'s** authoring surface, not the
+interaction contract. The runtime-owned contract is a small, finite,
+provider-independent vocabulary in which every question declares the exact
+shape of a legal answer, and `ask_user` is one point in it:
+
+```text
+QuestionSpecification { question, header, answer }
+                                           |
+       +----------+----------+-------------+-----------+--------------+
+       |          |          |             |           |              |
+     Text      Number     Integer       Boolean   SingleChoice   MultiChoice
+   bounded    bounded     bounded        true/     options +      options +
+   length,    range       range          false     allow_custom   bounds +
+   format                                                        allow_custom
+
+native ask_user, multi_select: false -> SingleChoice { options,
+                                          allow_custom: true }
+native ask_user, multi_select: true  -> MultiChoice  { options,
+                                          1..=options.len(),
+                                          allow_custom: true }
+```
+
+Two properties follow, and both are load-bearing:
+
+- **the request declares the legal answer shape.** A Runtime Client never has
+  to guess which answers are legal, and a free-text row exists only where a
+  question sets `allow_custom`. A bounded MCP `enum` sets it to `false`, so
+  the client offers no custom row and the protocol cannot express one — the
+  old "type a custom answer to an enum and the whole tool call fails" outcome
+  is gone by construction rather than by a special case.
+- **response validation derives from those immutable request facts**, in
+  `events::interaction`, which is the one authority the live coordinator, the
+  durable store, and every producer share. A Runtime Client may reject
+  obviously invalid input earlier for the user's benefit, but client-side
+  validation is UX and runtime-side validation is authoritative. An invalid
+  answer is refused while the interaction stays pending; it never fails the
+  enclosing tool invocation.
+
+###### The scalar domains
+
+Each scalar shape names exactly **one** domain, and that same domain is used by
+the request bound, the Runtime Client wire, the authoritative comparison, and
+the value finally emitted to a provider. No stage widens or narrows, so there
+is nowhere for a validated value and an emitted value to disagree.
+
+**`Number` — the finite IEEE-754 binary64 (`FiniteNumber`), canonical binary64
+text on the wire.**
+
+MCP types an elicitation `number` bound as a binary64: rmcp's
+`NumberSchema::minimum` and `maximum` are `Option<f64>`. A JavaScript `number`
+is a binary64 too. Binary64 is therefore not a convenience — it is the widest
+value every stage can hold without rounding, which is what makes it the one
+domain all of them can share:
+
+```text
+MCP NumberSchema bound (f64)
+  -> NumberAnswerSpecification bound (FiniteNumber)
+  -> Runtime Client wire              "43e0000000000000"   (canonical binary64 text)
+  -> client `number`, reconstructed exactly                (binary64)
+  -> NumberAnswer value              (FiniteNumber)
+  -> authoritative range comparison  (FiniteNumber)
+  -> MCP accept.content JSON number  (the same FiniteNumber)
+```
+
+Three things are kept strictly apart, and conflating any two of them is the
+whole failure class:
+
+```text
+human decimal spelling      client-local presentation ("1.5e3")
+  -> finite binary64        the semantic value        (1500.0)
+  -> canonical wire text    an exact encoding of the *value*
+```
+
+The wire carries the **value**, never the spelling. The protocol does not
+preserve `1.5e3`, because lexical spelling is client-local presentation state;
+it preserves the exact binary64 the client selected.
+
+*Why the wire is not a JSON number.* A JSON number cannot carry binary64
+identity across this protocol, because a JavaScript client serializes a
+`number` through `JSON.stringify`, which prints the shortest decimal that
+*round-trips* — not the exact value it denotes. The exact binary64 `2^63` is
+the mathematical integer `9223372036854775808`, and `JSON.stringify` emits
+`9223372036854776000`. Those are different integers. They happen to parse back
+to the same binary64, but a reader that treats a JSON integer as an exact
+decimal integer — which it must, to refuse a decimal binary64 cannot hold — has
+to reject the second, and a question whose only legal answer is `2^63` becomes
+publishable and unanswerable. **Binary64 identity must therefore not depend on
+any language's decimal rendering of a `number`.**
+
+*The canonical wire form.* A `FiniteNumber` crosses the Runtime Client protocol
+— and is stored in the Event Journal — as its IEEE-754 bit pattern written as
+exactly 16 lowercase hexadecimal digits, most significant first:
+
+```text
+2^63   -> "43e0000000000000"
+-2^63  -> "c3e0000000000000"
+0.1    -> "3fb999999999999a"
+```
+
+It is **exact** (the value's own bits, so `decode(encode(x)) == x` for every
+finite binary64, with no decimal parser in the trust path); **canonical** (one
+value has one spelling, byte for byte, in both languages — a shortest
+round-tripping *decimal* is deterministic within one language but Rust and
+JavaScript do not format it identically, so it could not carry the one-settled-
+spelling property `ExactInteger` already holds rustX to); **bounded** (always
+16 bytes, with no 700-digit subnormal expansion and no locale, grouping, or
+exponent-notation variation); and **closed over the domain** — the wire
+alphabet *is* the domain, so a decimal binary64 cannot hold, `9007199254740993`,
+has no wire representation at all rather than one the runtime must detect and
+refuse. `FiniteNumber::from_wire` is the one authoritative parse, and
+`tui/src/protocol/number.ts` is the client's single conversion seam; every
+bound and every answer on both sides goes through them.
+
+The representation is internal to the Runtime Client protocol and the durable
+audit. A human never sees it — the TUI reads a decimal draft, validates it with
+`readNumberDraft`, and renders bounds as ordinary decimals — and an MCP server
+never sees it either: `accept.content` carries the ordinary JSON number built
+from the same bits.
+
+*Admissibility is the client's statement, not its authority.* A whole decimal
+binary64 cannot hold is refused by `readNumberDraft` before any bound is
+consulted, on the *spelling* rather than on the rounded value:
+`9007199254740993`, `9007199254740993.0` and `9.007199254740993e15` all denote
+one refused integer, and `Number(...)` collapses all three onto `2^53` before
+anything could tell them apart. That refusal is a statement of the domain for
+the human's benefit. The enforcement is structural: such a value has no
+canonical wire spelling to arrive in, so it can never reach the runtime's range
+check at all — which is stronger than detecting it there.
+
+*Negative zero.* rustX **canonicalizes** `-0.0` to `+0.0`. IEEE-754 gives the
+two distinct bit patterns, but every comparison the domain takes part in — Rust
+`Eq`, `PartialOrd`, and the authoritative range check — already treats them as
+one value, so admitting two bit patterns would give one semantic value two
+canonical wire spellings. The normalization happens at construction, in
+`FiniteNumber::try_new` and in `finiteNumberToWire`, so no `-0.0` ever exists to
+be serialized, and `"8000000000000000"` is refused on the wire as a
+non-canonical spelling of `0.0` exactly as `ExactInteger` would refuse `"-0"`.
+NaN and infinity are unrepresentable by construction rather than merely
+rejected, which is what makes `Eq` sound: every value the domain holds is
+reflexive.
+
+**`Integer` — the exact `i64` (`ExactInteger`), decimal text on the wire.**
+
+MCP types an elicitation `integer` bound as an `i64`: rmcp's
+`IntegerSchema::minimum` and `maximum` are `Option<i64>`. So `i64` is exactly
+the domain the protocol hands rustX, and no MCP integer schema can name a bound
+outside it — refusing an out-of-domain integer schema is vacuous here by
+construction, not missing.
+
+The stage that *cannot* hold that domain is the Runtime Client protocol, whose
+JavaScript `number` is a binary64 and loses whole numbers above `2^53`. A
+question bounded to `9007199254740992..=9007199254740993` would then be
+publishable by the runtime and unanswerable by any client — a published
+question with no faithful response representation, which the typed interaction
+contract forbids. So the value crosses the wire as canonical decimal **text**
+and is parsed back exactly once, by the runtime:
+
+```text
+MCP IntegerSchema bound (i64)
+  -> IntegerAnswerSpecification bound (ExactInteger)  "9007199254740993"
+  -> Runtime Client JSON string                       "9007199254740993"
+  -> TUI draft, edited as decimal text                 9007199254740993
+  -> ExactInteger::parse — the one authoritative parse (i64)
+  -> authoritative range comparison                    (i64)
+  -> MCP accept.content JSON integer                   9007199254740993
+```
+
+`ExactInteger::parse` accepts an optional `-` followed by ASCII digits and
+nothing else: `1.5`, `1e3`, `+1`, `-`, `NaN`, `Infinity`, and `12abc` are all
+refused, as is any value outside `i64`. A settled value re-serializes from its
+`i64`, so one value always has exactly one canonical spelling. The TUI compares
+drafts with `BigInt`; it never uses `Number` or `Number.isSafeInteger` as the
+semantic representation of an integer, because doing so would round away the
+very values this representation exists to preserve.
+
+**`Text` — an omitted answer and an explicit `Text("")` are different facts.**
+
+A submission may leave a question unanswered; that is not the same as answering
+it with the empty string. For a required MCP string property with
+`minLength: 0`:
+
+```text
+explicit Text("")  -> { "action": "accept", "content": { "field": "" } }
+omitted            -> { "action": "decline" }   (a required property is missing)
+```
+
+The empty string is legal whenever the question declares no `min_length` or a
+`min_length` of `0`, and a positive `min_length` refuses it exactly as it
+refuses any short answer. A client must therefore track answer **presence**
+separately from draft length: the TUI carries an explicit per-question
+committed bit, set by editing the field — typing a character and erasing it is
+an explicit empty answer — or by pressing Enter on it, which commits the draft
+as it stands. An untouched field is never committed, so a blank questionnaire
+still submits nothing.
+
+A response addresses a choice by its **zero-based option index**, never by its
+display label. A label is presentation: it can repeat, collide with a
+client-reserved row, or be forged, and none of that can change which value the
+runtime settles on. (Two options a *human* could not tell apart are still
+refused deterministically, because that ambiguity is real even when the wire
+is not.)
+
+Every Questionnaire also carries an `InteractionRequester` — the
+registry-resolved `{ tool_id, tool_name, origin }` of the tool that asked. It
+is canonical, provider-independent identity, never a display string and never
+an MCP SDK value, and it flows unchanged through the live request, the Event
+Journal subject, the Runtime Client projection, and the TUI. It is
+deliberately orthogonal to `InteractionSource`: *where* an interaction came
+from (primary or subagent) and *who* asked (a native tool, or an MCP server
+named by `ToolOrigin::Mcp`) are two independent facts and are never collapsed
+into one field.
 
 The runtime control plane exposes `effective_approval_mode` and a pending
 desired mode. A busy attempt freezes the effective mode it admitted; later
@@ -4011,6 +4233,199 @@ generic MCP connect + `tools/list` that follows preparation is the server
 validation, and the candidate-generation machinery guarantees a failure
 leaves the previously committed generation intact.
 
+#### MCP multi-round-trip tool calls (Issue #242)
+
+MCP `2026-07-28` (SEP-2322) allows a server to answer `tools/call` with an
+`InputRequiredResult` instead of a `CallToolResult`. rustX adopts the subset
+that maps cleanly onto its existing human-interaction ownership —
+**Elicitation** — and treats that answer as an intermediate state of the
+already-admitted invocation:
+
+```text
+model ToolCall A
+    |
+    v
+rustX ToolInvocation A ──── approval evaluated once, before ToolExecutor::start
+    |
+    +--> tools/call round 1 --------------------------+
+    |        |                                        |
+    |        +--> CallToolResult -------------------->-+---> exactly one
+    |        |                                        |      terminal
+    |        +--> InputRequiredResult                 |      ToolExecutionResult
+    |                 |                               |
+    |                 v                               |
+    |        one runtime-owned Questionnaire          |
+    |        (the same InteractionCoordinator that    |
+    |         serves native ask_user)                 |
+    |                 |                               |
+    +--> tools/call round N+1 ----------------------->+
+```
+
+The whole loop lives inside the single operation future of
+`ToolExecutionHandle::settled_by_operation`, on the one connection generation
+resolved before the first round. So one model `ToolCall` remains one
+`ToolExecutor::start`, one `ToolInvocationId`, one `ToolExecutionId` (when
+detached), one server binding, one execution lease, one remote tool name, one
+set of business arguments, one progress stream, and one terminal result — and
+the Agent Loop, the background registry, and the provider adapters see nothing
+new. `src/tools/mcp/mrtr.rs` owns protocol translation only; the round driver
+composes the existing dispatch frontier, cancellation arbitration, progress
+ownership, local release proof, and protocol poisoning rather than replacing
+any of them.
+
+**Interaction authority is one narrow crate-private seam, now shared.** The
+MCP adapter is rustX-owned code and consumes the same
+`QuestionnaireRequester` that native `ask_user` does:
+
+```text
+                InteractionCoordinator        (the only human-interaction owner)
+                        ^
+                        |
+              QuestionnaireRequester          (crate-private, attempt-bound,
+                   |          |                publish-and-await only)
+              ask_user     MCP MRTR
+```
+
+It carries the attempt identity, a read-only cancellation view, and the
+conversation-owned coordinator, and can do exactly one thing: publish one
+bounded Questionnaire and await its typed response. It cannot trigger
+cancellation, run a model, settle Approval, mutate canonical history, or
+create any other kind of interaction. `ToolExecutionContext` still exposes no
+generic interaction capability, so an externally registered `ToolExecutor`
+cannot acquire one.
+
+**The capability is advertised per request, because that is the granularity
+of the authority.** rmcp populates `_meta` client capabilities (SEP-2575) on
+every request of a `2026-07-28` connection, so rustX declares
+`elicitation { form }` on a `tools/call` exactly when that invocation holds
+the Questionnaire capability — foreground Agent Loop dispatch and Workflow
+native invocation do; a detached background execution does not. The
+connection handshake itself is untouched (`ClientCapabilities::default()` on
+both the legacy `initialize` path and the inline `server/discover` probe), so
+rustX never claims the legacy server-initiated `elicitation/create` callback
+it does not implement, and legacy connections see no request `_meta`
+capabilities at all.
+
+That is also the honest answer for background work. rustX has no background
+human-interaction domain: `ask_user` is foreground-only and an interaction is
+owned by a live attempt, whose identity a detached execution does not have.
+Rather than invent a background waiter, attribute an interaction to an
+already-terminal attempt, or widen the interaction protocol for a domain that
+does not exist, a background MCP invocation tells the server the truth and
+refuses an `input_required` answer with a bounded diagnostic — under its own
+`ToolExecutionId`, with exactly one settlement. Background MCP execution
+itself is unchanged; only server-driven elicitation inside it is refused.
+
+**Sampling and Roots are refused, not implemented.** A `sampling/createMessage`
+input request would make an MCP server an initiator of rustX model execution;
+a `roots/list` input request would expose host authority through a deprecated
+surface that duplicates rustX's Workspace ownership. Both produce a bounded
+unsupported-feature diagnostic, with no model call and no workspace
+disclosure. A round mixing supported and unsupported requests fails as a
+whole, before any prompt is published.
+
+**The Elicitation form maps onto the typed question vocabulary, constraint by
+constraint.** One MCP property becomes one rustX question, and the core
+invariant of `src/tools/mcp/mrtr.rs` is:
+
+> rustX never emits an MCP `accept` whose `content` has not been validated
+> against every constraint of the original requested schema that rustX claims
+> to support — and it never claims to support a schema shape whose
+> constraints it would then discard.
+
+So every supported field of every rmcp schema type is either **preserved and
+validated**, or its presence **refuses that schema instance**:
+
+```text
+StringSchema   title -> question header, description -> prompt,
+               minLength / maxLength     -> Text { min_length, max_length }
+               format date|date-time|uri -> Text { format }        validated
+               format email              -> REFUSED (no faithful validator)
+NumberSchema   minimum / maximum (f64)  -> Number { minimum, maximum }
+                                          finite binary64, the identity
+                                          translation
+IntegerSchema  minimum / maximum (i64)  -> Integer { minimum, maximum }
+                                          exact i64, the identity translation
+BooleanSchema  (no constraints)          -> Boolean
+enum single    enum | oneOf | enumNames  -> SingleChoice { options,
+                                              allow_custom: false }
+enum multi     enum | anyOf,
+               minItems / maxItems       -> MultiChoice { options,
+                                              min_selected, max_selected,
+                                              allow_custom: false }
+URL elicitation                          -> REFUSED (not a questionnaire)
+```
+
+`default` is deliberately **not** a constraint: it is an authoring hint, and
+rustX does not pre-fill an answer on a human's behalf, so ignoring it can
+never produce schema-invalid content. That decision is documented rather than
+silent. `maxLength` above rustX's own 4096-scalar answer bound is narrowed to
+that bound, which is strictly stricter than the server's constraint and
+therefore still schema-valid; a `minLength` above it is impossible to satisfy
+and refuses the schema.
+
+Because the bounds live in the **provider-independent** question
+specification, the authoritative validator is the shared one: a multi-select
+with `minItems: 2, maxItems: 2` rejects one and three selections and accepts
+two, and a fractional value is not even a spellable answer to an `integer`
+question. No response that violates a declared bound can reach an MCP
+continuation.
+
+Question order is `(input-request key, schema property order)`, both
+deterministic, and answers map back by server-assigned key rather than by
+position. A whole-questionnaire decline, or an unanswered required property,
+becomes the protocol's own `decline` action. Provider unavailability keeps the
+existing coordinator contract and is never reported as a human decline.
+
+Two failure classes stay strictly separate, which is what makes the human
+experience recoverable:
+
+```text
+the server requested a schema rustX cannot represent
+    -> deterministic unsupported-feature failure of the invocation
+a human typed something the declared answer shape refuses
+    -> the interaction response is refused, the interaction stays pending
+```
+
+**MCP-originated prompts name their server.** The Questionnaire's
+`InteractionRequester` is built from the registry-resolved invocation and this
+runtime's own `McpServerId`, so a Runtime Client renders
+`Requested by MCP server: <id>` / `Tool: <name>` from canonical facts. A
+native `ask_user` prompt carries `ToolOrigin::Builtin` and is never labelled
+as MCP. The routed source (primary or subagent) remains a separate field.
+
+**`requestState` stays protocol-owned.** It is retained on the executor's
+stack for the lifetime of the invocation, returned byte for byte on the next
+round, never parsed or re-encoded through a rustX schema, and dropped at
+terminal settlement. It never reaches canonical history, the model-issued
+`ToolCall` arguments, the Event Journal, or Goal/Workflow/Subagent durable
+state, and a process restart never resumes one. The Event Journal does record
+the ordinary requested/settled facts of any Questionnaire a round published —
+those are runtime execution facts, and they are audit evidence rather than
+continuation authority.
+
+**The bound is fixed and rustX-owned.** `MCP_MRTR_MAX_ROUNDS = 10` counts the
+initial call as round 1, matching the convention rmcp's own
+`DEFAULT_MRTR_MAX_ROUNDS` uses, and is checked the moment an intermediate
+result arrives — before translation and before publication — so a server that
+never terminates cannot even create pending interaction state on its way to
+being refused. Every payload is bounded too: at most four input requests per
+round, at most four derived questions (the shared `ask_user` bound), 8 KiB of
+`requestState`, 64 KiB of input requests, 16 KiB of `inputResponses`. There is
+no configuration switch and no generic limits framework.
+
+**Cancellation composes rather than competes.** The continuation dispatch
+frontier *is* the existing pre-dispatch cancellation checkpoint: observable
+cancellation there means no new round is dispatched, so a human response that
+lost the race can never create fresh remote ambiguity. Everything past the
+frontier keeps its existing meaning — a correlated remote response wins,
+everything else is `OutcomeUnknown`, local request ownership is terminated and
+proven released before anything is reported, and a poisoned generation stays
+poisoned. One case is new and is resolved in the same spirit: a correlated
+`InputRequiredResult` observed after cancellation intent has already won
+settles as a proven `Cancelled`, because that round's remote outcome *is*
+known and rustX will not start another.
+
 ### Layer 5: Skill plane
 
 #### Workspace-owned Agent resources (Issue #172)
@@ -4280,8 +4695,12 @@ is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
-The current Runtime Client protocol is version 23, adding distinct source
-activation/unprepared projections. Version 22 added the
+The current Runtime Client protocol is version 24, adding the typed question
+vocabulary, its canonical scalar domains — a finite-binary64 `Number` carried
+as canonical binary64 text and an `Integer` carried as canonical decimal text,
+neither of them as a JSON number a JavaScript client would re-spell — and
+canonical Questionnaire requester identity (Issue #242) on top of version 23, which added distinct
+source activation/unprepared projections. Version 22 added the
 [native Workflow projection and cursor handoff](workflow-run-projection.md).
 Version 21 adds Review and
 Questionnaire invocation correlation. Version 20 adds borrowed

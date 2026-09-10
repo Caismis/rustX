@@ -21,9 +21,10 @@ use rustx::durable::{
     SqliteConversationStore, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT, TranscriptCursor, TranscriptItem,
 };
 use rustx::events::interaction::{
-    InteractionSettlement, InteractionSubject, OptionSpecification, QuestionSpecification,
-    QuestionnaireAnswer, QuestionnaireAnswerEntry, QuestionnaireResponse,
-    QuestionnaireSpecification, QuestionnaireSubmission, SingleOptionAnswer,
+    AnswerSpecification, InteractionRequester, InteractionSettlement, InteractionSubject,
+    OptionAnswer, OptionSpecification, QuestionSpecification, QuestionnaireAnswer,
+    QuestionnaireAnswerEntry, QuestionnaireResponse, QuestionnaireSpecification,
+    QuestionnaireSubmission, SingleChoiceSpecification,
 };
 use rustx::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use rustx::local_runtime::composition::{
@@ -342,23 +343,30 @@ fn requested_interaction(interaction_id: &InteractionId) -> RuntimeEventEnvelope
                 invocation_id: rustx::tools::types::ToolInvocationId::Agent {
                     call_id: rustx::runtime::identity::ToolCallId::new("questionnaire-call"),
                 },
+                requester: InteractionRequester {
+                    tool_id: rustx::runtime::identity::ToolId::new("tool-ask-user"),
+                    tool_name: "ask_user".to_owned(),
+                    origin: rustx::tools::types::ToolOrigin::Builtin,
+                },
                 questionnaire: QuestionnaireSpecification {
                     questions: vec![QuestionSpecification {
                         question: "Which environment?".to_owned(),
                         header: "Environment".to_owned(),
-                        options: vec![
-                            OptionSpecification {
-                                label: "staging".to_owned(),
-                                description: "A safe test environment.".to_owned(),
-                                preview: None,
-                            },
-                            OptionSpecification {
-                                label: "production".to_owned(),
-                                description: "The live environment.".to_owned(),
-                                preview: None,
-                            },
-                        ],
-                        multi_select: false,
+                        answer: AnswerSpecification::SingleChoice(SingleChoiceSpecification {
+                            options: vec![
+                                OptionSpecification {
+                                    label: "staging".to_owned(),
+                                    description: "A safe test environment.".to_owned(),
+                                    preview: None,
+                                },
+                                OptionSpecification {
+                                    label: "production".to_owned(),
+                                    description: "The live environment.".to_owned(),
+                                    preview: None,
+                                },
+                            ],
+                            allow_custom: true,
+                        }),
                     }],
                 },
             },
@@ -376,9 +384,7 @@ fn settled_interaction(interaction_id: &InteractionId) -> RuntimeEventEnvelope {
                 submission: QuestionnaireSubmission {
                     answers: vec![QuestionnaireAnswerEntry {
                         question_index: 0,
-                        answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
-                            label: "staging".to_owned(),
-                        }),
+                        answer: QuestionnaireAnswer::Option(OptionAnswer { option_index: 0 }),
                     }],
                 },
             },
@@ -919,9 +925,7 @@ async fn requirement_11_interaction_audits_page_without_recovering_a_waiter() {
                     response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
                         answers: vec![QuestionnaireAnswerEntry {
                             question_index: 0,
-                            answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
-                                label: "staging".to_owned(),
-                            }),
+                            answer: QuestionnaireAnswer::Option(OptionAnswer { option_index: 0 }),
                         }],
                     }),
                 },

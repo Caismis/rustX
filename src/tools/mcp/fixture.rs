@@ -104,6 +104,76 @@ pub const RESULT_BLOCK_BYTES_ENV: &str = "RUSTX_M7_FIXTURE_RESULT_BLOCK_BYTES";
 /// deterministic for self-spawned stdio fixtures, whose server state lives
 /// in another process.
 pub const ECHO_CALL_COUNT_FILE_ENV: &str = "RUSTX_M7_FIXTURE_ECHO_CALL_COUNT_FILE";
+/// The environment variable publishing the SEP-2322 multi round-trip guard
+/// tools in the fixture catalog (self-spawned stdio fixtures).
+///
+/// They are opt-in so that every pre-existing fixture catalog assertion keeps
+/// its exact tool set.
+pub const MRTR_TOOLS_ENV: &str = "RUSTX_M7_FIXTURE_MRTR";
+/// The environment variable selecting how many `tools/call` rounds the MRTR
+/// guard tool [`MRTR_CONFIRM_TOOL`] performs before it returns its final
+/// result (self-spawned stdio fixtures). The default is two: one
+/// `input_required` round and one final round.
+pub const MRTR_ROUNDS_ENV: &str = "RUSTX_M7_FIXTURE_MRTR_ROUNDS";
+/// The environment variable naming the file every MRTR fixture round appends
+/// one JSON observation line to.
+///
+/// This is the cross-process MRTR wire seam: a self-spawned stdio fixture's
+/// server state lives in another process, so "what did round N actually
+/// receive" is asserted from this file. Each line records the tool name, the
+/// echoed `requestState`, the `inputResponses` map, and whether the request's
+/// own `_meta` advertised the client elicitation capability.
+pub const MRTR_OBSERVATION_FILE_ENV: &str = "RUSTX_M7_FIXTURE_MRTR_FILE";
+
+/// The MRTR guard tool: it asks for one bounded elicitation choice and then
+/// returns the chosen value as its final result.
+pub const MRTR_CONFIRM_TOOL: &str = "mrtr_confirm";
+/// The MRTR guard tool that asks two input requests in one round.
+pub const MRTR_MULTI_TOOL: &str = "mrtr_multi";
+/// The MRTR guard tool that returns a `requestState`-only round (the spec's
+/// load-shedding shape) before completing.
+pub const MRTR_STATE_ONLY_TOOL: &str = "mrtr_state_only";
+/// The MRTR guard tool that asks for MCP sampling, which rustX refuses.
+pub const MRTR_SAMPLING_TOOL: &str = "mrtr_sampling";
+/// The MRTR guard tool that asks for MCP roots, which rustX refuses.
+pub const MRTR_ROOTS_TOOL: &str = "mrtr_roots";
+/// The MRTR guard tool that mixes one supported and one unsupported request.
+pub const MRTR_MIXED_TOOL: &str = "mrtr_mixed";
+/// The MRTR guard tool whose `requestState` exceeds the rustX retention bound.
+pub const MRTR_OVERSIZED_STATE_TOOL: &str = "mrtr_oversized_state";
+/// The MRTR guard tool whose elicitation schema rustX cannot represent.
+///
+/// It asks for a `string` with `format: "email"`. The **type** is supported —
+/// free-form strings became a typed Text question in Issue #242 — but rustX
+/// has no deterministic, faithful email validator, so it refuses that schema
+/// form rather than accepting the field and silently discarding its
+/// constraint.
+pub const MRTR_UNSUPPORTED_SCHEMA_TOOL: &str = "mrtr_unsupported_schema";
+/// The MRTR guard tool that asks one **mixed typed form**: a bounded `enum`,
+/// a free-form `string`, an `integer`, and a `boolean` in one schema.
+pub const MRTR_TYPED_TOOL: &str = "mrtr_typed";
+/// The MRTR guard tool that asks for scalars at the exact-value frontier.
+///
+/// Its `integer` property's entire legal answer set lies **above** the
+/// JavaScript safe-integer range, and its `number` property's maximum is `2^53`
+/// itself. Together they are the end-to-end proof of the repaired scalar
+/// contract: a real MCP server declares these bounds, a real answer crosses
+/// the Runtime Client protocol, and the value the runtime validated is the
+/// value the server receives — unrounded.
+pub const MRTR_EXACT_SCALARS_TOOL: &str = "mrtr_exact_scalars";
+/// The MRTR guard tool that asks one multi-select `enum` with explicit
+/// `minItems`/`maxItems`.
+pub const MRTR_MULTI_SELECT_TOOL: &str = "mrtr_multi_select";
+/// The MRTR guard tool that emits one progress notification on every round
+/// before it asks or completes.
+pub const MRTR_PROGRESS_TOOL: &str = "mrtr_progress";
+/// The MRTR guard tool that parks server-side until its cancellation context
+/// fires, on its **continuation** round only.
+pub const MRTR_SLOW_CONTINUATION_TOOL: &str = "mrtr_slow_continuation";
+
+/// The bounded elicitation choices the MRTR fixture tools ask about.
+pub const MRTR_CHOICES: [&str; 2] = ["stable", "beta"];
+
 /// Parses a comma-separated protocol revision list.
 ///
 /// Every MCP revision string is accepted, including ones no SDK knows: that
@@ -149,6 +219,11 @@ impl FixtureServer {
                     .collect()
             }),
             echo_call_count_file: std::env::var_os(ECHO_CALL_COUNT_FILE_ENV).map(PathBuf::from),
+            mrtr_tools: std::env::var_os(MRTR_TOOLS_ENV).is_some(),
+            mrtr_rounds: std::env::var(MRTR_ROUNDS_ENV)
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok()),
+            mrtr_observation_file: std::env::var_os(MRTR_OBSERVATION_FILE_ENV).map(PathBuf::from),
             ..Self::default()
         }
     }
@@ -191,6 +266,11 @@ impl FixtureServer {
             tools.push(routed_tool_named(&self.tool_name(ROUTED_TOOL)));
             tools.push(self.fixture_tool_named(STRUCTURED_ARRAY_TOOL));
             tools.push(self.fixture_tool_named(STRUCTURED_SCALAR_TOOL));
+        }
+        if self.mrtr_tools {
+            for name in MRTR_TOOLS {
+                tools.push(self.fixture_tool_named(name));
+            }
         }
         tools
     }
@@ -283,6 +363,15 @@ pub struct FixtureServer {
     /// tools ([`STRUCTURED_SCALAR_TOOL`], [`STRUCTURED_ARRAY_TOOL`],
     /// [`ROUTED_TOOL`]).
     pub modern_conformance_tools: bool,
+    /// Whether the catalog additionally publishes the SEP-2322 multi
+    /// round-trip guard tools (Issue #242).
+    pub mrtr_tools: bool,
+    /// How many `tools/call` rounds [`MRTR_CONFIRM_TOOL`] performs before its
+    /// final result. `2` means one `input_required` round then one final
+    /// round; `1` would make it an ordinary single-round tool.
+    pub mrtr_rounds: Option<usize>,
+    /// When set, every MRTR round appends one JSON observation line here.
+    pub mrtr_observation_file: Option<PathBuf>,
 }
 
 /// The conformance tool whose result carries a **scalar** `structuredContent`.
@@ -349,6 +438,316 @@ impl ConformanceTools {
         }
         None
     }
+}
+
+/// Every SEP-2322 guard tool the fixture publishes when
+/// [`FixtureServer::mrtr_tools`] is set.
+pub const MRTR_TOOLS: [&str; 13] = [
+    MRTR_CONFIRM_TOOL,
+    MRTR_EXACT_SCALARS_TOOL,
+    MRTR_MIXED_TOOL,
+    MRTR_MULTI_SELECT_TOOL,
+    MRTR_MULTI_TOOL,
+    MRTR_OVERSIZED_STATE_TOOL,
+    MRTR_PROGRESS_TOOL,
+    MRTR_ROOTS_TOOL,
+    MRTR_SAMPLING_TOOL,
+    MRTR_SLOW_CONTINUATION_TOOL,
+    MRTR_STATE_ONLY_TOOL,
+    MRTR_TYPED_TOOL,
+    MRTR_UNSUPPORTED_SCHEMA_TOOL,
+];
+
+/// The prefixed names of one fixture's SEP-2322 guard tools.
+///
+/// These are **guard tools** in the modern MRTR sense, not imperative
+/// `elicitation/create` callers: a round returns an `InputRequiredResult` as
+/// its complete result, and the next round observes the client's
+/// `inputResponses` and echoed `requestState` in its own request params.
+struct MrtrTools {
+    confirm: String,
+    exact_scalars: String,
+    mixed: String,
+    multi_select: String,
+    multi: String,
+    typed: String,
+    oversized_state: String,
+    progress: String,
+    roots: String,
+    sampling: String,
+    slow_continuation: String,
+    state_only: String,
+    unsupported_schema: String,
+}
+
+impl MrtrTools {
+    fn of(fixture: &FixtureServer) -> Self {
+        Self {
+            confirm: fixture.tool_name(MRTR_CONFIRM_TOOL),
+            exact_scalars: fixture.tool_name(MRTR_EXACT_SCALARS_TOOL),
+            mixed: fixture.tool_name(MRTR_MIXED_TOOL),
+            multi_select: fixture.tool_name(MRTR_MULTI_SELECT_TOOL),
+            multi: fixture.tool_name(MRTR_MULTI_TOOL),
+            typed: fixture.tool_name(MRTR_TYPED_TOOL),
+            oversized_state: fixture.tool_name(MRTR_OVERSIZED_STATE_TOOL),
+            progress: fixture.tool_name(MRTR_PROGRESS_TOOL),
+            roots: fixture.tool_name(MRTR_ROOTS_TOOL),
+            sampling: fixture.tool_name(MRTR_SAMPLING_TOOL),
+            slow_continuation: fixture.tool_name(MRTR_SLOW_CONTINUATION_TOOL),
+            state_only: fixture.tool_name(MRTR_STATE_ONLY_TOOL),
+            unsupported_schema: fixture.tool_name(MRTR_UNSUPPORTED_SCHEMA_TOOL),
+        }
+    }
+
+    fn owns(&self, name: &str) -> bool {
+        [
+            &self.confirm,
+            &self.exact_scalars,
+            &self.mixed,
+            &self.multi_select,
+            &self.multi,
+            &self.typed,
+            &self.oversized_state,
+            &self.progress,
+            &self.roots,
+            &self.sampling,
+            &self.slow_continuation,
+            &self.state_only,
+            &self.unsupported_schema,
+        ]
+        .into_iter()
+        .any(|candidate| candidate == name)
+    }
+}
+
+/// One bounded single-select elicitation request over [`MRTR_CHOICES`].
+#[must_use]
+pub fn mrtr_choice_request(message: &str, property: &str) -> serde_json::Value {
+    serde_json::json!({
+        "method": "elicitation/create",
+        "params": {
+            "message": message,
+            "requestedSchema": {
+                "type": "object",
+                "properties": {property: {"type": "string", "enum": MRTR_CHOICES}},
+                "required": [property],
+            },
+        },
+    })
+}
+
+/// The bounded multi-select choices the MRTR fixture asks about.
+pub const MRTR_MULTI_SELECT_CHOICES: [&str; 3] = ["eu", "us", "ap"];
+
+/// One **mixed typed form**: a bounded `enum`, a free-form `string` with its
+/// own length bounds, an `integer` with a range, and a `boolean`.
+///
+/// This is the shape the repaired typed interaction vocabulary exists for: it
+/// becomes one questionnaire carrying one `SingleChoice`, one `Text`, one
+/// `Integer`, and one `Boolean` question.
+#[must_use]
+pub fn mrtr_typed_form_request(message: &str) -> serde_json::Value {
+    serde_json::json!({
+        "method": "elicitation/create",
+        "params": {
+            "message": message,
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "channel": {"type": "string", "enum": MRTR_CHOICES},
+                    "operator": {
+                        "type": "string",
+                        "title": "Operator",
+                        "description": "What is your GitHub username?",
+                        "minLength": 1,
+                        "maxLength": 39,
+                    },
+                    "attempts": {"type": "integer", "minimum": 1, "maximum": 5},
+                    "notify": {"type": "boolean"},
+                },
+                "required": ["channel", "operator", "attempts", "notify"],
+            },
+        },
+    })
+}
+
+/// The inclusive bounds of the exact-scalar form's `integer` property.
+///
+/// The whole interval sits above `2^53`, so **every** legal answer is a value
+/// a JavaScript `number` would round. A client that stored the draft as a
+/// number could not submit a single one of them faithfully.
+pub const MRTR_EXACT_LEDGER_RANGE: (i64, i64) = (9_007_199_254_740_992, i64::MAX);
+
+/// One form of scalars at the binary64 exact-value frontier.
+///
+/// The `ledger` integer's legal answers all lie above the JavaScript safe
+/// range, and the `amount` number's maximum is `2^53` — the largest whole
+/// number after which binary64 stops distinguishing consecutive integers.
+#[must_use]
+pub fn mrtr_exact_scalars_request(message: &str) -> serde_json::Value {
+    serde_json::json!({
+        "method": "elicitation/create",
+        "params": {
+            "message": message,
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "ledger": {
+                        "type": "integer",
+                        "title": "Ledger",
+                        "description": "Which ledger entry?",
+                        "minimum": MRTR_EXACT_LEDGER_RANGE.0,
+                        "maximum": MRTR_EXACT_LEDGER_RANGE.1,
+                    },
+                    "amount": {
+                        "type": "number",
+                        "title": "Amount",
+                        "minimum": -1.0e18,
+                        "maximum": 9_007_199_254_740_992.0,
+                    },
+                },
+                "required": ["ledger", "amount"],
+            },
+        },
+    })
+}
+
+/// One multi-select `enum` request with explicit `minItems`/`maxItems`.
+#[must_use]
+pub fn mrtr_multi_select_request(
+    message: &str,
+    min_items: u64,
+    max_items: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "method": "elicitation/create",
+        "params": {
+            "message": message,
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "regions": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": MRTR_MULTI_SELECT_CHOICES},
+                        "minItems": min_items,
+                        "maxItems": max_items,
+                    },
+                },
+                "required": ["regions"],
+            },
+        },
+    })
+}
+
+/// The MCP sampling request rustX must refuse without calling any model.
+#[must_use]
+pub fn mrtr_sampling_request() -> serde_json::Value {
+    serde_json::json!({
+        "method": "sampling/createMessage",
+        "params": {
+            "messages": [{"role": "user", "content": {"type": "text", "text": "capital?"}}],
+            "maxTokens": 64,
+        },
+    })
+}
+
+/// The MCP roots request rustX must refuse without disclosing any workspace.
+#[must_use]
+pub fn mrtr_roots_request() -> serde_json::Value {
+    serde_json::json!({"method": "roots/list"})
+}
+
+fn input_requests(
+    entries: serde_json::Value,
+) -> Result<rmcp::model::InputRequests, rmcp::ErrorData> {
+    serde_json::from_value(entries).map_err(|error| {
+        rmcp::ErrorData::internal_error(format!("invalid fixture input requests: {error}"), None)
+    })
+}
+
+/// The round number this call is: round 1 has no echoed state, and every
+/// later round carries the `rustx-fixture-round-<n>` state the fixture minted.
+fn fixture_round(request: &CallToolRequestParams) -> usize {
+    request
+        .request_state
+        .as_deref()
+        .and_then(|state| state.strip_prefix(FIXTURE_ROUND_STATE_PREFIX))
+        .and_then(|round| round.parse::<usize>().ok())
+        .map_or(1, |round| round + 1)
+}
+
+/// The prefix of the fixture's own opaque continuation state.
+///
+/// It is opaque **to the client**: rustX never parses it, and the fixture
+/// asserts it comes back byte-identical.
+pub const FIXTURE_ROUND_STATE_PREFIX: &str = "rustx-fixture-round-";
+
+/// The exact opaque state the fixture mints for round `round`.
+#[must_use]
+pub fn fixture_round_state(round: usize) -> String {
+    format!("{FIXTURE_ROUND_STATE_PREFIX}{round}")
+}
+
+/// One observation line appended by every MRTR fixture round.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct MrtrObservation {
+    /// The model-facing tool name the round called.
+    pub tool: String,
+    /// The 1-based round number, derived from the echoed state.
+    pub round: usize,
+    /// The exact `requestState` this round received, verbatim.
+    pub request_state: Option<String>,
+    /// The exact `inputResponses` map this round received.
+    pub input_responses: Option<serde_json::Value>,
+    /// Whether this request's own `_meta` advertised a client elicitation
+    /// capability (SEP-2575 per-request capabilities).
+    pub elicitation_advertised: bool,
+    /// The business arguments this round received, so a test can prove they
+    /// are unchanged across rounds.
+    pub arguments: serde_json::Value,
+}
+
+fn record_mrtr(
+    path: Option<&std::path::Path>,
+    observation: &MrtrObservation,
+) -> Result<(), rmcp::ErrorData> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| {
+            rmcp::ErrorData::internal_error(
+                format!("cannot record fixture MRTR round: {error}"),
+                None,
+            )
+        })?;
+    let line = serde_json::to_string(observation).map_err(|error| {
+        rmcp::ErrorData::internal_error(format!("cannot encode fixture MRTR round: {error}"), None)
+    })?;
+    writeln!(file, "{line}").map_err(|error| {
+        rmcp::ErrorData::internal_error(format!("cannot record fixture MRTR round: {error}"), None)
+    })
+}
+
+/// Reads back every observation one MRTR fixture run recorded.
+///
+/// # Panics
+///
+/// Panics when the observation file exists but contains a line the fixture
+/// did not write.
+#[must_use]
+pub fn mrtr_observations(path: &std::path::Path) -> Vec<MrtrObservation> {
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    contents
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("a fixture MRTR observation line"))
+        .collect()
 }
 
 /// The routing-conformance tool definition: one primitive argument carrying
@@ -515,6 +914,10 @@ impl ServerHandler for FixtureServer {
         Ok(())
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one fixture dispatch chain stays readable in one place"
+    )]
     fn call_tool(
         &self,
         request: CallToolRequestParams,
@@ -532,7 +935,20 @@ impl ServerHandler for FixtureServer {
         let mutate_name = self.tool_name("mutate");
         let slow_name = self.tool_name("slow");
         let conformance = ConformanceTools::of(self);
+        let mrtr = MrtrTools::of(self);
+        let mrtr_rounds = self.mrtr_rounds.unwrap_or(2).max(1);
+        let mrtr_observation_file = self.mrtr_observation_file.clone();
         async move {
+            if mrtr.owns(&request.name) {
+                return mrtr_call(
+                    &mrtr,
+                    &request,
+                    &context,
+                    mrtr_rounds,
+                    mrtr_observation_file.as_deref(),
+                )
+                .await;
+            }
             if let Some(result) = conformance.result(&request) {
                 return Ok(result.into());
             }
@@ -621,6 +1037,312 @@ impl ServerHandler for FixtureServer {
             }
         }
     }
+}
+
+/// The whole SEP-2322 guard-tool behaviour of the fixture (Issue #242).
+///
+/// Every branch is a complete `tools/call` leg: it either returns an
+/// `InputRequiredResult` (the ask) or a `CallToolResult` (the completion).
+/// Nothing here blocks on a server-initiated client request, which is exactly
+/// what distinguishes modern MRTR from the legacy `elicitation/create`
+/// callback model.
+#[allow(
+    clippy::too_many_lines,
+    reason = "the guard-tool family is one dispatch chain"
+)]
+async fn mrtr_call(
+    tools: &MrtrTools,
+    request: &CallToolRequestParams,
+    context: &RequestContext<RoleServer>,
+    rounds: usize,
+    observation_file: Option<&std::path::Path>,
+) -> Result<CallToolResponse, rmcp::ErrorData> {
+    let round = fixture_round(request);
+    let arguments = request
+        .arguments
+        .clone()
+        .map_or(serde_json::Value::Null, serde_json::Value::Object);
+    record_mrtr(
+        observation_file,
+        &MrtrObservation {
+            tool: request.name.to_string(),
+            round,
+            request_state: request.request_state.clone(),
+            input_responses: request
+                .input_responses
+                .as_ref()
+                .map(|responses| serde_json::to_value(responses).unwrap_or_default()),
+            elicitation_advertised: context
+                .meta
+                .client_capabilities()
+                .is_some_and(|capabilities| capabilities.elicitation.is_some()),
+            arguments: arguments.clone(),
+        },
+    )?;
+    let name = request.name.as_ref();
+    // The answer the client gave for `choice`, when this is a later round.
+    let answered = |key: &str, property: &str| -> Option<String> {
+        request
+            .input_responses
+            .as_ref()?
+            .get(key)?
+            .get("content")?
+            .get(property)?
+            .as_str()
+            .map(str::to_owned)
+    };
+    if name == tools.sampling {
+        return Ok(rmcp::model::InputRequiredResult::new(
+            Some(input_requests(
+                serde_json::json!({"ask": mrtr_sampling_request()}),
+            )?),
+            Some(fixture_round_state(round)),
+        )
+        .into());
+    }
+    if name == tools.roots {
+        return Ok(rmcp::model::InputRequiredResult::new(
+            Some(input_requests(
+                serde_json::json!({"ask": mrtr_roots_request()}),
+            )?),
+            Some(fixture_round_state(round)),
+        )
+        .into());
+    }
+    if name == tools.mixed {
+        return Ok(rmcp::model::InputRequiredResult::new(
+            Some(input_requests(serde_json::json!({
+                "supported": mrtr_choice_request("Which channel?", "channel"),
+                "unsupported": mrtr_sampling_request(),
+            }))?),
+            Some(fixture_round_state(round)),
+        )
+        .into());
+    }
+    if name == tools.unsupported_schema {
+        return Ok(rmcp::model::InputRequiredResult::new(
+            Some(input_requests(serde_json::json!({
+                "ask": {
+                    "method": "elicitation/create",
+                    "params": {
+                        "message": "Your contact address?",
+                        "requestedSchema": {
+                            "type": "object",
+                            // The type is supported; the `email` format is the
+                            // one constraint rustX cannot faithfully enforce,
+                            // so it refuses this schema instead of accepting
+                            // the field and dropping the constraint.
+                            "properties": {
+                                "contact": {"type": "string", "format": "email"},
+                            },
+                            "required": ["contact"],
+                        },
+                    },
+                },
+            }))?),
+            Some(fixture_round_state(round)),
+        )
+        .into());
+    }
+    if name == tools.typed {
+        if round == 1 {
+            return Ok(rmcp::model::InputRequiredResult::new(
+                Some(input_requests(serde_json::json!({
+                    "form": mrtr_typed_form_request("Configure the release"),
+                }))?),
+                Some(fixture_round_state(round)),
+            )
+            .into());
+        }
+        let accepted = request
+            .input_responses
+            .as_ref()
+            .and_then(|responses| responses.get("form"))
+            .and_then(|answer| answer.get("content"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        // The final result is the exact JSON the client sent, so a test can
+        // prove the types on the wire, not merely their rendered text.
+        return Ok(CallToolResult::success(vec![ContentBlock::text(
+            serde_json::to_string(&accepted).unwrap_or_default(),
+        )])
+        .into());
+    }
+    if name == tools.exact_scalars {
+        if round == 1 {
+            return Ok(rmcp::model::InputRequiredResult::new(
+                Some(input_requests(serde_json::json!({
+                    "scalars": mrtr_exact_scalars_request("Post the entry"),
+                }))?),
+                Some(fixture_round_state(round)),
+            )
+            .into());
+        }
+        let accepted = request
+            .input_responses
+            .as_ref()
+            .and_then(|responses| responses.get("scalars"))
+            .and_then(|answer| answer.get("content"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        // Echoed verbatim, so a test proves the exact values that crossed the
+        // wire rather than their rendered text.
+        return Ok(CallToolResult::success(vec![ContentBlock::text(
+            serde_json::to_string(&accepted).unwrap_or_default(),
+        )])
+        .into());
+    }
+    if name == tools.multi_select {
+        if round == 1 {
+            let min = arguments
+                .get("min_items")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(2);
+            let max = arguments
+                .get("max_items")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(2);
+            return Ok(rmcp::model::InputRequiredResult::new(
+                Some(input_requests(serde_json::json!({
+                    "regions": mrtr_multi_select_request("Which regions?", min, max),
+                }))?),
+                Some(fixture_round_state(round)),
+            )
+            .into());
+        }
+        let accepted = request
+            .input_responses
+            .as_ref()
+            .and_then(|responses| responses.get("regions"))
+            .and_then(|answer| answer.get("content"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        return Ok(CallToolResult::success(vec![ContentBlock::text(
+            serde_json::to_string(&accepted).unwrap_or_default(),
+        )])
+        .into());
+    }
+    if name == tools.oversized_state {
+        return Ok(rmcp::model::InputRequiredResult::new(
+            Some(input_requests(serde_json::json!({
+                "ask": mrtr_choice_request("Which channel?", "channel"),
+            }))?),
+            // Deliberately far above the rustX retention bound.
+            Some("s".repeat(64 * 1024)),
+        )
+        .into());
+    }
+    if name == tools.state_only {
+        if round < rounds {
+            // The spec's load-shedding shape: continuation state, no ask.
+            return Ok(
+                rmcp::model::InputRequiredResult::from_request_state(fixture_round_state(round))
+                    .into(),
+            );
+        }
+        return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+            "state-only rounds: {round}"
+        ))])
+        .into());
+    }
+    if name == tools.multi {
+        if round == 1 {
+            return Ok(rmcp::model::InputRequiredResult::new(
+                Some(input_requests(serde_json::json!({
+                    "first": mrtr_choice_request("Which channel?", "channel"),
+                    "second": mrtr_choice_request("Which fallback?", "fallback"),
+                }))?),
+                Some(fixture_round_state(round)),
+            )
+            .into());
+        }
+        let first = answered("first", "channel").unwrap_or_else(|| "<none>".to_owned());
+        let second = answered("second", "fallback").unwrap_or_else(|| "<none>".to_owned());
+        return Ok(
+            CallToolResult::success(vec![ContentBlock::text(format!("{first}+{second}"))]).into(),
+        );
+    }
+    if name == tools.progress {
+        if let Some(token) = context.meta.get_progress_token() {
+            context
+                .peer
+                .notify_progress(
+                    ProgressNotificationParam::new(
+                        token,
+                        f64::from(u32::try_from(round).unwrap_or(u32::MAX)),
+                    )
+                    .with_message(format!("round {round}")),
+                )
+                .await
+                .map_err(|error| {
+                    rmcp::ErrorData::internal_error(
+                        format!("cannot notify progress: {error}"),
+                        None,
+                    )
+                })?;
+        }
+        if round < rounds {
+            return Ok(rmcp::model::InputRequiredResult::new(
+                Some(input_requests(serde_json::json!({
+                    "ask": mrtr_choice_request(&format!("Round {round}: which channel?"), "channel"),
+                }))?),
+                Some(fixture_round_state(round)),
+            )
+            .into());
+        }
+        return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+            "progress rounds: {round}"
+        ))])
+        .into());
+    }
+    if name == tools.slow_continuation {
+        if round == 1 {
+            return Ok(rmcp::model::InputRequiredResult::new(
+                Some(input_requests(serde_json::json!({
+                    "ask": mrtr_choice_request("Which channel?", "channel"),
+                }))?),
+                Some(fixture_round_state(round)),
+            )
+            .into());
+        }
+        // The cross-process "the continuation round is executing" signal.
+        // rustX forwards genuine remote progress through the one generic
+        // progress seam, so a test observes this without polling and without
+        // a sleep.
+        if let Some(token) = context.meta.get_progress_token() {
+            context
+                .peer
+                .notify_progress(
+                    ProgressNotificationParam::new(token, 1.0).with_message("continuation started"),
+                )
+                .await
+                .map_err(|error| {
+                    rmcp::ErrorData::internal_error(
+                        format!("cannot notify continuation start: {error}"),
+                        None,
+                    )
+                })?;
+        }
+        context.ct.cancelled().await;
+        return Ok(
+            CallToolResult::success(vec![ContentBlock::text("continuation cancelled")]).into(),
+        );
+    }
+    // `tools.confirm`: the ordinary guard tool.
+    if round < rounds {
+        return Ok(rmcp::model::InputRequiredResult::new(
+            Some(input_requests(serde_json::json!({
+                "ask": mrtr_choice_request(&format!("Round {round}: which channel?"), "channel"),
+            }))?),
+            Some(fixture_round_state(round)),
+        )
+        .into());
+    }
+    let choice = answered("ask", "channel").unwrap_or_else(|| "<none>".to_owned());
+    Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+        "rounds={round} choice={choice}"
+    ))])
+    .into())
 }
 
 /// Builds one canonical fixture tool definition.

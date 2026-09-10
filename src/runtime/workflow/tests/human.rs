@@ -279,9 +279,7 @@ pub(super) fn answer(request: &InteractionRequest, affirmative: bool) -> Interac
                 QuestionnaireResponse::Submitted(QuestionnaireSubmission {
                     answers: vec![QuestionnaireAnswerEntry {
                         question_index: 0,
-                        answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
-                            label: "A".into(),
-                        }),
+                        answer: QuestionnaireAnswer::Option(OptionAnswer { option_index: 0 }),
                     }],
                 })
             } else {

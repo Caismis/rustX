@@ -487,7 +487,7 @@ describe("RustxTuiApp lifecycle", () => {
           value: {
             answers: [{
               question_index: 0,
-              answer: { type: "single_option", value: { label: "staging" } },
+              answer: { type: "option", value: { option_index: 0 } },
             }],
           },
         },
