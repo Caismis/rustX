@@ -215,6 +215,10 @@ fn read_facts(store: &SqliteConversationStore) -> std::io::Result<Facts> {
     let mut children = BTreeSet::new();
     let mut blockers = BTreeMap::new();
     let mut resources = BTreeSet::new();
+    // Retain immutable authority even after its blocker is disposed. Borrowing
+    // is a reference to this native fact, never a second disposal authority.
+    let mut workflow_owners = BTreeMap::new();
+    let mut borrowed_children = BTreeSet::new();
     let mut cursor = None;
     let through = store.event_high_watermark().map_err(invalid)?;
     while cursor.unwrap_or(0) < through {
@@ -238,6 +242,7 @@ fn read_facts(store: &SqliteConversationStore) -> std::io::Result<Facts> {
                     subagent_id,
                     child_conversation_id,
                     workspace,
+                    ownership,
                     ..
                 } => {
                     workspace.validate().map_err(invalid)?;
@@ -253,7 +258,19 @@ fn read_facts(store: &SqliteConversationStore) -> std::io::Result<Facts> {
                     if !resources.insert(key.clone()) {
                         return Err(invalid("duplicate resource ownership"));
                     }
-                    if workspace.is_isolated() {
+                    if let Some(run) = &workspace.borrowed_from {
+                        let mut physical_owner = workspace.clone();
+                        physical_owner.borrowed_from = None;
+                        if run.conversation_id != *store.conversation_id()
+                            || ownership != crate::events::types::SubagentOwnershipKind::Workflow
+                            || workflow_owners.get(run) != Some(&physical_owner)
+                        {
+                            return Err(invalid(
+                                "borrowed child workspace has no matching Workflow owner",
+                            ));
+                        }
+                        borrowed_children.insert(key);
+                    } else if workspace.is_isolated() {
                         blockers.insert(key, (workspace, WorkspaceBlockerState::Owned));
                     }
                 }
@@ -301,8 +318,8 @@ fn read_facts(store: &SqliteConversationStore) -> std::io::Result<Facts> {
                     ..
                 } => {
                     let key = format!("child:{subagent_id}");
-                    if !resources.contains(&key) {
-                        return Err(invalid("disposal without ownership"));
+                    if !resources.contains(&key) || borrowed_children.contains(&key) {
+                        return Err(invalid("disposal without independent child ownership"));
                     }
                     match settlement {
                         SubagentWorkspaceDisposalSettlement::Disposed => {
@@ -319,9 +336,19 @@ fn read_facts(store: &SqliteConversationStore) -> std::io::Result<Facts> {
 
                 RuntimeEvent::WorkflowWorkspaceOwned { run_id, workspace } => {
                     workspace.validate().map_err(invalid)?;
-                    if run_id.conversation_id != *store.conversation_id() {
-                        return Err(invalid("foreign Workflow workspace"));
+                    if run_id.conversation_id != *store.conversation_id()
+                        || run_id.attempt_id.as_str().is_empty()
+                        || run_id.invocation == 0
+                        || envelope.event_id
+                            != crate::runtime::workspace::workflow_resource_event_id(
+                                &run_id, "owned",
+                            )
+                        || !workspace.is_isolated()
+                        || workspace.borrowed_from.is_some()
+                    {
+                        return Err(invalid("invalid Workflow workspace ownership authority"));
                     }
+                    workflow_owners.insert(run_id.clone(), workspace.clone());
                     let key = format!(
                         "workflow:{}",
                         serde_json::to_string(&run_id).map_err(invalid)?

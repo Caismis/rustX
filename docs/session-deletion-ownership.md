@@ -124,6 +124,48 @@ unlink it: unlink-after-unlock can split a racing owner's lock domain. A later
 owner reuses it, and its socket bind replaces stale routing only after obtaining
 the lease. The product lifecycle lock also covers this lease.
 
+
+### Workflow-owned workspaces and borrowing children
+
+A Workflow Agent borrowing a Workflow-owned candidate/worktree does not acquire
+independent physical workspace disposal authority.
+
+```text
+Session
+  +-- Workflow W
+  |     +-- owns worktree X (sole disposal authority)
+  +-- child C
+        +-- owns child Conversation/private runtime state
+        +-- borrows X from W; cannot own or dispose X
+```
+
+Preflight validates `WorkspaceSnapshot.borrowed_from` against the preceding
+native `WorkflowWorkspaceOwned` fact in the same Conversation: valid run and
+canonical ownership-event identity, Workflow child ownership kind, and exact
+owner snapshot equality after removing only the borrow marker. The Workflow
+snapshot must itself be independently owned and isolated. Missing, foreign or
+mismatched authority fails closed; paths alone never prove the relationship.
+The immutable Workflow ownership fact remains available for this validation
+after its physical blocker is disposed.
+
+Every child Conversation remains in the target, but any number of valid
+borrowers produce only the Workflow's single physical workspace blocker. Only
+Workflow disposal changes that blocker to branch-only and then removes it.
+No child terminal publication is needed, including after a crash immediately
+following child ownership commit. Borrowing adds no extra workspace resource to
+the semantic revision; new child Conversations still change target scope.
+
+The real subprocess regression
+`deletion_borrowed_workspace_crash_before_child_terminal_disposes_only_workflow`
+uses a committed-facts gate and kill/reap before reopening preflight, then
+verifies one Workflow blocker, branch-only settlement and zero blockers after
+complete Workflow disposal, without any child terminal event. The
+`deletion_borrowed_workspace_missing_workflow_owner_fails_closed`,
+`deletion_borrowed_workspace_mismatched_workspace_fails_closed`,
+`deletion_borrowed_workspace_foreign_or_invalid_run_fails_closed`, and
+`deletion_borrowed_workspace_multiple_children_share_one_disposal_owner`
+regressions cover invalid authority and multiple legitimate borrowers.
+
 ## Development storage boundary
 
 Catalog schema **4 -> 5** establishes separated workspace allocation semantics.

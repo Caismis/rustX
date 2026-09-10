@@ -6,7 +6,12 @@ Session deletion cascades along durable ownership, never provenance. `/tree`
 nodes belong to the same Session; `/fork` and `/clone` materialize independent
 Sessions. Catalog membership and native typed child ownership commits establish
 the finite target. Retained worktrees and branches are blockers requiring
-explicit disposal, not implicit cleanup targets. Shared environments, capability
+explicit disposal, not implicit cleanup targets. A Workflow Agent borrowing a
+Workflow-owned candidate/worktree acquires no independent physical disposal
+authority. Preflight validates the typed borrow against the durable Workflow
+owner in the same Conversation and emits one Workflow blocker, regardless of
+the number of borrowers. Workflow disposal clears that blocker without child
+terminal events; each child still owns its Conversation/private runtime state. Shared environments, capability
 resources, caches, config, credentials and project files remain outside it.
 
 Canonical `ProductRoot` identity, `ProductController` admission and target

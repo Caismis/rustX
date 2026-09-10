@@ -1,3 +1,5 @@
+mod borrowed_workspace;
+
 use super::*;
 use crate::local_runtime::session_deletion::SessionDeletionPreflight;
 use crate::runtime::identity::{AgentId, SubagentId};
