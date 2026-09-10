@@ -707,6 +707,40 @@ async fn sub258_skill_delegation_follows_frozen_model_visible_authority() {
         "a Skill this caller cannot see is not delegable"
     );
 
+    // An extension refusal names exactly what was requested, derived from the
+    // requested composition rather than written out at the call site.
+    let bare = Lab::new();
+    bare.write_config(
+        &serde_json::json!({
+            "reviewer": {
+                "description": "Read-only reviewer with no extension.",
+                "tools": {"builtin": ["read"]},
+                "extensions": {"agentStatus": {"enabled": false}},
+            }
+        }),
+        &["read", "subagent"],
+        &[],
+    );
+    let bare_product = bare.compose().await;
+    let bare_resources = bare_product.runtime().runtime_resources();
+    assert_eq!(
+        delegate(
+            &bare_resources,
+            "reviewer",
+            Some(&parse_override(
+                serde_json::json!({"extensions": {"agentStatus": {"enabled": true}}})
+            )),
+            &parent_of(&bare_resources),
+        ),
+        Err(SubagentResolutionError::UnauthorizedExtension {
+            extension: "agentStatus".to_owned(),
+            detail: "neither this agent's own composition nor the invoking agent's composition \
+                     authorizes the requested extension configuration"
+                .to_owned(),
+        }),
+        "the refusal names the requested extension"
+    );
+
     // Selecting a Skill grants no Tool: the effective tool set is exactly the
     // role's, and Read is not silently added.
     let resolved = delegate(

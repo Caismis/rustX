@@ -258,18 +258,6 @@ impl WorkflowProgram {
     }
 }
 
-/// The composed extension names of one frozen composition, for the bounded
-/// authoring projection. Configuration values stay out of the report.
-fn composed_extension_names(
-    composition: &crate::extensions::NativeAgentExtensions,
-) -> Vec<&'static str> {
-    let mut names = Vec::new();
-    if composition.agent_status().is_some() {
-        names.push("agentStatus");
-    }
-    names
-}
-
 // Schema structure is real; authored constant/enum contents and annotations can
 // contain secrets. The report explicitly identifies these redactions.
 fn schema(value: &Value) -> Value {
@@ -385,7 +373,9 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                         extensions: invocation_override
                             .extensions
                             .as_ref()
-                            .map(|selection| composed_extension_names(&selection.resolve())),
+                            .map(|selection| {
+                                crate::extensions::composed_extension_names(&selection.resolve())
+                            }),
                     });
                 }
                 view.output_schema = Some(schema(&agent.output_schema));

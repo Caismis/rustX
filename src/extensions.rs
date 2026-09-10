@@ -279,6 +279,21 @@ pub fn unsupported_child_scope(
     }
 }
 
+/// The canonical authored names of the extensions one composition composes.
+///
+/// The list is derived from the closed composition rather than written out at
+/// each call site, so a diagnostic can never name an extension the composition
+/// does not actually hold — and adding a member updates every caller at once.
+#[must_use]
+pub fn composed_extension_names(composition: &NativeAgentExtensions) -> Vec<&'static str> {
+    let NativeAgentExtensions { agent_status } = composition;
+    let mut names = Vec::new();
+    if agent_status.is_some() {
+        names.push("agentStatus");
+    }
+    names
+}
+
 /// One recognized extension that a one-shot child cannot own.
 ///
 /// This is a scope fact, never an authority fact: the caller may have been

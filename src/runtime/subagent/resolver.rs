@@ -1105,8 +1105,11 @@ fn authorize_delegation(
         && !definition.extensions().authorizes(extensions)
         && !invoking.extensions.authorizes(extensions)
     {
+        // The refusal names what was actually requested. Reaching this branch
+        // means the requested composition is non-empty, because removing an
+        // extension is narrowing and is authorized unconditionally.
         return Err(SubagentResolutionError::UnauthorizedExtension {
-            extension: "agentStatus".to_owned(),
+            extension: crate::extensions::composed_extension_names(extensions).join(", "),
             detail: "neither this agent's own composition nor the invoking agent's composition \
                      authorizes the requested extension configuration"
                 .to_owned(),
