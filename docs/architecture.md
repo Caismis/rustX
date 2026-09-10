@@ -4426,6 +4426,135 @@ poisoned. One case is new and is resolved in the same spirit: a correlated
 settles as a proven `Cancelled`, because that round's remote outcome *is*
 known and rustX will not start another.
 
+#### MCP Tasks (Issue #243)
+
+MCP `2026-07-28` also carries the **Tasks extension**
+(`io.modelcontextprotocol/tasks`, SEP-2663): a server may answer `tools/call`
+with a `CreateTaskResult` (`resultType: "task"`) instead of a result. rustX
+adopts it as an **adapter-local remote sub-lifecycle of one already-admitted
+`ToolInvocation`**, never as a rustX task:
+
+```text
+remote MCP Task = execution-local protocol state inside one ToolInvocation
+remote MCP Task != rustX background task, Scheduler job, WorkflowRun,
+                   Subagent, Goal, Todo, durable runtime entity, or a second
+                   ToolExecutionId
+```
+
+```text
+model ToolCall A
+    |
+    v
+rustX ToolInvocation A ──── approval evaluated once, before ToolExecutor::start
+    |
+    +--> tools/call round 1..N (the SEP-2322 MRTR loop above)
+    |        |
+    |        +--> CallToolResult -----------------------------> exactly one
+    |        |                                                   terminal
+    |        +--> CreateTaskResult                                ToolExecution
+    |                 |                                           Result
+    |                 v
+    |          RemoteTaskActive  (no tools/call is ever sent again)
+    |                 |
+    |                 +--> tasks/get -> working
+    |                 |        bounded, cancellation-aware wait, then poll
+    |                 +--> tasks/get -> input_required
+    |                 |        one runtime-owned Questionnaire, then
+    |                 |        tasks/update, then keep polling
+    |                 +--> tasks/get -> completed / failed / cancelled ------->+
+    |                 +--> tasks/cancel (best effort, only when rustX
+    |                          cancellation or a deadline won)
+```
+
+A task may be materialized by **any** round, including an MRTR continuation:
+`InputRequiredResult -> Questionnaire -> tools/call -> CreateTaskResult` is a
+valid flow. Once a task exists the round loop is left for good, so the
+original call is never replayed and a second task identity cannot appear.
+
+**Capability advertisement is truthful and per request.** On a `2026-07-28`
+connection every request of an invocation declares
+`extensions { io.modelcontextprotocol/tasks }` in its own `_meta`, because
+driving a task needs no human and rustX implements the whole client half.
+`elicitation { form }` is declared *additionally* and *only* when that
+invocation holds the runtime-owned `QuestionnaireRequester`. The two are
+independent: a detached background invocation drives
+`CreateTaskResult -> working -> completed` while advertising no elicitation at
+all. Legacy peers are unchanged — the handshake still carries
+`ClientCapabilities::default()` and legacy requests carry no `_meta`
+capabilities. The server side of the contract is kept too: a peer that did not
+advertise the extension in its negotiated capabilities does not acquire the
+right to answer with a `CreateTaskResult`, and one that does is refused.
+
+**The polling owner is the operation future, not a task.** `tasks/get` runs in
+the same `ToolExecutionHandle::settled_by_operation` future as everything
+else. Nothing is spawned and no timer outlives the invocation, so termination
+stays with the existing cancellation signal and the generic Issue #204
+deadline. `pollIntervalMs` is honoured as a hint clamped into a fixed
+rustX-owned interval (25 ms – 30 s, defaulting to 500 ms), and the wait
+between polls is a `select!` on the invocation's own cancellation signal, so a
+server can create neither a busy loop nor a wait that defeats cancellation.
+`ttlMs` is read as the server's retention metadata and never as a second local
+deadline. Polling is transport activity: another `tasks/get` is **not**
+reported as Tool progress, so no liveness is fabricated.
+
+**One dispatch owner for four methods.** `tools/call`, `tasks/get`,
+`tasks/update`, and `tasks/cancel` all go through the same private
+`dispatch_owned_request`, which owns the pre-frontier rejections, the
+`send_cancellable_request` effect frontier, request-lifecycle admission,
+progress ownership, cancellation arbitration, the local release proof,
+protocol poisoning, and transport-loss recording. It reports *facts*; each
+caller applies its own result vocabulary. The outbound seam's ownership was
+widened to match, so a task request over Streamable HTTP is a rustX-owned
+local participant that a cancellation can terminate and prove released.
+
+**In-task input reuses the #242 translation exactly.** A task's
+`inputRequests` are the very same rmcp type an `InputRequiredResult` carries,
+so `src/tools/mcp/mrtr.rs` plans them unchanged: one bounded typed
+Questionnaire through the one crate-private `QuestionnaireRequester`, one
+typed response, one `inputResponses` map. There is no task-specific
+interaction coordinator, no task-specific question vocabulary, and no public
+interaction seam. Sampling, Roots, and URL-mode elicitation stay unsupported
+for the same ownership reasons.
+
+**`tasks/update` is eventually consistent, and rustX answers a key once.**
+The specification acknowledges an update before the next snapshot must
+reflect it, so a later `tasks/get` may legitimately repeat a key that was just
+answered. `RemoteTask` remembers every answered key for the task's lifetime —
+recorded at the update *dispatch frontier*, before the request exists — so a
+stale repeat publishes no second interaction and sends no second update, while
+a genuinely new key in the same snapshot is still processed. The set is
+bounded at 32 distinct keys, so a server cannot grow execution-local state
+without limit.
+
+**Cancellation composes, and `tasks/cancel` proves nothing.** Local
+cancellation is checked at each task-request dispatch frontier and in the poll
+wait, so no further `tasks/get` or `tasks/update` is dispatched after the
+terminal decision. An in-flight task request is terminated and proven released
+exactly like a `tools/call`. rustX then sends at most one cooperative
+`tasks/cancel` — bounded by a fixed local wait on its acknowledgement, since
+the acknowledgement is not evidence — and settles. Two mechanisms stay
+distinct: `notifications/cancelled` cancels one in-flight JSON-RPC request and
+says nothing about the task, while `tasks/cancel` signals intent about the
+task and still does not prove the remote effect stopped.
+
+**Effect certainty after materialization.** A `CreateTaskResult` *is* remote
+work in progress, so every outcome other than the task's own terminal state
+settles as `OutcomeUnknown` — including a cancellation rustX itself decided.
+Claiming a proven `Cancelled` there would assert something no part of the
+protocol can establish. The task's own terminal states are different: a
+`completed` task is projected through the ordinary MCP result path (so
+`isError: true` stays a completed task with a failed tool), a `failed` task
+becomes one bounded `Failed` carrying the protocol's correlated error, and a
+`cancelled` task becomes a `Failed` that names the remote authority rather
+than inventing a local `CancellationReason`.
+
+**Generation loss is fail-closed.** The remote task belongs to the invocation
+and to the connection generation that created it. rustX never persists a task
+id, never replays the original `tools/call`, never reacquires a generation to
+keep polling, and never resumes a task across a process restart. A task that
+outlives rustX's connection continues on the server, and rustX reports an
+unknown outcome rather than pretending otherwise.
+
 ### Layer 5: Skill plane
 
 #### Workspace-owned Agent resources (Issue #172)

@@ -183,31 +183,50 @@ impl McpDispatchSeam {
 
 /// One outbound tool invocation, as the seam sees it.
 ///
-/// Only `tools/call` requests are tracked. They are exactly the requests an
-/// MCP settlement can ever need to terminate and exactly the requests whose
-/// progress is a live `ToolCall`'s idle-liveness evidence, so tracking
-/// anything else would create lifecycle state with no invocation to forget
-/// it.
-struct ToolInvocation {
+/// Only the requests **one rustX `ToolInvocation` owns** are tracked:
+/// `tools/call`, and the SEP-2663 task-control requests of a remote task that
+/// one `tools/call` materialized (Issue #243). They are exactly the requests
+/// an MCP settlement can ever need to terminate, so tracking anything else
+/// would create lifecycle state with no invocation to forget it.
+///
+/// The **progress** dimension is narrower than the ownership dimension. Only
+/// a `tools/call` carries a token here, because only a `tools/call` has
+/// progress that is a live `ToolCall`'s idle-liveness evidence. A `tasks/get`
+/// is transport activity of a poll loop, not Tool progress, so it is owned
+/// locally and admits no progress token — rustX never turns "another poll was
+/// dispatched" into a fabricated liveness fact.
+struct OwnedRequest {
     id: RequestId,
     token: Option<ProgressToken>,
     #[cfg_attr(not(test), allow(dead_code))]
     tool: String,
 }
 
-fn tool_invocation(message: &ClientJsonRpcMessage) -> Option<ToolInvocation> {
+fn owned_request(message: &ClientJsonRpcMessage) -> Option<OwnedRequest> {
     let ClientJsonRpcMessage::Request(request) = message else {
         return None;
     };
-    let ClientRequest::CallToolRequest(call) = &request.request else {
-        return None;
+    let (tool, token) = match &request.request {
+        ClientRequest::CallToolRequest(call) => (
+            call.params.name.to_string(),
+            request.request.get_meta().get_progress_token(),
+        ),
+        ClientRequest::GetTaskRequest(_) => (GET_TASK_METHOD.to_owned(), None),
+        ClientRequest::UpdateTaskRequest(_) => (UPDATE_TASK_METHOD.to_owned(), None),
+        ClientRequest::CancelTaskRequest(_) => (CANCEL_TASK_METHOD.to_owned(), None),
+        _ => return None,
     };
-    Some(ToolInvocation {
+    Some(OwnedRequest {
         id: request.id.clone(),
-        token: request.request.get_meta().get_progress_token(),
-        tool: call.params.name.to_string(),
+        token,
+        tool,
     })
 }
+
+/// The SEP-2663 method names, used as the seam's own request labels.
+pub(crate) const GET_TASK_METHOD: &str = "tasks/get";
+pub(crate) const UPDATE_TASK_METHOD: &str = "tasks/update";
+pub(crate) const CANCEL_TASK_METHOD: &str = "tasks/cancel";
 
 /// The JSON-RPC request id one inbound message answers, when it answers one.
 fn answered_request(message: &ServerJsonRpcMessage) -> Option<&RequestId> {
@@ -226,15 +245,15 @@ impl McpDispatchSeam {
     /// unowned-token window entirely. It runs in `Transport::send`'s
     /// synchronous prologue, so the registration *happens-before* the bytes
     /// can leave rustX.
-    fn admit_progress(&self, message: &ClientJsonRpcMessage) -> Option<ToolInvocation> {
-        let invocation = tool_invocation(message)?;
+    fn admit_progress(&self, message: &ClientJsonRpcMessage) -> Option<OwnedRequest> {
+        let invocation = owned_request(message)?;
         if let Some(token) = &invocation.token {
             self.progress.admit(&invocation.id, token);
         }
         Some(invocation)
     }
 
-    /// Takes dispatch ownership of one tool invocation inside
+    /// Takes dispatch ownership of one owned request inside
     /// `Transport::send`'s synchronous prologue.
     ///
     /// Deliberately as early as the seam can see the request: every
@@ -353,7 +372,8 @@ where
         let seam = Arc::clone(&self.seam);
         async move {
             let guard = match dispatch {
-                // Not a tool invocation: no settlement can ever terminate it,
+                // Not an invocation-owned request: no settlement can ever
+                // terminate it,
                 // so it owns nothing and passes straight through.
                 None => return deliver(inner).await,
                 // Already terminated when the prologue ran, or a duplicate
@@ -373,7 +393,7 @@ where
                 }
                 Some(OutboundDispatch::Owned(guard)) => guard,
             };
-            // Test-only: holds one owned tool invocation between the
+            // Test-only: holds one owned request between the
             // prologue and the first poll of the inner send — the exact
             // window in which the request has an outbound participant and
             // has not reached the transport. No production path installs a

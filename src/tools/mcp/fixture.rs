@@ -45,6 +45,7 @@ pub mod recovery;
 /// binary alongside it.
 #[cfg(test)]
 pub mod streamable_http;
+pub mod tasks;
 
 use std::borrow::Cow;
 use std::io::Write;
@@ -224,6 +225,10 @@ impl FixtureServer {
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok()),
             mrtr_observation_file: std::env::var_os(MRTR_OBSERVATION_FILE_ENV).map(PathBuf::from),
+            task_tools: std::env::var_os(tasks::TASK_TOOLS_ENV).is_some()
+                || std::env::var_os(tasks::TASK_UNADVERTISED_ENV).is_some(),
+            tasks_unadvertised: std::env::var_os(tasks::TASK_UNADVERTISED_ENV).is_some(),
+            task_observation_file: tasks::observation_file(),
             ..Self::default()
         }
     }
@@ -272,6 +277,11 @@ impl FixtureServer {
                 tools.push(self.fixture_tool_named(name));
             }
         }
+        if self.task_tools {
+            for name in tasks::TASK_TOOLS {
+                tools.push(self.fixture_tool_named(name));
+            }
+        }
         tools
     }
 
@@ -288,6 +298,17 @@ impl FixtureServer {
 }
 
 /// The shared observable state of one fixture instance.
+///
+/// The independent boolean switches are deliberate: each one selects one
+/// orthogonal peer behaviour a suite needs to compose freely (a paginated
+/// catalog, the modern conformance tools, the SEP-2322 guard tools, the
+/// SEP-2663 task tools, an unadvertised extension). Grouping them into an
+/// enum would make combinations unrepresentable, which is the opposite of
+/// what a conformance fixture needs.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each switch selects one orthogonal, freely composable peer behaviour"
+)]
 #[derive(Clone, Default)]
 pub struct FixtureServer {
     /// The catalog flip observed by `tools/list`.
@@ -363,6 +384,18 @@ pub struct FixtureServer {
     /// tools ([`STRUCTURED_SCALAR_TOOL`], [`STRUCTURED_ARRAY_TOOL`],
     /// [`ROUTED_TOOL`]).
     pub modern_conformance_tools: bool,
+    /// Whether the catalog additionally publishes the SEP-2663 Tasks guard
+    /// tools, and the server advertises the `io.modelcontextprotocol/tasks`
+    /// extension (Issue #243).
+    pub task_tools: bool,
+    /// Whether the Tasks guard tools are published **without** the server
+    /// advertising the extension, so a client can prove it refuses an
+    /// unnegotiated `CreateTaskResult`.
+    pub tasks_unadvertised: bool,
+    /// The JSONL file every task-protocol request is appended to.
+    pub task_observation_file: Option<PathBuf>,
+    /// The fixture's own SEP-2663 server state.
+    pub task_registry: tasks::FixtureTaskRegistry,
     /// Whether the catalog additionally publishes the SEP-2322 multi
     /// round-trip guard tools (Issue #242).
     pub mrtr_tools: bool,
@@ -804,6 +837,14 @@ impl ServerHandler for FixtureServer {
         if self.list_changed_supported {
             capabilities = capabilities.enable_tool_list_changed();
         }
+        // Advertisement is authority: the unadvertised variant publishes the
+        // same guard tools and answers with the same `CreateTaskResult`,
+        // which is exactly the peer a client must refuse to follow.
+        let capabilities = if self.task_tools && !self.tasks_unadvertised {
+            capabilities.enable_tasks()
+        } else {
+            capabilities
+        };
         let mut info = ServerInfo::new(capabilities.build());
         // The legacy `initialize` fallback echoes this revision whenever the
         // client asks for one the fixture does not serve, so it must be a
@@ -938,7 +979,21 @@ impl ServerHandler for FixtureServer {
         let mrtr = MrtrTools::of(self);
         let mrtr_rounds = self.mrtr_rounds.unwrap_or(2).max(1);
         let mrtr_observation_file = self.mrtr_observation_file.clone();
+        let task_tools = self.task_tools.then(|| TaskTools::of(self));
+        let task_registry = self.task_registry.clone();
+        let task_observation_file = self.task_observation_file.clone();
         async move {
+            if let Some(task_tools) = &task_tools
+                && let Some(scenario) = task_tools.scenario_of(&request.name)
+            {
+                return task_call(
+                    scenario,
+                    &request,
+                    &context,
+                    &task_registry,
+                    task_observation_file.as_deref(),
+                );
+            }
             if mrtr.owns(&request.name) {
                 return mrtr_call(
                     &mrtr,
@@ -1037,6 +1092,170 @@ impl ServerHandler for FixtureServer {
             }
         }
     }
+
+    /// SEP-2663 `tasks/get`, served from the fixture's own counted state.
+    fn get_task(
+        &self,
+        request: rmcp::model::GetTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<rmcp::model::GetTaskResult, rmcp::ErrorData>> + Send
+    {
+        let registry = self.task_registry.clone();
+        let file = self.task_observation_file.clone();
+        async move {
+            record_task(
+                &registry,
+                file.as_deref(),
+                tasks::GET_TASK,
+                &request.task_id,
+                &context,
+                None,
+            )?;
+            // The deliberately malformed scenario: a snapshot describing a
+            // different task id, which is a second remote execution identity
+            // trying to appear inside one rustX invocation.
+            if registry.answers_foreign_id(&request.task_id) {
+                return Ok(tasks::foreign_snapshot(&request.task_id));
+            }
+            registry.get(&request.task_id)
+        }
+    }
+
+    /// SEP-2663 `tasks/update`. The acknowledgement is empty and eventually
+    /// consistent: a scenario may still show the answered key afterwards.
+    fn update_task(
+        &self,
+        request: rmcp::model::UpdateTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<(), rmcp::ErrorData>> + Send {
+        let registry = self.task_registry.clone();
+        let file = self.task_observation_file.clone();
+        async move {
+            let responses = serde_json::to_value(&request.input_responses).ok();
+            record_task(
+                &registry,
+                file.as_deref(),
+                tasks::UPDATE_TASK,
+                &request.task_id,
+                &context,
+                responses,
+            )?;
+            registry.update(&request.task_id, &request.input_responses)
+        }
+    }
+
+    /// SEP-2663 `tasks/cancel`: cooperative, acknowledged, and never a
+    /// promise that anything stopped.
+    fn cancel_task(
+        &self,
+        request: rmcp::model::CancelTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<(), rmcp::ErrorData>> + Send {
+        let registry = self.task_registry.clone();
+        let file = self.task_observation_file.clone();
+        async move {
+            record_task(
+                &registry,
+                file.as_deref(),
+                tasks::CANCEL_TASK,
+                &request.task_id,
+                &context,
+                None,
+            )?;
+            registry.cancel(&request.task_id)
+        }
+    }
+}
+
+/// The prefixed names of one fixture's SEP-2663 Tasks guard tools.
+struct TaskTools {
+    /// Model-facing name -> unprefixed scenario name.
+    scenarios: Vec<(String, &'static str)>,
+}
+
+impl TaskTools {
+    fn of(fixture: &FixtureServer) -> Self {
+        Self {
+            scenarios: tasks::TASK_TOOLS
+                .into_iter()
+                .map(|name| (fixture.tool_name(name), name))
+                .collect(),
+        }
+    }
+
+    fn scenario_of(&self, name: &str) -> Option<&'static str> {
+        self.scenarios
+            .iter()
+            .find(|(candidate, _)| candidate == name)
+            .map(|(_, scenario)| *scenario)
+    }
+}
+
+/// Records one task-protocol request, with the per-request client
+/// capabilities it actually carried.
+fn record_task(
+    registry: &tasks::FixtureTaskRegistry,
+    file: Option<&std::path::Path>,
+    method: &str,
+    task_id: &str,
+    context: &RequestContext<RoleServer>,
+    input_responses: Option<serde_json::Value>,
+) -> Result<(), rmcp::ErrorData> {
+    let (tasks_advertised, elicitation_advertised) =
+        tasks::advertised(context.meta.client_capabilities());
+    tasks::record(
+        file,
+        &tasks::TaskObservation {
+            method: method.to_owned(),
+            tool: registry.tool_of(task_id),
+            task_id: task_id.to_owned(),
+            tasks_advertised,
+            elicitation_advertised,
+            input_responses,
+        },
+    )
+}
+
+/// The whole SEP-2663 guard-tool behaviour of the fixture (Issue #243).
+///
+/// Every branch answers `tools/call` with a real `CreateTaskResult`; the task
+/// itself then progresses through [`tasks::FixtureTaskRegistry`], which is a
+/// counted transition table rather than a timer.
+fn task_call(
+    scenario: &'static str,
+    request: &CallToolRequestParams,
+    context: &RequestContext<RoleServer>,
+    registry: &tasks::FixtureTaskRegistry,
+    observation_file: Option<&std::path::Path>,
+) -> Result<CallToolResponse, rmcp::ErrorData> {
+    let (tasks_advertised, elicitation_advertised) =
+        tasks::advertised(context.meta.client_capabilities());
+    tasks::record(
+        observation_file,
+        &tasks::TaskObservation {
+            method: tasks::CALL_TOOL.to_owned(),
+            tool: request.name.to_string(),
+            task_id: String::new(),
+            tasks_advertised,
+            elicitation_advertised,
+            input_responses: request
+                .input_responses
+                .as_ref()
+                .and_then(|responses| serde_json::to_value(responses).ok()),
+        },
+    )?;
+    // One synchronous SEP-2322 round *before* the task exists, so a task can
+    // be materialized by a continuation and not only by round one.
+    if scenario == tasks::TASK_MRTR_TOOL && fixture_round(request) == 1 {
+        return Ok(rmcp::model::InputRequiredResult::new(
+            Some(input_requests(serde_json::json!({
+                "gate": mrtr_choice_request("Approve the long job?", "channel"),
+            }))?),
+            Some(fixture_round_state(1)),
+        )
+        .into());
+    }
+    Ok(registry.create(scenario, request.name.as_ref()).into())
 }
 
 /// The whole SEP-2322 guard-tool behaviour of the fixture (Issue #242).

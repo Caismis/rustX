@@ -47,6 +47,14 @@
 //!   around each dispatch.
 //! - [`mcp_mrtr_managed`] — the same contract end to end against a real
 //!   managed `FastMCP` 4 child built by a real, network-bound `uv`.
+//! - [`mcp_tasks`] — the MCP Tasks extension (SEP-2663) as an adapter-local
+//!   remote sub-lifecycle of one already-admitted `ToolInvocation`: capability
+//!   advertisement, the poll loop, in-task Interaction reuse, the
+//!   eventually-consistent update deduplication, and the cancellation
+//!   frontiers around every task request.
+//! - [`mcp_tasks_managed`] — the same contract end to end against a real
+//!   managed `FastMCP` 4 child whose own `requirements.txt` declares the
+//!   SEP-2663 `fastmcp-tasks` extension.
 //! - [`tool_deadline`] — the generic Issue #204 hard deadline bounding a
 //!   real foreground Bash process: process-group kill and reap are the
 //!   physical settlement behind the proven `TimedOut`.
@@ -69,6 +77,9 @@ mod managed_selection;
 mod mcp_mrtr;
 mod mcp_mrtr_managed;
 mod mcp_recovery;
+#[cfg(feature = "mcp-fixture")]
+mod mcp_tasks;
+mod mcp_tasks_managed;
 mod runtime_client;
 mod subagent;
 mod tool_deadline;
