@@ -78,6 +78,13 @@ pub const TOOL_PULSE: &str = "http-pulse";
 /// and its progress subscription.
 pub const TOOL_ANNOUNCE: &str = "http-announce";
 
+/// The SEP-2663 tool: `tools/call` materializes a remote task, and the
+/// task's own `tasks/get` withholds its answer exactly like
+/// [`TOOL_WITHHOLD`] — so a cancellation lands while a real in-flight HTTP
+/// request belongs to a `tasks/get` rather than to a `tools/call`
+/// (Issue #243).
+pub const TOOL_TASK: &str = "http-task";
+
 /// The identity of the next fixture instance.
 ///
 /// Every fixture mints tool names that belong to exactly one instance, which
@@ -94,6 +101,10 @@ pub struct HttpFixtureControl {
     terminated: watch::Sender<u32>,
     pulsed: watch::Sender<u32>,
     release: watch::Sender<bool>,
+    /// How many `tasks/get` requests entered the handler (Issue #243).
+    task_gets: watch::Sender<u32>,
+    /// How many cooperative `tasks/cancel` requests arrived.
+    task_cancels: watch::Sender<u32>,
 }
 
 impl Default for HttpFixtureControl {
@@ -113,6 +124,8 @@ impl HttpFixtureControl {
             terminated: watch::channel(0).0,
             pulsed: watch::channel(0).0,
             release: watch::channel(false).0,
+            task_gets: watch::channel(0).0,
+            task_cancels: watch::channel(0).0,
         }
     }
 
@@ -143,6 +156,44 @@ impl HttpFixtureControl {
     #[must_use]
     pub fn withhold(&self) -> String {
         self.scoped(TOOL_WITHHOLD)
+    }
+
+    /// This fixture's [`TOOL_TASK`].
+    #[must_use]
+    pub fn task(&self) -> String {
+        self.scoped(TOOL_TASK)
+    }
+
+    /// The task id [`TOOL_TASK`] materializes.
+    #[must_use]
+    pub fn task_id(&self) -> String {
+        format!("{}--task", self.task())
+    }
+
+    /// Resolves once at least `count` `tasks/get` requests have entered the
+    /// server handler.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the fixture's observation channel closed.
+    pub async fn wait_task_gets(&self, count: u32) {
+        self.task_gets
+            .subscribe()
+            .wait_for(|gets| *gets >= count)
+            .await
+            .expect("the fixture task channel stays open");
+    }
+
+    /// How many `tasks/get` requests entered the handler.
+    #[must_use]
+    pub fn task_gets(&self) -> u32 {
+        *self.task_gets.borrow()
+    }
+
+    /// How many cooperative `tasks/cancel` requests arrived.
+    #[must_use]
+    pub fn task_cancels(&self) -> u32 {
+        *self.task_cancels.borrow()
     }
 
     /// Resolves once at least `count` `tools/call` invocations have entered
@@ -228,6 +279,7 @@ impl HttpFixtureServer {
             super::fixture_tool_named(&self.control.pulse()),
             super::fixture_tool_named(&self.control.withhold()),
             super::fixture_tool_named(&self.control.announce()),
+            super::fixture_tool_named(&self.control.task()),
         ]
     }
 
@@ -254,7 +306,12 @@ impl HttpFixtureServer {
 
 impl ServerHandler for HttpFixtureServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_tasks()
+                .build(),
+        )
     }
 
     fn supported_protocol_versions(&self) -> std::borrow::Cow<'static, [ProtocolVersion]> {
@@ -296,8 +353,22 @@ impl ServerHandler for HttpFixtureServer {
         let pulse = control.pulse();
         let withhold = control.withhold();
         let announce = control.announce();
+        let task = control.task();
         async move {
             match request.name.as_ref() {
+                name if name == task => {
+                    control.accepted.send_modify(|accepted| *accepted += 1);
+                    Ok(rmcp::model::CreateTaskResult::new(
+                        rmcp::model::Task::new(
+                            control.task_id(),
+                            rmcp::model::TaskStatus::Working,
+                            "2026-07-28T10:00:00Z",
+                            "2026-07-28T10:00:00Z",
+                        )
+                        .with_poll_interval_ms(25),
+                    )
+                    .into())
+                }
                 name if name == echo => {
                     // Counted like every other tool of this fixture, so
                     // `accepted_calls() == 0` is evidence that a request
@@ -368,6 +439,80 @@ impl ServerHandler for HttpFixtureServer {
                     rmcp::model::CallToolRequestMethod,
                 >()),
             }
+        }
+    }
+
+    /// SEP-2663 `tasks/get`, deliberately withheld.
+    ///
+    /// The handler emits nothing until it is released, so the HTTP response
+    /// headers of this `tasks/get` are genuinely still outstanding. A client
+    /// disconnect while it waits is the far-side proof that rustX terminated
+    /// its own in-flight HTTP request for a **task** request.
+    fn get_task(
+        &self,
+        request: rmcp::model::GetTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<rmcp::model::GetTaskResult, rmcp::ErrorData>> + Send
+    {
+        let control = self.control.clone();
+        async move {
+            if request.task_id != control.task_id() {
+                return Err(rmcp::ErrorData::invalid_params(
+                    format!("unknown task {}", request.task_id),
+                    None,
+                ));
+            }
+            control.task_gets.send_modify(|gets| *gets += 1);
+            let mut release = control.release.subscribe();
+            tokio::select! {
+                () = context.ct.cancelled() => {
+                    control
+                        .terminated
+                        .send_modify(|terminated| *terminated += 1);
+                    Err(rmcp::ErrorData::internal_error(
+                        "the client terminated its HTTP request",
+                        None,
+                    ))
+                }
+                released = release.wait_for(|released| *released) => {
+                    match released {
+                        Ok(_) => Ok(rmcp::model::GetTaskResult::new(
+                            rmcp::model::DetailedTask::new(
+                                rmcp::model::Task::new(
+                                    control.task_id(),
+                                    rmcp::model::TaskStatus::Working,
+                                    "2026-07-28T10:00:00Z",
+                                    "2026-07-28T10:00:01Z",
+                                ),
+                                rmcp::model::TaskPayload::Working,
+                            ),
+                        )),
+                        Err(_) => Err(rmcp::ErrorData::internal_error(
+                            "the fixture control channel closed",
+                            None,
+                        )),
+                    }
+                }
+            }
+        }
+    }
+
+    /// SEP-2663 `tasks/cancel`: acknowledged, counted, and never a promise.
+    fn cancel_task(
+        &self,
+        request: rmcp::model::CancelTaskParams,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<(), rmcp::ErrorData>> + Send {
+        let control = self.control.clone();
+        async move {
+            if request.task_id != control.task_id() {
+                return Err(rmcp::ErrorData::invalid_params(
+                    format!("unknown task {}", request.task_id),
+                    None,
+                ));
+            }
+            control.task_cancels.send_modify(|cancels| *cancels += 1);
+            Ok(())
         }
     }
 }

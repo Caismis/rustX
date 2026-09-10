@@ -160,6 +160,31 @@ and never becomes canonical or durable state; and the continuation dispatch
 frontier is the existing pre-dispatch cancellation checkpoint, so cancellation
 that wins there dispatches no further round.
 
+The same server may instead answer `tools/call` with a `CreateTaskResult`
+(SEP-2663, `io.modelcontextprotocol/tasks`). That too is an intermediate state
+of the same invocation, not a result and not a rustX task: the executor drives
+the remote task through `tasks/get` from inside the same operation future,
+answers any `input_required` through the same `QuestionnaireRequester` and
+`tasks/update`, and settles exactly one `ToolExecutionResult` when the task
+reaches a terminal protocol state. Tasks are advertised per request on every
+`2026-07-28` invocation; elicitation is advertised separately, only where the
+invocation can settle it. After a task exists no `tools/call` is ever sent
+again, polling waits honor the server hint with a 25 ms floor, no maximum
+clamp, and a 500 ms default, starting with the first poll. Waits are
+cancellation-aware, and every outcome
+other than the task's own terminal state is `OutcomeUnknown` — a cooperative
+`tasks/cancel` is remote control, never proof that the remote effect stopped.
+
+rustX stops driving an addressable active task only after at most one
+best-effort `tasks/cancel`. Missing Interaction authority, unsupported input,
+local continuation failures, and method/result mismatches follow this rule.
+A closed, failed, or poisoned generation and an invalid/untrusted task id
+cannot carry a cancellation; rustX settles without replay or resumption.
+`tasks/update` and `tasks/cancel` accept exactly rmcp 3.2.0's `TaskAckResult`
+(`resultType: "complete"`, optional `_meta`, no other fields). An unrelated
+successful result is a method/result mismatch, not an ACK or connection
+poison. Even a valid cancellation ACK leaves the task outcome unknown.
+
 Each requested schema is translated into the provider-independent typed
 question vocabulary (`Text`, `Number`, `Integer`, `Boolean`, `SingleChoice`,
 `MultiChoice`) with every supported constraint preserved. Each scalar shape
@@ -226,7 +251,7 @@ Workflow, or Subagent canonical lifecycle was introduced.
 | Native Read document task | Blocking decoder cancellation waits for join; JoinError already typed; unchanged | Read document cancellation/decoder tests |
 | Native todo and ask_user | Business errors already typed; broken interaction authority deliberately fails outside business results | Native tests; scripted interaction and Agent policy suites |
 | Bash foreground/background | Process semantics conform; capture drain abandoned siblings on early error and did not join aborted tasks; fixed | Capture panic/abort regression; Bash boundary and #204 deadline suites |
-| MCP stdio/HTTP | Remote error, pre-dispatch refusal, post-dispatch uncertainty, local ownership release, progress, and reconnect already conform; a bounded multi-round-trip invocation composes them per round and still settles once | `tests/boundary/mcp_recovery.rs`; MCP output/remote-error tests; `src/tools/mcp/mrtr_execution.rs` |
+| MCP stdio/HTTP | Remote error, pre-dispatch refusal, post-dispatch uncertainty, local ownership release, progress, and reconnect already conform; a bounded multi-round-trip invocation composes them per round, and a remote SEP-2663 task composes them per task request, and both still settle once | `tests/boundary/mcp_recovery.rs`; `tests/boundary/mcp_mrtr.rs`; `tests/boundary/mcp_tasks.rs`; MCP output/remote-error tests |
 | Managed Python packages | No separate executor: package preparation precedes capability admission, invocation uses MCP; unchanged | Python package and MCP provider boundary suites |
 | Subagent Tool | Parse/resolve/prepare/commit failures already typed; accepted creation transfers child authority; unchanged | Native subagent and staged-child boundary suites |
 | Workflow Tool | Command rejection already Failed; typed cancellation and Workflow-owned child settlement retained | Workflow scripted/boundary suites |

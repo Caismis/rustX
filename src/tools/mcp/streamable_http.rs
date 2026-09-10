@@ -138,6 +138,14 @@
 //! when the outbound participant has arrived and decided, or has been proven
 //! unable to arrive because the generation's outbound seam is over.
 //!
+//! A correlated response is not this release proof. rmcp 3.2.0 forwards a
+//! POST SSE response before draining its tail (up to 50 ms) and dropping the
+//! response stream. The physical request owner awaits the same release latch
+//! on normal answers, retaining admission until the HTTP guard releases.
+//! Ordinary cancellation and the existing control-request deadline can end
+//! that request-local drain; neither changes the captured response evidence.
+//! Standalone GET streams remain connection-owned and are never registered.
+//!
 //! # One monotone lifecycle per request id
 //!
 //! > Request lifecycle authority is created once per `RequestId` per
@@ -231,6 +239,8 @@ struct RequestLifecycle {
     /// Which local participant currently owns this request, and whether any
     /// can still act.
     phase: RequestPhase,
+    #[cfg(test)]
+    method: Option<String>,
     /// An MCP invocation still holds this entry. Its admission guard is the
     /// request-local forget point.
     admitted: bool,
@@ -281,6 +291,8 @@ impl RequestLifecycle {
             terminate: CancellationToken::new(),
             release: Arc::new(ReleaseLatch::default()),
             phase,
+            #[cfg(test)]
+            method: None,
             admitted: false,
             awaiting_admission: false,
             #[cfg(test)]
@@ -312,6 +324,131 @@ struct OwnershipState {
 #[derive(Default)]
 pub(crate) struct McpHttpRequestOwnership {
     state: Mutex<OwnershipState>,
+    #[cfg(test)]
+    release_probe: Mutex<Option<Arc<HttpReleaseProbe>>>,
+}
+
+/// Delays only one exact request's HTTP release publication after its body
+/// has been dropped. Per-registry installation prevents parallel-test crosstalk.
+#[cfg(test)]
+pub(crate) struct HttpReleaseProbe {
+    method: &'static str,
+    ownership: std::sync::Weak<McpHttpRequestOwnership>,
+    state: tokio::sync::watch::Sender<ReleaseProbeState>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Default)]
+struct ReleaseProbeState {
+    id: Option<RequestId>,
+    held: bool,
+    observed: bool,
+    released: bool,
+}
+
+#[cfg(test)]
+impl HttpReleaseProbe {
+    pub(crate) async fn wait_held_and_observed(&self) {
+        self.state
+            .subscribe()
+            .wait_for(|s| s.held && s.observed)
+            .await
+            .expect("release probe");
+    }
+
+    pub(crate) fn request_id(&self) -> RequestId {
+        self.state.borrow().id.clone().expect("request selected")
+    }
+
+    pub(crate) fn release(&self) {
+        let mut held = None;
+        self.state.send_modify(|s| {
+            s.released = true;
+            if s.held {
+                held = s.id.clone();
+            }
+        });
+        if let (Some(id), Some(ownership)) = (held, self.ownership.upgrade()) {
+            ownership.release_http(&id);
+        }
+    }
+
+    fn hold(&self, id: &RequestId) -> bool {
+        let mut held = false;
+        self.state.send_modify(|s| {
+            if s.id.as_ref() == Some(id) && !s.released {
+                s.held = true;
+                held = true;
+            }
+        });
+        held
+    }
+}
+
+#[cfg(test)]
+impl McpHttpRequestOwnership {
+    pub(crate) fn hold_http_release(
+        self: &Arc<Self>,
+        method: &'static str,
+    ) -> Arc<HttpReleaseProbe> {
+        let probe = Arc::new(HttpReleaseProbe {
+            method,
+            ownership: Arc::downgrade(self),
+            state: tokio::sync::watch::channel(ReleaseProbeState::default()).0,
+        });
+        *self.release_probe.lock().expect("probe lock") = Some(Arc::clone(&probe));
+        probe
+    }
+
+    fn note_http_request(&self, id: &RequestId, message: &ClientJsonRpcMessage) {
+        let method = serde_json::to_value(message).expect("fixture request")["method"]
+            .as_str()
+            .expect("request method")
+            .to_owned();
+        if let Some(entry) = self
+            .state
+            .lock()
+            .expect("ownership lock")
+            .requests
+            .get_mut(id)
+        {
+            entry.method = Some(method.clone());
+        }
+        if let Some(probe) = self.release_probe.lock().expect("probe lock").as_ref() {
+            probe.state.send_modify(|s| {
+                if probe.method == method && s.id.is_none() {
+                    s.id = Some(id.clone());
+                }
+            });
+        }
+    }
+
+    pub(crate) fn note_response_observed(&self, id: &RequestId) {
+        if let Some(probe) = self.release_probe.lock().expect("probe lock").as_ref() {
+            probe.state.send_modify(|s| {
+                if s.id.as_ref() == Some(id) {
+                    s.observed = true;
+                }
+            });
+        }
+    }
+
+    pub(crate) fn request_states(&self) -> Vec<(RequestId, Option<String>, String, bool)> {
+        self.state
+            .lock()
+            .expect("ownership lock")
+            .requests
+            .iter()
+            .map(|(id, entry)| {
+                (
+                    id.clone(),
+                    entry.method.clone(),
+                    format!("{:?}", entry.phase),
+                    entry.admitted,
+                )
+            })
+            .collect()
+    }
 }
 
 /// What terminating one request's local ownership found, and the proof that
@@ -393,6 +530,27 @@ pub(crate) struct McpRequestAdmission {
 }
 
 impl McpRequestAdmission {
+    /// Waits for this exact request's ownership baton to reach Released.
+    /// Admission remains held during the wait, so late participants cannot
+    /// recreate authority before the request-local forget point.
+    pub(crate) async fn released(&self) {
+        let latch = {
+            let state = self
+                .ownership
+                .state
+                .lock()
+                .expect("MCP HTTP ownership lock poisoned");
+            Arc::clone(
+                &state
+                    .requests
+                    .get(&self.id)
+                    .expect("admission retains its request")
+                    .release,
+            )
+        };
+        latch.released().await;
+    }
+
     /// Terminates the local ownership of this admitted request.
     ///
     /// Synchronous and unconditional: from the moment it returns, this
@@ -843,6 +1001,16 @@ struct RequestOwnershipGuard {
 impl Drop for RequestOwnershipGuard {
     fn drop(&mut self) {
         if let Some(ownership) = &self.ownership {
+            #[cfg(test)]
+            if ownership
+                .release_probe
+                .lock()
+                .expect("probe lock")
+                .as_ref()
+                .is_some_and(|probe| probe.hold(&self.id))
+            {
+                return;
+            }
             ownership.release_http(&self.id);
         }
     }
@@ -980,6 +1148,8 @@ impl McpHttpClient {
         let Some(id) = request_id(message) else {
             return post.await;
         };
+        #[cfg(test)]
+        self.ownership.note_http_request(&id, message);
         let guard = self.ownership.register(id);
         let terminate = guard.terminate.clone();
         let response = tokio::select! {

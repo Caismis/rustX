@@ -101,6 +101,7 @@ mod framing;
 pub mod identity;
 mod mrtr;
 mod streamable_http;
+mod tasks;
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -110,9 +111,10 @@ use std::time::Instant;
 
 use base64::Engine;
 use rmcp::model::{
-    CallToolRequest, CallToolRequestParams, CallToolResult, ClientCapabilities, ClientInfo,
-    ClientRequest, ContentBlock, Implementation, ProgressNotificationParam, ProtocolVersion,
-    ServerNotification, ServerResult, SubscriptionFilter,
+    CallToolRequest, CallToolRequestParams, CallToolResult, CancelTaskParams, CancelTaskRequest,
+    ClientCapabilities, ClientInfo, ClientRequest, ContentBlock, GetTaskParams, GetTaskRequest,
+    Implementation, ProgressNotificationParam, ProtocolVersion, ServerNotification, ServerResult,
+    SubscriptionFilter, UpdateTaskParams, UpdateTaskRequest,
 };
 use rmcp::service::{PeerRequestOptions, RoleClient, RunningService};
 use rmcp::{ClientHandler, ClientServiceExt};
@@ -434,6 +436,14 @@ pub struct McpServerRuntime {
     credentials: crate::credentials::SourceCredentials,
     server_id: McpServerId,
     protocol_version: ProtocolVersion,
+    /// Whether this peer advertised the SEP-2663 Tasks extension in its
+    /// negotiated server capabilities (Issue #243).
+    ///
+    /// It is the **server side** of the capability contract, retained because
+    /// advertisement is authority: a peer that never declared the extension
+    /// may not silently acquire the right to answer `tools/call` with a
+    /// `CreateTaskResult` and hand rustX a remote lifecycle to drive.
+    server_tasks: bool,
     peer: rmcp::Peer<RoleClient>,
     service: Arc<tokio::sync::Mutex<Option<RunningService<RoleClient, McpClientHandler>>>>,
     handler: McpClientHandler,
@@ -1990,6 +2000,31 @@ pub(crate) mod test_sync {
         }
     }
 
+    /// Freeze the completing poll before arbitration until its correlated
+    /// response is queued. This test-only scheduling hook does not consume or
+    /// classify the response; the existing Issue #205 select remains authoritative.
+    pub(crate) async fn park_task_arbitration(
+        server: &str,
+        handle: &rmcp::service::RequestHandle<rmcp::RoleClient>,
+    ) {
+        const METHOD: &str = "tasks/get:correlated";
+        let Some(barrier) =
+            TASK_REQUEST_BARRIERS.find(|b| b.server == server && b.method == METHOD)
+        else {
+            return;
+        };
+        park_before_task_request(server, METHOD, "in-flight").await;
+        if barrier.arrivals().len() >= barrier.first_held {
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                while handle.rx.is_empty() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("the gated poll queues its correlated response");
+        }
+    }
+
     /// The deterministic MRTR continuation-dispatch barrier (Issue #242).
     ///
     /// It holds one invocation at the exact point between "the typed human
@@ -2094,6 +2129,149 @@ pub(crate) mod test_sync {
             tokio::pin!(released);
             released.as_mut().enable();
             if barrier.state.lock().expect("MRTR barrier lock").released {
+                return;
+            }
+            released.await;
+        }
+    }
+
+    /// The deterministic linearization point of every SEP-2663 task-request
+    /// dispatch frontier (Issue #243).
+    ///
+    /// A barrier is installed for one `(server, method)` pair and parks the
+    /// invocation immediately **before** that request is dispatched:
+    ///
+    /// - `tasks/get` — after the poll wait, before the poll exists;
+    /// - `tasks/update` — after the typed human response has been accepted,
+    ///   mapped to `inputResponses`, and recorded as answered, and before the
+    ///   update exists;
+    /// - `tasks/cancel` — before the cooperative cancellation exists.
+    ///
+    /// A regression parks there, decides the cancellation race deliberately,
+    /// and then asserts on what the server actually saw — no sleeps, and no
+    /// reliance on scheduler timing.
+    pub(crate) struct TaskRequestBarrier {
+        server: String,
+        method: &'static str,
+        /// The 1-based arrival from which requests are held. Earlier
+        /// arrivals are counted and pass straight through, so a regression
+        /// can let a known number of requests complete and then hold exactly
+        /// the next one at its frontier.
+        first_held: usize,
+        state: Mutex<TaskUpdateBarrierState>,
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+
+    #[derive(Default)]
+    struct TaskUpdateBarrierState {
+        released: bool,
+        /// The task id of every request that reached the barrier.
+        arrivals: Vec<String>,
+    }
+
+    static TASK_REQUEST_BARRIERS: ProbeRegistry<TaskRequestBarrier> = ProbeRegistry::new();
+
+    /// Uninstalls **only** the barrier its own installation created.
+    pub(crate) struct TaskRequestBarrierGuard {
+        id: u64,
+    }
+
+    impl Drop for TaskRequestBarrierGuard {
+        fn drop(&mut self) {
+            TASK_REQUEST_BARRIERS.remove(self.id);
+        }
+    }
+
+    impl TaskRequestBarrier {
+        /// Installs a barrier that parks every `method` request of `server`.
+        pub(crate) fn install(
+            server: &str,
+            method: &'static str,
+        ) -> (Arc<Self>, TaskRequestBarrierGuard) {
+            Self::install_from(server, method, 1)
+        }
+
+        /// Installs a barrier that lets the first `first_held - 1` requests
+        /// through and holds every later one at its dispatch frontier.
+        pub(crate) fn install_from(
+            server: &str,
+            method: &'static str,
+            first_held: usize,
+        ) -> (Arc<Self>, TaskRequestBarrierGuard) {
+            let barrier = Arc::new(Self {
+                server: server.to_owned(),
+                method,
+                first_held,
+                state: Mutex::new(TaskUpdateBarrierState::default()),
+                entered: tokio::sync::Notify::new(),
+                release: tokio::sync::Notify::new(),
+            });
+            let id = TASK_REQUEST_BARRIERS.install(Arc::clone(&barrier));
+            (barrier, TaskRequestBarrierGuard { id })
+        }
+
+        /// Resolves once at least `count` requests have arrived.
+        pub(crate) async fn wait_arrived(&self, count: usize) {
+            loop {
+                let entered = self.entered.notified();
+                tokio::pin!(entered);
+                entered.as_mut().enable();
+                if self.arrivals().len() >= count {
+                    return;
+                }
+                entered.await;
+            }
+        }
+
+        /// The task id of every request that reached the barrier.
+        pub(crate) fn arrivals(&self) -> Vec<String> {
+            self.state
+                .lock()
+                .expect("task update barrier lock")
+                .arrivals
+                .clone()
+        }
+
+        /// Releases every parked request.
+        pub(crate) fn release(&self) {
+            self.state
+                .lock()
+                .expect("task update barrier lock")
+                .released = true;
+            self.release.notify_waiters();
+        }
+    }
+
+    /// Parks one SEP-2663 task request before its dispatch frontier, when a
+    /// barrier is installed for its server and method.
+    pub(crate) async fn park_before_task_request(server: &str, method: &str, task_id: &str) {
+        let Some(barrier) = TASK_REQUEST_BARRIERS
+            .find(|barrier| barrier.server == server && barrier.method == method)
+        else {
+            return;
+        };
+        {
+            let mut state = barrier.state.lock().expect("task update barrier lock");
+            state.arrivals.push(task_id.to_owned());
+            let held = state.arrivals.len() >= barrier.first_held;
+            if state.released || !held {
+                drop(state);
+                barrier.entered.notify_waiters();
+                return;
+            }
+        }
+        barrier.entered.notify_waiters();
+        loop {
+            let released = barrier.release.notified();
+            tokio::pin!(released);
+            released.as_mut().enable();
+            if barrier
+                .state
+                .lock()
+                .expect("task update barrier lock")
+                .released
+            {
                 return;
             }
             released.await;
@@ -2479,6 +2657,7 @@ impl McpServerRuntime {
             credentials: binding.credentials.clone(),
             server_id: server_id.clone(),
             protocol_version: info.protocol_version.clone(),
+            server_tasks: info.capabilities.supports_tasks(),
             peer,
             service: Arc::new(tokio::sync::Mutex::new(Some(service))),
             handler,
@@ -2809,6 +2988,27 @@ impl McpServerRuntime {
             .map_or(0, |ownership| ownership.outstanding_requests())
     }
 
+    #[cfg(test)]
+    pub(crate) fn hold_http_release(
+        &self,
+        method: &'static str,
+    ) -> Arc<streamable_http::HttpReleaseProbe> {
+        self.request_ownership
+            .as_ref()
+            .expect("HTTP transport")
+            .hold_http_release(method)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn http_request_states(
+        &self,
+    ) -> Vec<(rmcp::model::RequestId, Option<String>, String, bool)> {
+        self.request_ownership
+            .as_ref()
+            .expect("HTTP transport")
+            .request_states()
+    }
+
     /// Current progress cardinality, including pre-admission tombstones.
     #[cfg(test)]
     pub(crate) fn tracked_progress_requests(&self) -> usize {
@@ -2846,18 +3046,6 @@ impl McpServerRuntime {
         if let Some(process) = &self.process {
             process.lock().await.request_shutdown();
         }
-    }
-
-    /// The failed tool result for a confirmed protocol violation observed
-    /// **before dispatch**, when the observation seam recorded one. Also
-    /// poisons the generation (see [`Self::poison_after_protocol_violation`]).
-    async fn protocol_violation_failure(
-        &self,
-        context: &ToolExecutionContext<'_>,
-        started: Instant,
-    ) -> Option<ToolExecutionResult> {
-        let violation = self.poisoned_protocol_violation().await?;
-        Some(failed_mcp(&violation, context, started))
     }
 
     /// Poisons the generation after a confirmed peer protocol violation and
@@ -3018,6 +3206,17 @@ impl McpServerRuntime {
             let input_required = match outcome {
                 McpRoundOutcome::Terminal(result) => return result,
                 McpRoundOutcome::InputRequired(input_required) => input_required,
+                // The remote half of this invocation moved into a task
+                // lifecycle (Issue #243). The round loop is left for good:
+                // there is no `tools/call` after task creation, so the
+                // original call is never replayed and no second task
+                // identity can appear.
+                McpRoundOutcome::Task(created) => {
+                    return Box::pin(
+                        self.drive_remote_task(&created, identity, context, generation, started),
+                    )
+                    .await;
+                }
             };
             // The round bound is checked the moment an intermediate result
             // arrives, *before* any translation or interaction publication:
@@ -3208,9 +3407,11 @@ impl McpServerRuntime {
         })
     }
 
-    /// The per-request options of one `tools/call` round.
+    /// The per-request client capabilities of **every** physical request one
+    /// invocation sends: its `tools/call` rounds and the SEP-2663 task
+    /// control requests of a task those rounds materialized.
     ///
-    /// # Why elicitation is advertised per request, never per connection
+    /// # Why capabilities are advertised per request, never per connection
     ///
     /// MCP `2026-07-28` carries client capabilities in every request's
     /// `_meta` (SEP-2575), which is exactly the granularity rustX's
@@ -3220,36 +3421,58 @@ impl McpServerRuntime {
     /// a server that *every* call on that peer can be answered by a human,
     /// which is not true — and §4 of Issue #242 forbids exactly that.
     ///
-    /// So the advertisement is a truthful, per-invocation fact:
+    /// # Tasks and Elicitation are orthogonal, and are advertised separately
+    ///
+    /// Driving a remote MCP task is a *protocol* capability rustX always has
+    /// on a modern peer: the poll loop, the bounded waits, the terminal-state
+    /// projection, and cooperative cancellation are owned by the invocation
+    /// itself and need no human. Answering an elicitation is an *authority*
+    /// this particular invocation may or may not hold. So:
     ///
     /// ```text
+    /// modern peer
+    ///     -> _meta advertises extensions { io.modelcontextprotocol/tasks }
     /// modern peer + this invocation holds interaction authority
-    ///     -> _meta advertises elicitation { form }
-    /// anything else
-    ///     -> no advertisement, and an input_required answer is refused
+    ///     -> _meta additionally advertises elicitation { form }
+    /// modern peer, no interaction authority
+    ///     -> Tasks stay advertised; elicitation is absent, and an
+    ///        input_required answer — from a round or from a task — is refused
+    /// legacy peer
+    ///     -> no request `_meta` capabilities at all
     /// ```
+    ///
+    /// A detached background invocation therefore drives
+    /// `CreateTaskResult -> working -> completed` exactly like a foreground
+    /// one, and fails honestly the moment such a task asks for a human.
     ///
     /// The connection-level handshake keeps `ClientCapabilities::default()`
     /// on both the legacy `initialize` path and the inline `server/discover`
     /// probe, so rustX never claims support for the legacy server-initiated
-    /// `elicitation/create` callback it does not implement. Legacy
-    /// connections never receive request `_meta` capabilities at all: rmcp
-    /// populates them only for `2026-07-28`+ peers, and this method adds
-    /// nothing there.
-    fn call_request_options(&self, context: &ToolExecutionContext<'_>) -> PeerRequestOptions {
+    /// `elicitation/create` callback it does not implement, and never
+    /// declares Tasks to a peer whose requests could not carry the extension
+    /// anyway. Legacy connections never receive request `_meta` capabilities
+    /// at all: rmcp populates them only for `2026-07-28`+ peers, and this
+    /// method adds nothing there.
+    fn invocation_request_options(&self, context: &ToolExecutionContext<'_>) -> PeerRequestOptions {
         if !uses_inline_lifecycle(&self.protocol_version) {
             return PeerRequestOptions::no_options();
         }
-        if context.questionnaire_requester().is_none() {
-            return PeerRequestOptions::no_options();
-        }
         let mut capabilities = ClientCapabilities::default();
-        // Form mode only. URL-mode elicitation directs a human to an external
-        // site, which is not a bounded rustX Questionnaire.
-        capabilities.elicitation = Some(
-            rmcp::model::ElicitationCapability::new()
-                .with_form(rmcp::model::FormElicitationCapability::new()),
-        );
+        // SEP-2663. rustX implements the whole client half of the extension
+        // — `tasks/get`, `tasks/update`, `tasks/cancel` — inside the owning
+        // invocation, so declaring it is a contract rustX can keep.
+        capabilities.extensions = Some(rmcp::model::ExtensionCapabilities::from([(
+            rmcp::model::TASKS_EXTENSION_ID.to_owned(),
+            rmcp::model::JsonObject::new(),
+        )]));
+        if context.questionnaire_requester().is_some() {
+            // Form mode only. URL-mode elicitation directs a human to an
+            // external site, which is not a bounded rustX Questionnaire.
+            capabilities.elicitation = Some(
+                rmcp::model::ElicitationCapability::new()
+                    .with_form(rmcp::model::FormElicitationCapability::new()),
+            );
+        }
         let mut meta = rmcp::model::RequestMetaObject::new();
         meta.set_client_capabilities(capabilities);
         // rmcp fills protocol version, client info, and its own default
@@ -3261,31 +3484,18 @@ impl McpServerRuntime {
     /// Dispatches **one** physical MCP `tools/call` round and classifies its
     /// outcome (Issue #242).
     ///
-    /// This is the whole of the pre-MRTR call path, unchanged: the
-    /// pre-frontier rejections, the `send_cancellable_request` external-effect
-    /// frontier, request-lifecycle admission, progress ownership, the
-    /// cancellation arbitration, the local release proof, protocol poisoning,
-    /// and `OutcomeUnknown` semantics all live here and nowhere else. The
-    /// MRTR driver above composes rounds; it never re-implements any of this.
+    /// The physical request — its effect frontier, its ownership, and its
+    /// cancellation arbitration — belongs to [`Self::dispatch_owned_request`],
+    /// which every request of this invocation shares. What stays here is the
+    /// `tools/call` *vocabulary*: how the round's request is built from the
+    /// business arguments plus the MRTR continuation, and what each physical
+    /// outcome means for a tool call.
     ///
     /// `continuation` carries the opaque protocol state of the previous
     /// round. On the first round it is empty and the request is byte-identical
     /// to the pre-#242 one. `started` is the **invocation's** start instant,
     /// shared by every round, so a settled result reports the whole
     /// invocation's duration rather than its last round's.
-    ///
-    /// The read side of the call gate is taken **per round**, not for the
-    /// whole invocation. The gate's guarantee is "no call or notification that
-    /// began before `close()` is still running when the write barrier is
-    /// crossed", and that stays exactly true: while a round's human
-    /// interaction is pending no request exists, and the next round re-takes
-    /// the gate and observes `closed` before it can dispatch. Holding the gate
-    /// across a human interaction would instead make runtime drain wait for a
-    /// person.
-    #[allow(
-        clippy::too_many_lines,
-        reason = "the effect frontier and its ownership seams must stay in one function"
-    )]
     async fn dispatch_one_mcp_round(
         &self,
         remote_name: &str,
@@ -3295,42 +3505,6 @@ impl McpServerRuntime {
         generation: u64,
         started: Instant,
     ) -> McpRoundOutcome {
-        let _call_gate = self.call_gate.read().await;
-        // ---------- before the external-effect frontier ----------
-        //
-        // Every rejection below happens while no request exists, so each one
-        // is a proven ordinary outcome: rustX can prove no remote side
-        // effect was possible, and claiming an unknown external outcome here
-        // would be dishonest in the opposite direction.
-        //
-        // A generation that already violated the protocol never serves
-        // another call as healthy, whether the violation arrived during an
-        // earlier call or while the connection was idle.
-        if let Some(failure) = self.protocol_violation_failure(context, started).await {
-            return McpRoundOutcome::Terminal(failure);
-        }
-        if self.closed.load(Ordering::Acquire) {
-            return McpRoundOutcome::terminal(failed_mcp(
-                "MCP server runtime is closed",
-                context,
-                started,
-            ));
-        }
-        // The pre-frontier cancellation checkpoint, and — for every
-        // continuation round — the MRTR **continuation dispatch frontier**
-        // (Issue #242). Cancellation observed here means no new remote round
-        // is started at all, so a human response that lost the cancellation
-        // race can never create fresh remote ambiguity.
-        if context.cancellation.is_cancelled() {
-            return McpRoundOutcome::terminal(mcp_empty_terminal(
-                ToolExecutionStatus::Cancelled {
-                    reason: context.cancellation.reason(),
-                    phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
-                },
-                context,
-                started,
-            ));
-        }
         // The original business arguments are re-sent unchanged on every
         // round. MRTR continuation fields are additional *protocol* state and
         // are never merged into the model-issued arguments.
@@ -3344,10 +3518,171 @@ impl McpServerRuntime {
         if let Some(input_responses) = &continuation.input_responses {
             params = params.with_input_responses(input_responses.clone());
         }
-        let request = ClientRequest::CallToolRequest(CallToolRequest::new(params));
+        let outcome = self
+            .dispatch_owned_request(
+                ClientRequest::CallToolRequest(CallToolRequest::new(params)),
+                McpRequestOwnership::tool_call(remote_name),
+                context,
+                generation,
+                started,
+            )
+            .await;
+        match outcome {
+            McpPhysicalOutcome::RefusedByCancellation { reason } => {
+                McpRoundOutcome::terminal(mcp_empty_terminal(
+                    ToolExecutionStatus::Cancelled {
+                        reason,
+                        phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
+                    },
+                    context,
+                    started,
+                ))
+            }
+            McpPhysicalOutcome::Refused { result, .. } => McpRoundOutcome::Terminal(*result),
+            McpPhysicalOutcome::Observed {
+                response,
+                terminated_local_request,
+                cancellation_won,
+            } => {
+                let outcome = self
+                    .classify_post_frontier_response(
+                        response,
+                        context,
+                        started,
+                        generation,
+                        terminated_local_request,
+                    )
+                    .await;
+                if !cancellation_won {
+                    return outcome;
+                }
+                match outcome {
+                    // The peer answered this round with an intermediate MRTR
+                    // result while cancellation intent had already won
+                    // locally (Issue #242). Remote terminality *of this
+                    // round* is proven — the server answered — and the
+                    // invocation will not start another one, so the honest
+                    // settlement is a proven cancellation, not an unknown
+                    // outcome and not a failure.
+                    McpRoundOutcome::InputRequired(_) => {
+                        McpRoundOutcome::terminal(mcp_empty_terminal(
+                            ToolExecutionStatus::Cancelled {
+                                reason: context.cancellation.reason(),
+                                phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
+                            },
+                            context,
+                            started,
+                        ))
+                    }
+                    // A remote task was materialized by the very round
+                    // cancellation just won against (Issue #243). Unlike an
+                    // `input_required` answer, this one leaves *remote work
+                    // running*: the server says the task exists. rustX will
+                    // not poll it, asks the server cooperatively to stop it,
+                    // and reports the outcome it genuinely cannot prove.
+                    McpRoundOutcome::Task(created) => McpRoundOutcome::terminal(
+                        self.abandon_remote_task(&created, context, started, generation)
+                            .await,
+                    ),
+                    outcome @ McpRoundOutcome::Terminal(_) => outcome,
+                }
+            }
+            McpPhysicalOutcome::CancelledPostFrontier { requested, .. } => {
+                McpRoundOutcome::terminal(mcp_empty_terminal(
+                    post_dispatch_cancellation_status(requested, &self.generation_tag(generation)),
+                    context,
+                    started,
+                ))
+            }
+        }
+    }
+
+    /// Dispatches **one** physical MCP request under every ownership rule of
+    /// the `ToolInvocation` that owns it, and reports the physical facts
+    /// (Issues #205, #242, #243).
+    ///
+    /// This is the whole MCP request path, and there is exactly one of it.
+    /// The pre-frontier rejections, the `send_cancellable_request`
+    /// external-effect frontier, request-lifecycle admission, progress
+    /// ownership, cancellation arbitration, the local release proof, protocol
+    /// poisoning, and transport-loss recording live here and nowhere else.
+    /// Every request one invocation sends goes through it: the `tools/call`
+    /// rounds of the MRTR driver, and the `tasks/get`, `tasks/update`, and
+    /// `tasks/cancel` requests of a remote task one of those rounds
+    /// materialized. No caller re-implements any of it, which is why the
+    /// Tasks extension adds a protocol, not a second dispatch owner.
+    ///
+    /// What this function deliberately does **not** own is the *meaning* of a
+    /// response: the outcome carries facts, and each caller applies its own
+    /// result vocabulary — a `tools/call` result, a task snapshot, an
+    /// acknowledgement — to them.
+    ///
+    /// The read side of the call gate is taken **per request**, not for the
+    /// whole invocation. The gate's guarantee is "no call or notification that
+    /// began before `close()` is still running when the write barrier is
+    /// crossed", and that stays exactly true: while a round's human
+    /// interaction or a task's poll wait is pending no request exists, and the
+    /// next request re-takes the gate and observes `closed` before it can
+    /// dispatch. Holding the gate across a human interaction — or across a
+    /// remote task's whole lifetime — would instead make runtime drain wait
+    /// for a person or for a server.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the effect frontier and its ownership seams must stay in one function"
+    )]
+    async fn dispatch_owned_request(
+        &self,
+        request: ClientRequest,
+        ownership: McpRequestOwnership<'_>,
+        context: &ToolExecutionContext<'_>,
+        generation: u64,
+        started: Instant,
+    ) -> McpPhysicalOutcome {
+        let _call_gate = self.call_gate.read().await;
+        // ---------- before the external-effect frontier ----------
+        //
+        // Every rejection below happens while no request exists, so each one
+        // is a proven ordinary outcome: rustX can prove no remote side
+        // effect was possible, and claiming an unknown external outcome here
+        // would be dishonest in the opposite direction.
+        //
+        // A generation that already violated the protocol never serves
+        // another request as healthy, whether the violation arrived during an
+        // earlier call or while the connection was idle.
+        if let Some(violation) = self.poisoned_protocol_violation().await {
+            return McpPhysicalOutcome::Refused {
+                result: Box::new(failed_mcp(&violation, context, started)),
+                detail: violation,
+            };
+        }
+        if self.closed.load(Ordering::Acquire) {
+            const CLOSED: &str = "MCP server runtime is closed";
+            return McpPhysicalOutcome::Refused {
+                result: Box::new(failed_mcp(CLOSED, context, started)),
+                detail: CLOSED.to_owned(),
+            };
+        }
+        // The pre-frontier cancellation checkpoint. For a `tools/call` it is
+        // also the MRTR **continuation dispatch frontier** (Issue #242); for
+        // a `tasks/get` or `tasks/update` it is the **task dispatch
+        // frontier** (Issue #243). Cancellation observed here means the
+        // request is never started, so a human response — or a poll wait —
+        // that lost the cancellation race can never create fresh remote
+        // ambiguity.
+        //
+        // The one exempt request is the cooperative `tasks/cancel`, which
+        // exists *because* cancellation won and would be self-defeating to
+        // refuse for that reason.
+        if ownership.refused_by_cancellation() && context.cancellation.is_cancelled() {
+            return McpPhysicalOutcome::RefusedByCancellation {
+                reason: context.cancellation.reason(),
+            };
+        }
+        #[cfg(test)]
+        let is_task_poll = matches!(&request, ClientRequest::GetTaskRequest(_));
         let mut handle = match self
             .peer
-            .send_cancellable_request(request, self.call_request_options(context))
+            .send_cancellable_request(request, self.invocation_request_options(context))
             .await
         {
             Ok(handle) => handle,
@@ -3361,16 +3696,16 @@ impl McpServerRuntime {
                     "the MCP service of '{}' is gone: {error}",
                     self.server_id
                 ));
-                return McpRoundOutcome::terminal(failed_mcp(
-                    &format!(
-                        "the MCP request was refused before dispatch and never reached the \
-                         transport ({}): {}",
-                        self.generation_tag(generation),
-                        bound_error(&error.to_string())
-                    ),
-                    context,
-                    started,
-                ));
+                let detail = format!(
+                    "the MCP request was refused before dispatch and never reached the \
+                     transport ({}): {}",
+                    self.generation_tag(generation),
+                    bound_error(&error.to_string())
+                );
+                return McpPhysicalOutcome::Refused {
+                    result: Box::new(failed_mcp(&detail, context, started)),
+                    detail,
+                };
             }
         };
         // ---------- the external-effect frontier is crossed ----------
@@ -3383,7 +3718,7 @@ impl McpServerRuntime {
         // point, which is why normal completion cleans up its own state
         // instead of leaving one record per historical request behind.
         let admission = self.admit_local_request(&handle.id);
-        // This call's progress-consumer ownership, taken in the same
+        // This request's progress-consumer ownership, taken in the same
         // await-free step as the admission above and released only when this
         // frame ends — however it ends. It is what makes "a correlated
         // response arrived" and "the dispatching caller is gone" two
@@ -3391,28 +3726,49 @@ impl McpServerRuntime {
         // once both are true, so a response can never delete evidence this
         // call has not claimed yet, and a call that exits before subscribing
         // still leaves nothing behind.
-        let progress_lease = self
-            .handler
-            .progress
-            .lease(handle.id.clone(), handle.progress_token.clone());
+        //
+        // Only a `tools/call` takes one. A task-control request is transport
+        // activity of rustX's own poll loop, and turning "another `tasks/get`
+        // was dispatched" into Tool progress would fabricate liveness the
+        // server never reported.
+        let progress_lease = ownership.progress_of.map(|_| {
+            self.handler
+                .progress
+                .lease(handle.id.clone(), handle.progress_token.clone())
+        });
         // Test-only: holds this call inside the pre-subscription window so a
         // regression can prove that genuine remote progress arrived before
         // the subscription registration completed. No production path
         // installs a race, so this is a lock read that returns immediately.
         #[cfg(test)]
-        test_sync::park_before_progress_subscription(
-            remote_name,
-            &handle.id,
-            self.handler.progress.scope(),
-        )
-        .await;
+        if let Some(remote_name) = ownership.progress_of {
+            test_sync::park_before_progress_subscription(
+                remote_name,
+                &handle.id,
+                self.handler.progress.scope(),
+            )
+            .await;
+        }
         // Subscribing after dispatch is unavoidable — rmcp mints the token
         // inside the request — but it is no longer a race: the outbound
         // dispatch seam registered this token as known and live before the
         // request could reach the server, so anything the peer sent for it
         // is already owned and is claimed here, including evidence the peer
         // sent before it answered.
-        let mut progress = progress_lease.subscribe();
+        let mut progress = progress_lease.as_ref().map(McpProgressLease::subscribe);
+        // The rustX-owned bound on a cancellation-exempt request. `None` for
+        // every ordinary request: those are bounded by the invocation's own
+        // cancellation and deadline contract, which this adapter neither owns
+        // nor duplicates.
+        #[cfg(test)]
+        if is_task_poll {
+            test_sync::park_task_arbitration(self.server_id.as_str(), &handle).await;
+        }
+        // One absolute bound covers both the acknowledgement wait and its
+        // request-local release; observing an ACK does not restart the bound.
+        let bound = ownership
+            .response_bound()
+            .map(|duration| tokio::time::Instant::now() + duration);
         let response = loop {
             tokio::select! {
                 biased;
@@ -3421,29 +3777,48 @@ impl McpServerRuntime {
                 // the deterministic winner of the response-versus-
                 // cancellation race.
                 response = &mut handle.rx => break response,
-                () = context.cancellation.cancelled() => {
+                () = context.cancellation.cancelled(), if ownership.arbitrated_by_cancellation() => {
                     // Liveness evidence that already arrived is never
                     // discarded by arbitration: it genuinely happened before
                     // the cancellation intent won.
-                    drain_remote_progress(context, &mut progress);
+                    if let Some(progress) = progress.as_mut() {
+                        drain_remote_progress(context, progress);
+                    }
                     drop(progress);
                     // This call stops consuming progress here, so it
                     // relinquishes here. Consumed admission makes progress
                     // forgettable even if settlement reports OutcomeUnknown;
                     // remote uncertainty does not own local progress.
                     drop(progress_lease);
-                    return McpRoundOutcome::terminal(
-                        self.settle_post_frontier_cancellation(
-                            handle,
-                            admission.as_ref(),
-                            context,
-                            started,
-                            generation,
-                        )
-                        .await,
-                    );
+                    return self
+                        .settle_post_frontier_cancellation(handle, admission.as_ref())
+                        .await;
                 }
-                progress_item = progress.recv() => {
+                // The cancellation-exempt request's own bound. It is a
+                // rustX-owned local fact, never settlement evidence: a
+                // cooperative `tasks/cancel` that outlives it is abandoned
+                // rather than allowed to hold this invocation open.
+                () = async {
+                    match bound {
+                        Some(bound) => tokio::time::sleep_until(bound).await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    drop(progress);
+                    drop(progress_lease);
+                    let termination = Self::terminate_local_request(admission.as_ref());
+                    termination.settled().await;
+                    return McpPhysicalOutcome::CancelledPostFrontier {
+                        requested: RemoteCancellation::Abandoned,
+                        terminated_local_request: termination.terminated_local_request(),
+                    };
+                }
+                progress_item = async {
+                    match progress.as_mut() {
+                        Some(progress) => progress.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
                     // Genuine remote liveness evidence, forwarded through the
                     // one generic progress seam. It refreshes the Agent
                     // Loop's idle watchdog and can never extend the generic
@@ -3455,12 +3830,55 @@ impl McpServerRuntime {
                 }
             }
         };
+        #[cfg(test)]
+        if let Some(ownership) = &self.request_ownership {
+            ownership.note_response_observed(&handle.id);
+        }
+        // An error already observed before cleanup is independent transport
+        // evidence. Later local termination must not explain it away.
+        match &response {
+            Ok(Err(error)) if is_transport_loss(error) => {
+                self.note_transport_loss(&error.to_string());
+            }
+            Err(_) => self.note_transport_loss(
+                "the MCP response channel ended without a correlated response",
+            ),
+            _ => {}
+        }
+        let mut terminated_local_request = false;
+        // rmcp makes a correlated POST response visible before its SSE tail
+        // drain drops our HTTP guard. Retain admission and await the exact
+        // request's release proof before returning any physical outcome.
+        // The response has already won arbitration; cleanup cannot replace it.
+        if let Some(admission) = admission.as_ref() {
+            tokio::select! {
+                biased;
+                () = admission.released() => {},
+                () = context.cancellation.cancelled(), if ownership.arbitrated_by_cancellation() => {
+                    let termination = admission.terminate();
+                    terminated_local_request = termination.terminated_local_request();
+                    termination.settled().await;
+                }
+                () = async {
+                    match bound {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    let termination = admission.terminate();
+                    terminated_local_request = termination.terminated_local_request();
+                    termination.settled().await;
+                }
+            }
+        }
         // A correlated response winning the biased arbitration must not
         // silently discard liveness evidence the peer already delivered on
         // the same ordered transport: those notifications genuinely arrived
         // before the response, and they are reported before the terminal
         // result so the durable fact order stays terminal-last.
-        drain_remote_progress(context, &mut progress);
+        if let Some(progress) = progress.as_mut() {
+            drain_remote_progress(context, progress);
+        }
         drop(progress);
         // Every occurrence this call owned has now been reported, so its
         // progress-consumer ownership ends. The correlated response already
@@ -3468,17 +3886,612 @@ impl McpServerRuntime {
         // this the request's terminal forget point.
         drop(progress_lease);
         // A response that won the biased arbitration on its own is a pure
-        // response-plane outcome: this call never terminated its own
-        // transport-level request, so any transport-class failure here is
-        // genuine evidence about the connection generation.
-        self.classify_post_frontier_response(
-            McpResponseOutcome::observed(response),
+        // response-plane outcome. Any transport error was captured before
+        // release cleanup, so that cleanup cannot explain away the error as
+        // self-inflicted or change the established arbitration facts.
+        McpPhysicalOutcome::Observed {
+            response: McpResponseOutcome::observed(response),
+            terminated_local_request,
+            cancellation_won: false,
+        }
+    }
+
+    /// Drives one already-materialized remote MCP task to **exactly one**
+    /// terminal rustX `ToolExecutionResult` (Issue #243).
+    ///
+    /// # The finite state machine
+    ///
+    /// ```text
+    ///                  CreateTaskResult (from tools/call)
+    ///                             |
+    ///                             v
+    ///                     RemoteTaskActive
+    ///                             |
+    ///          +------------------+------------------+---------------+
+    ///          |                  |                  |               |
+    ///      tasks/get          tasks/get          tasks/get     cancellation /
+    ///      -> working      -> input_required   -> completed     deadline
+    ///          |                  |             / failed /          |
+    ///          |                  v             / cancelled         v
+    ///          |          one runtime-owned          |        no further poll
+    ///          |          Questionnaire              |        or update;
+    ///          |                  |                  |        cooperative
+    ///          |                  v                  |        tasks/cancel
+    ///          |            tasks/update             |              |
+    ///          |                  |                  v              v
+    ///          +--- bounded, cancellation-aware      exactly one terminal
+    ///               wait, then tasks/get ---+        ToolExecutionResult
+    /// ```
+    ///
+    /// There is **no `tools/call` here**: the invocation left the round loop
+    /// behind when the task was created, so the original call is never
+    /// replayed and no second task identity can appear.
+    ///
+    /// # The poll loop has no task of its own
+    ///
+    /// Every await below belongs to the operation future of the owning
+    /// [`ToolExecutionHandle`](crate::tools::executor::ToolExecutionHandle):
+    /// nothing is spawned, nothing is detached, and no timer outlives the
+    /// invocation. Termination is the existing contract's — the invocation's
+    /// cancellation signal and the generic Issue #204 deadline — which is why
+    /// `ttlMs` is read as the server's retention metadata and never as a
+    /// second local deadline.
+    async fn drive_remote_task(
+        &self,
+        created: &rmcp::model::CreateTaskResult,
+        identity: &McpCallIdentity<'_>,
+        context: &ToolExecutionContext<'_>,
+        generation: u64,
+        started: Instant,
+    ) -> ToolExecutionResult {
+        // Advertisement is authority in both directions. rustX declares the
+        // extension per request; a peer that never declared it in its own
+        // negotiated capabilities does not acquire the right to hand this
+        // invocation a remote lifecycle by simply answering with one.
+        if !self.server_tasks {
+            return self.task_outcome_unknown(
+                &created.task.task_id,
+                "the MCP server answered tools/call with a task result without advertising the \
+                 io.modelcontextprotocol/tasks extension",
+                context,
+                started,
+                generation,
+            );
+        }
+        let mut task = match tasks::RemoteTask::create(created) {
+            Ok(task) => task,
+            Err(violation) => {
+                return self.task_outcome_unknown(
+                    &created.task.task_id,
+                    &violation.diagnostic,
+                    context,
+                    started,
+                    generation,
+                );
+            }
+        };
+        if let Err(violation) = tasks::RemoteTask::validate_creation(created) {
+            return self
+                .abandon_active_task(
+                    task.task_id(),
+                    &violation.diagnostic,
+                    context,
+                    started,
+                    generation,
+                )
+                .await;
+        }
+        // All nonterminal exits converge here: addressable abandonment owes
+        // at most one cooperative cancellation; unreachable peers cannot carry it.
+        let failure = loop {
+            // Wait before every poll, including the creation hint.
+            // Cancellation observed here means the next `tasks/get` is never dispatched.
+            if !wait_before_next_poll(task.poll_interval(), context).await {
+                break TaskDriveFailure::Cancelled(
+                    "the rustX execution was cancelled while waiting to poll the MCP task"
+                        .to_owned(),
+                );
+            }
+            let observation = match self
+                .observe_remote_task(&mut task, context, generation)
+                .await
+            {
+                Ok(observation) => observation,
+                Err(failure) => break failure,
+            };
+            match observation {
+                // The task finished. The result is projected through exactly
+                // the ordinary MCP result path, so `isError`, content, and
+                // structured output behave as they do for a direct call — a
+                // `completed` task carrying `isError: true` is a completed
+                // task with a failed tool, not a failed task.
+                tasks::RemoteTaskObservation::Completed(result) => {
+                    return translate_result(*result, context, started);
+                }
+                // The task's own terminal failure, correlated to this task
+                // by the protocol. A known terminal outcome, bounded.
+                tasks::RemoteTaskObservation::Failed(error) => {
+                    return failed_mcp(
+                        &format!(
+                            "the MCP task failed ({}): {}",
+                            self.generation_tag(generation),
+                            bound_error(&error.to_string())
+                        ),
+                        context,
+                        started,
+                    );
+                }
+                // A remote protocol fact, never a rustX cancellation:
+                // `CancellationReason` is local authority and rustX did not
+                // cancel this. The task reached a terminal state carrying no
+                // result, which is a known failed outcome of the tool.
+                tasks::RemoteTaskObservation::Cancelled => {
+                    return failed_mcp(
+                        &format!(
+                            "the MCP server cancelled the task and it produced no result ({})",
+                            self.generation_tag(generation)
+                        ),
+                        context,
+                        started,
+                    );
+                }
+                tasks::RemoteTaskObservation::InputRequired(requests) => {
+                    if let Err(failure) = self
+                        .answer_task_input(&mut task, &requests, identity, context, generation)
+                        .await
+                    {
+                        break failure;
+                    }
+                    // A successful update is acknowledged eventually, so the
+                    // next observation may still show the request rustX just
+                    // answered. It is deduplicated by the answered-key set,
+                    // never by a re-ask and never by a second update.
+                }
+                tasks::RemoteTaskObservation::Working => {}
+            }
+        };
+        match failure {
+            TaskDriveFailure::Unreachable(detail) => {
+                self.task_outcome_unknown(task.task_id(), &detail, context, started, generation)
+            }
+            TaskDriveFailure::AbandonAddressable(detail) | TaskDriveFailure::Cancelled(detail) => {
+                self.abandon_active_task(task.task_id(), &detail, context, started, generation)
+                    .await
+            }
+        }
+    }
+
+    /// Polls the remote task once and validates the snapshot it answered.
+    ///
+    /// # Errors
+    ///
+    /// Returns the failure that ends the drive: a bounded diagnostic about a
+    /// task rustX can no longer follow, or a local cancellation that still
+    /// owes the server a cooperative `tasks/cancel`.
+    async fn observe_remote_task(
+        &self,
+        task: &mut tasks::RemoteTask,
+        context: &ToolExecutionContext<'_>,
+        generation: u64,
+    ) -> Result<tasks::RemoteTaskObservation, TaskDriveFailure> {
+        let snapshot = match self.poll_remote_task(task, context, generation).await {
+            McpTaskAnswer::Answered(snapshot) => snapshot,
+            McpTaskAnswer::Malformed(detail) => {
+                return Err(TaskDriveFailure::AbandonAddressable(detail));
+            }
+            McpTaskAnswer::Cancelled(detail) => {
+                return Err(TaskDriveFailure::Cancelled(format!(
+                    "{detail}; last observed status {}",
+                    task.status()
+                )));
+            }
+            McpTaskAnswer::Unknown(detail) => {
+                return Err(TaskDriveFailure::Unreachable(format!(
+                    "{detail}; last observed status {}",
+                    task.status()
+                )));
+            }
+        };
+        // A self-contradictory snapshot fails *this* invocation and nothing
+        // else: the peer answered, so the transport is healthy and unrelated
+        // calls on this generation stay healthy too.
+        task.observe(&snapshot)
+            .map_err(|violation| TaskDriveFailure::AbandonAddressable(violation.diagnostic))
+    }
+
+    /// Dispatches one `tasks/get` for the invocation's remote task.
+    async fn poll_remote_task(
+        &self,
+        task: &tasks::RemoteTask,
+        context: &ToolExecutionContext<'_>,
+        generation: u64,
+    ) -> McpTaskAnswer<rmcp::model::GetTaskResult> {
+        let request = ClientRequest::GetTaskRequest(GetTaskRequest::new(GetTaskParams::new(
+            task.task_id().to_owned(),
+        )));
+        self.dispatch_task_request(
+            dispatch::GET_TASK_METHOD,
+            task.task_id(),
+            request,
+            McpRequestOwnership::task_control(),
+            context,
+            generation,
+        )
+        .await
+    }
+
+    /// Turns one task `input_required` snapshot into one runtime-owned
+    /// Questionnaire and one `tasks/update` (Issue #243).
+    ///
+    /// Everything human here is the **existing** #242 machinery: the same
+    /// whole-payload translation, the same crate-private
+    /// `QuestionnaireRequester`, the same typed answer vocabulary, and the
+    /// same `inputResponses` mapping. A task's input request is an MCP
+    /// elicitation like any other; nothing about it justifies a second
+    /// interaction subsystem.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one task input round's whole settlement contract stays in one place"
+    )]
+    async fn answer_task_input(
+        &self,
+        task: &mut tasks::RemoteTask,
+        requests: &rmcp::model::InputRequests,
+        identity: &McpCallIdentity<'_>,
+        context: &ToolExecutionContext<'_>,
+        generation: u64,
+    ) -> Result<(), TaskDriveFailure> {
+        use crate::runtime::interaction::{
+            InteractionFailure, InteractionOutcome, InteractionResponse,
+        };
+
+        let task_id = task.task_id().to_owned();
+        // Nothing here builds a settlement: the driver is the single
+        // settlement point, so this function reports only *why* the round
+        // could not complete.
+        let unsupported =
+            |diagnostic: &str| TaskDriveFailure::AbandonAddressable(diagnostic.to_owned());
+        // Cancellation observed before publication: no interaction is created
+        // at all, so there is no pending prompt to settle and no waiter to
+        // race.
+        if context.cancellation.is_cancelled() {
+            return Err(TaskDriveFailure::Cancelled(
+                "the rustX execution was cancelled before the MCP task interaction was published"
+                    .to_owned(),
+            ));
+        }
+        // Whole-payload validation before anything is published: a mixed
+        // supported/unsupported request set fails here, never half-way
+        // through a prompt.
+        let plan = match mrtr::plan_round(Some(requests)) {
+            Ok(Some(plan)) => plan,
+            // Unreachable: an empty request map is refused as a contradictory
+            // snapshot before this function is reached.
+            Ok(None) => {
+                return Err(unsupported(
+                    "the MCP task reported input_required with nothing to ask",
+                ));
+            }
+            Err(error) => return Err(unsupported(&error.diagnostic)),
+        };
+        // The one runtime-owned human-interaction authority — the same
+        // crate-private capability the native `ask_user` tool and the
+        // synchronous MRTR path consume. A background invocation holds none,
+        // and rustX advertised no elicitation capability for it, so a task
+        // that asks a background execution for a human fails honestly rather
+        // than creating hidden pending UI state.
+        let Some(requester) = context.questionnaire_requester() else {
+            return Err(unsupported(
+                "the MCP task asked for user input, but this execution has no runtime-owned \
+                 interaction authority: rustX advertises MCP elicitation only for invocations \
+                 that can settle it",
+            ));
+        };
+        let facts = crate::runtime::interaction::QuestionnaireFacts {
+            invocation_id: identity.invocation_id.clone(),
+            requester: identity.requester(&self.server_id),
+            turn: 0,
+            questionnaire: plan.questionnaire().clone(),
+        };
+        let response = match requester.request_questionnaire(facts).await {
+            Ok(InteractionOutcome::Responded {
+                response: InteractionResponse::Questionnaire { response },
+            }) => response,
+            Ok(InteractionOutcome::Responded { response: _ }) => {
+                return Err(unsupported(
+                    "the MCP elicitation interaction settled with a response of another kind",
+                ));
+            }
+            Ok(InteractionOutcome::Cancelled { reason }) => {
+                return Err(TaskDriveFailure::Cancelled(format!(
+                    "the MCP task interaction was cancelled ({reason:?})"
+                )));
+            }
+            Ok(InteractionOutcome::DeadlineExpired { kind: _ }) => {
+                return Err(TaskDriveFailure::Cancelled(
+                    "the execution deadline expired while the MCP task interaction was pending"
+                        .to_owned(),
+                ));
+            }
+            Ok(InteractionOutcome::ReviewInvalidated) => {
+                return Err(unsupported(
+                    "the MCP elicitation interaction was invalidated by native source \
+                     interference",
+                ));
+            }
+            Err(failure) => {
+                let detail = if failure == InteractionFailure::Unavailable {
+                    format!(
+                        "the MCP task asked for user input and {failure}, so the call cannot \
+                         continue"
+                    )
+                } else {
+                    format!("the MCP elicitation interaction failed: {failure}")
+                };
+                return Err(unsupported(&detail));
+            }
+        };
+        let input_responses = match plan.responses(&response) {
+            Ok(responses) => responses,
+            Err(error) => return Err(unsupported(&error)),
+        };
+        // The keys are recorded **before** the dispatch frontier, so a
+        // request rustX has committed to answering is never asked again even
+        // if the update itself is never acknowledged. Answering a human twice
+        // for one key is not recoverable by retrying.
+        if let Err(violation) = task.record_answered(requests.keys().map(String::as_str)) {
+            return Err(unsupported(&violation.diagnostic));
+        }
+        let request = ClientRequest::UpdateTaskRequest(UpdateTaskRequest::new(
+            UpdateTaskParams::new(task_id.clone(), input_responses),
+        ));
+        match self
+            .dispatch_task_request::<rmcp::model::TaskAckResult>(
+                dispatch::UPDATE_TASK_METHOD,
+                &task_id,
+                request,
+                McpRequestOwnership::task_control(),
+                context,
+                generation,
+            )
+            .await
+        {
+            // The acknowledgement is empty by definition and eventually
+            // consistent: it proves the server accepted the responses, never
+            // that the next snapshot reflects them.
+            McpTaskAnswer::Answered(_) => Ok(()),
+            McpTaskAnswer::Cancelled(detail) => Err(TaskDriveFailure::Cancelled(detail)),
+            McpTaskAnswer::Malformed(detail) => Err(unsupported(&detail)),
+            McpTaskAnswer::Unknown(detail) => Err(TaskDriveFailure::Unreachable(detail)),
+        }
+    }
+
+    /// Dispatches one SEP-2663 task-control request and reduces its physical
+    /// outcome to what the task driver can act on.
+    async fn dispatch_task_request<T: tasks::TaskResponse>(
+        &self,
+        method: &'static str,
+        task_id: &str,
+        request: ClientRequest,
+        ownership: McpRequestOwnership<'_>,
+        context: &ToolExecutionContext<'_>,
+        generation: u64,
+    ) -> McpTaskAnswer<T> {
+        // Test-only: the deterministic task-request dispatch frontier. A
+        // regression parks here, decides a cancellation race, and asserts on
+        // what the server actually saw.
+        #[cfg(test)]
+        test_sync::park_before_task_request(self.server_id.as_str(), method, task_id).await;
+        #[cfg(not(test))]
+        let _ = task_id;
+        // The instant is unused by every branch that survives: a task request
+        // never builds a settled result here, because a task-active
+        // invocation's certainty rules belong to its driver.
+        let started = Instant::now();
+        match self
+            .dispatch_owned_request(request, ownership, context, generation, started)
+            .await
+        {
+            McpPhysicalOutcome::RefusedByCancellation { reason } => {
+                McpTaskAnswer::Cancelled(format!(
+                    "{method} was not dispatched because the rustX execution was cancelled ({reason:?})"
+                ))
+            }
+            McpPhysicalOutcome::Refused { detail, .. } => {
+                McpTaskAnswer::Unknown(format!("{method} was refused before dispatch: {detail}"))
+            }
+            McpPhysicalOutcome::Observed {
+                response,
+                cancellation_won,
+                terminated_local_request,
+            } => match response {
+                McpResponseOutcome::Answered(answered) => match *answered {
+                    Ok(result) => match T::decode(result) {
+                        Ok(result) => McpTaskAnswer::Answered(result),
+                        Err(detail) => McpTaskAnswer::Malformed(format!(
+                            "{method}: malformed response: {detail}"
+                        )),
+                    },
+                    // A JSON-RPC error correlated to a task-control request
+                    // is a proven answer *to that request* and nothing more:
+                    // an expired or unknown task id says the server no longer
+                    // has the task, not what the task did.
+                    Err(rmcp::service::ServiceError::McpError(error)) => {
+                        McpTaskAnswer::Malformed(format!(
+                            "{method} was answered with a protocol error: {}",
+                            bound_error(&error.to_string())
+                        ))
+                    }
+                    Err(error) => {
+                        let detail = format!(
+                            "{method} produced no correlated remote response: {}",
+                            bound_error(&error.to_string())
+                        );
+                        if is_transport_loss(&error) && !terminated_local_request {
+                            self.note_transport_loss(&detail);
+                            McpTaskAnswer::Unknown(detail)
+                        } else if cancellation_won {
+                            McpTaskAnswer::Cancelled(detail)
+                        } else {
+                            McpTaskAnswer::Malformed(detail)
+                        }
+                    }
+                },
+                McpResponseOutcome::ChannelEnded => {
+                    let detail = format!("the MCP transport closed during {method}");
+                    if cancellation_won {
+                        McpTaskAnswer::Cancelled(detail)
+                    } else {
+                        self.note_transport_loss(&detail);
+                        McpTaskAnswer::Unknown(detail)
+                    }
+                }
+            },
+            McpPhysicalOutcome::CancelledPostFrontier { .. } => McpTaskAnswer::Cancelled(format!(
+                "the rustX execution was cancelled while {method} was in flight"
+            )),
+        }
+    }
+
+    /// Settles an invocation whose remote task rustX will no longer drive,
+    /// after asking the server cooperatively to stop it (Issue #243).
+    ///
+    /// # Why the acknowledgement proves nothing
+    ///
+    /// `tasks/cancel` is *cooperative*: SEP-2663 defines its result as an
+    /// empty acknowledgement, and an implementation may accept it while the
+    /// task keeps running, or having already finished. It is therefore
+    /// remote **control**, never remote **evidence**, and it can never turn
+    /// this settlement into a proven `Cancelled` or a proven no-effect. It is
+    /// also distinct from `notifications/cancelled`, which cancels one
+    /// in-flight JSON-RPC request and says nothing about the task at all —
+    /// the in-flight poll's own request-level cancellation already happened
+    /// inside [`Self::dispatch_owned_request`].
+    ///
+    /// The invocation therefore settles as `OutcomeUnknown`: the remote task
+    /// may continue independently on the server, and rustX does not pretend
+    /// otherwise.
+    async fn abandon_active_task(
+        &self,
+        task_id: &str,
+        detail: &str,
+        context: &ToolExecutionContext<'_>,
+        started: Instant,
+        generation: u64,
+    ) -> ToolExecutionResult {
+        if !self.server_tasks {
+            return self.task_outcome_unknown(
+                task_id,
+                &format!("{detail}; no tasks/cancel: Tasks was not negotiated"),
+                context,
+                started,
+                generation,
+            );
+        }
+        if let Some(reason) = self.unusable_reason() {
+            return self.task_outcome_unknown(
+                task_id,
+                &format!("{detail}; no tasks/cancel: {reason}"),
+                context,
+                started,
+                generation,
+            );
+        }
+        let request = ClientRequest::CancelTaskRequest(CancelTaskRequest::new(
+            CancelTaskParams::new(task_id.to_owned()),
+        ));
+        // Exactly one cooperative cancellation per invocation, dispatched
+        // through the one task-request owner so its own local HTTP
+        // participant is terminated and proven released before this
+        // invocation reports.
+        let requested = match self
+            .dispatch_task_request::<rmcp::model::TaskAckResult>(
+                dispatch::CANCEL_TASK_METHOD,
+                task_id,
+                request,
+                McpRequestOwnership::task_cancellation(),
+                context,
+                generation,
+            )
+            .await
+        {
+            McpTaskAnswer::Answered(_) => {
+                "the server acknowledged the cooperative tasks/cancel, which does not prove the \
+                 remote task stopped"
+            }
+            McpTaskAnswer::Cancelled(_)
+            | McpTaskAnswer::Unknown(_)
+            | McpTaskAnswer::Malformed(_) => {
+                "the cooperative tasks/cancel produced no acknowledgement"
+            }
+        };
+        self.task_outcome_unknown(
+            task_id,
+            &format!("{detail}; {requested}"),
             context,
             started,
             generation,
-            false,
         )
-        .await
+    }
+
+    /// Settles an invocation whose remote task was materialized by a round
+    /// that local cancellation had already won against.
+    ///
+    /// The task exists — the server said so — and rustX never polls it, so
+    /// this is [`Self::abandon_active_task`] with the one difference that an
+    /// unusable task id cannot be cancelled cooperatively at all.
+    async fn abandon_remote_task(
+        &self,
+        created: &rmcp::model::CreateTaskResult,
+        context: &ToolExecutionContext<'_>,
+        started: Instant,
+        generation: u64,
+    ) -> ToolExecutionResult {
+        let detail = "the rustX execution was cancelled and the MCP server answered the same \
+                      round by creating a task, which rustX will not drive";
+        match tasks::RemoteTask::create(created) {
+            Ok(task) => {
+                self.abandon_active_task(task.task_id(), detail, context, started, generation)
+                    .await
+            }
+            Err(violation) => self.task_outcome_unknown(
+                &created.task.task_id,
+                &format!("{detail}; {}", violation.diagnostic),
+                context,
+                started,
+                generation,
+            ),
+        }
+    }
+
+    /// The one terminal status of an invocation whose remote task rustX
+    /// cannot follow to a terminal protocol state.
+    ///
+    /// A materialized task **is** remote work in progress, so every outcome
+    /// other than the task's own terminal state leaves the external result
+    /// genuinely unknown — including a cancellation rustX itself decided.
+    /// Reporting a proven `Cancelled` there would claim the server stopped,
+    /// which no part of the Tasks protocol can establish.
+    fn task_outcome_unknown(
+        &self,
+        task_id: &str,
+        detail: &str,
+        context: &ToolExecutionContext<'_>,
+        started: Instant,
+        generation: u64,
+    ) -> ToolExecutionResult {
+        mcp_empty_terminal(
+            ToolExecutionStatus::OutcomeUnknown {
+                detail: bound_error(&format!(
+                    "the MCP tool materialized remote task {} and its outcome could not be \
+                     established ({}): {detail}",
+                    bounded_task_id(task_id),
+                    self.generation_tag(generation)
+                )),
+            },
+            context,
+            started,
+        )
     }
 
     /// The bounded transport-generation tag carried by MCP diagnostics.
@@ -3568,18 +4581,15 @@ impl McpServerRuntime {
     /// is never used as evidence of anything.
     ///
     /// Nothing is reported until local ownership is settled: that await is
-    /// the last thing this function does before it builds a result, so
+    /// the last thing this function does before it reports a fact, so
     /// `Unconfirmed` keeps its Issue #204 meaning — every rustX-owned local
-    /// activity of this invocation is over, and only the remote effect
-    /// remains uncertain.
+    /// activity of this request is over, and only the remote effect remains
+    /// uncertain.
     async fn settle_post_frontier_cancellation(
         &self,
         mut handle: rmcp::service::RequestHandle<RoleClient>,
         admission: Option<&streamable_http::McpRequestAdmission>,
-        context: &ToolExecutionContext<'_>,
-        started: Instant,
-        generation: u64,
-    ) -> ToolExecutionResult {
+    ) -> McpPhysicalOutcome {
         // Armed first and synchronously: from here on this request cannot
         // reach the network even if its POST had not started yet.
         let termination = Self::terminate_local_request(admission);
@@ -3600,37 +4610,13 @@ impl McpServerRuntime {
         match outcome {
             // A correlated remote response beat the cancellation: remote
             // terminality is proven and the remote's own outcome is
-            // authoritative. The generic lifecycle then applies its
-            // documented rule to this proven settlement.
-            PostFrontierCancellation::Correlated(response) => {
-                match self
-                    .classify_post_frontier_response(
-                        response,
-                        context,
-                        started,
-                        generation,
-                        termination.terminated_local_request(),
-                    )
-                    .await
-                {
-                    McpRoundOutcome::Terminal(result) => result,
-                    // The peer answered this round with an intermediate MRTR
-                    // result while cancellation intent had already won
-                    // locally (Issue #242). Remote terminality *of this
-                    // round* is proven — the server answered — and the
-                    // invocation will not start another one, so the honest
-                    // settlement is a proven cancellation, not an unknown
-                    // outcome and not a failure.
-                    McpRoundOutcome::InputRequired(_) => mcp_empty_terminal(
-                        ToolExecutionStatus::Cancelled {
-                            reason: context.cancellation.reason(),
-                            phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
-                        },
-                        context,
-                        started,
-                    ),
-                }
-            }
+            // authoritative. The caller then applies its documented rule to
+            // this proven settlement.
+            PostFrontierCancellation::Correlated(response) => McpPhysicalOutcome::Observed {
+                response,
+                terminated_local_request: termination.terminated_local_request(),
+                cancellation_won: true,
+            },
             // No correlated remote response exists. The request may have
             // executed remotely and its final external outcome cannot be
             // established.
@@ -3659,11 +4645,10 @@ impl McpServerRuntime {
                         _ => {}
                     }
                 }
-                mcp_empty_terminal(
-                    post_dispatch_cancellation_status(requested, &self.generation_tag(generation)),
-                    context,
-                    started,
-                )
+                McpPhysicalOutcome::CancelledPostFrontier {
+                    requested,
+                    terminated_local_request: termination.terminated_local_request(),
+                }
             }
         }
     }
@@ -3840,6 +4825,12 @@ impl McpServerRuntime {
             Ok(ServerResult::InputRequiredResult(result)) => {
                 McpRoundOutcome::InputRequired(Box::new(result))
             }
+            // The SEP-2663 Tasks extension: the server materialized this call
+            // as a remote task (Issue #243). Like `InputRequiredResult` this
+            // is a state, not a result; whether rustX may drive it at all is
+            // the driver's decision, and this classifier only reports what
+            // the peer answered.
+            Ok(ServerResult::CreateTaskResult(result)) => McpRoundOutcome::Task(Box::new(result)),
             Ok(_) => McpRoundOutcome::terminal(failed_mcp(
                 "unexpected MCP tools/call response",
                 context,
@@ -3884,12 +4875,14 @@ impl McpServerRuntime {
     }
 }
 
-/// The outcome of **one** physical MCP `tools/call` round (Issue #242).
+/// The outcome of **one** physical MCP `tools/call` round (Issues #242, #243).
 ///
-/// The distinction is the whole MRTR contract: `Terminal` settles the rustX
-/// invocation, and `InputRequired` does not. There is no third state — a
-/// protocol failure, a cancellation, a deadline, and an unknown outcome are
-/// all already `ToolExecutionResult` values by the time a round returns.
+/// The distinction is the whole contract: `Terminal` settles the rustX
+/// invocation, and neither of the other two does. `InputRequired` keeps the
+/// invocation in the round loop; `Task` takes it out of the round loop for
+/// good and into the remote task lifecycle. A protocol failure, a
+/// cancellation, a deadline, and an unknown outcome are all already
+/// `ToolExecutionResult` values by the time a round returns.
 enum McpRoundOutcome {
     /// This round produced the invocation's one terminal result.
     Terminal(ToolExecutionResult),
@@ -3899,12 +4892,173 @@ enum McpRoundOutcome {
     /// Boxed because `InputRequiredResult` carries a whole embedded request
     /// map and this value travels through the round loop by value.
     InputRequired(Box<rmcp::model::InputRequiredResult>),
+    /// The server materialized this call as a remote task (SEP-2663). The
+    /// invocation is **not** settled: its remote half moved into a task
+    /// lifecycle, and no further `tools/call` will be sent.
+    Task(Box<rmcp::model::CreateTaskResult>),
 }
 
 impl McpRoundOutcome {
     fn terminal(result: ToolExecutionResult) -> Self {
         Self::Terminal(result)
     }
+}
+
+/// How one physical MCP request participates in the ownership rules of the
+/// `ToolInvocation` that owns it (Issue #243).
+struct McpRequestOwnership<'a> {
+    /// The remote tool whose idle-liveness this request's progress evidences.
+    ///
+    /// `Some` only for a `tools/call`: a server's progress on a tool call is
+    /// genuine Tool liveness. `None` for every task-control request, because
+    /// dispatching another `tasks/get` is rustX's own transport activity and
+    /// reporting it as progress would fabricate liveness.
+    progress_of: Option<&'a str>,
+    /// How local cancellation intent applies to this request.
+    cancellation: McpRequestCancellation,
+}
+
+/// How local cancellation intent applies to one physical MCP request.
+enum McpRequestCancellation {
+    /// Cancellation refuses the dispatch before the effect frontier and
+    /// arbitrates the response after it. Every request of a live invocation.
+    Arbitrated,
+    /// The request exists **because** cancellation already won, so
+    /// cancellation can neither refuse nor arbitrate it — doing either would
+    /// make the cooperative `tasks/cancel` unsendable exactly when it is
+    /// needed. It is bounded instead by a fixed rustX-owned wait, after which
+    /// its local half is terminated and proven released like any other.
+    Exempt {
+        /// The rustX-owned bound on awaiting the acknowledgement.
+        bound: std::time::Duration,
+    },
+}
+
+/// The rustX-owned bound on the cooperative `tasks/cancel` acknowledgement.
+///
+/// It is a bound on a **best-effort remote control**, not a deadline and not
+/// settlement evidence: the acknowledgement proves nothing about the remote
+/// task either way, so the only thing this value protects is the invocation's
+/// own ability to finish reporting.
+const MCP_TASK_CANCEL_ACK_BOUND: std::time::Duration = std::time::Duration::from_secs(5);
+
+impl<'a> McpRequestOwnership<'a> {
+    /// One `tools/call` round: it owns progress, and cancellation arbitrates.
+    const fn tool_call(remote_name: &'a str) -> Self {
+        Self {
+            progress_of: Some(remote_name),
+            cancellation: McpRequestCancellation::Arbitrated,
+        }
+    }
+
+    /// One `tasks/get` or `tasks/update`: locally owned, silent, arbitrated.
+    const fn task_control() -> Self {
+        Self {
+            progress_of: None,
+            cancellation: McpRequestCancellation::Arbitrated,
+        }
+    }
+
+    /// The one cooperative `tasks/cancel` an invocation may send.
+    const fn task_cancellation() -> Self {
+        Self {
+            progress_of: None,
+            cancellation: McpRequestCancellation::Exempt {
+                bound: MCP_TASK_CANCEL_ACK_BOUND,
+            },
+        }
+    }
+
+    /// Whether observable cancellation refuses this request before dispatch.
+    const fn refused_by_cancellation(&self) -> bool {
+        matches!(self.cancellation, McpRequestCancellation::Arbitrated)
+    }
+
+    /// Whether observable cancellation competes with this request's response.
+    const fn arbitrated_by_cancellation(&self) -> bool {
+        matches!(self.cancellation, McpRequestCancellation::Arbitrated)
+    }
+
+    /// The rustX-owned bound on awaiting this request's response, when it has
+    /// one instead of the invocation's cancellation/deadline contract.
+    const fn response_bound(&self) -> Option<std::time::Duration> {
+        match self.cancellation {
+            McpRequestCancellation::Arbitrated => None,
+            McpRequestCancellation::Exempt { bound } => Some(bound),
+        }
+    }
+}
+
+/// What became of **one** physical MCP request, in facts rather than in one
+/// caller's result vocabulary (Issue #243).
+///
+/// Every variant reports a state in which no rustX-owned local activity of
+/// that request remains: a refusal never started one, and both settled
+/// variants awaited the local release proof before they were built.
+enum McpPhysicalOutcome {
+    /// Local cancellation intent was already observable, so the request was
+    /// never dispatched and no remote side effect was possible.
+    RefusedByCancellation {
+        /// The cancellation this invocation was asked to honour.
+        reason: crate::runtime::types::CancellationReason,
+    },
+    /// The request never reached the transport for a protocol or runtime
+    /// reason. `result` is the settled outcome for a caller with no further
+    /// context; `detail` is the same fact as a bounded diagnostic, for a
+    /// caller whose own certainty rules differ.
+    Refused {
+        /// The settled result of the invocation.
+        result: Box<ToolExecutionResult>,
+        /// The bounded diagnostic behind it.
+        detail: String,
+    },
+    /// The request crossed the effect frontier and its response channel
+    /// resolved, or proved that it cannot.
+    Observed {
+        /// What the response channel produced.
+        response: McpResponseOutcome,
+        /// Whether *this request* terminated its own transport-level half.
+        terminated_local_request: bool,
+        /// Whether local cancellation intent won before the response did.
+        /// A correlated remote response still outranks it.
+        cancellation_won: bool,
+    },
+    /// Local cancellation intent won past the effect frontier with no
+    /// correlated remote response, or the request's own rustX-owned bound
+    /// expired. The remote outcome cannot be established.
+    CancelledPostFrontier {
+        /// What became of the best-effort protocol cancellation.
+        requested: RemoteCancellation,
+        /// Whether *this request* terminated its own transport-level half.
+        #[allow(dead_code, reason = "reported for symmetry with `Observed`")]
+        terminated_local_request: bool,
+    },
+}
+
+/// What one SEP-2663 task-control request produced for the task driver.
+enum McpTaskAnswer<T> {
+    /// The peer answered this request id with a result.
+    Answered(T),
+    /// A correlated response has the wrong method-specific shape or is an error.
+    Malformed(String),
+    /// Local cancellation intent decided this request. The remote task is
+    /// still the server's, so the driver asks it cooperatively to stop.
+    Cancelled(String),
+    /// No usable correlated answer exists, and no further protocol step can
+    /// establish the task's outcome.
+    Unknown(String),
+}
+
+/// Why one remote task drive ended without a terminal task state.
+///
+/// The driver alone settles, after at most one cancellation for an addressable task.
+enum TaskDriveFailure {
+    /// Local continuation failed but the task remains addressable.
+    AbandonAddressable(String),
+    /// Transport or generation cannot carry further traffic.
+    Unreachable(String),
+    /// Local cancellation or a deadline decided it.
+    Cancelled(String),
 }
 
 /// The canonical rustX identity of the invocation one MCP call serves.
@@ -4056,6 +5210,42 @@ fn drain_remote_progress(
     for notification in progress.drain() {
         report_remote_progress(context, notification);
     }
+}
+
+/// The cancellation-aware wait before every `tasks/get` poll.
+///
+/// Returns `false` when local cancellation won the wait, which is the task's
+/// **poll dispatch frontier**: the next `tasks/get` is then never dispatched.
+///
+/// The wait is deliberately a plain `select!` on this invocation's own
+/// cancellation signal and one timer owned by this stack frame. Nothing is
+/// spawned, nothing is detached, and the timer cannot outlive the operation
+/// future — a server's `pollIntervalMs` can therefore never defeat local
+/// cancellation, however large it is.
+async fn wait_before_next_poll(
+    interval: std::time::Duration,
+    context: &ToolExecutionContext<'_>,
+) -> bool {
+    tokio::select! {
+        biased;
+        () = context.cancellation.cancelled() => false,
+        () = async {
+            match tokio::time::Instant::now().checked_add(interval) {
+                Some(deadline) => tokio::time::sleep_until(deadline).await,
+                None => std::future::pending().await,
+            }
+        } => true,
+    }
+}
+
+/// A remote task id trimmed for a diagnostic, so a hostile id cannot inflate
+/// one.
+fn bounded_task_id(task_id: &str) -> String {
+    const LIMIT: usize = 64;
+    if task_id.chars().count() <= LIMIT {
+        return format!("{task_id:?}");
+    }
+    format!("{:?}…", task_id.chars().take(LIMIT).collect::<String>())
 }
 
 /// Whether one rmcp service failure is transport-class evidence that the
@@ -6321,6 +7511,38 @@ mod tests {
             runtime.tool_output(),
             runtime.environment(),
         )
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn mcp_tasks_poll_wait_preserves_hints_and_is_interruptible() {
+        use futures_util::FutureExt as _;
+        use std::time::Duration;
+        let (_directory, runtime) = runtime("task-clock");
+        let context = context(&runtime, None, &NoProgress);
+        for (hint, millis) in [
+            (None, 500),
+            (Some(0), 25),
+            (Some(500), 500),
+            (Some(60_000), 60_000),
+        ] {
+            let wait = super::wait_before_next_poll(super::tasks::poll_interval(hint), &context);
+            tokio::pin!(wait);
+            assert!(wait.as_mut().now_or_never().is_none());
+            tokio::time::advance(Duration::from_millis(millis - 1)).await;
+            assert!(wait.as_mut().now_or_never().is_none());
+            tokio::time::advance(Duration::from_millis(1)).await;
+            assert!(wait.await);
+        }
+        let signal = CancellationSignal::new();
+        let mut context = context;
+        context.cancellation =
+            ExecutionCancellation::detached(signal.clone(), CancellationReason::UserRequested);
+        let wait =
+            super::wait_before_next_poll(super::tasks::poll_interval(Some(u64::MAX)), &context);
+        tokio::pin!(wait);
+        assert!(wait.as_mut().now_or_never().is_none());
+        signal.cancel();
+        assert!(!wait.await);
     }
 
     fn image_block(bytes: usize) -> ContentBlock {
