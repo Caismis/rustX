@@ -1127,6 +1127,103 @@ live and historical entries by their durable transcript cursors without
 moving the live event cursor; identity only rejects the same fact twice.
 Historical audits are non-actionable presentation rows.
 
+## Native Agent Extensions (EXT-01 / Issue #256)
+
+rustX separates the Agent core from *optional* Agent augmentation:
+
+```text
+Agent core
+  ConversationRuntime
+  Agent Loop
+  Tool Plane
+  Context Assembly / Context Engine
+  durability / cancellation / recovery
+
+Native Agent Extensions
+  Agent Status        migrated (Issue #256)
+  Todo                later
+  Goal                later
+```
+
+The core invariant of the boundary:
+
+> An extension may contribute behavior only through an existing native
+> owner/seam. Extension composition never becomes a second Agent Loop, Tool
+> Plane, Context Engine, conversation owner, admission path, or durability
+> authority.
+
+Agent Status obeys it literally. It produces one bounded structured
+contribution per logical primary step; **Context Assembly** admits it as an
+ordinary canonical Runtime context fact and remains the sole request-time owner
+of admission, ordering, provenance, projection, and token/context semantics.
+Agent Status never schedules a model turn, prolongs an attempt, owns an
+execution state machine, becomes a second message/history authority, or owns
+Todo or Goal. Time and Background stay bounded contributors with their existing
+eligibility policies and their existing optional-context failure semantics
+(a failing contributor is quarantined for the attempt; it never fails the
+request).
+
+### Ownership: closed composition, not a plugin runtime
+
+`src/extensions.rs` owns the boundary and contains exactly two types:
+
+```text
+NativeAgentExtensionsDocument   authored, strict, closed record
+        | resolve()             the one configuration -> composition transition
+        v
+NativeAgentExtensions           the frozen composition a launch executes against
+```
+
+The composition is a closed struct with one typed member per extension, never
+`Vec<Box<dyn Extension>>`. There is deliberately no lifecycle trait, dynamic
+registration, runtime install/uninstall, callback or event-hook registry,
+arbitrary model-request mutation, cross-extension mutation API, or
+JavaScript/TypeScript/WASM or third-party loading. A future extension adds a
+typed member here and reaches the runtime through its real owning subsystem:
+Tool Plane for tools, Context Assembly for context contributions,
+`ConversationRuntime` for runtime coordination, Runtime Client for projection.
+`NativeAgentExtensions` has no `Default`: "the composition an unconfigured
+launch or role gets" is a decision of `resolve()`, and "no extension at all" is
+the explicit `NativeAgentExtensions::none()`.
+
+`extensions` is not an alias for tool selection. Ordinary execution
+capabilities remain `defaultTools`/`--tools` and the capability plane; an
+extension never adds a Tool to the model-facing registry by itself.
+
+### Launch-scoped lifetime and the two freeze points
+
+> A running `ConversationRuntime` executes against the native extension
+> composition frozen for that launch.
+
+- **Root.** `CurrentRuntimeConfig::extension_composition()` is called exactly
+  once, in `LocalConversationCore::compose`, and its result is materialized
+  through the single seam `NativeAgentExtensions::agent_status_engine`, which
+  produces the `Option<AgentStatusEngine>` the `ConversationRuntime` carries.
+  Nothing downstream reads the configuration document again. `extensions` is
+  not a reload-owned field, so an explicit resource reload republishes a whole
+  new `RuntimeResourceSnapshot` without reaching the composed extension set.
+  Restart/resume is a new launch: it resolves the current document through the
+  same resolver and rewrites no canonical Session history.
+- **Child.** `SubagentResolver::resolve_in_domain` freezes
+  `definition.extensions()` into `ResolvedSubagentSpec::extensions`, before
+  process staging and durable ownership commit. Root and named-role
+  compositions are independently authored — the root's document is not an input
+  to child resolution — and role extension settings participate in
+  `SubagentDefinitionDigest`. `LocalConversationCore::compose_subagent_child`
+  materializes `spec.resolved.extensions` and rereads no configuration document,
+  role file, or later resource generation.
+
+An absent member means the extension is not part of the composition, not that
+it is present and idle. `Option<AgentStatusEngine>` is the *whole*
+representation of "this runtime composes no Agent Status": the Agent Loop
+consults the extension set at exactly one place — `AgentExecution::compose_status`
+— and nowhere in tool admission, tool execution, cancellation, settlement,
+terminal events, canonical history, or the Event Journal. The pending fresh
+inbound turn's canonical consistency is validated by the Agent Loop itself,
+outside that seam, so an inconsistent execution state fails identically whether
+or not the launch composed Agent Status. An empty extension set is therefore an
+ordinary runtime with nothing added, never a second semantic runtime mode.
+
 ## 2. Layer model
 
 ### Layer 0: Domain and protocol types
@@ -2533,7 +2630,7 @@ executing attempt captures one read-only active snapshot from the background
 registry, the closed Background module bounds and evaluates it, and the
 renderer shows retained active executions in allocation order with an
 `omitted_count` when necessary. Time, Background, and Todo are compile-time-
-owned modules; there is no extension provider registration seam.
+owned contributors; there is no extension provider registration seam.
 
 The native tool plane implements Read, Write, Edit, Glob, Grep, and Bash as
 ordinary registrations under the concrete bounded `NativeToolPolicies`
@@ -6027,7 +6124,7 @@ capability-source settings are launch-scoped inputs.
 every process start before ordinary request admission. Composition combines that current
 `CurrentRuntimeConfig` with the selected Session state and active node. A
 resume therefore loads a fresh Runtime Resource Snapshot with current
-project/MCP/Skill/Tool/context/Agent Status/timezone/environment settings, while the
+project/MCP/Skill/Tool/context/extension/timezone/environment settings, while the
 selected Session model remains durable. A new Session
 uses the current runtime model default; clone/fork/tree operations copy only
 the intentionally Session-local state.
@@ -7425,7 +7522,9 @@ order, so two units with outstanding offers cannot open each other's gates.
 The control read half remains the parent-liveness authority, and its EOF is
 what `ChildPreparation` observes during composition. Channels are bounded,
 there is no listener and no network service. The subagent IPC version is
-**15**: its typed `Cancel` frame carries the parent registry's semantic
+**20**: the child's own frozen native Agent Extension composition rides inside
+the frozen `ResolvedSubagentSpec` (Issue #256) rather than as inherited
+launch-scoped Agent Status configuration, its typed `Cancel` frame carries the parent registry's semantic
 `CancellationReason` (with an absent reason only for pre-ownership
 preparation cancellation, where no child attempt exists), the child→parent
 `Activity` frame (kind 107) carries the Issue #178 live activity projection
@@ -7621,9 +7720,12 @@ Representative current runtime/project configuration:
       "requestParams": { "temperature": 0.1 }
     }
   },
-  "agentStatus": {
-    "time": { "enabled": true, "timezone": "Europe/Paris" },
-    "background": { "enabled": true }
+  "extensions": {
+    "agentStatus": {
+      "enabled": true,
+      "time": { "enabled": true, "timezone": "Europe/Paris" },
+      "background": { "enabled": true }
+    }
   },
   "context": {
     "reserveTokens": 16384,

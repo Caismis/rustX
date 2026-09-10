@@ -2516,7 +2516,7 @@ after ChildGuidanceOutcome::Accepted:
   `execution` have no child-plane implementation at all.
 - **Committed child identity is `(agent, definition_digest)`.**
   `SubagentDefinitionDigest` is SHA-256 over a rustX-owned versioned
-  canonical framing (`rustx-subagent-definition-v3`) of the normalized
+  canonical framing (`rustx-subagent-definition-v4`) of the normalized
   semantic definition — never raw JSONC bytes — so comments, whitespace, key
   order, and selector listing order cannot change it while every semantic
   change does. It is the identity of the **named definition itself**, not of
@@ -2802,9 +2802,13 @@ after ChildGuidanceOutcome::Accepted:
   either `UnixStream`; there is no listener and no network service.
 - **Anchor acknowledgements route by exact typed identity.** Two units with
   outstanding offers cannot open each other's start gates.
-- **The subagent IPC version is 16 and there is no compatibility decoding.** A
+- **The subagent IPC version is 20 and there is no compatibility decoding.** A
   peer that does not speak exactly this version exits before composing
-  anything. The typed `Cancel` payload carries the parent registry's semantic
+  anything. Version 20 removed the inherited launch-scoped Agent Status
+  configuration from `SubagentChildSpec` and carries the child's own frozen
+  native Agent Extension composition inside `resolved` instead (Issue #256):
+  root and named-role extension sets are independently authored, so this
+  transport has no inheritance channel between them. The typed `Cancel` payload carries the parent registry's semantic
   `CancellationReason`; only pre-ownership preparation cancellation uses an
   absent reason because no child attempt exists yet. Version 9 moved the
   child→parent `Activity` frame (kind 107) carrying the latest-value
@@ -3233,12 +3237,45 @@ the launch-boundary policy inheritance.
 - **Current runtime configuration is recomposed on every launch.**
   `--config <rustx.jsonc>` is parsed and validated before an existing Session
   catalog is opened. MCP definitions, native Tool policy and activation,
-  Skill roots/resources, environment, context policy, launch-scoped Agent
-  Status module settings (including Time timezone), agent settings, approval settings reserved for #100, and future capability
+  Skill roots/resources, environment, context policy, the launch-scoped native
+  Agent Extension composition (including the Agent Status Time timezone), agent
+  settings, approval settings reserved for #100, and future capability
   sources therefore come from the current launch. A valid old Session can
   never make an invalid current configuration disappear.
 - Resource reload replaces only the process-local Runtime Resource Snapshot;
-  it does not reread `rustx.jsonc` or change Agent Status configuration.
+  it does not reread `rustx.jsonc` or change the native Agent Extension
+  composition.
+- **A running `ConversationRuntime` executes against the native Agent
+  Extension composition frozen for that launch (Issue #256).** `extensions` is
+  the one closed, launch-scoped surface for optional Agent augmentation;
+  Agent Status is the first extension migrated under it and the obsolete
+  top-level `agentStatus` contract is removed with no alias, fallback parse,
+  deprecation warning, or compatibility mode. Resource reload cannot install,
+  remove, or reconfigure an extension in an already-composed runtime;
+  restart/resume is a new launch that resolves the current document through
+  the ordinary resolver and rewrites no canonical Session history. The
+  composition is a closed record of typed Rust members: an unknown extension
+  name and an unknown knob inside a known extension both fail the strict-field
+  boundary, and there is no plugin loader, lifecycle trait, dynamic
+  registration, event-hook registry, or third-party extension mechanism.
+- **Root Agent extensions and named-Subagent extensions are independently
+  authored compositions (Issue #256).** A child never implicitly inherits the
+  root's extension set: `SubagentResolver` freezes the *definition's* own
+  composition into `ResolvedSubagentSpec::extensions` before process staging
+  and durable ownership commit, and the root's document is not an input to
+  resolution. Role extension settings participate in
+  `SubagentDefinitionDigest`. The child materializes that frozen decision and
+  never rereads `rustx.jsonc`, host or project configuration, role files, or a
+  later resource generation to reinterpret which extensions it owns.
+- **An empty extension composition is an ordinary runtime, not a second
+  runtime mode (Issue #256).** `Option<AgentStatusEngine>` is the entire
+  representation of "no Agent Status": the Agent Loop consults the extension
+  set at exactly one seam (`AgentExecution::compose_status`) and nowhere in
+  tool admission, tool execution, cancellation, attempt settlement, terminal
+  events, canonical history, or the Event Journal. An extension may contribute
+  behavior only through an existing native owner; Context Assembly remains the
+  sole request-time owner of Agent Status admission, ordering, provenance,
+  projection, and token semantics.
 - **Runtime resources are process-local generations.** Composition discovers
   project instructions, Skill catalog identity/metadata, extension System
   Sections, and extension Tool registrations once and publishes them with one
