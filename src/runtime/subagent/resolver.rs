@@ -14,19 +14,65 @@
 //!
 //! Resolution reads the invoking generation's **available** capability
 //! catalog — [`CapabilitySnapshot::available_tools`] — and the matching
-//! capability-source availability of that same generation. It deliberately
-//! never reads the parent model's active `ToolRegistry`:
+//! capability-source availability of that same generation. That catalog is
+//! the outer ceiling on everything below:
 //!
 //! ```text
-//! ParentActiveTools     ⊆ CapabilitySnapshot::available_tools()
 //! SubagentResolvedTools ⊆ CapabilitySnapshot::available_tools()
-//! SubagentResolvedTools ⊄ ParentActiveTools          (deliberately)
 //! ```
 //!
 //! A named subagent is an independent projection of the authority admitted
 //! into the invoking attempt's runtime generation: it may **narrow** that
 //! authority but can never manufacture authority the generation does not
 //! already hold.
+//!
+//! ## The parent registry: frozen authority, never a live read (Issue #258)
+//!
+//! Resolution never consults a **live, currently mutable** parent
+//! `ToolRegistry`. Doing so would let a reload widen an attempt that was
+//! already admitted, and would make one resolution's outcome depend on when
+//! it ran rather than on what the invoking attempt actually holds.
+//!
+//! It does, however, depend on the invoking attempt's model-facing registry —
+//! as a **value frozen at attempt admission**, not as a reference to a
+//! changing one:
+//!
+//! ```text
+//! attempt admission     CapabilitySnapshot::tool_registry()
+//!                              |  captured once, by exact ToolId
+//!                              v
+//!                       InvokingAgentAuthority   (a typed frozen value)
+//!                              |  passed in as an argument
+//!                              v
+//!                       SubagentResolver::resolve
+//! ```
+//!
+//! Three concepts stay distinct, and conflating any two of them is a
+//! privilege bug:
+//!
+//! ```text
+//! available_tools()   the whole GENERATION's catalog. The outer ceiling of
+//!                     every path below, and deliberately WIDER than what the
+//!                     invoking model was admitted with.
+//!
+//! tool_registry()     the exact model-facing registry of the INVOKING
+//!                     ATTEMPT, frozen into `InvokingAgentAuthority`. It is
+//!                     the ceiling on what an INVOCATION-SCOPED OVERRIDE may
+//!                     add, so a main-model caller cannot delegate a
+//!                     capability it was never admitted with.
+//!
+//! role defaults       a named definition's own selections are authorized
+//!                     INDEPENDENTLY, against the generation catalog. A role
+//!                     may legitimately hold a capability the invoking model
+//!                     does not, so its defaults never narrow to
+//!                     `InvokingAgentAuthority`.
+//! ```
+//!
+//! So `SubagentResolvedTools ⊄ ParentActiveTools` remains true — a role's own
+//! defaults are not bounded by the invoking model's registry — while an
+//! override's *additions* are bounded by exactly that frozen registry. A
+//! trusted Workflow program carries its own typed authority and is bounded by
+//! the generation catalog instead; see [`SubagentDelegationAuthority`].
 //!
 //! # Optionality
 //!
@@ -343,10 +389,17 @@ pub struct ResolvedSubagentSpec {
 ///                            invocation framed by the SAME helper, so an
 ///                            explicit summary model is framed exactly as
 ///                            completely as the primary one
-/// effective tools            origin, exact ToolId, model-facing name, and
-///                            the cross-process MCP identity where one exists
+/// effective tools            origin, exact ToolId, model-facing name, the
+///                            COMPLETE frozen ToolDefinition the child
+///                            executes (description, canonical input schema,
+///                            and the execution/concurrency/approval/replay
+///                            policies), and — for an MCP tool — its frozen
+///                            cross-process identity (see
+///                            `frame_tool_definition`)
 /// effective Skills           exact SkillId + SkillVersionId binding and the
-///                            model-visible name
+///                            model-visible name AND description, both of
+///                            which cross to the child verbatim (see
+///                            `compute_profile_digest`)
 /// project instruction chain  path AND content, in order
 /// materialization plane      exactly the external source identities the
 ///                            effective selection requires. The bindings
@@ -356,9 +409,11 @@ pub struct ResolvedSubagentSpec {
 ///                            server imposes on its tools — is already framed
 ///                            exactly, through each MCP tool's cross-process
 ///                            identity above
-/// effective extensions       the closed composition's EFFECTIVE framing,
-///                            so an omitted timezone frames as the UTC it
-///                            actually renders
+/// effective extensions       the closed composition's EFFECTIVE framing:
+///                            an omitted timezone frames as the UTC it
+///                            actually renders, and a DISABLED Time
+///                            contributor's timezone frames as one inactive
+///                            sentinel because no zone executes
 /// ```
 ///
 /// # What the framing deliberately excludes
@@ -404,11 +459,33 @@ pub struct SubagentExecutionProfileDigest(String);
 /// version: a later milestone that admits a new profile-defining field bumps
 /// this constant so two framings can never collide into one digest.
 ///
-/// `v2` corrected `v1`, which folded `definition_digest` into the preimage —
-/// making an *effective* profile identity depend on source-definition-only
-/// provenance — and framed an explicit summary invocation far less completely
-/// than the primary one.
-pub const SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION: &str = "rustx-subagent-profile-v2";
+/// The revisions so far, each an *interpretation* change rather than an added
+/// field, which is why each took a new version rather than a compatibility
+/// mode — there is exactly one canonical reading of a given version:
+///
+/// ```text
+/// v1 -> v2  stopped folding `definition_digest` into the preimage (an
+///           EFFECTIVE profile identity must not depend on
+///           source-definition-only provenance), and framed an explicit
+///           summary invocation as completely as the primary one.
+///
+/// v2 -> v3  frames the COMPLETE frozen `ToolDefinition` of every resolved
+///           Tool instead of `builtin:{tool_id}:{name}` (a stable capability
+///           id is not a digest of the semantics it was frozen with), frames
+///           a Skill's model-visible description (which crosses to the child
+///           verbatim rather than being re-derived from `version_id`), and
+///           stops letting a DISABLED Time contributor's timezone
+///           distinguish two behaviorally identical profiles.
+/// ```
+///
+/// Both `v2 -> v3` corrections change what an existing preimage means: the
+/// same frozen specification hashes to a different value, and pairs that
+/// collided under `v2` no longer do. Since `profile_digest` is durably
+/// committed at ownership and never recomputed, a stale `v2` row must be
+/// visibly a different framing rather than silently reinterpreted under the
+/// corrected rules — so the version moves even though `v2` never shipped and
+/// no compatibility mode exists.
+pub const SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION: &str = "rustx-subagent-profile-v3";
 
 impl SubagentExecutionProfileDigest {
     /// The stable textual form `sha256:<64 lowercase hex characters>`.
@@ -472,17 +549,36 @@ impl ResolvedSubagentSpec {
     /// excluded fields.
     #[must_use]
     pub fn profile_digest(&self) -> SubagentExecutionProfileDigest {
+        // Destructured for the same reason the framing helpers are: a new
+        // field of the frozen contract cannot reach a child without a
+        // deliberate decision about whether it identifies the child.
+        let Self {
+            agent,
+            // The one deliberate exclusion, and the whole point of the split:
+            // source-definition provenance is not effective-execution
+            // identity. See `SubagentExecutionProfileDigest`.
+            definition_digest: _,
+            execution_deadline,
+            workspace_policy,
+            instructions,
+            model,
+            tools,
+            skills,
+            project_instructions,
+            materialization,
+            extensions,
+        } = self;
         compute_profile_digest(&ProfileFraming {
-            agent: &self.agent,
-            execution_deadline: self.execution_deadline,
-            workspace_policy: self.workspace_policy,
-            instructions: &self.instructions,
-            model: &self.model,
-            tools: &self.tools,
-            skills: &self.skills,
-            project_instructions: &self.project_instructions,
-            materialization: &self.materialization,
-            extensions: &self.extensions,
+            agent,
+            execution_deadline: *execution_deadline,
+            workspace_policy: *workspace_policy,
+            instructions,
+            model,
+            tools,
+            skills,
+            project_instructions,
+            materialization,
+            extensions,
         })
     }
 }
@@ -1468,13 +1564,18 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
     // The frozen model *decision*, never the provider binding. `configured`
     // is excluded with it: it is the descriptive record of what was asked
     // for, and the resolved invocations below are the authority.
-    frame_frozen_model_invocation(&mut hasher, "model", &framing.model.primary);
+    let crate::model::frozen::FrozenModelSpec {
+        configured: _,
+        primary,
+        summary,
+    } = framing.model;
+    frame_frozen_model_invocation(&mut hasher, "model", primary);
     // The summary policy is two distinct facts — "summaries follow the
     // session primary" and "summaries use this separately frozen
     // invocation" — and the explicit one is framed by the SAME helper as the
     // primary, so no behavior-affecting summary field can be dropped from
     // the identity while the equivalent primary field is kept.
-    match &framing.model.summary {
+    match summary {
         crate::model::frozen::FrozenSummaryModel::Session => {
             field(&mut hasher, "model_summary", "session");
         }
@@ -1488,45 +1589,78 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
     // order without imposing a second one.
     count(&mut hasher, "tools", framing.tools.len());
     for tool in framing.tools {
+        // Each variant is destructured completely: every frozen field of a
+        // resolved Tool is framed, and adding one is a compile error until it
+        // is classified. The child consumes the whole frozen `ToolDefinition`,
+        // so a stable `ToolId` is never accepted as a summary of it.
         match tool {
-            ResolvedSubagentTool::Builtin { tool_id, name, .. } => {
-                field(
-                    &mut hasher,
-                    "tool",
-                    &format!("builtin:{}:{name}", tool_id.as_str()),
-                );
+            ResolvedSubagentTool::Builtin {
+                tool_id,
+                name,
+                definition,
+            } => {
+                field(&mut hasher, "tool", "builtin");
+                field(&mut hasher, "tool.tool_id", tool_id.as_str());
+                field(&mut hasher, "tool.name", name);
+                frame_tool_definition(&mut hasher, "tool.definition", definition);
             }
             ResolvedSubagentTool::Mcp {
                 server_id,
                 tool_id,
                 name,
+                definition,
                 identity,
-                ..
-            } => field(
-                &mut hasher,
-                "tool",
-                &format!(
-                    "mcp:{server_id}:{}:{name}:{}",
-                    tool_id.as_str(),
-                    identity.as_str()
-                ),
-            ),
+            } => {
+                field(&mut hasher, "tool", "mcp");
+                field(&mut hasher, "tool.server_id", server_id.as_str());
+                field(&mut hasher, "tool.tool_id", tool_id.as_str());
+                field(&mut hasher, "tool.name", name);
+                frame_tool_definition(&mut hasher, "tool.definition", definition);
+                // `identity` is framed in addition to, not instead of, the
+                // definition. It is an independently frozen field that gates
+                // the child's startup: the child recomputes it from its own
+                // `tools/list` and refuses to run unless it matches, so a spec
+                // carrying a different frozen identity for the same definition
+                // is a different — failing — execution profile. It is framed
+                // here as that frozen value, and this digest never performs
+                // the verification itself.
+                field(&mut hasher, "tool.mcp_identity", identity.as_str());
+            }
         }
     }
     count(&mut hasher, "skills", framing.skills.len());
     for skill in framing.skills {
-        // The immutable version binding is the identity; the host source root
-        // and the child's remapped location are physical paths and are not.
-        field(
-            &mut hasher,
-            "skill",
-            &format!(
-                "{}:{}:{}",
-                skill.binding.skill_id.as_str(),
-                skill.binding.version_id.as_str(),
-                skill.catalog_entry.name
-            ),
-        );
+        // Destructured for the same reason the Tool framing is: every frozen
+        // field is classified, and adding one is a compile error.
+        let ResolvedSubagentSkill {
+            binding,
+            catalog_entry,
+            // A materialization SOURCE, not an identity. The child copies
+            // from it and then proves the copy hashes back to `version_id`.
+            source_root: _,
+            // Represented exactly by `version_id`, which hashes every
+            // package-relative path AND its bytes in sorted order: the file
+            // set cannot change without the version identity changing.
+            files: _,
+        } = skill;
+        field(&mut hasher, "skill.id", binding.skill_id.as_str());
+        field(&mut hasher, "skill.version_id", binding.version_id.as_str());
+        let crate::skills::SkillCatalogEntry {
+            name,
+            description,
+            // The host `SKILL.md` path. The child REMAPS it onto its own
+            // materialized copy, so the parent's spelling never executes.
+            location: _,
+        } = catalog_entry;
+        // Both model-visible fields cross to the child verbatim — only
+        // `location` is remapped — so both are part of what the child's model
+        // actually sees. `description` in particular drives progressive
+        // disclosure: it is how the model decides whether to open the Skill at
+        // all. It is NOT covered by `version_id`, even though it is parsed
+        // from the hashed `SKILL.md`, because the child trusts this frozen
+        // string rather than re-deriving it from the materialized package.
+        field(&mut hasher, "skill.name", name);
+        field(&mut hasher, "skill.description", description);
     }
     // The project instruction chain's order is meaning, so it is framed
     // exactly as resolved, content included.
@@ -1561,6 +1695,109 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
         &framing.extensions.effective_digest_framing(),
     );
     SubagentExecutionProfileDigest(format!("sha256:{:x}", hasher.finalize()))
+}
+
+/// Frames the complete semantic contract of one frozen [`ToolDefinition`]
+/// under `prefix`.
+///
+/// # Why a `ToolId` is not enough
+///
+/// A `ToolId` is a stable *capability* identity, not a digest of the runtime
+/// and model-facing semantics a definition was frozen with. The same
+/// `tool-read` identity can be frozen with a different description, a
+/// different input schema, or different execution, concurrency, approval, or
+/// replay policies, and the child executes **the frozen definition** — not a
+/// definition it looks up by id. Framing `builtin:{tool_id}:{name}` therefore
+/// collapsed materially different child execution contracts into one identity.
+///
+/// # The classification
+///
+/// Every field of [`ToolDefinition`] is destructured, so adding one is a
+/// compile error until it is decided. All nine are **included**:
+///
+/// ```text
+/// id                  the capability identity the child resolves against
+/// name                the model-facing name the model emits calls with
+/// origin              Builtin vs a specific MCP server: the same name from
+///                     two origins is two different capabilities
+/// description         model-facing prose; it changes what the model does
+/// input_schema        the accepted-argument contract, framed through the
+///                     rustX-owned canonical JSON writer
+/// execution_policy    attempt-owned vs conversation-owned vs model-selected
+/// concurrency_policy  in-batch sequential barrier vs parallel group
+/// approval_policy     whether an eligible invocation stops for a human
+/// replay_policy       whether the runtime may re-execute after an unknown
+///                     outcome
+/// ```
+///
+/// `replay_policy` is included deliberately rather than by omission. It is
+/// today's frozen declaration of whether automatic re-execution after a crash
+/// is permitted, it crosses the Runtime Client boundary into the child's
+/// observable tool projection, and its own documentation defers the consuming
+/// recovery policy to a later milestone. Excluding it would require proving it
+/// can never affect behavior, which is exactly what that deferral refuses to
+/// promise; a durable identity committed today must not silently equate an
+/// `Idempotent` tool with a `Never` one.
+///
+/// Nothing is excluded: [`ToolDefinition`] carries no physical, secret, or
+/// execution-correlation field. Physical materialization detail lives in
+/// [`ResolvedSubagentMaterialization`], and the model-selectable invocation
+/// metadata the runtime adds is added to the *compiled* model-facing
+/// definition, never to this canonical one.
+fn frame_tool_definition(hasher: &mut Sha256, prefix: &str, definition: &ToolDefinition) {
+    // Destructured so a new field of the frozen definition cannot be added
+    // without deciding whether it belongs in the child's execution identity.
+    let ToolDefinition {
+        id,
+        name,
+        description,
+        input_schema,
+        execution_policy,
+        concurrency_policy,
+        approval_policy,
+        replay_policy,
+        origin,
+    } = definition;
+    let key = |suffix: &str| format!("{prefix}.{suffix}");
+    field(hasher, &key("id"), id.as_str());
+    field(hasher, &key("name"), name);
+    match origin {
+        crate::tools::types::ToolOrigin::Builtin => field(hasher, &key("origin"), "builtin"),
+        crate::tools::types::ToolOrigin::Mcp { server_id } => {
+            field(
+                hasher,
+                &key("origin"),
+                &format!("mcp:{}", server_id.as_str()),
+            );
+        }
+    }
+    field(hasher, &key("description"), description);
+    // The rustX-owned canonical JSON writer, shared with the cross-process
+    // MCP Tool identity: object keys sorted recursively, array order
+    // preserved because it is semantic in JSON Schema, and numbers and
+    // escapes written by rustX rather than by whatever `serde_json`'s map
+    // implementation and feature flags happen to do in this build.
+    field(
+        hasher,
+        &key("input_schema"),
+        &crate::tools::mcp::identity::canonical_json(input_schema),
+    );
+    field(
+        hasher,
+        &key("execution_policy"),
+        &format!("{execution_policy:?}"),
+    );
+    field(
+        hasher,
+        &key("concurrency_policy"),
+        &format!("{concurrency_policy:?}"),
+    );
+    field(
+        hasher,
+        &key("approval_policy"),
+        &format!("{approval_policy:?}"),
+    );
+    field(hasher, &key("replay_policy"), &format!("{replay_policy:?}"));
 }
 
 /// Frames the complete **non-binding semantics** of one frozen model
@@ -1680,30 +1917,19 @@ fn frame_frozen_model_invocation(
     );
 }
 
-/// Serializes one value into a key-ordered canonical JSON text.
+/// Serializes one arbitrary value into rustX canonical JSON text.
 ///
-/// `serde_json` preserves map insertion order in this build, so a plain
-/// `to_string` would let two semantically identical values frame differently.
-/// Recursively sorting object keys removes that freedom.
+/// This is a thin generic adapter over
+/// [`crate::tools::mcp::identity::canonical_json`], deliberately rather than a
+/// second canonicalizer: the profile digest and the cross-process MCP Tool
+/// identity must agree on what "the same JSON document" means, and one writer
+/// is how that stays true. It owns object-key ordering, array order, number
+/// formatting and string escaping itself, so no `serde_json` map
+/// implementation or feature flag can move a digest.
 fn canonical_json<T: Serialize>(value: &T) -> String {
-    fn sort(value: serde_json::Value) -> serde_json::Value {
-        match value {
-            serde_json::Value::Object(fields) => {
-                let ordered: BTreeMap<String, serde_json::Value> = fields
-                    .into_iter()
-                    .map(|(key, value)| (key, sort(value)))
-                    .collect();
-                serde_json::Value::Object(ordered.into_iter().collect())
-            }
-            serde_json::Value::Array(values) => {
-                serde_json::Value::Array(values.into_iter().map(sort).collect())
-            }
-            value => value,
-        }
-    }
     serde_json::to_value(value).map_or_else(
         |_| "\u{0}unserializable".to_owned(),
-        |value| sort(value).to_string(),
+        |value| crate::tools::mcp::identity::canonical_json(&value),
     )
 }
 
@@ -2741,8 +2967,9 @@ mod tests {
     // proven against real composed generations in tests/subagent/overrides.rs.
     // ---------------------------------------------------------------
 
-    use super::{FrozenModelSpec, ResolvedSubagentSpec, SessionModelConfig};
+    use super::{FrozenModelSpec, ResolvedSubagentSkill, ResolvedSubagentSpec, SessionModelConfig};
     use crate::runtime::ProjectContextFile;
+    use crate::runtime::identity::{SkillId, SkillVersionId};
     use crate::runtime::subagent::catalog::SubagentExecutionDeadline;
 
     fn frozen_invocation() -> crate::model::frozen::FrozenModelInvocation {
@@ -3102,8 +3329,8 @@ mod tests {
     fn sub258_the_profile_framing_is_versioned() {
         assert_eq!(
             super::SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION,
-            "rustx-subagent-profile-v2",
-            "the corrected framing is not the v1 one it replaced"
+            "rustx-subagent-profile-v3",
+            "the corrected framing is not one of the readings it replaced"
         );
         assert!(
             frozen_spec()
@@ -3111,6 +3338,417 @@ mod tests {
                 .as_str()
                 .starts_with("sha256:")
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Issue #258: a stable capability id is not a semantic contract.
+    // ---------------------------------------------------------------
+
+    /// The exact `ToolDefinition` a Builtin variant is frozen with, used as
+    /// the fixed point every mutation below departs from by one field.
+    fn frozen_builtin_definition() -> ToolDefinition {
+        ToolDefinition {
+            id: ToolId::new("tool-read"),
+            name: "read".to_owned(),
+            description: "Reads one file.".to_owned(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"]
+            }),
+            execution_policy: ToolExecutionPolicy::ForegroundOnly,
+            concurrency_policy: ToolConcurrencyPolicy::Sequential,
+            approval_policy: ToolApprovalPolicy::Never,
+            replay_policy: ToolReplayPolicy::Never,
+            origin: ToolOrigin::Builtin,
+        }
+    }
+
+    /// A frozen contract carrying exactly one Builtin tool, whose outer
+    /// `tool_id` and model-facing `name` are the SAME in every variant.
+    fn spec_with_builtin(definition: ToolDefinition) -> ResolvedSubagentSpec {
+        let mut spec = frozen_spec();
+        spec.tools = vec![ResolvedSubagentTool::Builtin {
+            tool_id: ToolId::new("tool-read"),
+            name: "read".to_owned(),
+            definition,
+        }];
+        spec
+    }
+
+    /// A Builtin `ToolId` is a stable **capability** identity, never a digest
+    /// of the semantics the definition was frozen with.
+    ///
+    /// The child consumes the frozen `ToolDefinition` — it does not look one
+    /// up by id — so the same `tool-read` identity frozen with a different
+    /// approval policy, execution policy, concurrency policy, replay policy,
+    /// description, or input schema is a materially different child execution
+    /// contract. Framing `builtin:{tool_id}:{name}` collapsed all of them into
+    /// one identity; this is the regression that says it cannot again.
+    ///
+    /// Every variant below keeps `tool_id` and `name` byte-identical, so the
+    /// only thing that can separate the digests is the definition itself.
+    #[test]
+    fn sub258_a_builtin_tool_id_never_summarizes_its_frozen_definition() {
+        let base = frozen_builtin_definition();
+        let mut variants = vec![spec_with_builtin(base.clone())];
+
+        let mut redescribed = base.clone();
+        redescribed.description = "Reads one file, carefully.".to_owned();
+        variants.push(spec_with_builtin(redescribed));
+
+        let mut reschematized = base.clone();
+        reschematized.input_schema = serde_json::json!({
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "limit": {"type": "number"}},
+            "required": ["path"]
+        });
+        variants.push(spec_with_builtin(reschematized));
+
+        let mut backgrounded = base.clone();
+        backgrounded.execution_policy = ToolExecutionPolicy::BackgroundOnly;
+        variants.push(spec_with_builtin(backgrounded));
+
+        let mut model_selected = base.clone();
+        model_selected.execution_policy = ToolExecutionPolicy::ModelSelectable;
+        variants.push(spec_with_builtin(model_selected));
+
+        let mut parallel = base.clone();
+        parallel.concurrency_policy = ToolConcurrencyPolicy::Parallel;
+        variants.push(spec_with_builtin(parallel));
+
+        let mut gated = base.clone();
+        gated.approval_policy = ToolApprovalPolicy::Always;
+        variants.push(spec_with_builtin(gated));
+
+        // `replay_policy` participates deliberately: it is the frozen
+        // declaration of whether re-execution after an unknown outcome is
+        // permitted, and it must not be silently equated with `Never`.
+        let mut replayable = base.clone();
+        replayable.replay_policy = ToolReplayPolicy::Idempotent;
+        variants.push(spec_with_builtin(replayable));
+
+        // The premise of the whole test: the stable identity really is stable
+        // across every variant, so nothing but the definition can be talking.
+        for spec in &variants {
+            let ResolvedSubagentTool::Builtin { tool_id, name, .. } =
+                spec.tools.first().expect("one frozen tool")
+            else {
+                panic!("the variants are Builtin tools");
+            };
+            assert_eq!(tool_id, &ToolId::new("tool-read"));
+            assert_eq!(name, "read");
+        }
+
+        assert_distinct(&variants, "a frozen Builtin ToolDefinition field");
+    }
+
+    /// The input schema is framed through the rustX-owned canonical JSON
+    /// writer, so two semantically identical schemas are one profile however
+    /// their object keys were inserted, and object key order can never move a
+    /// durable identity.
+    ///
+    /// The writer sorts keys itself rather than trusting them to arrive
+    /// sorted, which is what keeps this true if `serde_json`'s map
+    /// implementation is ever switched to one that preserves insertion order.
+    #[test]
+    fn sub258_builtin_input_schema_framing_is_object_key_order_independent() {
+        let ordered = |keys: [(&str, serde_json::Value); 3]| {
+            let mut object = serde_json::Map::new();
+            for (key, value) in keys {
+                object.insert(key.to_owned(), value);
+            }
+            serde_json::Value::Object(object)
+        };
+        let properties = serde_json::json!({"path": {"type": "string"}});
+        let forwards = ordered([
+            ("additionalProperties", serde_json::json!(false)),
+            ("properties", properties.clone()),
+            ("type", serde_json::json!("object")),
+        ]);
+        let backwards = ordered([
+            ("type", serde_json::json!("object")),
+            ("properties", properties),
+            ("additionalProperties", serde_json::json!(false)),
+        ]);
+
+        // The framing really does canonicalize rather than echo an order.
+        assert_eq!(
+            crate::tools::mcp::identity::canonical_json(&forwards),
+            r#"{"additionalProperties":false,"properties":{"path":{"type":"string"}},"type":"object"}"#
+        );
+
+        let mut first = frozen_builtin_definition();
+        first.input_schema = forwards;
+        let mut second = frozen_builtin_definition();
+        second.input_schema = backwards;
+        assert_eq!(
+            spec_with_builtin(first).profile_digest(),
+            spec_with_builtin(second).profile_digest(),
+            "one semantic schema is one effective profile"
+        );
+
+        // Array order, by contrast, is semantic in JSON Schema and is never
+        // sorted away.
+        let mut ascending = frozen_builtin_definition();
+        ascending.input_schema = serde_json::json!({"required": ["a", "b"]});
+        let mut descending = frozen_builtin_definition();
+        descending.input_schema = serde_json::json!({"required": ["b", "a"]});
+        assert_ne!(
+            spec_with_builtin(ascending).profile_digest(),
+            spec_with_builtin(descending).profile_digest(),
+            "JSON Schema array order is meaning"
+        );
+    }
+
+    /// An MCP tool frames the same complete definition **and** its frozen
+    /// cross-process identity, and neither substitutes for the other.
+    ///
+    /// `McpToolIdentity` commits the server-published contract — name,
+    /// description, canonical schema, and the three invocation policies — but
+    /// deliberately not `replay_policy` or `ToolId`. Relying on it alone would
+    /// therefore reintroduce exactly the collision this issue corrects, on the
+    /// MCP side. The identity stays framed because it is an independently
+    /// frozen field that gates the child's startup: the child recomputes it
+    /// from its own `tools/list` and refuses to run on a mismatch.
+    #[test]
+    fn sub258_an_mcp_tool_frames_both_its_definition_and_its_frozen_identity() {
+        let server = McpServerId::new("github");
+        let definition = ToolDefinition {
+            id: ToolId::new("mcp-github-get_issue"),
+            name: "get_issue".to_owned(),
+            description: "Reads one issue.".to_owned(),
+            input_schema: serde_json::json!({"type": "object"}),
+            execution_policy: ToolExecutionPolicy::ForegroundOnly,
+            concurrency_policy: ToolConcurrencyPolicy::Sequential,
+            approval_policy: ToolApprovalPolicy::Never,
+            replay_policy: ToolReplayPolicy::Never,
+            origin: ToolOrigin::Mcp {
+                server_id: server.clone(),
+            },
+        };
+        let identity_of = |definition: &ToolDefinition| {
+            crate::tools::mcp::identity::definition_identity(definition)
+                .expect("an MCP definition has a cross-process identity")
+        };
+        let spec_with = |definition: ToolDefinition| {
+            let mut spec = frozen_spec();
+            spec.tools = vec![ResolvedSubagentTool::Mcp {
+                server_id: server.clone(),
+                tool_id: definition.id.clone(),
+                name: definition.name.clone(),
+                identity: identity_of(&definition),
+                definition,
+            }];
+            spec
+        };
+
+        // A field the cross-process identity does not cover still separates
+        // two effective profiles, because the complete definition is framed.
+        let mut replayable = definition.clone();
+        replayable.replay_policy = ToolReplayPolicy::Idempotent;
+        assert_eq!(
+            identity_of(&definition),
+            identity_of(&replayable),
+            "MCP cross-process identity behavior is unchanged by this issue"
+        );
+        assert_ne!(
+            spec_with(definition.clone()).profile_digest(),
+            spec_with(replayable).profile_digest(),
+            "a frozen field outside the MCP identity still identifies the profile"
+        );
+
+        // A field the cross-process identity does cover moves both.
+        let mut gated = definition.clone();
+        gated.approval_policy = ToolApprovalPolicy::Always;
+        assert_ne!(identity_of(&definition), identity_of(&gated));
+        assert_ne!(
+            spec_with(definition.clone()).profile_digest(),
+            spec_with(gated).profile_digest()
+        );
+
+        // And the frozen identity is itself framed: a specification that
+        // crossed the boundary carrying an identity its definition does not
+        // derive is a different — failing — execution profile.
+        let mut mismatched = spec_with(definition.clone());
+        let ResolvedSubagentTool::Mcp { identity, .. } =
+            mismatched.tools.first_mut().expect("one frozen tool")
+        else {
+            panic!("the variant is an MCP tool");
+        };
+        *identity = crate::runtime::identity::McpToolIdentity::new("sha256:00");
+        assert_ne!(
+            spec_with(definition).profile_digest(),
+            mismatched.profile_digest(),
+            "the frozen cross-process identity is part of the frozen contract"
+        );
+    }
+
+    /// The same semantic Builtin definition arriving through the real
+    /// `freeze_tool` path digests identically however it was constructed, and
+    /// the physical materialization plane behind an MCP tool stays out.
+    ///
+    /// The first half proves the framing is tested against the actual frozen
+    /// `ResolvedSubagentTool` rather than only against a hash helper; the
+    /// second half proves the deliberate exclusions did not accidentally
+    /// become inclusions when the tool framing grew.
+    #[test]
+    fn sub258_the_tool_framing_covers_the_real_frozen_value_and_excludes_the_physical_plane() {
+        let definition = frozen_builtin_definition();
+        let frozen = freeze_tool(
+            &ToolSelector::Builtin {
+                name: "read".to_owned(),
+            },
+            &definition,
+        );
+        let mut resolved = frozen_spec();
+        resolved.tools = vec![frozen];
+        assert_eq!(
+            resolved.profile_digest(),
+            spec_with_builtin(definition).profile_digest(),
+            "the framing identifies the value the resolver actually freezes"
+        );
+
+        // Transport, credentials and resource root are physical or secret;
+        // only the server identity a required source contributes is framed.
+        let server = McpServerId::new("github");
+        let binding = |command: &str| crate::tools::mcp::McpServerBinding {
+            credentials: crate::credentials::SourceCredentials::default(),
+            activation: crate::capabilities::activation::SourceActivation::default(),
+            resource_workspace: None,
+            transport: crate::tools::mcp::McpTransportConfig::Stdio {
+                program: command.to_owned(),
+                args: Vec::new(),
+                cwd: None,
+                environment: std::collections::BTreeMap::new(),
+            },
+            policy: crate::tools::types::ToolInvocationPolicy::default(),
+        };
+        let plane = |command: &str| {
+            let mut spec = frozen_spec();
+            spec.materialization = super::ResolvedSubagentMaterialization {
+                mcp_servers: [(server.clone(), binding(command))].into_iter().collect(),
+            };
+            spec
+        };
+        assert_eq!(
+            plane("/usr/bin/server").profile_digest(),
+            plane("/opt/relocated/server").profile_digest(),
+            "a physical launch plane never identifies an effective profile"
+        );
+    }
+
+    /// A DISABLED Time contributor never executes, so no timezone spelling may
+    /// separate two otherwise identical effective profiles — while an ENABLED
+    /// one's effective zone still does.
+    ///
+    /// This is the spec-level half of the rule; `crate::extensions` proves the
+    /// same thing on the framing itself, and proves that the *source
+    /// definition* digest deliberately keeps distinguishing an authored zone.
+    #[test]
+    fn sub258_a_disabled_time_contributor_has_no_effective_timezone_in_the_profile() {
+        let spec_with_time = |enabled: bool, timezone: Option<chrono_tz::Tz>| {
+            let mut spec = frozen_spec();
+            spec.extensions = crate::extensions::NativeAgentExtensions::with_agent_status(
+                crate::context::AgentStatusConfig {
+                    time: crate::context::TimeStatusConfig { enabled, timezone },
+                    background: crate::context::BackgroundStatusConfig { enabled: true },
+                },
+            );
+            spec
+        };
+
+        let disabled_utc = spec_with_time(false, Some(chrono_tz::UTC)).profile_digest();
+        assert_eq!(
+            disabled_utc,
+            spec_with_time(false, Some(chrono_tz::Asia::Shanghai)).profile_digest(),
+            "a zone that never renders cannot identify a frozen child"
+        );
+        assert_eq!(
+            disabled_utc,
+            spec_with_time(false, None).profile_digest(),
+            "an omitted zone is the same inactive configuration"
+        );
+
+        let enabled_utc = spec_with_time(true, Some(chrono_tz::UTC)).profile_digest();
+        assert_ne!(
+            enabled_utc,
+            spec_with_time(true, Some(chrono_tz::Asia::Shanghai)).profile_digest(),
+            "an enabled contributor's zone is behavior"
+        );
+        assert_eq!(
+            enabled_utc,
+            spec_with_time(true, None).profile_digest(),
+            "an omitted zone renders UTC, so the two are one effective profile"
+        );
+        assert_ne!(
+            enabled_utc, disabled_utc,
+            "enabling Time is itself behavior and stays framed"
+        );
+    }
+
+    /// A Skill's model-visible **description** is part of the child's
+    /// execution contract, and the physical plane behind it is not.
+    ///
+    /// The same audit that corrected the Builtin Tool framing found the same
+    /// shape here: `version_id` is a content digest of the package, but the
+    /// child does not re-derive `catalog_entry` from the materialized bytes —
+    /// it takes the parent's frozen strings verbatim and only remaps
+    /// `location`. So the description reaches the child's model exactly as
+    /// frozen, drives progressive disclosure, and must identify the profile.
+    #[test]
+    fn sub258_a_skill_description_identifies_the_profile_and_its_paths_do_not() {
+        let skill = |description: &str, source_root: &str, location: &str| {
+            let mut spec = frozen_spec();
+            spec.skills = vec![ResolvedSubagentSkill {
+                binding: crate::protocol::manifest::SkillBinding {
+                    skill_id: SkillId::new("code-review"),
+                    version_id: SkillVersionId::new("sha256:abc"),
+                },
+                catalog_entry: crate::skills::SkillCatalogEntry {
+                    name: "code-review".to_owned(),
+                    description: description.to_owned(),
+                    location: location.to_owned(),
+                },
+                source_root: std::path::PathBuf::from(source_root),
+                files: vec![std::path::PathBuf::from("SKILL.md")],
+            }];
+            spec
+        };
+        let base = skill(
+            "Reviews a diff.",
+            "/w/.skills/code-review",
+            "/w/.skills/code-review/SKILL.md",
+        );
+
+        assert_ne!(
+            base.profile_digest(),
+            skill(
+                "Reviews a diff, adversarially.",
+                "/w/.skills/code-review",
+                "/w/.skills/code-review/SKILL.md"
+            )
+            .profile_digest(),
+            "the description the model reads is part of the child's contract"
+        );
+        assert_eq!(
+            base.profile_digest(),
+            skill(
+                "Reviews a diff.",
+                "/other/root/code-review",
+                "/other/root/code-review/SKILL.md"
+            )
+            .profile_digest(),
+            "a host source root and a remapped location are physical, not identity"
+        );
+
+        let mut renamed = base.clone();
+        renamed.skills[0].catalog_entry.name = "review".to_owned();
+        assert_ne!(base.profile_digest(), renamed.profile_digest());
+
+        let mut reversioned = base.clone();
+        reversioned.skills[0].binding.version_id = SkillVersionId::new("sha256:def");
+        assert_ne!(base.profile_digest(), reversioned.profile_digest());
     }
 
     fn assert_distinct(specs: &[ResolvedSubagentSpec], what: &str) {

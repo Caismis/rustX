@@ -446,17 +446,39 @@ impl NativeAgentExtensions {
     /// The deterministic canonical framing of what this composition
     /// **executes**, for the effective child execution-profile digest.
     ///
-    /// The one difference from [`Self::authored_digest_framing`] is the
-    /// timezone, which is framed through
-    /// [`effective_status_timezone`](crate::context::effective_status_timezone):
-    /// an absent zone renders UTC at execution, so two compositions that
-    /// render identically are one effective profile and must not be told
-    /// apart by a spelling the runtime never observes.
+    /// It differs from [`Self::authored_digest_framing`] in exactly one
+    /// dimension — the timezone — and in two ways, both of which follow from
+    /// the same rule: *frame what the frozen composition does, not how it was
+    /// spelled*.
     ///
-    /// A disabled Time contributor still frames its effective zone. That is
-    /// deliberate rather than an oversight: dropping it would be a second,
-    /// unnecessary normalization rule, and re-enabling Time is a
-    /// configuration change that already changes `time`.
+    /// ```text
+    /// time.enabled = true    the zone executes, so the EFFECTIVE zone is
+    ///                        framed, through `effective_timezone()`. An
+    ///                        omitted zone renders UTC, so `omitted` and an
+    ///                        explicit `UTC` are one effective profile.
+    ///
+    /// time.enabled = false   the Time contributor never runs, so no zone
+    ///                        executes and none may distinguish the profile.
+    ///                        Every zone spelling — including omission —
+    ///                        frames as one inactive sentinel.
+    /// ```
+    ///
+    /// The disabled case is not an oversight-shaped shortcut: a child frozen
+    /// with Time off emits no Time contribution whatever its `timezone` says,
+    /// so two such compositions are behaviorally identical and must correlate
+    /// to one `profile_digest`. That a later configuration edit could
+    /// re-enable Time is irrelevant here — the composition this framing
+    /// identifies is frozen, and re-enabling Time changes `time.enabled`,
+    /// which is framed.
+    ///
+    /// The sentinel is a spelling no IANA zone name can carry, so it can
+    /// never collide with an enabled zone's framing. Authorization reads the
+    /// same rule: a disabled Time contributor needs no timezone authority
+    /// (see [`authorize_delegated_extensions`]).
+    ///
+    /// [`Self::authored_digest_framing`] deliberately keeps distinguishing a
+    /// disabled contributor's authored zone, because a definition digest
+    /// identifies the **source document**, not the behavior it produces.
     #[must_use]
     pub fn effective_digest_framing(&self) -> String {
         match &self.agent_status {
@@ -464,12 +486,23 @@ impl NativeAgentExtensions {
             Some(config) => format!(
                 "agent_status=present:time={}:timezone={}:background={}",
                 config.time.enabled,
-                config.time.effective_timezone().name(),
+                if config.time.enabled {
+                    config.time.effective_timezone().name().to_owned()
+                } else {
+                    INACTIVE_TIMEZONE_FRAMING.to_owned()
+                },
                 config.background.enabled,
             ),
         }
     }
 }
+
+/// The framing token a **disabled** Time contributor's timezone renders as
+/// in [`NativeAgentExtensions::effective_digest_framing`].
+///
+/// It carries a NUL, which no IANA timezone name may contain, so an inactive
+/// zone can never be confused with a zone that actually executes.
+const INACTIVE_TIMEZONE_FRAMING: &str = "\u{0}inactive";
 
 /// The canonical authored name of the Agent Status extension.
 pub const AGENT_STATUS_EXTENSION: &str = "agentStatus";
@@ -1014,6 +1047,123 @@ mod tests {
             omitted.effective_digest_framing(),
             status(true, Some(zone("Asia/Shanghai")), true).effective_digest_framing(),
             "a different rendered zone is a different effective profile"
+        );
+    }
+
+    /// A **disabled** Time contributor never executes, so no timezone
+    /// spelling may separate two effective execution profiles — while the
+    /// authored framing keeps every one of them apart, because it identifies
+    /// the source document rather than the behavior.
+    ///
+    /// The two questions and their two answers:
+    ///
+    /// ```text
+    /// effective  time off + UTC == time off + Asia/Shanghai == time off + omitted
+    /// authored   all three are three different source documents
+    /// ```
+    #[test]
+    fn sub258_a_disabled_time_contributor_has_no_effective_timezone() {
+        let disabled_utc = status(false, Some(chrono_tz::UTC), true);
+        let disabled_shanghai = status(false, Some(zone("Asia/Shanghai")), true);
+        let disabled_omitted = status(false, None, true);
+
+        assert_eq!(
+            disabled_utc.effective_digest_framing(),
+            disabled_shanghai.effective_digest_framing(),
+            "a zone that never renders cannot identify a frozen composition"
+        );
+        assert_eq!(
+            disabled_utc.effective_digest_framing(),
+            disabled_omitted.effective_digest_framing(),
+            "an omitted zone is the same inactive configuration"
+        );
+
+        // The source-definition question is a different question, and its
+        // answer deliberately did not change.
+        let authored = [
+            disabled_utc.authored_digest_framing(),
+            disabled_shanghai.authored_digest_framing(),
+            disabled_omitted.authored_digest_framing(),
+        ];
+        let mut unique = authored.to_vec();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            authored.len(),
+            "three different source documents keep three source identities"
+        );
+    }
+
+    /// An **enabled** Time contributor's effective zone is behavior and still
+    /// identifies the profile, and the already-correct normalization of an
+    /// omitted zone survives the disabled-case correction.
+    #[test]
+    fn sub258_an_enabled_time_contributor_still_frames_its_effective_timezone() {
+        assert_ne!(
+            status(true, Some(chrono_tz::UTC), true).effective_digest_framing(),
+            status(true, Some(zone("Asia/Shanghai")), true).effective_digest_framing(),
+            "an enabled contributor renders its zone, so the zone is behavior"
+        );
+        assert_eq!(
+            status(true, Some(chrono_tz::UTC), true).effective_digest_framing(),
+            status(true, None, true).effective_digest_framing(),
+            "an omitted zone renders UTC, so the two produce one Time behavior"
+        );
+
+        // Enabling Time is itself behavior, and the inactive sentinel can
+        // never be confused with a zone that actually executes: no IANA name
+        // may contain a NUL.
+        for timezone in [None, Some(chrono_tz::UTC), Some(zone("Asia/Shanghai"))] {
+            assert_ne!(
+                status(true, timezone, true).effective_digest_framing(),
+                status(false, timezone, true).effective_digest_framing(),
+                "switching the contributor off is a different effective profile"
+            );
+        }
+        assert!(
+            !status(true, Some(chrono_tz::UTC), true)
+                .effective_digest_framing()
+                .contains(super::INACTIVE_TIMEZONE_FRAMING),
+            "an executing zone never frames as the inactive sentinel"
+        );
+    }
+
+    /// Authorization reads the same effective semantics the framing does: a
+    /// disabled Time contributor needs no timezone authority at all, and an
+    /// enabled one needs authority for its effective zone.
+    ///
+    /// The two rules must not drift apart — a digest that ignores a disabled
+    /// zone while authorization demands authority for it would refuse a
+    /// request whose identity says it is the one already authorized.
+    #[test]
+    fn sub258_a_disabled_time_contributor_needs_no_timezone_authority() {
+        let background_only = status(false, None, true);
+        for requested in [
+            status(false, Some(chrono_tz::UTC), true),
+            status(false, Some(zone("Asia/Shanghai")), true),
+            status(false, None, true),
+        ] {
+            assert!(
+                authorize_delegated_extensions(
+                    &background_only,
+                    &NativeAgentExtensions::none(),
+                    &requested,
+                )
+                .is_ok(),
+                "a contributor that never runs demands no zone authority"
+            );
+        }
+
+        // Enabling it does demand authority, for the EFFECTIVE zone.
+        assert!(
+            authorize_delegated_extensions(
+                &background_only,
+                &NativeAgentExtensions::none(),
+                &status(true, Some(zone("Asia/Shanghai")), true),
+            )
+            .is_err(),
+            "an enabled contributor needs authority for the zone it renders"
         );
     }
 }

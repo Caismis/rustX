@@ -390,7 +390,7 @@ frozen bytes. The invoking attempt also commits it durably with child
 ownership, so it survives a restart unchanged (see
 [Durable execution identity](#durable-execution-identity)).
 
-The versioned canonical framing (`rustx-subagent-profile-v2`) covers:
+The versioned canonical framing (`rustx-subagent-profile-v3`) covers:
 
 ```text
 agent name, instructions, workspace policy, execution deadline
@@ -404,16 +404,24 @@ frozen summary policy   "follows the session primary", or an explicit
                         completely as the primary one
 project instruction chain   path AND content, in order
 effective tools         origin, exact ToolId, model-facing name, and the
-                        cross-process MCP identity where one exists
-effective Skills        exact SkillId + SkillVersionId and the visible name
+                        COMPLETE frozen ToolDefinition the child executes:
+                        description, canonical input schema, and the
+                        execution, concurrency, approval and replay policies.
+                        An MCP tool additionally frames its frozen
+                        cross-process identity
+effective Skills        exact SkillId + SkillVersionId, and the
+                        model-visible name AND description, both of which
+                        cross to the child verbatim
 materialization plane   exactly the external source identities required. The
                         bindings behind them are physical (transport, resource
                         root) or secret (credentials); the one behavior they
                         carry — the invocation policy a server imposes on its
                         tools — is already framed exactly, through each MCP
                         tool's cross-process identity above
-effective extensions    the closed composition's EFFECTIVE framing, so an
-                        omitted timezone frames as the UTC it renders
+effective extensions    the closed composition's EFFECTIVE framing: an
+                        omitted timezone frames as the UTC it renders, and a
+                        DISABLED Time contributor's timezone frames as one
+                        inactive sentinel because no zone executes
 ```
 
 Values whose serialization carries authoring shape are framed by their
@@ -421,6 +429,74 @@ effective semantics rather than through that serializer: an omitted
 `time.timezone` frames as the UTC it renders, and `ModelCompat` frames its five
 translation decisions rather than only the ones a catalog spelled out. Two
 values that behave identically are one effective profile.
+
+### A stable capability id is not a semantic contract
+
+A `ToolId` identifies a capability; it does not summarize the semantics that
+capability was frozen with. The same `tool-read` identity can be frozen with a
+different model-facing description, a different input schema, or different
+execution, concurrency, approval or replay policies, and the child executes
+**the frozen definition** rather than one it looks up by id. So a Builtin tool
+is framed by its complete `ToolDefinition`, field by field, and every field is
+included:
+
+```text
+id, name, origin           the capability and the name the model calls
+description, input_schema  the model-facing contract
+execution_policy           attempt-owned / conversation-owned / model-selected
+concurrency_policy         in-batch sequential barrier vs parallel group
+approval_policy            whether an eligible invocation stops for a human
+replay_policy              whether re-execution after an unknown outcome is
+                           permitted. Included deliberately: it is a frozen
+                           declaration today, it crosses the Runtime Client
+                           boundary into the child's observable projection, and
+                           its consuming recovery policy is a later milestone —
+                           so it cannot be shown irrelevant
+```
+
+`input_schema` is framed through the rustX-owned canonical JSON writer that the
+cross-process MCP Tool identity already uses — object keys sorted recursively,
+array order preserved because it is semantic in JSON Schema, and rustX-owned
+number formatting and escaping — so no `serde_json` map implementation or
+feature flag can move a digest, and two schemas that differ only in object key
+insertion order are one profile.
+
+A Skill's `catalog_entry.description` is framed for the same reason. The
+child does not re-derive that metadata from the materialized package: it takes
+the parent's frozen strings verbatim and remaps only `location`. So the
+description reaches the child's model exactly as frozen and drives progressive
+disclosure — deciding whether the model opens the Skill at all — which
+`version_id` does not capture on its own. The Skill's `source_root` and its
+`files` list stay out: the first is a materialization source rather than an
+identity, and the second is represented exactly by `version_id`, which hashes
+every package-relative path and its bytes.
+
+An MCP tool frames the same complete definition **and** its frozen
+`McpToolIdentity`. The identity is not redundant framing: it is an
+independently frozen field that gates the child's startup, since the child
+recomputes it from its own `tools/list` and refuses to run on a mismatch. The
+profile digest frames that frozen value; it never performs the verification
+itself, which remains the child's cross-process materialization check.
+
+### A disabled contributor's configuration does not execute
+
+Once `time.enabled` is `false` the Time contributor never runs, so no timezone
+executes and none may distinguish the profile:
+
+```text
+time enabled  = true    the effective zone is framed; omitted == explicit UTC
+time enabled  = false   every zone spelling, including omission, frames as one
+                        inactive sentinel
+```
+
+A child frozen with Time off emits no Time contribution whatever its `timezone`
+says. That a later configuration edit could re-enable Time is irrelevant: the
+composition this digest identifies is frozen, and re-enabling Time changes
+`time.enabled`, which is framed. Authorization reads the same rule — a disabled
+Time contributor needs no timezone authority, and an enabled one needs
+authority for its **effective** zone. The *source-definition* digest keeps
+distinguishing an authored disabled zone, because it identifies the source
+document rather than the behavior.
 
 The framing deliberately excludes:
 

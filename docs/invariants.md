@@ -3011,12 +3011,39 @@ after ChildGuidanceOutcome::Accepted:
   effective profile. The *source-definition* digest keeps the authored
   spelling, because it identifies the source document rather than the
   behavior.
+- **A stable capability id is never accepted as a summary of the semantics it
+  was frozen with.** Every resolved Tool frames its COMPLETE frozen
+  `ToolDefinition` — id, name, origin, description, canonical input schema, and
+  the execution, concurrency, approval and replay policies — so two tools
+  sharing a `ToolId` and a model-facing name but frozen with different
+  approval, execution, concurrency or replay policies, a different description,
+  or a different input schema are different effective profiles. The input
+  schema is framed through the same rustX-owned canonical JSON writer the
+  cross-process MCP Tool identity uses, so object key insertion order cannot
+  move a digest. An MCP tool additionally frames its frozen `McpToolIdentity`,
+  which gates the child's startup; the profile digest frames that frozen value
+  and never performs the cross-process verification itself.
+- **A frozen string the child takes verbatim identifies the child.** A Skill's
+  model-visible name AND description are framed, because the child remaps only
+  `location` and otherwise consumes the parent's frozen catalog metadata
+  unchanged; the description drives progressive disclosure and `version_id`
+  does not stand in for it. The Skill `source_root` stays out as a
+  materialization source, and the `files` list stays out because `version_id`
+  hashes every package-relative path and its bytes.
+- **A disabled contributor's configuration does not execute and does not
+  identify.** With `time.enabled = false` the Time contributor never runs, so
+  every timezone spelling — including omission — frames as one inactive
+  sentinel and the two compositions are one effective profile. With Time
+  enabled the effective zone is framed, and an omitted zone equals an explicit
+  `UTC`. Authorization reads the identical rule: a disabled Time contributor
+  needs no timezone authority; an enabled one needs authority for its effective
+  zone.
 - **It is derived from the frozen contract, not stored beside it.** Every input
   is already part of the frozen specification, so the identity is frozen
   exactly as strongly as the contract while no second stored copy can drift
   from the specification it labels; the child recomputes the same value from
   the same frozen bytes.
-- **The framing is versioned** (`rustx-subagent-profile-v2`). Semantically
+- **The framing is versioned** (`rustx-subagent-profile-v3`). Semantically
   unordered collections are canonically normalized and meaningful order is
   preserved. Execution identities, timestamps, temporary staging paths, Skill
   source roots, and raw payload formatting are all outside the preimage.
