@@ -364,11 +364,12 @@ pub enum ConversationRuntimeError {
     /// architectural reason, and one owning a list it never offers a Tool for
     /// would publish a task list nothing can change.
     ///
-    /// Reaching this error takes deliberate effort — the plane can only be
-    /// derived from a materialized tool runtime, so the realistic way to
-    /// produce it is pairing a coordinator with a *different* conversation's
-    /// materialization — and it fails closed rather than running a
-    /// composition that cannot be described coherently.
+    /// It fails closed rather than running a composition that cannot be
+    /// described coherently, and the two Tool facets are reported separately
+    /// because they fail for different reasons: a wrong *configured* plane
+    /// means the coordinator was built for another conversation's
+    /// materialization, while a missing *active* Tool means the coordinator
+    /// has not published an executable generation carrying it yet.
     ExtensionCompositionMismatch {
         /// The conversation whose facets disagree.
         conversation_id: ConversationId,
@@ -378,9 +379,20 @@ pub enum ConversationRuntimeError {
         /// Whether the conversation tool runtime materialized a Todo state
         /// owner.
         materialized_todo_state: bool,
-        /// Whether the capability coordinator's extension Tool plane
-        /// publishes the `todo` Tool.
-        published_todo_tool: bool,
+        /// Whether the capability coordinator's **configured** extension Tool
+        /// plane names the `todo` Tool.
+        ///
+        /// This is an input to future capability preparation, never proof
+        /// that anything executable carries the Tool.
+        configured_todo_tool: bool,
+        /// Whether the coordinator's **currently active** `CapabilitySnapshot`
+        /// publishes the canonical Todo Tool authority.
+        ///
+        /// This is the executable fact: `false` with `composed_todo` true
+        /// means the model would be told it has `todo` while the active
+        /// generation cannot dispatch it — which is exactly what an
+        /// unprepared, uncommitted coordinator carries at revision zero.
+        active_todo_tool: bool,
         /// Whether the composition's Agent Status engine materialization
         /// matches the frozen composition.
         agent_status_agrees: bool,
@@ -483,13 +495,15 @@ impl core::fmt::Display for ConversationRuntimeError {
                 conversation_id,
                 composed_todo,
                 materialized_todo_state,
-                published_todo_tool,
+                configured_todo_tool,
+                active_todo_tool,
                 agent_status_agrees,
             } => write!(
                 f,
                 "the native Agent Extension facets of conversation {conversation_id} do not follow from one frozen composition: \
                  composed todo={composed_todo}, materialized todo state={materialized_todo_state}, \
-                 published todo Tool={published_todo_tool}, agent status agrees={agent_status_agrees}"
+                 configured todo Tool={configured_todo_tool}, active todo Tool={active_todo_tool}, \
+                 agent status agrees={agent_status_agrees}"
             ),
             Self::Context(message) => write!(f, "context configuration failed: {message}"),
             Self::InvalidModelTimeoutPolicy => write!(
@@ -3077,39 +3091,67 @@ impl ConversationRuntime {
         }
         // The one native Agent Extension composition invariant (Issue #259).
         //
-        // This runtime is the ownership-transfer boundary at which the four
-        // facets of one frozen composition come together, so it is where
-        // their coherence is *proved* rather than assumed:
+        // This runtime is the ownership-transfer boundary at which every facet
+        // of one frozen composition comes together, so it is where their
+        // coherence is *proved* rather than assumed:
         //
         // ```text
         // NativeAgentExtensions              the conversation tool runtime's
         //                                    stored frozen composition
         //   |-- Todo state owner             tool_runtime.todos()
-        //   |-- extension Tool plane         capability.extension_tool_plane_shape()
         //   |-- Agent Status engine          context.status_engine
+        //   |-- configured extension plane   capability.extension_tool_plane_shape()
+        //   |-- ACTIVE extension authority   capability.current_snapshot()
+        //   |                                    .tool_registry()
         //   `-- Runtime Client projection    native_extensions(), which reads
         //                                    the stored composition directly
         // ```
         //
-        // The first facet cannot disagree — the tool runtime materializes its
-        // list *from* the stored composition — and the plane can only be
-        // derived from a materialized tool runtime, so the check is not the
-        // primary defence. It is the boundary that catches the one remaining
-        // way to construct an incoherent runtime: pairing a coordinator, or a
-        // status engine, built for one composition with a conversation frozen
-        // on another.
+        // The state facet cannot disagree — the tool runtime materializes its
+        // list *from* the stored composition — and the configured plane can
+        // only be derived from a materialized tool runtime, so neither is the
+        // primary defence. The remaining two are:
+        //
+        // 1. the **configured** plane catches a coordinator, or a status
+        //    engine, built for one composition and paired with a conversation
+        //    frozen on another;
+        //
+        // 2. the **active** capability generation catches the case the
+        //    configured plane structurally cannot see. A coordinator holds its
+        //    configured plane from construction, but `CapabilityCoordinator`
+        //    deliberately opens at revision zero with an empty executable
+        //    registry and publishes nothing until a prepared candidate is
+        //    committed. So "configured to publish `todo`" is not "the
+        //    currently executable generation carries `todo`": a coordinator
+        //    that was never prepared and committed would otherwise satisfy
+        //    every other facet while the Agent Loop could not dispatch the
+        //    Tool the model was told it has.
+        //
+        // The active snapshot is the execution authority; the configured plane
+        // is only an input to a future preparation. Both are required, and the
+        // comparison uses the exact canonical `ToolDefinition` each extension
+        // owns rather than a model-facing name, so a same-named MCP Tool
+        // cannot satisfy it. The identity knowledge stays in the extension
+        // owner: this boundary compares closed typed shapes and never names a
+        // Tool id.
         let composition = config.tool_runtime.extensions();
         let materialized = crate::extensions::NativeAgentExtensions::from_materialized(
             config.context.status_engine.as_ref(),
             config.tool_runtime.todos(),
         );
-        let plane = config.capability.extension_tool_plane_shape();
-        if &materialized != composition || plane != composition.expected_tool_plane() {
+        let required = composition.expected_tool_plane();
+        let configured_plane = config.capability.extension_tool_plane_shape();
+        let active_plane = crate::extensions::ExtensionToolPlaneShape::of_published_registry(
+            snapshot.tool_registry(),
+        );
+        if &materialized != composition || configured_plane != required || active_plane != required
+        {
             return Err(ConversationRuntimeError::ExtensionCompositionMismatch {
                 conversation_id,
                 composed_todo: composition.todo().is_some(),
                 materialized_todo_state: config.tool_runtime.todos().is_some(),
-                published_todo_tool: plane.todo,
+                configured_todo_tool: configured_plane.todo,
+                active_todo_tool: active_plane.todo,
                 agent_status_agrees: materialized.agent_status() == composition.agent_status(),
             });
         }
@@ -10581,10 +10623,28 @@ mod tests {
         let conversation_id = ConversationId::new("conv-no-tokio");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+        // This fixture's subject is the missing execution runtime, and it runs
+        // on a plain thread — so it can never `await` a prepared candidate,
+        // and its coordinator necessarily stays at revision zero with an
+        // empty executable registry. It therefore composes Agent Status and
+        // no Tool-providing extension, which is a coherent composition whose
+        // required extension Tool authority is *empty*: the Issue #259
+        // active-capability check passes on it, and construction reaches the
+        // `NoExecutionRuntime` decision this test is about. A Todo-composed
+        // fixture here would be genuinely incoherent — configured to publish
+        // `todo`, with nothing executable carrying it — and would be refused
+        // earlier, for a reason unrelated to Tokio.
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
             conversation_id.clone(),
-            &workspace,
-            dir.path().join("artifacts"),
+            crate::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace,
+                dir.path().join("artifacts"),
+            )
+            .with_extensions(
+                crate::extensions::NativeAgentExtensions::with_agent_status(
+                    crate::context::AgentStatusConfig::default(),
+                ),
+            ),
         )
         .expect("tool runtime");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(

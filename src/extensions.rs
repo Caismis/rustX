@@ -888,6 +888,13 @@ impl ExtensionToolPlane {
     /// seam it replaces, it cannot be reached without first materializing the
     /// extension owners whose Tools it registers.
     ///
+    /// Crate-private: the capability plane composes extension Tools through
+    /// `select_tools`, and nothing outside this crate has a reason to inject
+    /// them into a registry of its own. A caller that legitimately needs one
+    /// conversation's complete model Tool set asks that conversation for it —
+    /// [`ConversationToolRuntime::compose_model_tools`] — so the composition
+    /// is always named by the owner whose state backs it.
+    ///
     /// # Errors
     ///
     /// Returns the specific [`ToolRegistryError`] of the first registration
@@ -895,7 +902,8 @@ impl ExtensionToolPlane {
     /// registry already holds.
     ///
     /// [`ToolRegistryError`]: crate::tools::executor::ToolRegistryError
-    pub fn register_into(
+    /// [`ConversationToolRuntime::compose_model_tools`]: crate::tools::runtime::ConversationToolRuntime::compose_model_tools
+    pub(crate) fn register_into(
         &self,
         registry: &mut crate::tools::executor::ToolRegistry,
     ) -> Result<(), crate::tools::executor::ToolRegistryError> {
@@ -917,16 +925,67 @@ impl ExtensionToolPlane {
     }
 }
 
-/// The composition-identifying shape of an [`ExtensionToolPlane`].
+/// The composition-identifying shape of one extension Tool surface.
 ///
 /// One `bool` per Tool-providing extension. It exists so the
-/// `ConversationRuntime` ownership-transfer boundary can compare *what the
-/// coordinator actually publishes* against *what the conversation's frozen
-/// composition says it must*, without comparing executors.
+/// `ConversationRuntime` ownership-transfer boundary can compare Tool
+/// surfaces against *what the conversation's frozen composition says they
+/// must be*, without comparing executors.
+///
+/// The same closed shape describes two genuinely different facts, and #259's
+/// invariant needs both:
+///
+/// ```text
+/// ExtensionToolPlane::shape()             what a coordinator is CONFIGURED
+///                                         to publish into a future prepared
+///                                         candidate
+///
+/// Self::of_published_registry()           what the CURRENT ACTIVE capability
+///                                         generation actually executes
+/// ```
+///
+/// They are not interchangeable. A coordinator holds its configured plane
+/// from construction but publishes nothing until a prepared candidate is
+/// committed, so a revision-zero coordinator names `todo` in its configured
+/// plane while its active registry is empty.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ExtensionToolPlaneShape {
-    /// Whether the plane publishes the `todo` Tool.
+    /// Whether the surface carries the `todo` Tool.
     pub(crate) todo: bool,
+}
+
+impl ExtensionToolPlaneShape {
+    /// The extension Tool authority one **currently published** capability
+    /// generation actually carries (Issue #259).
+    ///
+    /// This reads the active model-facing registry — the executable authority
+    /// an attempt really runs against — rather than the plane a coordinator
+    /// was configured with. "Configured to publish Todo" and "Todo has been
+    /// published into the currently executable generation" are different
+    /// facts, and only the second one lets the model call `todo`.
+    ///
+    /// Identity is the **exact canonical [`ToolDefinition`]** the extension
+    /// owns, never the model-facing name: a same-named MCP Tool, or a `todo`
+    /// whose schema, origin, or execution policies differ, is not the Todo
+    /// extension's authority and must not satisfy the invariant.
+    ///
+    /// The match is exhaustive over the Tool-providing half of the closed
+    /// composition, built from the very registrations
+    /// [`ExtensionToolPlane::of_materialized_owners`] publishes — so there is
+    /// no second, hand-maintained list of extension Tool identities anywhere,
+    /// and `ConversationRuntime` never learns a Tool id of its own.
+    ///
+    /// [`ToolDefinition`]: crate::tools::types::ToolDefinition
+    #[must_use]
+    pub(crate) fn of_published_registry(registry: &crate::tools::executor::ToolRegistry) -> Self {
+        let published = registry.definitions();
+        let carries = |canonical: &crate::tools::types::ToolDefinition| {
+            published.iter().any(|definition| definition == canonical)
+        };
+        Self {
+            todo: carries(&crate::tools::native::todo_tool_registration().definition),
+        }
+    }
 }
 
 /// The framing token a **disabled** Time contributor's timezone renders as

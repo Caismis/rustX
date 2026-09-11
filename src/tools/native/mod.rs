@@ -414,6 +414,21 @@ pub(crate) fn todo_tool_registration() -> crate::tools::executor::ToolRegistrati
 /// The canonical model-facing name of the extension-provided `todo` Tool.
 pub(crate) const TODO_TOOL_NAME: &str = todo::NAME;
 
+/// The canonical [`ToolDefinition`] the Todo extension publishes (Issue #259).
+///
+/// The identity half of [`todo_tool_registration`], without its executor.
+/// It is the value the `ConversationRuntime` construction invariant compares a
+/// published capability generation against, and the one a test asserts an
+/// active registry carries — so neither has to restate a Tool id, a name, or a
+/// schema of its own. A same-named Tool from another origin is a different
+/// definition and does not match.
+///
+/// [`ToolDefinition`]: crate::tools::types::ToolDefinition
+#[must_use]
+pub fn todo_tool_definition() -> crate::tools::types::ToolDefinition {
+    todo::definition()
+}
+
 /// The canonical child-plane definition of one native capability under one
 /// invocation policy, for in-crate tests that need to build a frozen
 /// specification the child plane can actually materialize.
