@@ -33,7 +33,8 @@ function harness(options: { rows?: SessionSummaryView[]; query?: string; nextOff
   const workflow = new SessionDeletionWorkflow(client, () => true, (text) => feedback.push(text));
   const view = new ResumeSelector({ sessions: nativeRows, query: options.query, nextOffset: options.nextOffset, alive: () => !closed, feedback: (text) => feedback.push(text), client, workflow });
   view.onCancel = () => { closed = true; };
-  return { view, previews, executes, recovers, lists, feedback,
+  return { view, workflow, client, previews, executes, recovers, lists, feedback,
+    dispose: () => { closed = true; view.dispose(); },
     get closed() { return closed; },
     get previewResponse() { return previewResponse; }, get execution() { return execution; }, get recovery() { return recovery; },
     setPreview: () => { previewResponse = deferred(); }, setExecution: () => { execution = deferred(); },
@@ -221,4 +222,24 @@ test("preview pending remains cancellable and its late response cannot reopen co
   assert.equal(h.view.popupTitle(), "Resume session");
   assert.doesNotMatch(h.text(), /Permanently delete/);
   assert.deepEqual(h.executes, []);
+});
+
+
+test("a remounted stale workflow preserves the query and neighbor anchor through fresh confirmation", async () => {
+  const history = (id: string) => ({ ...row(id), name: `history-${id}` });
+  const h = harness({ query: "history", rows: [history("a"), history("b"), history("c")] });
+  await h.open(); confirm(h.view); h.dispose(); h.setPreview();
+  h.execution.resolve({ status: "stale", session_id: "b" }); await turn();
+  assert.deepEqual(h.previews, ["b"], "no disposed surface can start a new preview");
+  const replacement = new ResumeSelector({ sessions: [], query: h.workflow.context.query,
+    client: h.client, workflow: h.workflow, alive: () => true, feedback: () => {} });
+  h.previewResponse.resolve(preview("b", "revision-2")); await turn();
+  assert.equal(h.executes.length, 1);
+  h.setExecution(); confirm(replacement);
+  assert.deepEqual(h.executes, [["b", "revision-1"], ["b", "revision-2"]]);
+  h.rows([history("a"), history("c")]);
+  h.execution.resolve({ status: "deleted", session_id: "b" }); await turn();
+  assert.deepEqual(h.lists, [["history", 0], ["history", 0]]);
+  assert.equal(replacement.selector.selectedSession()?.id, "c");
+  replacement.dispose();
 });

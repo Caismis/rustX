@@ -40,6 +40,10 @@ export class ResumeSelector implements PopupContent {
   constructor(options: SessionSelectorOptions & { client: DeletionClient; workflow: SessionDeletionWorkflow; alive: () => boolean; feedback: (text: string) => void }) {
     this.#client = options.client;
     this.#workflow = options.workflow;
+    if (this.#workflow.state.kind !== "idle") {
+      const { ids, index, loaded } = this.#workflow.context;
+      this.#anchor = { ids: [...ids], index, loaded };
+    }
     this.#alive = options.alive;
     this.#feedback = options.feedback;
     this.#query = options.query ?? "";
