@@ -288,7 +288,11 @@ async fn every_native_non_success_survives_the_actual_outer_adapter_once() {
 #[tokio::test]
 async fn fixed_admission_rejects_orchestration_background_and_composite_leaves() {
     use crate::capabilities::selection::ToolSelector;
-    for name in ["subagent", "execution", "todo", "background", "composite"] {
+    // `todo` is deliberately absent: it is no longer an ordinary Builtin
+    // capability, so a Workflow that names it is refused at compile time
+    // (see `ext259_a_workflow_cannot_admit_an_extension_tool`) rather than
+    // admitted and then rejected as ineligible here (Issue #259).
+    for name in ["subagent", "execution", "background", "composite"] {
         let plane = workflow_test_plane(1);
         let runtime = workflow_runtime(&plane);
         let probe = Probe::new(ToolExecutionStatus::Success);
@@ -344,6 +348,31 @@ async fn fixed_admission_rejects_orchestration_background_and_composite_leaves()
         );
         assert_eq!(probe.starts.load(Ordering::SeqCst), 0);
     }
+}
+
+/// Issue #259 regression 3 (Workflow half): the extension-provided `todo`
+/// Tool is refused as an ordinary Workflow capability at compile time, with a
+/// diagnostic that names the plane it actually lives in.
+#[test]
+fn ext259_a_workflow_cannot_admit_an_extension_tool() {
+    use crate::capabilities::selection::ToolSelector;
+    let selector = ToolSelector::Builtin {
+        name: "todo".into(),
+    };
+    let mut definition = program_definition();
+    definition.tools = BTreeSet::from([selector.clone()]);
+    if let WorkflowNodeDefinition::Tool {
+        selector: target, ..
+    } = definition.block.nodes.get_mut("check").unwrap()
+    {
+        *target = selector;
+    }
+    let error = compile_test(definition).expect_err("an extension Tool is not admittable");
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("Agent Extension") && rendered.contains("todo"),
+        "the refusal names the owning plane: {rendered}"
+    );
 }
 
 #[test]

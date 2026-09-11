@@ -927,6 +927,22 @@ fn compile_program(
         "{:x}",
         Sha256::digest(serde_json::to_vec(&definition).expect("validated definition"))
     );
+    // A Workflow's admitted capability set is the *ordinary* capability
+    // plane. An extension-provided Tool is not selectable there — a Workflow
+    // Agent node composes it by composing the extension, and a Workflow's own
+    // Tool nodes never get one — so naming it is a static authoring error
+    // rather than a selector that merely fails to resolve later (Issue #259).
+    for selector in &definition.tools {
+        if let crate::capabilities::selection::ToolSelector::Builtin { name } = selector
+            && let Some(extension) = crate::capabilities::extension_provided_tool(name)
+        {
+            return Err(WorkflowCompileError::InvalidField(format!(
+                "builtin:{name} is provided by the {extension:?} Agent Extension, not by \
+                 ordinary Tool selection; a Workflow cannot admit it as a capability"
+            ))
+            .at("tools"));
+        }
+    }
     let mut total_nodes = 0;
     let block = compile_block(
         definition.block,

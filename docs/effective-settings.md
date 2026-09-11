@@ -156,7 +156,27 @@ carries no prompts, registries, extension internals, secrets, or arbitrary
 configuration documents, and it is not a generic configuration read/write
 surface.
 
-Protocol 26 adds `effective_extensions` and `settings_lifetimes.extensions`.
+The members are **independent axes**. `todo: null` means this Agent composes no
+Todo extension, and it says nothing about Agent Status — nor the reverse. It is
+also the only authoritative answer to "does this runtime have a current task
+list, a `todo` Tool, and a Todo panel?": a client must never infer that from
+`todo` results in the transcript, which are historical facts of the
+conversation rather than facts about the runtime attached to it. The same
+distinction governs `RuntimeClientSnapshot.todos`, where `null` means "no Todo
+extension composed" and the empty list means "composed, and this conversation
+has no tasks".
+
+Protocol 28 adds the `effective_extensions.todo` member and makes
+`RuntimeClientSnapshot.todos` nullable, so "no Todo extension composed" and
+"composed over an empty task list" stop sharing one wire spelling (Issue #259).
+Both follow from one frozen composition and therefore cannot disagree. The
+change is breaking and deliberately carries a new version number: protocol 27
+is Issue #258's effective Subagent profile digest, whose `effective_extensions`
+has no `todo` member. rustX is pre-1.0, so the protocol may break without a
+compatibility layer — that is not licence for two protocols to share a version.
+There is no v27 decoding: a v27 client is refused by strict version
+negotiation. Protocol 27 adds the subagent `profile_digest`. Protocol 26 adds
+`effective_extensions` and `settings_lifetimes.extensions`.
 Protocol 25 extends the existing snapshot with `launch_settings`,
 `settings_lifetimes`, and `settings_evidence`. Canonical model, policy and resource
 sections remain the only live value projections. Attempt `model` and
@@ -268,6 +288,24 @@ Issue #256 effective-extension regressions:
 | `ext256_materialized_owners_recover_the_exact_frozen_composition` | The projection source is the materialization: every semantic composition round-trips through its materialized owners unchanged |
 | `EXT256 /settings distinguishes absent, composed, and timezone-configured Agent Status` | Rendering separates absent, composed, contributors-disabled, configured timezone and none, and root from frozen child |
 | `EXT256 /settings never infers extension enablement from Agent Status observations` | Enabled with an empty status window renders enabled; absent with a composed status renders absent |
+
+Issue #259 Todo-extension regressions:
+
+| Test | Boundary/evidence |
+| --- | --- |
+| `ext259_ordinary_tool_selection_neither_adds_nor_removes_the_extension_tool` | Every ordinary activation shape, including `--no-tools` and `--no-builtin-tools`, against both compositions; the extension Tool is present or absent purely by composition, and never appears in the ordinary available catalog |
+| `ext259_todo_is_rejected_on_every_ordinary_selection_surface` | Root `defaultTools`, the CLI activation policy's three lists, and the shared source-qualified selection vocabulary all refuse `todo` by name |
+| `ext259_a_workflow_cannot_admit_an_extension_tool` | A Workflow naming `builtin:todo` fails at compile time with the extension named |
+| `ext259_todo_is_not_an_ordinary_child_capability` | A frozen Builtin selection naming `todo` fails child materialization closed; the extension plane is the only seam that registers it |
+| `ext259_the_todo_tool_schema_is_stable_across_list_mutations` | Create/complete/clear through the real batch authority leave the Tool definition and the capability revision unchanged |
+| `ext259_todo_and_agent_status_are_independent_and_change_no_loop_semantics` | All four combinations over one scripted attempt; admission, request count, canonical history, tool identities/statuses, terminal ordering and durable event ordering are identical across all of them |
+| `ext259_disabling_todo_preserves_history_and_re_enabling_reconstructs_it` | Three consecutive compositions over one durable store; the disabled launch composes no list and rewrites no history; re-enabling recovers the accepted snapshot with no duplicate ToolResult or event, and continues id allocation |
+| `ext259_a_resource_reload_cannot_install_or_remove_the_todo_extension` | Two real capability publications that genuinely change the ordinary plane, in both directions, leave the extension Tool exactly as composed |
+| `ext259_parent_and_concurrent_child_todo_lists_never_alias` | A parent and two concurrently composed Todo-enabled children write through their own batch authorities; each list holds only its own task and each allocates id 1 |
+| `ext259_a_role_todo_default_and_its_invocation_override_freeze_exactly` | Role default, missing dimension, present dimension, and `extensions: {}` resolve to the exact frozen child set; it survives the child serialization contract and participates in the profile digest |
+| `ext259_todo_obeys_the_shared_override_authority_distinction` | A main-model caller holding no Todo is refused by name; an entitled caller and a trusted Workflow override both resolve; enabling or disabling Todo changes no ordinary capability, Skill, or model |
+| `ext256_a_child_frozen_on_r1_keeps_r1_extensions_after_r2_publishes` | Extended for #259: R1 composes Todo and R2 removes it; the frozen child keeps R1's Todo composition and a child resolved after R2 composes none |
+| `shows no current list for a runtime that composes no Todo extension` | TUI: a Todo-disabled snapshot yields no panel and an explicit `/todos` message, while the inherited `todo` result still renders as transcript history and cannot install a current list |
 | `EXT256 reconnect reconstructs the same effective-extension view` | A fresh projection of the same snapshot is identical; an unattached client has no composition |
 
 Repair regressions additionally cover:

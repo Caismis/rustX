@@ -661,6 +661,7 @@ async fn a_server_failing_at_startup_is_isolated_and_diagnosed() {
             conversation_id: ConversationId::new("conv-managed-startup"),
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
+            extension_tools: rustx::extensions::ExtensionToolPlane::none(),
             tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
             // Keep this fixture independent of the developer's HOME.
             skill_discovery: rustx::skills::SkillDiscoveryConfig {
@@ -811,6 +812,7 @@ def add(a: int, b: int) -> str:
             conversation_id: ConversationId::new("conv-managed-freeze"),
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
+            extension_tools: rustx::extensions::ExtensionToolPlane::none(),
             tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
             // Keep this fixture independent of the developer's HOME.
             skill_discovery: rustx::skills::SkillDiscoveryConfig {
@@ -1124,6 +1126,7 @@ def ping() -> str:
             conversation_id: ConversationId::new("conv-managed-conflict"),
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(base_tool_registry),
+            extension_tools: rustx::extensions::ExtensionToolPlane::none(),
             tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
             // Keep this fixture independent of the developer's HOME.
             skill_discovery: rustx::skills::SkillDiscoveryConfig {

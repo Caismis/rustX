@@ -179,6 +179,9 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
                 },
             },
         ),
+        // Unauthored, and therefore composed: the Todo extension's default
+        // lives in the closed extension document (Issue #259).
+        todo: Some(crate::runtime_client::settings::EffectiveTodoExtension {}),
     };
     assert_eq!(
         client_projection.effective_extensions,
@@ -573,7 +576,11 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
     // no Agent Status at all, while the runtime above kept projecting the
     // composition it was actually running.
     assert!(
-        next_launch.config().extension_composition().is_empty(),
+        next_launch
+            .config()
+            .extension_composition()
+            .agent_status()
+            .is_none(),
         "the prospective next launch reads the edited extension configuration"
     );
     assert_eq!(next_launch.config().model.model, b.model);

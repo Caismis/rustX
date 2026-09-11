@@ -144,7 +144,15 @@ and all semantic errors. `--no-tools` means zero ordinary main-model tools,
 including Read and generated dispatchers; `--tools` is exact and exclusions
 subtract last. `--no-tools` conflicts with the other three Tool flags, and
 `--tools` conflicts with `--no-builtin-tools`. Lists reject empty entries,
-duplicates and unknown/unavailable/ambiguous names. `/tools` distinguishes
+duplicates and unknown/unavailable/ambiguous names.
+
+All four flags address the *ordinary* capability plane only. A Tool contributed
+by a Native Agent Extension — `todo` — is composed under `extensions` in the
+launch configuration and cannot be named here: listing it is a validation
+error, and `--no-tools` does not remove it. A model request with no Tools at
+all therefore needs `--no-tools` **and** a composition with no Tool-providing
+extension. `/settings` shows which extensions the attached Agent is actually
+running with. `/tools` distinguishes
 model authority from available but inactive capabilities; exposure filtering
 does not disable source preparation. Lazy Skills require native Read in the
 model's own frozen registry. See the
@@ -238,7 +246,7 @@ surfaces are Runtime Client facts or canonical conversation history.
 | **Picker** | Existing focused selectors and approval interactions remain overlays with their existing selection and focus semantics. |
 | **Transient** | One current item, owned by the app. New feedback replaces old feedback; any input acknowledges it, and attachment/session replacement clears it. Producers keep the payload compact enough for the three-line bound; a defensive overflow is marked explicitly, and no wall-clock timer is used. |
 | **Local scrollback** | Deliberately not implemented. These client events have no honest interleaving point with runtime conversation history, so they use the finite transient surface instead of a second local event store. |
-| **Task panel** | The task list the runtime published, drawn between the conversation and the editor because it answers a question the reader has while typing the next message. It is derived from the runtime's own snapshot projection and the committed `todo` results observed since, holds no state of its own, is bounded so a long plan cannot push the conversation off screen, and disappears entirely when the list is empty. Task text is sanitized before it is drawn, so one task is always one physical row and no model-written escape sequence reaches the terminal. |
+| **Task panel** | The task list the runtime published, drawn between the conversation and the editor because it answers a question the reader has while typing the next message. It is derived from the runtime's own snapshot projection and the committed `todo` results observed since, holds no state of its own, is bounded so a long plan cannot push the conversation off screen, and disappears entirely when the list is empty or when the attached runtime composes no Todo Agent Extension. Task text is sanitized before it is drawn, so one task is always one physical row and no model-written escape sequence reaches the terminal. |
 | **Preference** | Reasoning visibility and expansion choices stay in client display preferences and never become runtime messages. |
 | **Control** | Canonical commands still go through the Runtime Client. Their short acknowledgement is transient; runtime status and settlement remain authoritative runtime projection. |
 | **Quit** | Shutdown is a control intent. Lifecycle failures are committed in a final Pi frame before the TUI stops, and are never turned into fake transcript messages. |
@@ -334,7 +342,10 @@ does not implement a parallel Session system.
   inactive Tools separately.
 - `/skills` — show the active Skill catalog.
 - `/todos` — print the complete task list the agent is tracking, grouped by
-  status. The panel above the editor shows the same list, bounded.
+  status. The panel above the editor shows the same list, bounded. When the
+  attached runtime composes no Todo Agent Extension, it says so rather than
+  reporting an empty list: there is no task list and no `todo` tool to create
+  one.
 - `/status` — show the runtime-composed Agent Status and diagnostics.
 
 ### Control and presentation

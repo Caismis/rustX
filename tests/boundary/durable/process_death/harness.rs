@@ -101,10 +101,11 @@ fn models_json() -> String {
 
 /// The runtime configuration a child composes from.
 fn runtime_json(read_approval: &str, include_todo: bool) -> String {
-    let mut default_tools = vec!["read", "bash", "execution", "subagent"];
-    if include_todo {
-        default_tools.push("todo");
-    }
+    // Issue #259: Todo is composed through the closed extension surface, not
+    // through `defaultTools` — which no longer accepts the name at all. The
+    // bounded catalog the rest of FND-06 relies on is preserved by composing
+    // no Todo extension unless a case asks for one.
+    let default_tools = vec!["read", "bash", "execution", "subagent"];
     serde_json::json!({
         "schemaVersion": 8,
         "agentId": "agent-fnd06",
@@ -117,6 +118,7 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
             "bash": {"execution": "model_selectable", "approval": "never"}
         },
         "defaultTools": default_tools,
+        "extensions": {"todo": {"enabled": include_todo}},
         // One named subagent definition (Issue #144). The instruction
         // document is a workspace resource the parent generation freezes;
         // the child never reads this configuration.
@@ -136,9 +138,9 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
     .to_string()
 }
 
-/// Rewrites a child lab configuration with the native Todo tool enabled.
-/// Only the Issue #130 process-death scenarios need this extra model-facing
-/// tool; the rest of FND-06 retains its original bounded catalog.
+/// Rewrites a child lab configuration with the **Todo Agent Extension**
+/// composed. Only the Issue #130 process-death scenarios need it; the rest of
+/// FND-06 retains its original bounded catalog.
 pub(crate) fn write_runtime_config_with_todo(root: &Path) {
     crate::launch_fixture::write_documents(
         &root.join("rustx.jsonc"),

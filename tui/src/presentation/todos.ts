@@ -56,17 +56,34 @@ const STATUSES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The conversation's list, or `undefined` when the projection has none.
+ * The conversation's list, or `undefined` when there is no current one.
  *
- * `undefined` means "this client has not been told yet", a state that only
- * exists before the first snapshot arrives. A conversation that never called
- * `todo`, and one whose list was cleared, both carry an *empty* list, which
- * is a fact rather than an absence.
+ * `undefined` covers exactly two states, and neither draws a panel: the
+ * client has not been told yet (only before the first snapshot arrives), and
+ * the attached runtime composes no Todo Agent Extension, so it has no current
+ * list at all (Issue #259). A conversation that never called `todo` under a
+ * Todo-enabled runtime, and one whose list was cleared, both carry an *empty*
+ * list, which is a fact rather than an absence.
  */
 export function selectTodos(
   state: PresentationState | undefined,
 ): TodoSnapshot | undefined {
   return state?.todos;
+}
+
+/**
+ * Whether the attached runtime composes the Todo Agent Extension.
+ *
+ * The authority is the runtime's own effective-extension projection — never
+ * the presence of `todo` results in the transcript, which are historical facts
+ * of the conversation rather than facts about the runtime attached to it, and
+ * never the presence of the list itself, which an unattached client has not
+ * been told about yet.
+ */
+export function isTodoComposed(
+  state: PresentationState | undefined,
+): boolean {
+  return state?.effectiveExtensions?.todo != null;
 }
 
 /** Tasks that are neither completed nor tombstoned. */

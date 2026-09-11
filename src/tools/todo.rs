@@ -1,4 +1,5 @@
-//! The conversation-owned task list.
+//! The conversation-owned task list: the state half of the **Todo Native
+//! Agent Extension** (Issue #259).
 //!
 //! One conversation owns one [`ConversationTodoList`]: the authoritative
 //! set of tasks the model is tracking for that conversation, the id
@@ -10,8 +11,29 @@
 //! ```text
 //! native `todo` tool        model-facing contract, reply prose
 //! ConversationTodoList      task identity, transitions, dependency graph
+//! TodoStatusPresentation    the bounded read-only view another extension reads
 //! canonical tool results    the durable record the list is rebuilt from
 //! ```
+//!
+//! # One extension, one composition decision
+//!
+//! Everything above exists for a conversation exactly when that
+//! Agent/Conversation composes the Todo extension
+//! ([`NativeAgentExtensions::todo`](crate::extensions::NativeAgentExtensions::todo)).
+//! Composing it composes all of it at once — the list, the `todo` Tool, the
+//! status presentation, and the Runtime Client projection — and not composing
+//! it composes none of it. There is deliberately no second switch: ordinary
+//! Tool selection cannot add or remove the `todo` Tool, Agent Status cannot
+//! turn the list on or off, and list contents never change which Tools exist.
+//!
+//! A composition without Todo still keeps every `todo` `ToolCall` and
+//! `ToolResult`
+//! its canonical history holds. Those are facts of the conversation, not of the
+//! current runtime: nothing deletes, rewrites, or hides them, and a later
+//! launch that composes Todo again rebuilds the latest accepted snapshot from
+//! them — see [`ConversationTodoList::rebuilt`], which reads the newest
+//! committed result rather than replaying mutations, so re-enabling produces
+//! no new `ToolResult`s and no duplicate events.
 //!
 //! # Why the list is not a file
 //!
@@ -40,13 +62,17 @@
 //!
 //! # Session isolation
 //!
-//! The list is conversation-owned state, keyed by [`ConversationId`], and it
-//! is reachable only through the tool registration of that conversation's own
-//! tool plane. A subagent child composes exactly the Builtin capabilities its
-//! named definition resolved to, so a child without an explicit `todo`
-//! selection has no `todo` registration at all and can neither read nor
-//! overwrite its parent's list — the isolation is structural, not a check.
-//! Even a child that does select `todo` owns its own conversation's list.
+//! The list is conversation-owned state, keyed by [`ConversationId`], and a
+//! conversation reaches only the list its own `ConversationToolRuntime`
+//! composed. A subagent child is a separate conversation with a separate
+//! runtime and a separate Ledger, so a Todo-enabled child composes a list of
+//! its own, rebuilt from *its own* canonical history — which is empty at
+//! birth. Parent and child therefore never alias, two concurrent Todo-enabled
+//! children never alias each other, and no child snapshot merges upward: the
+//! isolation is structural, not a check, and there is no process-global,
+//! Workflow-owned, or cross-conversation task list anywhere in the runtime.
+//! A child that does not compose the extension has no list and no `todo`
+//! registration at all.
 //!
 //! # A mutation is provisional until its own result is durable
 //!
@@ -92,6 +118,93 @@ use crate::tools::types::{ToolExecutionStatus, ToolResultContent};
 /// so a differently named tool that happens to publish similar structure is
 /// never mistaken for the task list.
 pub const TODO_TOOL_ID: &str = "tool-todo";
+
+/// The maximum number of Todo tasks included in one bounded status
+/// presentation. The current in-progress task, when any, uses one slot.
+pub const MAX_TODO_STATUS_TASKS: usize = 6;
+
+/// The maximum byte length of one Todo task label included in the bounded
+/// status presentation.
+pub const MAX_TODO_STATUS_TEXT_BYTES: usize = 256;
+
+/// One bounded Todo task of the read-only status presentation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TodoStatusTask {
+    /// The conversation-owned task id.
+    pub id: u64,
+    /// The bounded task subject.
+    pub subject: String,
+    /// The bounded in-progress label, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_form: Option<String>,
+    /// The authoritative committed lifecycle status.
+    pub status: TodoStatus,
+    /// Whether an active dependency still blocks this task.
+    pub blocked: bool,
+}
+
+/// The bounded, **read-only** semantic Todo presentation (Issue #259).
+///
+/// This is the whole interface the Todo extension offers another extension.
+/// It is derived here, by the list's owner, from the *committed* snapshot —
+/// the conversation's durable truth — and it is a value, not a handle: a
+/// consumer can render it and fingerprint it, and can neither mutate the
+/// list, drive its recovery, nor observe a mutation some batch has staged but
+/// not committed.
+///
+/// Agent Status is the only consumer today. It decides *whether and how often*
+/// to show a reminder; it never decides what the list is.
+///
+/// Tasks are in conversation creation order. `current` is the first committed
+/// `InProgress` task, when any; `tasks` contains the remaining committed active
+/// tasks up to the explicit bound. Counts cover the complete committed
+/// snapshot, while `omitted_count` is the number of active tasks not shown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TodoStatusPresentation {
+    /// The first committed `InProgress` task, when any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<TodoStatusTask>,
+    /// Remaining active tasks in deterministic creation order.
+    #[serde(default)]
+    pub tasks: Vec<TodoStatusTask>,
+    /// Number of committed Pending or `InProgress` tasks.
+    pub active_count: usize,
+    /// Number of active tasks with an unresolved active dependency.
+    pub blocked_count: usize,
+    /// Number of committed Completed tasks.
+    pub completed_count: usize,
+    /// Number of committed Deleted tasks.
+    pub deleted_count: usize,
+    /// Number of active tasks omitted by the bounded presentation.
+    pub omitted_count: usize,
+}
+
+impl TodoStatusPresentation {
+    /// Whether this presentation contains work a reminder could be about.
+    #[must_use]
+    pub const fn is_actionable(&self) -> bool {
+        self.active_count > 0
+    }
+
+    /// The stable content fingerprint of this presentation.
+    ///
+    /// Owned here because the presentation is owned here: a consumer that
+    /// computed its own fingerprint over its own rendering would be deciding
+    /// when two Todo states are "the same", which is the list's question.
+    ///
+    /// # Panics
+    ///
+    /// Only if this value stops being serializable, which its own derive
+    /// makes a compile-time property rather than a runtime one.
+    #[must_use]
+    pub fn fingerprint(&self) -> String {
+        let encoded = serde_json::to_vec(self).expect("Todo status presentation is serializable");
+        let digest = <sha2::Sha256 as sha2::Digest>::digest(encoded);
+        format!("{digest:x}")
+    }
+}
 
 /// The lifecycle status of one task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -564,6 +677,97 @@ impl TodoSnapshot {
             .count();
         (done, live)
     }
+
+    /// The bounded read-only [`TodoStatusPresentation`] of this list.
+    ///
+    /// Deriving it is the list's own business: the bounds, the choice of the
+    /// current task, the blocked predicate, and the truncation rule are all
+    /// facts about the task model, not about any consumer's rendering.
+    #[must_use]
+    pub fn status_presentation(&self) -> TodoStatusPresentation {
+        let states = self
+            .tasks
+            .iter()
+            .map(|task| (task.id, task.status))
+            .collect::<BTreeMap<_, _>>();
+        let blocked = |task: &TodoTask| {
+            task.blocked_by.iter().any(|blocker| {
+                states.get(blocker).is_some_and(|status| {
+                    matches!(status, TodoStatus::Pending | TodoStatus::InProgress)
+                })
+            })
+        };
+        let active = self
+            .tasks
+            .iter()
+            .filter(|task| matches!(task.status, TodoStatus::Pending | TodoStatus::InProgress));
+        let active_count = active.clone().count();
+        let blocked_count = active.clone().filter(|task| blocked(task)).count();
+        let completed_count = self
+            .tasks
+            .iter()
+            .filter(|task| task.status == TodoStatus::Completed)
+            .count();
+        let deleted_count = self
+            .tasks
+            .iter()
+            .filter(|task| task.status == TodoStatus::Deleted)
+            .count();
+
+        let current_id = self
+            .tasks
+            .iter()
+            .find(|task| task.status == TodoStatus::InProgress)
+            .map(|task| task.id);
+        let mut current = None;
+        let mut tasks = Vec::new();
+        let task_limit = if current_id.is_some() {
+            MAX_TODO_STATUS_TASKS.saturating_sub(1)
+        } else {
+            MAX_TODO_STATUS_TASKS
+        };
+        for task in active {
+            let bounded = TodoStatusTask {
+                id: task.id,
+                subject: bound_status_text(&task.subject),
+                active_form: task.active_form.as_deref().map(bound_status_text),
+                status: task.status,
+                blocked: blocked(task),
+            };
+            if Some(task.id) == current_id {
+                current = Some(bounded);
+            } else if tasks.len() < task_limit {
+                tasks.push(bounded);
+            }
+        }
+        let displayed = usize::from(current.is_some()) + tasks.len();
+        TodoStatusPresentation {
+            current,
+            tasks,
+            active_count,
+            blocked_count,
+            completed_count,
+            deleted_count,
+            omitted_count: active_count.saturating_sub(displayed),
+        }
+    }
+}
+
+/// Bounds one presentation field to [`MAX_TODO_STATUS_TEXT_BYTES`] on a UTF-8
+/// character boundary.
+fn bound_status_text(text: &str) -> String {
+    if text.len() <= MAX_TODO_STATUS_TEXT_BYTES {
+        return text.to_owned();
+    }
+    let marker = "…";
+    let limit = MAX_TODO_STATUS_TEXT_BYTES.saturating_sub(marker.len());
+    let mut end = limit.min(text.len());
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut bounded = text[..end].to_owned();
+    bounded.push_str(marker);
+    bounded
 }
 
 /// A rejected mutation.

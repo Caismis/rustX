@@ -325,7 +325,27 @@ pub enum RuntimeClientSessionRequest {
 /// child without an effective profile identity is not a state this runtime
 /// can produce.
 /// Version 28 adds crash-safe native Session deletion preview/execute/recovery.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 28;
+///
+/// Version 29 carries Issue #259's Todo Agent Extension projection.
+/// `effective_extensions` gains a `todo` member — the authoritative answer to
+/// "does the attached runtime own a current task list, publish the `todo`
+/// Tool, and offer a Todo panel?" — and `RuntimeClientSnapshot.todos` becomes
+/// nullable, so *no Todo extension composed* and *Todo composed over an empty
+/// task list* stop sharing one wire spelling. A client must render the two
+/// differently: the first has no current Todo surface at all, however many
+/// historical `todo` results the transcript still carries, while the second
+/// has an empty one. Both members follow from a single frozen composition, so
+/// they can never disagree on the wire.
+///
+/// The change is deliberately breaking. Version 28 is Issue #255's protocol —
+/// crash-safe Session deletion — and its `effective_extensions` record has no
+/// `todo` member and its `todos` is a bare snapshot, so serving it this schema
+/// under the same number would give two materially different contracts one
+/// identity. rustX is pre-1.0, which means the protocol may break without a
+/// compatibility layer; it does not mean two protocols may share a version.
+/// There is no v28 decoding and no compatibility shim: a v28 client is refused
+/// by ordinary strict version negotiation.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 29;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1349,13 +1369,42 @@ mod tests {
     use crate::runtime::interaction::{ApprovalDecision, InteractionRef, InteractionResponse};
     use crate::runtime_client::event::RuntimeClientEvent;
 
+    /// Issue #259 blocker 3: the Rust and TypeScript protocol constants are
+    /// one number.
+    ///
+    /// The reference client mirrors this contract in its own source, so the
+    /// two constants are two literals describing one wire schema. Reading the
+    /// TypeScript one here makes them impossible to bump apart: a Rust bump
+    /// that forgets `tui/src/protocol/types.ts` fails in Rust, before any
+    /// client ever negotiates against a version that means two things.
+    #[test]
+    fn ext259_the_typescript_protocol_constant_mirrors_this_one() {
+        let mirror = include_str!("../../tui/src/protocol/types.ts");
+        let declaration = mirror
+            .lines()
+            .find_map(|line| {
+                line.trim()
+                    .strip_prefix("export const RUNTIME_CLIENT_PROTOCOL_VERSION = ")
+            })
+            .expect("the reference client declares the protocol version");
+        let declared: u16 = declaration
+            .trim_end_matches(';')
+            .trim()
+            .parse()
+            .expect("the declared version is a number");
+        assert_eq!(
+            declared, RUNTIME_CLIENT_PROTOCOL_VERSION,
+            "the TypeScript mirror must carry the same protocol version as this crate"
+        );
+    }
+
     /// The Runtime Client protocol version is a distinct constant from the
     /// internal event schema version: representing or changing one never
     /// implies anything about the other.
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 28);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 29);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

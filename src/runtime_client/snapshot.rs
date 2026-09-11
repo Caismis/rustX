@@ -205,7 +205,8 @@ pub struct RuntimeClientSnapshot {
     /// Absent when no live Session model authority exists (historical inspection).
     pub model: Option<SessionModelView>,
     /// The conversation's task list, as of the newest committed `todo`
-    /// result.
+    /// result — present exactly when this runtime composes the **Todo**
+    /// Agent Extension (Issue #259).
     ///
     /// This is a **projection of canonical history, not a second
     /// authority**: the runtime derives it from exactly the tool results the
@@ -223,9 +224,15 @@ pub struct RuntimeClientSnapshot {
     ///
     /// A conversation that never called `todo` carries the empty list.
     ///
+    /// `None` is a different fact and must render differently: this runtime
+    /// composes no Todo extension, so there is no current task list to show
+    /// at all. Canonical history may still contain `todo` calls and results
+    /// from a launch that did compose it; those remain renderable as
+    /// *transcript history* and must not be folded back into a current panel.
+    ///
     /// [`ConversationTodoList`]: crate::tools::todo::ConversationTodoList
     #[serde(default)]
-    pub todos: TodoSnapshot,
+    pub todos: Option<TodoSnapshot>,
 }
 
 /// One bounded newest-or-older page of derived transcript history.

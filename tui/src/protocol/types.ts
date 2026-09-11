@@ -74,7 +74,16 @@
 // extensions (Issue #258). It is always present, on live and recovery-projected
 // children alike. There is no v26 decoding and no optional form.
 // Version 28: bounded Runtime Client-owned Session deletion DTOs; no cleanup plan.
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 28;
+// Version 29: the Todo Agent Extension projection (Issue #259).
+// `effective_extensions` gains `todo` — the authoritative answer to whether the
+// attached runtime owns a current task list, publishes the `todo` Tool, and
+// offers a Todo panel — and `RuntimeClientSnapshot.todos` becomes nullable, so
+// "no Todo extension composed" (`null`: no current Todo surface at all, however
+// many historical `todo` results the transcript carries) is no longer spelled
+// the same way as "Todo composed over an empty task list" (an empty snapshot).
+// Both follow from one frozen composition and cannot disagree. There is no v28
+// decoding and no compatibility shim.
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 29;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -1454,10 +1463,25 @@ export interface SettingsLifetimes {
  * `agent_status: null` means the extension is **not part of this Agent's
  * composition**. That is a different fact from a composed extension whose
  * two contributors are both disabled.
+ *
+ * The members are independent axes (Issue #259): Todo composes with or
+ * without Agent Status, and `todo` here is the *only* authoritative answer to
+ * "does this runtime have a current task list and a `todo` Tool?". A client
+ * must never infer it from `todo` results in the transcript, which are
+ * historical facts of the conversation rather than facts about the runtime
+ * attached to it.
  */
 export interface EffectiveNativeAgentExtensions {
   agent_status: EffectiveAgentStatusExtension | null;
+  /**
+   * The composed Todo extension, or `null` when this Agent composes none.
+   *
+   * It carries no field: Todo has no contributor configuration, so being
+   * composed is the whole fact.
+   */
+  todo: EffectiveTodoExtension | null;
 }
+export type EffectiveTodoExtension = Record<string, never>;
 export interface EffectiveAgentStatusExtension {
   time: EffectiveTimeStatus;
   background: EffectiveBackgroundStatus;
@@ -1521,15 +1545,21 @@ export interface RuntimeClientSnapshot {
   /** The session's *desired* model. Never the running attempt's model. */
   model: SessionModelView | null;
   /**
-   * The conversation's task list as of the newest committed `todo` result.
+   * The conversation's task list as of the newest committed `todo` result —
+   * present exactly when this runtime composes the Todo Agent Extension.
    *
    * The runtime derives this from the whole canonical history, which is why
    * the client does not scan its own transcript for it: the client holds
    * only a bounded newest page, so a conversation that committed a page or
    * more of messages after its last `todo` result would attach with no list
    * while the runtime still had one.
+   *
+   * `null` is a different fact from the empty list: this runtime composes no
+   * Todo extension, so there is no current task list to show at all. A
+   * conversation that never called `todo` under a Todo-enabled runtime
+   * carries the *empty* list instead (Issue #259).
    */
-  todos?: TodoSnapshot;
+  todos?: TodoSnapshot | null;
 }
 
 export type RuntimeClientTranscriptItem =

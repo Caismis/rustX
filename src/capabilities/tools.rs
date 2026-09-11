@@ -5,6 +5,34 @@
 //! exposed to the model and Agent Loop. Keeping both in this capability layer
 //! prevents a discovery source or client projection from becoming a second
 //! capability authority.
+//!
+//! # This layer owns the ordinary capability plane only
+//!
+//! Everything here — `defaultTools`, `--tools`, `--exclude-tools`,
+//! `--no-tools`, `--no-builtin-tools` — addresses *ordinary execution
+//! capabilities*. A Native Agent Extension may also contribute a model-facing
+//! Tool, and that Tool belongs to the extension's composition, not to this
+//! selection:
+//!
+//! ```text
+//! active model Tool set = selected ordinary capabilities
+//!                       + extension-provided Tool surfaces
+//! ```
+//!
+//! [`select_tools`] therefore takes the two sets separately and never lets one
+//! decide the other. Selection cannot remove an extension Tool (so `--no-tools`
+//! plus an enabled Todo still exposes `todo`, and a truly Tool-free request
+//! needs both zero ordinary Tools and no Tool-providing extension), and it
+//! cannot add one either: an extension's Tool name is not an ordinary
+//! identity, so naming it in an allowlist, an exclusion, or `defaultTools` is
+//! rejected by [`ToolActivationPolicy::validate`] rather than silently
+//! accepted. The classification is semantic: `--no-builtin-tools` removes
+//! ordinary built-ins, not every Tool that happens to be implemented in Rust.
+//!
+//! Extension registrations are still *validated* exactly like ordinary ones,
+//! and the composed active registry is built through the same
+//! [`ToolRegistry`] identity rules — so a foreign Tool colliding with an
+//! extension Tool's name fails loudly instead of shadowing it.
 
 use std::collections::BTreeSet;
 
@@ -28,6 +56,34 @@ pub struct ToolActivationPolicy {
     pub exclude_tools: Vec<String>,
 }
 
+/// The extension that owns `name` as a Tool surface, when one does
+/// (Issue #259).
+///
+/// This is the ordinary capability plane's view of the extension plane: it
+/// knows only that certain model-facing names are *not its to decide*, so it
+/// can refuse them with a diagnostic that says where the name actually lives
+/// instead of the misleading "unknown or ineligible".
+///
+/// The answer is derived from the closed extension vocabulary's own Tool
+/// composition, never from a second hand-written list, so it cannot drift from
+/// what an enabled extension actually registers.
+#[must_use]
+pub fn extension_provided_tool(name: &str) -> Option<&'static str> {
+    (name == crate::tools::native::TODO_TOOL_NAME).then_some(crate::extensions::TODO_EXTENSION)
+}
+
+/// Rejects an ordinary selection entry that names an extension-provided Tool.
+fn reject_extension_tool(name: &str, label: &str) -> Result<(), String> {
+    match extension_provided_tool(name) {
+        None => Ok(()),
+        Some(extension) => Err(format!(
+            "Tool {label} entry {name:?} is provided by the {extension:?} Agent \
+             Extension, not by ordinary Tool selection; compose it with \
+             extensions.{extension}.enabled instead"
+        )),
+    }
+}
+
 impl ToolActivationPolicy {
     pub(crate) fn conflict(&self) -> Option<(&'static str, &'static str)> {
         if self.no_tools {
@@ -46,7 +102,13 @@ impl ToolActivationPolicy {
 
     /// Validates selection intent independently of capability discovery.
     /// The same boundary is used by CLI parsing and resolved composition.
-    pub(crate) fn validate(&self) -> Result<(), String> {
+    ///
+    /// # Errors
+    ///
+    /// Returns the first violation: a flag conflict, a malformed name list,
+    /// or an entry naming a Tool an Agent Extension owns rather than the
+    /// ordinary capability plane (Issue #259).
+    pub fn validate(&self) -> Result<(), String> {
         if let Some((first, second)) = self.conflict() {
             return Err(format!("{first} conflicts with {second}"));
         }
@@ -55,6 +117,20 @@ impl ToolActivationPolicy {
         }
         if !self.exclude_tools.is_empty() {
             validate_names(&self.exclude_tools, "exclusion")?;
+        }
+        // An extension-provided Tool is refused on *every* ordinary selection
+        // surface, including `default_tools` — where an unknown name is
+        // otherwise harmlessly ignored, and would therefore have made
+        // `defaultTools: ["todo"]` look like it worked while deciding
+        // nothing at all (Issue #259).
+        for (names, label) in [
+            (self.default_tools.as_deref(), "default selection"),
+            (self.tools.as_deref(), "allowlist"),
+            (Some(self.exclude_tools.as_slice()), "exclusion"),
+        ] {
+            for name in names.unwrap_or_default() {
+                reject_extension_tool(name, label)?;
+            }
         }
         Ok(())
     }
@@ -166,20 +242,30 @@ impl AvailableToolCatalog {
 }
 
 /// Applies the bounded startup selection pipeline to one complete available
-/// registration set.
+/// registration set, then composes the extension-provided Tool surfaces of
+/// the same Agent composition (Issue #259).
 ///
 /// The returned registry contains only active Tools. The available catalog
-/// contains every provided available Tool and is safe to project
+/// contains every provided *ordinary* available Tool and is safe to project
 /// independently.
+///
+/// `extensions` is deliberately outside the catalog. The available catalog is
+/// the ordinary capability universe — it is what `--tools`, `--exclude-tools`,
+/// a role's `tools.builtin`, and a Workflow capability selection resolve
+/// against — and an extension Tool is not selectable through any of them. It
+/// still passes the same per-registration validation and the same final
+/// registry identity check, so it can never shadow or be shadowed by an
+/// ordinary capability of the same name.
 pub(crate) fn select_tools(
     available: &[ToolRegistration],
+    extensions: &[ToolRegistration],
     policy: &ToolActivationPolicy,
 ) -> Result<(AvailableToolCatalog, ToolRegistry), String> {
     // Validate every candidate before projecting availability. Selection can
     // intentionally hide ordinary tools (`no_tools`, exclusions, or a strict
     // allowlist), but it must never hide an identity collision with a
     // runtime-owned protocol name.
-    for registration in available {
+    for registration in available.iter().chain(extensions) {
         // Validate each available capability even when activation hides it.
         // A one-entry registry reuses native registration validation without
         // treating same-name, source-qualified available tools as collisions.
@@ -192,13 +278,20 @@ pub(crate) fn select_tools(
         .map(|registration| &registration.definition)
         .collect::<Vec<_>>();
     let selected = select_definitions(&definitions, policy)?;
-    let registrations = selected.into_iter().map(|definition| {
-        available
-            .iter()
-            .find(|registration| std::ptr::eq(&raw const registration.definition, definition))
-            .expect("selected available definition")
-            .clone()
-    });
+    let registrations = selected
+        .into_iter()
+        .map(|definition| {
+            available
+                .iter()
+                .find(|registration| std::ptr::eq(&raw const registration.definition, definition))
+                .expect("selected available definition")
+                .clone()
+        })
+        // The composition, and the reason it is an append rather than a
+        // filter pass: no ordinary selection outcome — `no_tools`, an exact
+        // allowlist, an exclusion — participates in whether an extension
+        // Tool is active. The frozen extension composition already decided.
+        .chain(extensions.iter().cloned());
     let active = ToolRegistry::from_registrations(registrations)
         .map_err(|error| format!("active Tool selection is invalid: {error}"))?;
     Ok((available_catalog, active))
@@ -348,7 +441,7 @@ mod tests {
             ..ToolActivationPolicy::default()
         };
         let (available, active) =
-            select_tools(&registrations(), &policy).expect("activation selection");
+            select_tools(&registrations(), &[], &policy).expect("activation selection");
 
         assert_eq!(
             available
@@ -366,6 +459,7 @@ mod tests {
     fn builtin_disable_and_no_tools_retain_truthful_availability() {
         let (available, active) = select_tools(
             &registrations(),
+            &[],
             &ToolActivationPolicy {
                 default_tools: Some(Vec::new()),
                 ..ToolActivationPolicy::default()
@@ -377,6 +471,7 @@ mod tests {
 
         let (available, active) = select_tools(
             &registrations(),
+            &[],
             &ToolActivationPolicy {
                 no_builtin_tools: true,
                 ..ToolActivationPolicy::default()
@@ -388,6 +483,7 @@ mod tests {
 
         let (available, active) = select_tools(
             &registrations(),
+            &[],
             &ToolActivationPolicy {
                 no_tools: true,
                 ..ToolActivationPolicy::default()
@@ -402,6 +498,7 @@ mod tests {
     fn strict_allowlist_and_final_exclusions_cross_origins() {
         let (available, active) = select_tools(
             &registrations(),
+            &[],
             &ToolActivationPolicy {
                 tools: Some(vec!["bash".to_owned(), "search".to_owned()]),
                 exclude_tools: vec!["bash".to_owned()],
@@ -414,6 +511,7 @@ mod tests {
 
         let error = select_tools(
             &registrations(),
+            &[],
             &ToolActivationPolicy {
                 tools: Some(vec!["missing".to_owned()]),
                 ..ToolActivationPolicy::default()
@@ -453,6 +551,7 @@ mod tests {
 
         let error = select_tools(
             &registrations,
+            &[],
             &ToolActivationPolicy {
                 tools: Some(vec!["duplicate".to_owned()]),
                 ..ToolActivationPolicy::default()
@@ -462,6 +561,7 @@ mod tests {
         assert!(error.contains("ambiguous"));
         let error = select_tools(
             &registrations,
+            &[],
             &ToolActivationPolicy {
                 exclude_tools: vec!["duplicate".to_owned()],
                 ..ToolActivationPolicy::default()
@@ -529,7 +629,7 @@ mod tests {
             },
         ] {
             assert!(
-                select_tools(&registrations(), &policy).is_err(),
+                select_tools(&registrations(), &[], &policy).is_err(),
                 "{policy:?}"
             );
         }
@@ -569,7 +669,7 @@ mod tests {
                 vec![],
             ),
         ] {
-            let (_, active) = select_tools(&registrations(), &policy).unwrap();
+            let (_, active) = select_tools(&registrations(), &[], &policy).unwrap();
             assert_eq!(names(&active), expected, "{policy:?}");
         }
     }
@@ -589,6 +689,7 @@ mod tests {
                     definition(crate::tools::executor::WORKFLOW_OUTPUT_TOOL_NAME, origin),
                     Arc::new(NoopTool),
                 )],
+                &[],
                 &ToolActivationPolicy {
                     no_tools: true,
                     ..ToolActivationPolicy::default()

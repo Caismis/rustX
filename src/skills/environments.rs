@@ -1349,6 +1349,7 @@ mod tests {
                 conversation_id,
                 workspace: workspace.clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
+                extension_tools: crate::extensions::ExtensionToolPlane::none(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default_for_workspace(
                     &workspace,

@@ -227,6 +227,25 @@ pub struct ConversationRuntimeConfig {
     /// The explicit authorized tool environment; an empty environment is
     /// used when omitted.
     pub environment: Option<ToolEnvironment>,
+    /// The **one** frozen Native Agent Extension composition of this
+    /// conversation (Issue #259).
+    ///
+    /// This is the single authority from which every Todo facet follows.
+    /// The conversation tool runtime is the composition's *materialization
+    /// owner*: it builds the [`ConversationTodoList`] exactly when
+    /// `extensions.todo()` is `Some`, and everything downstream — the
+    /// extension Tool plane, the Agent Status presentation, the Runtime
+    /// Client projection — is derived from what it materialized rather than
+    /// configured a second time. There is deliberately no separate "does the
+    /// `todo` Tool exist" input anywhere in the runtime.
+    ///
+    /// It defaults to
+    /// [`NativeAgentExtensionsDocument::resolve`](crate::extensions::NativeAgentExtensionsDocument::resolve)
+    /// of the default document, which is the product default. The two real
+    /// composition sites — `LocalConversationCore::compose` and
+    /// `compose_subagent_child` — always set it explicitly from their frozen
+    /// composition.
+    pub extensions: crate::extensions::NativeAgentExtensions,
 }
 
 impl ConversationRuntimeConfig {
@@ -242,7 +261,31 @@ impl ConversationRuntimeConfig {
             clock: None,
             event_sink: None,
             environment: None,
+            // The product default composition, resolved from the default
+            // authored document.
+            //
+            // This value is the conversation's *whole* frozen composition,
+            // not only the half this owner materializes, because it is what
+            // the effective-extension projection reads back and what the
+            // `ConversationRuntime` construction invariant proves every
+            // materialized facet against. Defaulting it to the product
+            // default keeps "a conversation runtime nobody configured" the
+            // same composition a launch nobody configured gets.
+            //
+            // Both real composition sites call [`Self::with_extensions`] with
+            // their launch's or their child specification's complete frozen
+            // composition, so this default is never the product decision in
+            // production.
+            extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
         }
+    }
+
+    /// The same configuration frozen against an explicit extension
+    /// composition (Issue #259).
+    #[must_use]
+    pub fn with_extensions(mut self, extensions: crate::extensions::NativeAgentExtensions) -> Self {
+        self.extensions = extensions;
+        self
     }
 }
 
@@ -263,8 +306,17 @@ pub struct ConversationToolRuntime {
     environment: ToolEnvironment,
     background: ConversationBackgroundRegistry,
     /// The conversation's task list, rebuilt from its own durable history at
-    /// construction.
-    todos: ConversationTodoList,
+    /// construction — present exactly when this conversation composes the
+    /// Todo Agent Extension (Issue #259).
+    todos: Option<ConversationTodoList>,
+    /// The one frozen extension composition this runtime materialized.
+    ///
+    /// Retained so the composition can be *read back* rather than
+    /// reconstructed: it is what [`Self::extensions`] returns, what the
+    /// Runtime Client effective-extension projection carries, and what the
+    /// `ConversationRuntime` ownership-transfer boundary checks every other
+    /// materialized facet against.
+    extensions: crate::extensions::NativeAgentExtensions,
     /// The one composition-time binding shared by the runtime and its narrow
     /// mailbox capability.
     durable_binding: ConversationStoreBinding,
@@ -441,21 +493,35 @@ impl ConversationToolRuntime {
                 event_sink: config.event_sink,
             },
         );
-        // The task list is conversation state that was already published as
-        // canonical tool results, so it is *rebuilt* here rather than
-        // restored from a second persistence path: whatever the last
-        // committed `todo` result said the list was, it still is. A
-        // conversation with no such result opens with an empty list.
-        let todos = ConversationTodoList::rebuilt(
-            conversation_id.clone(),
-            &durable_binding
-                .full_store()
-                .load_canonical()
-                .map_err(|error| {
-                    ConversationRuntimeError::DurableConversation(error.to_string())
-                })?,
-        )
-        .map_err(ConversationRuntimeError::TodoList)?;
+        // The Todo extension's materialization seam (Issue #259). The task
+        // list is conversation state that was already published as canonical
+        // tool results, so it is *rebuilt* here rather than restored from a
+        // second persistence path: whatever the last committed `todo` result
+        // said the list was, it still is. A conversation with no such result
+        // opens with an empty list.
+        //
+        // A composition without the extension does not read that history at
+        // all — not even read-only. Reconstruction exists to serve a current
+        // Todo authority, and this runtime has none; the canonical results
+        // stay exactly where they are, as historical facts of the
+        // conversation, and a later launch that composes Todo again rebuilds
+        // the same latest accepted snapshot from them without replaying a
+        // single mutation.
+        let todos = match config.extensions.todo() {
+            None => None,
+            Some(crate::extensions::TodoExtensionConfig {}) => Some(
+                ConversationTodoList::rebuilt(
+                    conversation_id.clone(),
+                    &durable_binding
+                        .full_store()
+                        .load_canonical()
+                        .map_err(|error| {
+                            ConversationRuntimeError::DurableConversation(error.to_string())
+                        })?,
+                )
+                .map_err(ConversationRuntimeError::TodoList)?,
+            ),
+        };
         Ok(Self {
             _lifecycle: config.lifecycle,
             workflows: crate::runtime::workflow::read_model::WorkflowReadModel::new(
@@ -468,6 +534,7 @@ impl ConversationToolRuntime {
             environment,
             background,
             todos,
+            extensions: config.extensions,
             durable_binding,
             runtime_client: Arc::new(RuntimeClientBinding {
                 bound: AtomicBool::new(false),
@@ -488,20 +555,101 @@ impl ConversationToolRuntime {
     /// because only it holds the durable batch commit the claim refers to.
     /// A consumer that wants to read the list uses
     /// [`Self::todo_snapshot`], which carries no such authority.
+    ///
+    /// `None` is the composed/absent fact of the Todo extension, not a
+    /// lifecycle state: a runtime that does not compose Todo never has one.
     #[must_use]
-    pub(crate) fn todos(&self) -> &ConversationTodoList {
-        &self.todos
+    pub(crate) fn todos(&self) -> Option<&ConversationTodoList> {
+        self.todos.as_ref()
     }
 
-    /// The conversation's committed task list.
+    /// The conversation's committed task list, when Todo is composed.
     ///
     /// The authoritative list as canonical history left it: what a restart
     /// would rebuild, and what the Runtime Client projection carries. A
     /// batch in flight is invisible here, because a mutation nothing has
     /// committed is not yet part of the conversation.
+    ///
+    /// `None` means this runtime composes no Todo extension, which is
+    /// deliberately *not* the same fact as the empty list: a client must show
+    /// no current Todo surface at all rather than an empty one, however many
+    /// historical `todo` results the transcript still carries.
     #[must_use]
-    pub fn todo_snapshot(&self) -> crate::tools::todo::TodoSnapshot {
-        self.todos.committed()
+    pub fn todo_snapshot(&self) -> Option<crate::tools::todo::TodoSnapshot> {
+        self.todos.as_ref().map(ConversationTodoList::committed)
+    }
+
+    /// The bounded read-only Todo presentation Agent Status consumes, when
+    /// this conversation composes the Todo extension (Issue #259).
+    ///
+    /// This is the Todo-side **capture boundary**: the derivation
+    /// `committed() -> status_presentation()` happens here, beside the
+    /// owner, so the value that leaves this runtime for the Agent Status
+    /// engine is already finite and immutable. Agent Status never receives
+    /// the list, a snapshot authority, a writer, or canonical history.
+    #[must_use]
+    pub(crate) fn todo_status_presentation(
+        &self,
+    ) -> Option<crate::tools::todo::TodoStatusPresentation> {
+        self.todos
+            .as_ref()
+            .map(|todos| todos.committed().status_presentation())
+    }
+
+    /// The one frozen Native Agent Extension composition this runtime
+    /// materialized (Issue #259).
+    ///
+    /// The composition is **stored**, not reconstructed: this is the single
+    /// authority every other Todo facet is derived from or checked against,
+    /// and it is what the Runtime Client effective-extension projection
+    /// reads.
+    #[must_use]
+    pub fn extensions(&self) -> &crate::extensions::NativeAgentExtensions {
+        &self.extensions
+    }
+
+    /// The extension-provided model Tool surfaces of this runtime's frozen
+    /// composition (Issue #259).
+    ///
+    /// This is the **only** constructor of an [`ExtensionToolPlane`] in the
+    /// process, and it derives the plane from the extension *owners this
+    /// runtime actually materialized* rather than from a configuration
+    /// value. That is what makes the central invariant structural: the
+    /// `todo` Tool exists in a plane exactly when a `ConversationTodoList`
+    /// exists to serve it, so "Tool without state" cannot be spelled, and a
+    /// capability coordinator cannot be composed with an extension Tool set
+    /// that no conversation owns.
+    ///
+    /// [`ExtensionToolPlane`]: crate::extensions::ExtensionToolPlane
+    #[must_use]
+    pub fn extension_tool_plane(&self) -> crate::extensions::ExtensionToolPlane {
+        crate::extensions::ExtensionToolPlane::of_materialized_owners(self.todos.as_ref())
+    }
+
+    /// This conversation's complete model Tool set: `ordinary` composed with
+    /// the extension Tools this runtime's frozen composition materialized
+    /// (Issue #259).
+    ///
+    /// The two planes are composed exactly as the capability coordinator
+    /// composes them, and the composition is named by the conversation whose
+    /// state backs it: there is no way to obtain one conversation's extension
+    /// Tools and register them somewhere unrelated.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first [`ToolRegistryError`] the composition violates — in
+    /// practice, an identity collision between an ordinary Tool and an
+    /// extension-provided one.
+    ///
+    /// [`ToolRegistryError`]: crate::tools::executor::ToolRegistryError
+    pub fn compose_model_tools(
+        &self,
+        ordinary: crate::tools::executor::ToolRegistry,
+    ) -> Result<crate::tools::executor::ToolRegistry, crate::tools::executor::ToolRegistryError>
+    {
+        let mut composed = ordinary;
+        self.extension_tool_plane().register_into(&mut composed)?;
+        Ok(composed)
     }
 
     /// Process-local Workflow read authority shared with the native orchestrator.

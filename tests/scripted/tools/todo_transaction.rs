@@ -109,7 +109,8 @@ async fn run(
     calls: &[support::fake::ScriptedCall],
 ) -> common::DurableExecutionAudit {
     let model = support::fake::fake_model(turn(calls));
-    let capability = common::capability_lease(fixture.registry.clone(), &fixture.runtime).await;
+    let capability =
+        common::capability_lease(fixture.ordinary_registry.clone(), &fixture.runtime).await;
     let (lease, coordinator) = capability.into_lease_and_coordinator();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = AgentExecution::new(
@@ -151,7 +152,10 @@ async fn a_committed_batch_settles_the_list_on_its_own_published_snapshot() {
     assert_eq!(canonical.tasks.len(), 1);
     assert_eq!(canonical.tasks[0].subject, "Write the parser");
     assert_eq!(
-        fixture.runtime.todo_snapshot(),
+        fixture
+            .runtime
+            .todo_snapshot()
+            .expect("the fixture composes the Todo extension"),
         canonical,
         "the conversation's list is exactly the list its history published"
     );
@@ -176,7 +180,10 @@ async fn later_calls_of_one_batch_see_what_earlier_ones_staged() {
     .await;
     assert!(matches!(audit.outcome, AttemptOutcome::Completed { .. }));
 
-    let committed = fixture.runtime.todo_snapshot();
+    let committed = fixture
+        .runtime
+        .todo_snapshot()
+        .expect("the fixture composes the Todo extension");
     assert_eq!(
         committed
             .tasks
@@ -203,7 +210,10 @@ async fn later_calls_of_one_batch_see_what_earlier_ones_staged() {
 #[tokio::test]
 async fn a_batch_that_never_becomes_canonical_leaves_the_list_untouched() {
     let fixture = common::native_fixture();
-    let before = fixture.runtime.todo_snapshot();
+    let before = fixture
+        .runtime
+        .todo_snapshot()
+        .expect("the fixture composes the Todo extension");
     assert_eq!(before, TodoSnapshot::empty());
 
     let audit = run(
@@ -225,7 +235,10 @@ async fn a_batch_that_never_becomes_canonical_leaves_the_list_untouched() {
         "no tool result became canonical, so no list was ever published"
     );
     assert_eq!(
-        fixture.runtime.todo_snapshot(),
+        fixture
+            .runtime
+            .todo_snapshot()
+            .expect("the fixture composes the Todo extension"),
         before,
         "the authority a restart would rebuild is the authority this process holds"
     );
@@ -305,6 +318,7 @@ async fn a_fresh_attach_carries_the_list_even_when_the_result_is_off_the_page() 
         .extend((0..70).map(|index| assistant(&format!("message-after-{index}"), "kept working")));
 
     let fixture = support::runtime_client_fixture::RuntimeClientFixture::builder("conv-todo-page")
+        .todo_extension()
         .durable_history(history)
         .build()
         .await;
@@ -320,7 +334,8 @@ async fn a_fresh_attach_carries_the_list_even_when_the_result_is_off_the_page() 
         "the bounded page really has scrolled past the todo result"
     );
     assert_eq!(
-        snapshot.todos, list,
+        snapshot.todos,
+        Some(list),
         "the client attaches to the list canonical history holds"
     );
 }
@@ -330,16 +345,18 @@ async fn a_fresh_attach_carries_the_list_even_when_the_result_is_off_the_page() 
 #[tokio::test]
 async fn a_conversation_without_a_list_attaches_to_the_empty_one() {
     let fixture = support::runtime_client_fixture::RuntimeClientFixture::builder("conv-todo-none")
+        .todo_extension()
         .build()
         .await;
     let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
-    assert_eq!(snapshot.todos, TodoSnapshot::empty());
+    assert_eq!(snapshot.todos, Some(TodoSnapshot::empty()));
 }
 
 /// While the client is live, the list follows the committed result.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_projection_follows_a_committed_todo_result() {
     let fixture = support::runtime_client_fixture::RuntimeClientFixture::builder("conv-todo-live")
+        .todo_extension()
         .native_tools()
         .scripts(turn(&[create("call-todo-live", "Write the parser")]))
         .build()
@@ -377,8 +394,9 @@ async fn the_projection_follows_a_committed_todo_result() {
     .expect("the attempt settles");
 
     let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
-    assert_eq!(snapshot.todos.tasks.len(), 1);
-    assert_eq!(snapshot.todos.tasks[0].subject, "Write the parser");
+    let projected = snapshot.todos.clone().expect("the runtime composes Todo");
+    assert_eq!(projected.tasks.len(), 1);
+    assert_eq!(projected.tasks[0].subject, "Write the parser");
     assert_eq!(
         snapshot.todos,
         fixture.runtime.tool_runtime().todo_snapshot(),
@@ -523,7 +541,10 @@ async fn a_committed_list_survives_the_compaction_that_retires_its_result() {
     let fixture = common::native_fixture();
     let audit = run(&fixture, &[create("call-todo-a", "Write the parser")]).await;
     assert!(matches!(audit.outcome, AttemptOutcome::Completed { .. }));
-    let committed = fixture.runtime.todo_snapshot();
+    let committed = fixture
+        .runtime
+        .todo_snapshot()
+        .expect("the fixture composes the Todo extension");
     assert_eq!(committed.tasks.len(), 1);
 
     let store = fixture.store.as_ref();
@@ -599,7 +620,9 @@ async fn a_committed_list_survives_the_compaction_that_retires_its_result() {
     )
     .expect("a runtime over the compacted conversation");
     assert_eq!(
-        reopened.todo_snapshot(),
+        reopened
+            .todo_snapshot()
+            .expect("the fixture composes the Todo extension"),
         committed,
         "compaction retires a result from the Surface; it never removes it from the Ledger"
     );
@@ -653,7 +676,10 @@ async fn every_committed_list_survives_the_restart_that_reads_it_back() {
         "a rejected call publishes no list, because it mutated nothing"
     );
 
-    let committed = fixture.runtime.todo_snapshot();
+    let committed = fixture
+        .runtime
+        .todo_snapshot()
+        .expect("the fixture composes the Todo extension");
     assert_eq!(committed.tasks.len(), 1);
     assert_eq!(committed.tasks[0].subject, "Write the parser");
     committed
@@ -687,5 +713,11 @@ async fn every_committed_list_survives_the_restart_that_reads_it_back() {
         },
     )
     .expect("the restarted runtime rebuilds the list it committed");
-    assert_eq!(restarted.todos().committed(), committed);
+    assert_eq!(
+        restarted
+            .todos()
+            .expect("the restarted runtime composes Todo")
+            .committed(),
+        committed
+    );
 }
