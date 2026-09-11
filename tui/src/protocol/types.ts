@@ -74,7 +74,7 @@ import type { SessionDeletionRequest, SessionDeletionResponse } from "../../../s
 // authorized invocation override may replace a role's tools, Skills, or
 // extensions (Issue #258). It is always present, on live and recovery-projected
 // children alike. There is no v26 decoding and no optional form.
-// Version 28: native crash-safe Session deletion control.
+// Version 28: bounded Runtime Client-owned Session deletion DTOs; no cleanup plan.
 export const RUNTIME_CLIENT_PROTOCOL_VERSION = 28;
 
 // ---------------------------------------------------------------------------

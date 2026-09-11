@@ -794,23 +794,31 @@ impl RuntimeClientSessionControl for LocalSessionSupervisor {
             let result = match request {
                 RuntimeClientSessionRequest::DeletePreview { session_id } => {
                     RuntimeClientResult::SessionDeletion {
-                        result: supervisor.delete_preview(&SessionId::new(session_id)).await,
+                        result: project_session_deletion(
+                            supervisor.delete_preview(&SessionId::new(session_id)).await,
+                        ),
                     }
                 }
                 RuntimeClientSessionRequest::Delete {
                     session_id,
                     expected_target_revision,
                 } => RuntimeClientResult::SessionDeletion {
-                    result: supervisor
-                        .delete_session(&SessionId::new(session_id), &expected_target_revision)
-                        .await
-                        .map_err(|e| session_error(&SessionSupervisorError::from(e)))?,
+                    result: project_session_deletion(
+                        supervisor
+                            .delete_session(&SessionId::new(session_id), &expected_target_revision)
+                            .await
+                            .map_err(|_| RuntimeClientError::SessionFailure {
+                                message: "Session deletion failed before logical commit.".into(),
+                            })?,
+                    ),
                 },
                 RuntimeClientSessionRequest::DeleteRecover { session_id } => {
                     RuntimeClientResult::SessionDeletion {
-                        result: supervisor
-                            .recover_deletion(&SessionId::new(session_id))
-                            .await,
+                        result: project_session_deletion(
+                            supervisor
+                                .recover_deletion(&SessionId::new(session_id))
+                                .await,
+                        ),
                     }
                 }
                 RuntimeClientSessionRequest::List {
@@ -1067,4 +1075,70 @@ pub(crate) async fn assert_deletion_cleanup_releases_catalog(
         task.await.unwrap(),
         super::session::deletion::SessionDeleteResult::Deleted { .. }
     ));
+}
+
+/// The Session control owner projects internal outcomes explicitly. Neither
+/// recovery capabilities nor storage error strings cross the protocol boundary.
+pub(crate) fn project_session_deletion(
+    result: super::session::deletion::SessionDeleteResult,
+) -> crate::runtime_client::session_deletion::RuntimeClientSessionDeletionResult {
+    use super::session::deletion::{
+        DeletionBlocker as Blocker, DeletionScope, SessionDeleteResult as Native,
+    };
+    use crate::runtime_client::session_deletion::{
+        RuntimeClientSessionDeletePreview, RuntimeClientSessionDeletionBlocker as Reason,
+        RuntimeClientSessionDeletionResult as Wire,
+    };
+    match result {
+        Native::Preview { preview } => {
+            let nodes = preview
+                .scopes
+                .iter()
+                .filter(|s| matches!(s, DeletionScope::Node { .. }))
+                .count() as u64;
+            let total = preview.scopes.len() as u64;
+            Wire::Preview {
+                preview: RuntimeClientSessionDeletePreview {
+                    session_id: preview.session_id.to_string(),
+                    name: preview.name.map(|name| name.chars().take(256).collect()),
+                    target_revision: preview.target_revision,
+                    owned_node_count: nodes,
+                    owned_conversation_count: total,
+                    owned_child_count: total - nodes,
+                },
+            }
+        }
+        Native::Deleted { session_id } => Wire::Deleted {
+            session_id: session_id.to_string(),
+        },
+        Native::NotFound { session_id } => Wire::NotFound {
+            session_id: session_id.to_string(),
+        },
+        Native::Stale {
+            session_id,
+            actual_revision,
+        } => Wire::Stale {
+            session_id: session_id.to_string(),
+            actual_revision,
+        },
+        Native::Blocked { session_id, reason } => Wire::Blocked {
+            session_id: session_id.to_string(),
+            reason: match reason {
+                Blocker::CurrentSession => Reason::CurrentSession,
+                Blocker::InUse => Reason::InUse,
+                Blocker::Workspace { resources } => Reason::Workspace {
+                    resource_count: resources.len() as u64,
+                },
+                Blocker::InvalidOwnership { .. } => Reason::InvalidOwnership,
+            },
+        },
+        Native::CommittedCleanupPending { record, .. } => Wire::CommittedCleanupPending {
+            session_id: record.session_id.to_string(),
+        },
+        Native::CommittedDurabilityUncertain { session_id, .. } => {
+            Wire::CommittedDurabilityUncertain {
+                session_id: session_id.to_string(),
+            }
+        }
+    }
 }

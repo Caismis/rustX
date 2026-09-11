@@ -1,163 +1,175 @@
 # Crash-safe Session deletion
 
-SESSION-DELETE-02 extends the ownership authority in
-[session-deletion-ownership.md](session-deletion-ownership.md). It is Session
-control, never durable inbound, an Agent Tool, or canonical conversation input.
+SESSION-DELETE-02 extends the exclusion authority in
+[session-deletion-ownership.md](session-deletion-ownership.md). Deletion is native
+Session control, never durable inbound, an Agent Tool, or canonical input.
 
-## Authority and state
+## Authoritative state
 
-Catalog schema **6** has one document containing live `sessions` and `deletions`.
-A deletion record contains SessionId, the #254 semantic SHA-256 ownership revision,
-and sorted semantic scopes: node `(SessionNodeId, ConversationId)` or child
-`(ConversationId, parent ConversationId)`. No arbitrary absolute paths, messages,
-workspace paths, or execution history are copied. ProductRoot derives each exact
-private allocation and child routing socket. Independent fork/clone provenance is not ownership.
-
-The persisted phase is `cleanup_pending` or `deleted`. Absence from `deletions`
-and presence in `sessions` means live. Pre-commit rejection is an operation result,
-not persisted state. Durability uncertainty is a publication outcome, not a second
-on-disk flag: after a crash only the atomically selected document is authoritative.
-Cleanup-in-progress retains `cleanup_pending`; there is no durable worker lease.
-The frozen record is the cleanup authority, and the private allocation locks
-exclude conflicting cleanup/access. No root freeze or catalog mutex spans removal.
+Catalog schema **7** contains live `sessions`, pending `deletions`, a publication
+`generation`, and the existing Session/node allocation high-water marks. There is
+one document and one publication boundary. Previous development schemas are
+rejected; there is no migration or compatibility reader.
 
 ```text
-live --fresh preflight + matching revision--> atomic catalog replacement
-  |                                           |
-  +-- rejected / pre-rename failure: live      +-- durability unproven: no cleanup
-                                              |
-                                              +-- parent fsync succeeds
-                                                     |
-                                               cleanup_pending
-                                                     |
-                                          idempotent frozen-scope removal
-                                                     |
-                                       all removal directory barriers succeed
-                                                     |
-                                     atomic final publication + parent fsync
-                                                     |
-                                                   deleted
+live Session
+    -> atomic removal of live row + installation of frozen cleanup record
+    -> confirmed durable logical commit
+    -> idempotent physical cleanup of the frozen workset
+    -> durable removal of the cleanup record
+    -> absent
 ```
 
-## Commit points and uncertainty
+`DeletionRecord` contains the Session identity, #254 semantic ownership revision,
+and exact node `(SessionNodeId, ConversationId)` / child
+`(ConversationId, parent ConversationId)` scopes. Trusted ProductRoot and these
+identities derive private allocations and child routing sockets. Independent
+fork/clone provenance is not ownership. No workspace paths or conversation history
+are copied into the record.
 
-`SessionCatalog::commit_delete` reacquires #254 preflight. Preview has already
-returned a finite snapshot and released all guards; no confirmation holds a lock.
-Execute compares the native semantic revision before accepting workspace state.
-Target membership or workspace authority changes return `stale`. Live access and
-the current Session return typed blockers. Existing records return existing state
-without discovering another target.
+Every persisted deletion record is pending cleanup authority. There is no
+`DeletionPhase`, completed record, deletion archive, or tombstone collection.
+Cleanup progress is replay of the finite idempotent workset, not a durable worker
+lease or per-item cursor. Completed worksets do not accumulate in `catalog.json`.
+Pre-commit rejection and durability uncertainty are operation outcomes, not extra
+persisted phases. A crash selects one complete catalog document atomically.
 
-The logical **visibility** point is rename of the fsynced temporary catalog over
-`catalog.json`. One document removes the live row and adds the complete frozen
-record. The existing atomic writer distinguishes errors before rename from errors
-after rename. `commit_under_ownership` updates in-memory visibility even when the
-latter occurs. It uses the already-held #254 exclusive ownership snapshot;
-ordinary catalog commits acquire their usual shared ownership mutation guard.
+## Publication, visibility, and durability
 
-The logical **durability** boundary is successful fsync of the catalog's parent
-directory and its ancestry following the temporary-file fsync and rename. The
-ancestry barriers also persist naming entries for directories created during this
-startup; an immediate-parent-only barrier would not prove their reachability. Only success mints an
-owned `CleanupWork`. `CommittedDurabilityUncertain` means visibility changed but
-its durability barrier failed: this attempt performs **no physical cleanup**.
-Recovery republishes the existing record, including file and directory barriers,
-before minting cleanup authority. A recovery publication error conservatively
-returns uncertainty and never starts removal. A repeated lookup of an existing
-record confirms file/directory persistence before reporting its phase.
+Preview acquires a finite #254 snapshot and releases every guard before returning.
+Execute acquires a fresh preflight and compares the native `target_revision`.
+Changed semantic ownership is `Stale`; current-Session, access and workspace
+collisions remain typed pre-commit blockers. An existing pending record returns
+pending state without a second discovery or snapshot.
 
-Finalization also distinguishes pre-rename failure (cleanup pending) from
-post-rename uncertainty (possibly visible `deleted`, but no final success yet).
-Only confirmed final persistence returns `Deleted`. Repeated terminal lookup or
-explicit recovery confirms the barrier before reporting final success.
+Every catalog mutation takes root ownership exclusion first (shared for ordinary
+mutations, the existing exclusive #254 preflight for deletion), then a short
+exclusive publication lock on the stable `sessions` directory inode. Under that
+lock it compares the actual persisted generation against the writer's observed
+generation and the planned document's generation. A mismatch rejects the write
+before replacement. Successful publication advances the generation. This is a
+generic compare-and-publish boundary: stale clones and stale plans cannot erase
+newer names, graph changes, live membership, or pending deletions. The catalog
+file itself is replaced and therefore is not the lock inode. These locks provide
+exclusion, not durability; neither is held across recursive cleanup.
 
-## Access and monotonic identities
+The logical visibility/linearization point is rename of the fsynced temporary
+catalog over `catalog.json`. That single document removes live membership and
+installs the complete frozen workset. Pre-rename failure leaves the old document
+authoritative and performs no cleanup. Post-rename failure updates in-memory
+visibility and returns `CommittedDurabilityUncertain`, never an ordinary
+pre-commit error.
 
-ConversationAccess first obtains its existing shared allocation lock, then checks
-the authoritative catalog for a deleted scope. If access wins, fresh preflight
-cannot obtain exclusive target authority. If commit wins, admission rejects the
-residual allocation. This requires no global ownership freeze for unrelated access.
-Native startup and explicit child allocation also check identity before creating
-private state. Direct child inspection uses the same ConversationAccess admission.
-Read-only SQLite management never creates missing stores.
+The durability boundary is successful fsync of the parent directory and its
+ancestry after file fsync and rename. The ancestry barriers also persist naming
+entries created during startup. Only confirmed durable logical commit grants an
+owned `CleanupWork`. Uncertain logical publication starts no cleanup. Recovery
+republishes the same frozen authority with file/directory barriers before granting
+cleanup authority; it never scans ownership again.
 
-Completed records retain the Session/node/Conversation identities and frozen scope,
-without history. These are identity reservations inside the existing catalog,
-not a second tombstone database or a history archive. Both normal allocation and
-explicit prepared identity publication reject reuse. Catalog validation rejects
-live/deleted collisions. Every catalog publication checks that existing deletion
-records survive unchanged except for the monotonic pending-to-deleted transition;
-a stale in-memory catalog cannot erase a tombstone or revive a session.
+After every frozen removal and its filesystem barrier succeeds, finalization
+publishes a document **without** the pending record. A pre-rename finalization
+failure retains the exact pending record for retry. An uncertain final rename
+returns `CommittedDurabilityUncertain`; it may have made absence visible, but does
+not return `Deleted`. Restart sees either the same pending work (safe to replay)
+or absence. Explicit recovery of absence confirms file/directory persistence
+without reconstructing a workset. `Deleted` is emitted by confirmed successful
+finalization; subsequent deletion/recovery returns `NotFound`. A delayed duplicate
+worker cannot recreate a record or regress absence to pending.
 
-Physical allocation lock inodes may be removed only after commit. Unlike live
-allocations, their identities can never be admitted again, so removal cannot split
-normal access into a newly created lock domain. Permanent product/controller lock
-inodes and workspace storage are not cleanup targets.
+## Allocation and access are separate from cleanup history
+
+Native Session and node identities use `next_session_ordinal` and
+`next_node_ordinal`. Publication advances each high-water mark past the actual
+chosen ordinal, including gaps skipped for orphan allocations. Deletion never
+rewinds these counters. A new Session uses `session-N` / `conversation-N`; tree
+nodes use `node-M` / `conversation-node-M`. Native child IDs derive recursively
+from their parent Conversation and its durable subagent ordinal allocator.
+Published identities therefore cannot be allocated again after deletion.
+
+The private prepared-Session publication path accepts only native identities at
+or above the current allocation marks with matching Conversation identity. Tree
+publication similarly rejects an earlier node ordinal. There is no public import
+API accepting arbitrary Session IDs and no identity reservation database.
+
+ConversationAccess acquires the existing allocation lock before checking catalog
+admission. Pending frozen scopes reject access immediately. After completion,
+native Session/Conversation identities below the high-water mark must still have
+a live catalog owner; retired native root domains also reject their derived child
+IDs. Residue, a stale projection, or a copied allocation is not live authority.
+The check does not rediscover the deletion graph. New child creation still uses
+the parent's native ordinal authority; unsupported arbitrary IDs are not a
+promise of permanent cross-allocation reservation.
 
 ## Cleanup and recovery
 
-The supervisor drops its catalog mutex and the preflight drops root/target guards
-before dispatching `CleanupWork::run` through Tokio `spawn_blocking`. The work owns
-its ProductRoot, frozen record and retained controller lifetime, not a catalog
-reference. It takes exclusive allocation access for each exact frozen private
-unit. Child routing sockets derive from the frozen child ID; their root-directory
-removal barrier also precedes completion. Recursive removal does not follow symlinks; confinement failures retain
-pending state. Missing units count as success. Each removed unit's surviving parent
-is fsynced, including on retries where removal was already visible.
+The supervisor releases its catalog mutex and preflight drops root/target guards
+before dispatching `CleanupWork::run` through `spawn_blocking`. Work owns its
+ProductRoot, frozen record and controller lifetime, not a catalog reference. It
+takes exclusive access to one exact frozen private allocation at a time. Missing
+units are idempotent success; each surviving parent receives a persistence barrier,
+including on retry after a previously visible unlink. Child socket removal and its
+root-directory barrier precede completion too. Confinement failures retain pending
+state, and recursive cleanup does not follow symlinks.
 
-No per-item cursor is needed: replaying this finite idempotent plan is the progress
-model. A crash after any subset simply repeats the same scopes. Empty Session
-container directories may remain; they grant no identity and contain no owned
-Conversation data. Workspace disposal, project sources, environments, caches,
-config and credentials are outside the plan.
+Empty Session container directories may remain; they contain no Conversation
+source of truth and grant no identity. Projects, workspaces, environments, caches,
+configuration and credentials are outside cleanup. Retained worktrees require
+explicit disposal and continue to block preflight.
 
-`LocalSessionProduct::compose` recovers pending deletions after controller admission
-and before ordinary live-store recovery or runtime composition. It does not recover
-or activate the deleted Conversation. Startup is single-owner and has no supervisor
-mutex yet. `session_delete_recover` is the explicit asynchronous retry boundary.
-There is no timer, queue, retention sweep, or distributed worker. Cleanup failures
-leave committed state for the next boundary. Cancelling a request can leave a
-blocking cleanup running or an unfinalized record; either is safely recoverable.
+`LocalSessionProduct::compose` recovers pending records after controller admission
+and before ordinary live-store recovery or runtime composition.
+`session_delete_recover` is the explicit asynchronous retry boundary. Neither
+recovery path activates a deleted Conversation, processes Pending Inbound, restores
+agents, calls a model, or initializes semantic services. Cancellation can leave a
+worker running or an unfinalized record; both converge at the next recovery
+boundary. No queue, timer, distributed worker, or retention policy is introduced.
 
-## Public protocol
+## Bounded Runtime Client contract
 
-Runtime Client protocol **28** adds `session_delete_preview`, `session_delete`
-(SessionId + expected_target_revision only), and `session_delete_recover`.
-All return `session_deletion` with a discriminated native result:
+Protocol **28** adds `session_delete_preview`, `session_delete`
+(`session_id` + `expected_target_revision` only), and `session_delete_recover`.
+`runtime_client::session_deletion` owns independent DTOs:
+`RuntimeClientSessionDeletePreview`, `RuntimeClientSessionDeletionBlocker`, and
+`RuntimeClientSessionDeletionResult`. The Session-control owner explicitly maps
+native outcomes in `supervisor::project_session_deletion`.
+
+Preview carries identity, target revision, display name (at most 256 Unicode scalar
+values), and node/Conversation/child counts. Workspace blockers expose a count;
+other blockers expose a discriminant. Pending and uncertain outcomes carry only
+Session identity and status. The wire contains no frozen records, scopes, child
+lists, private paths, or storage diagnostics. Its size is independent of graph
+size except for decimal count widths. Internal diagnostics remain native; ordinary
+pre-commit failures use a bounded protocol error without private storage paths.
 
 | Status | Meaning |
 | --- | --- |
-| `preview` | Finite semantic scopes, target revision and display name; no guards |
+| `preview` | Bounded confirmation metadata; no guards |
 | `stale` | Ownership changed; obtain a new preview |
-| `blocked` | Current Session, in use, unresolved workspace, or invalid ownership |
-| `not_found` | No live Session or retained deletion identity |
-| `committed_cleanup_pending` | Logically unavailable; exact frozen work awaits retry |
-| `committed_durability_uncertain` | Publication visible, barrier not proven; recover before cleanup/final success |
-| `deleted` | Physical cleanup and final metadata persistence confirmed |
+| `blocked` | Current Session, in use, workspace, or invalid ownership |
+| `committed_cleanup_pending` | Logically unavailable; frozen cleanup awaits retry |
+| `committed_durability_uncertain` | Publication durability unproven; recover before further cleanup/final success |
+| `deleted` | This finalization confirmed cleanup and durable record removal |
+| `not_found` | No live Session or pending record, including completed deletion |
 
-Ordinary pre-visibility I/O errors remain Session errors; they cannot hide a
-post-visibility outcome. The SDK deletion contract lives in `sdk/runtime-client`;
-the existing TUI protocol imports it. Rust and TypeScript roundtrip the same JSON
-fixtures. The full confirmation UI is left to #257. Retention/GC policy remains
-out of scope (issue #259 currently concerns Todo extensions, not retention).
+The TypeScript SDK and TUI mirror these external DTOs only. Shared Rust/TypeScript
+fixtures validate the wire contract, not deletion persistence. Interactive deletion
+UX (#257) and retention/lifecycle policy remain outside this change.
 
 ## Deterministic evidence
 
-`src/local_runtime/session/tests/deletion_tests/lifecycle.rs` covers pre-rename
-failure, uncertain rename, pending/final transitions, final-publication failures,
-fresh exclusion/stale preview, repeated work, explicit identity reuse, stale
-catalog rejection, path substitution, independent fork/clone history and further
-lineage materialization, and shared protocol fixtures.
+`session/tests/deletion_tests/lifecycle.rs` covers publication fault windows,
+exact pending authority across cleanup failure/restart, persisted record removal,
+repeated absent recovery, sequential deletions without history growth, native
+allocation monotonicity, generic stale metadata/plan writes, and stale resurrection
+after record removal. Large ownership worksets exercise the real protocol mapper
+and prove bounded counts, names, blockers and results.
 
-The process-death test starts the real Rust test subprocess, waits for a flushed
-boundary message, then kills and reaps it at `logical_commit` and `cleanup_item`.
-It verifies surviving frozen scopes and deliberately corrupts unrelated live
-storage before recovery to prove no ownership rediscovery occurs.
-
-One test holds a conflicting root snapshot throughout recursive cleanup. Another
-parks the real blocking cleanup worker with a scoped gate and acquires the
-supervisor catalog mutex using `try_lock`, while asserting no terminal result has
-been emitted. These are synchronization proofs, not timing assumptions. Existing
-#254 cross-process, alias, child access, retained-workspace and disposal tests remain.
-The provider-backed A/B conformance test now executes B deletion over Runtime Client
-and verifies A remains active with no additional provider request.
+The process-death regression kills/reaps a real subprocess at flushed pipe gates
+immediately after durable commit and after one durable cleanup item. Restart
+recovers the same scopes even with unrelated storage deliberately corrupted.
+Another test holds conflicting root exclusion throughout cleanup; a gated real
+worker test acquires the supervisor mutex with `try_lock` before releasing the
+worker. No sleeps establish these synchronization facts. Existing #254 blockers,
+stale preview, fork/clone survivors and provider-backed active-A/deleted-B
+conformance remain part of validation.

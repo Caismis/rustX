@@ -423,7 +423,7 @@ async fn interactive_production_turn_still_builds_over_the_same_composition() {
 async fn active_session_a_executes_while_historical_b_preflight_retains_authority() {
     use rustx::durable::{ConversationStore, SqliteConversationStore};
     use rustx::local_runtime::composition::LocalSessionProduct;
-    use rustx::local_runtime::session::deletion::SessionDeleteResult;
+    use rustx::runtime_client::session_deletion::RuntimeClientSessionDeletionResult as SessionDeleteResult;
     use rustx::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClientResult};
     let Some(emulator) = ProviderEmulator::start("openai_chat_streamed_turn").await else {
         return;

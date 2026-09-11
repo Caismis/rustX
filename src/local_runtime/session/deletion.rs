@@ -101,30 +101,21 @@ pub enum SessionDeleteResult {
         detail: Option<String>,
     },
     CommittedDurabilityUncertain {
-        record: DeletionRecord,
+        session_id: SessionId,
         detail: String,
     },
     NotFound {
         session_id: SessionId,
     },
 }
-/// Persisted state is deliberately small: replay the complete idempotent workset
-/// until all removals AND their directory barriers succeed, then publish Deleted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DeletionPhase {
-    CleanupPending,
-    Deleted,
-}
-/// The frozen record owns cleanup and reserves identities permanently. Completed
-/// records retain identities (not history) to reject explicit/restored ID reuse.
+/// Frozen authority exists only while cleanup is pending. Completion durably
+/// removes this record; allocation high-water marks reserve native identities.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeletionRecord {
     pub session_id: SessionId,
     pub target_revision: String,
     pub scopes: Vec<DeletionScope>,
-    pub phase: DeletionPhase,
 }
 /// An owned cleanup capability. It never borrows a catalog or root snapshot.
 #[derive(Debug)]
@@ -192,25 +183,21 @@ impl CleanupWork {
 }
 
 impl SessionCatalog {
+    fn confirm_catalog_durability(&self) -> std::io::Result<()> {
+        File::open(&self.path)?.sync_all()?;
+        super::sync_directory_ancestry(&self.root)
+    }
     fn existing_deletion(&self, id: &SessionId) -> Option<SessionDeleteResult> {
         self.document.deletions.get(id).map(|record| {
-            if let Err(error) = File::open(&self.path)
-                .and_then(|f| f.sync_all())
-                .and_then(|()| super::sync_directory_ancestry(&self.root))
-            {
+            if let Err(error) = self.confirm_catalog_durability() {
                 return SessionDeleteResult::CommittedDurabilityUncertain {
-                    record: record.clone(),
+                    session_id: record.session_id.clone(),
                     detail: error.to_string(),
                 };
             }
-            match record.phase {
-                DeletionPhase::Deleted => SessionDeleteResult::Deleted {
-                    session_id: id.clone(),
-                },
-                DeletionPhase::CleanupPending => SessionDeleteResult::CommittedCleanupPending {
-                    record: record.clone(),
-                    detail: None,
-                },
+            SessionDeleteResult::CommittedCleanupPending {
+                record: record.clone(),
+                detail: None,
             }
         })
     }
@@ -338,7 +325,6 @@ impl SessionCatalog {
             session_id: id.clone(),
             target_revision: preview.target_revision,
             scopes: preview.scopes,
-            phase: DeletionPhase::CleanupPending,
         };
         let mut next = self.document.clone();
         next.sessions.remove(id);
@@ -351,7 +337,7 @@ impl SessionCatalog {
                 error: CatalogCommitError::CommittedButDurabilityUncertain { detail, .. },
             }) => {
                 return Ok(Err(SessionDeleteResult::CommittedDurabilityUncertain {
-                    record,
+                    session_id: record.session_id,
                     detail,
                 }));
             }
@@ -375,21 +361,23 @@ impl SessionCatalog {
         id: &SessionId,
     ) -> Result<CleanupWork, SessionDeleteResult> {
         let Some(record) = self.document.deletions.get(id).cloned() else {
+            // Absence may be an unconfirmed final rename. Confirm the current
+            // metadata before reporting it; never reconstruct a cleanup workset.
+            if let Err(e) = self.confirm_catalog_durability() {
+                return Err(SessionDeleteResult::CommittedDurabilityUncertain {
+                    session_id: id.clone(),
+                    detail: e.to_string(),
+                });
+            }
             return Err(SessionDeleteResult::NotFound {
                 session_id: id.clone(),
             });
         };
-        // Even a visible Deleted record may have had an uncertain final barrier.
-        // Republish before emitting the terminal result.
+        // Republish the frozen record before granting cleanup authority.
         if let Err(e) = self.commit(self.document.clone()) {
             return Err(SessionDeleteResult::CommittedDurabilityUncertain {
-                record,
+                session_id: record.session_id,
                 detail: e.to_string(),
-            });
-        }
-        if record.phase == DeletionPhase::Deleted {
-            return Err(SessionDeleteResult::Deleted {
-                session_id: id.clone(),
             });
         }
         Ok(CleanupWork {
@@ -405,17 +393,18 @@ impl SessionCatalog {
         frozen: &DeletionRecord,
         cleanup: std::io::Result<()>,
     ) -> SessionDeleteResult {
-        if self
-            .document
-            .deletions
-            .get(&frozen.session_id)
-            .is_some_and(|record| record.phase == DeletionPhase::Deleted)
-        {
-            // Another retry may have finalized while this worker was running.
-            // A delayed failure cannot regress the authoritative terminal state.
-            return self
-                .existing_deletion(&frozen.session_id)
-                .expect("retained terminal identity");
+        if !self.document.deletions.contains_key(&frozen.session_id) {
+            // A competing retry already removed the authority. Confirm visible
+            // absence before returning an absent result after an uncertain finish.
+            if let Err(e) = self.commit(self.document.clone()) {
+                return SessionDeleteResult::CommittedDurabilityUncertain {
+                    session_id: frozen.session_id.clone(),
+                    detail: e.to_string(),
+                };
+            }
+            return SessionDeleteResult::NotFound {
+                session_id: frozen.session_id.clone(),
+            };
         }
         if let Err(e) = cleanup {
             return SessionDeleteResult::CommittedCleanupPending {
@@ -424,12 +413,7 @@ impl SessionCatalog {
             };
         }
         let mut next = self.document.clone();
-        let record = next
-            .deletions
-            .get_mut(&frozen.session_id)
-            .expect("committed deletion retained");
-        record.phase = DeletionPhase::Deleted;
-        let completed = record.clone();
+        next.deletions.remove(&frozen.session_id);
         match self.commit(next) {
             Ok(()) => SessionDeleteResult::Deleted {
                 session_id: frozen.session_id.clone(),
@@ -437,7 +421,7 @@ impl SessionCatalog {
             Err(SessionError::CatalogCommit {
                 error: CatalogCommitError::CommittedButDurabilityUncertain { detail, .. },
             }) => SessionDeleteResult::CommittedDurabilityUncertain {
-                record: completed,
+                session_id: frozen.session_id.clone(),
                 detail,
             },
             Err(e) => SessionDeleteResult::CommittedCleanupPending {
@@ -447,24 +431,13 @@ impl SessionCatalog {
         }
     }
     pub(crate) fn pending_deletion_ids(&self) -> Vec<SessionId> {
-        self.document
-            .deletions
-            .iter()
-            .filter(|(_, record)| record.phase == DeletionPhase::CleanupPending)
-            .map(|(id, _)| id.clone())
-            .collect()
+        self.document.deletions.keys().cloned().collect()
     }
     // Test driver of the same startup boundary; production runs owned work in
     // composition or the supervisor, never inside a catalog mutation method.
     #[cfg(test)]
     pub(crate) fn recover_deletions(&mut self) -> Vec<SessionDeleteResult> {
-        let ids: Vec<_> = self
-            .document
-            .deletions
-            .iter()
-            .filter(|(_, r)| r.phase == DeletionPhase::CleanupPending)
-            .map(|(id, _)| id.clone())
-            .collect();
+        let ids: Vec<_> = self.document.deletions.keys().cloned().collect();
         ids.into_iter()
             .map(|id| match self.recover_delete(&id) {
                 Ok(work) => {
@@ -475,7 +448,7 @@ impl SessionCatalog {
             })
             .collect()
     }
-    pub(super) fn reject_deleted_identity(
+    pub(super) fn reject_pending_identity(
         &self,
         session: &SessionId,
         node: &SessionNodeId,
@@ -490,7 +463,7 @@ impl SessionCatalog {
             })
         {
             return Err(SessionError::Catalog {
-                detail: "deleted identity cannot be reused".into(),
+                detail: "pending deletion identity cannot be reused".into(),
             });
         }
         Ok(())
@@ -513,7 +486,7 @@ impl SessionCatalog {
             return Ok(());
         };
         // Recognize native placement only to reject reused identities, never
-        // to discover ownership. A restored ID cannot evade a tombstone by
+        // to discover ownership. Pending identities cannot evade exclusion by
         // moving from a node allocation to a child allocation (or vice versa).
         let components: Vec<_> = allocation
             .strip_prefix(root.root())
@@ -529,6 +502,36 @@ impl SessionCatalog {
             [kind, conversation, ..] if *kind == "subagents" => (None, Some(*conversation)),
             _ => (None, None),
         };
+        let retired_session = session
+            .and_then(|s| s.to_str())
+            .and_then(|s| super::native_ordinal(s, "session-"))
+            .is_some_and(|n| {
+                n < catalog.document.next_session_ordinal
+                    && !catalog
+                        .document
+                        .sessions
+                        .contains_key(&SessionId::new(format!("session-{n}")))
+            });
+        let retired_conversation = conversation.and_then(|c| c.to_str()).is_some_and(|c| {
+            let base = c.split("-subagent-").next().expect("base identity");
+            let allocated = super::native_ordinal(base, "conversation-node-")
+                .is_some_and(|n| n < catalog.document.next_node_ordinal)
+                || super::native_ordinal(base, "conversation-")
+                    .is_some_and(|n| n < catalog.document.next_session_ordinal);
+            allocated
+                && !catalog
+                    .document
+                    .sessions
+                    .values()
+                    .flat_map(|s| s.nodes.values())
+                    .any(|node| node.conversation_id.as_str() == base)
+        });
+        if retired_session || retired_conversation {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "native allocation is no longer live",
+            ));
+        }
         for record in catalog.document.deletions.values() {
             for scope in &record.scopes {
                 if session == Some(std::ffi::OsStr::new(record.session_id.as_str()))

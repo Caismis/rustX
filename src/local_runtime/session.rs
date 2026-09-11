@@ -102,8 +102,9 @@ use crate::runtime::identity::{ConversationId, MessageId, ToolCallId};
 /// the promise is refused rather than silently reinterpreted. Because a
 /// version-3 destination's real provenance was discarded at seed time, no
 /// migration can reconstruct it, and none is attempted.
-/// Version 6 atomically co-locates live Sessions and frozen deletion authority.
-pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 6;
+/// Version 7 co-locates live Sessions and pending-only frozen cleanup authority,
+/// with generation-checked publication. Older development schemas are rejected.
+pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 7;
 
 /// The largest display name a Session may carry.
 pub const SESSION_NAME_LIMIT: usize = 120;
@@ -363,6 +364,7 @@ pub(crate) struct SessionPersistentState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 struct CatalogDocument {
+    generation: u64,
     deletions: BTreeMap<SessionId, deletion::DeletionRecord>,
     schema_version: u32,
     active_session: SessionId,
@@ -765,6 +767,7 @@ impl SessionCatalog {
             deletions: BTreeMap::new(),
             schema_version: SESSION_CATALOG_SCHEMA_VERSION,
             active_session: session_id,
+            generation: 0,
             next_session_ordinal: 2,
             next_node_ordinal: 2,
             sessions,
@@ -1306,7 +1309,7 @@ impl SessionCatalog {
                 .flat_map(|session| session.nodes.values())
                 .any(|node| node.conversation_id == conversation_id);
             if self
-                .reject_deleted_identity(session_id, &node_id, &conversation_id)
+                .reject_pending_identity(session_id, &node_id, &conversation_id)
                 .is_ok()
                 && !node_id_taken
                 && !conversation_taken
@@ -1338,7 +1341,8 @@ impl SessionCatalog {
         conversation_id: ConversationId,
         seed: &LineageSeed,
     ) -> Result<PreparedLineage, SessionError> {
-        self.reject_deleted_identity(&session_id, &node_id, &conversation_id)?;
+        self.reject_pending_identity(&session_id, &node_id, &conversation_id)?;
+        self.validate_new_session_identity(&session_id, &node_id, &conversation_id)?;
         let database_path = conversation_database_path(&self.root, &session_id, &conversation_id);
         initialize_database(&self.product, &database_path, &conversation_id, seed)?;
         Ok(PreparedLineage {
@@ -1429,6 +1433,25 @@ impl SessionCatalog {
         store.load_head().map_err(SessionError::Store).map(|_| ())
     }
 
+    fn validate_new_session_identity(
+        &self,
+        session: &SessionId,
+        node: &SessionNodeId,
+        conversation: &ConversationId,
+    ) -> Result<(), SessionError> {
+        let valid = native_ordinal(session.as_str(), "session-").is_some_and(|n| {
+            n >= self.document.next_session_ordinal
+                && conversation.as_str() == format!("conversation-{n}")
+        }) && native_ordinal(node.as_str(), "node-")
+            .is_some_and(|n| n >= self.document.next_node_ordinal);
+        if !valid {
+            return Err(SessionError::Catalog {
+                detail: "identity precedes native allocation high-water mark or is not native"
+                    .into(),
+            });
+        }
+        Ok(())
+    }
     fn allocate_ids(&self) -> (SessionId, SessionNodeId, ConversationId) {
         let mut session_ordinal = self.document.next_session_ordinal.max(1);
         let mut node_ordinal = self.document.next_node_ordinal.max(1);
@@ -1449,7 +1472,7 @@ impl SessionCatalog {
                 .flat_map(|session| session.nodes.values())
                 .any(|node| node.conversation_id == conversation_id);
             if self
-                .reject_deleted_identity(&session_id, &node_id, &conversation_id)
+                .reject_pending_identity(&session_id, &node_id, &conversation_id)
                 .is_ok()
                 && !self.document.sessions.contains_key(&session_id)
                 && !node_taken
@@ -1550,7 +1573,12 @@ impl SessionCatalog {
         prepared: &PreparedLineage,
         origin: SessionNodeOrigin,
     ) -> Result<CatalogDocument, SessionError> {
-        self.reject_deleted_identity(
+        self.reject_pending_identity(
+            &prepared.session_id,
+            &prepared.node_id,
+            &prepared.conversation_id,
+        )?;
+        self.validate_new_session_identity(
             &prepared.session_id,
             &prepared.node_id,
             &prepared.conversation_id,
@@ -1595,8 +1623,8 @@ impl SessionCatalog {
             },
         );
         next.active_session = prepared.session_id.clone();
-        next.next_session_ordinal = next.next_session_ordinal.saturating_add(1);
-        next.next_node_ordinal = next.next_node_ordinal.saturating_add(1);
+        next.next_session_ordinal = native_successor(prepared.session_id.as_str(), "session-")?;
+        next.next_node_ordinal = native_successor(prepared.node_id.as_str(), "node-")?;
         Ok(next)
     }
 
@@ -1607,6 +1635,14 @@ impl SessionCatalog {
         parent: SessionNodeId,
         origin: SessionNodeOrigin,
     ) -> Result<CatalogDocument, SessionError> {
+        if !native_ordinal(prepared.node_id.as_str(), "node-").is_some_and(|n| {
+            n >= self.document.next_node_ordinal
+                && prepared.conversation_id.as_str() == format!("conversation-node-{n}")
+        }) {
+            return Err(SessionError::Catalog {
+                detail: "prepared node precedes native allocation high-water mark".into(),
+            });
+        }
         if prepared.session_id != *session_id {
             return Err(SessionError::Catalog {
                 detail: "prepared node belongs to another Session".to_owned(),
@@ -1640,7 +1676,7 @@ impl SessionCatalog {
         session.active_node = prepared.node_id.clone();
         session.updated_at = Utc::now();
         next.active_session = session_id.clone();
-        next.next_node_ordinal = next.next_node_ordinal.saturating_add(1);
+        next.next_node_ordinal = native_successor(prepared.node_id.as_str(), "node-")?;
         Ok(next)
     }
 
@@ -1654,25 +1690,38 @@ impl SessionCatalog {
         self.commit_under_ownership(next)
     }
 
-    fn commit_under_ownership(&mut self, next: CatalogDocument) -> Result<(), SessionError> {
-        validate_document(&next)?;
-        // A stale in-memory projection is never allowed to erase deletion
-        // authority or rewind a completed identity to pending/live.
-        if let Some(current) = Self::read_under_guard(&self.product)? {
-            for (id, record) in current.document.deletions {
-                let retained = next.deletions.get(&id).is_some_and(|next| {
-                    next.scopes == record.scopes
-                        && next.target_revision == record.target_revision
-                        && (record.phase != deletion::DeletionPhase::Deleted
-                            || next.phase == deletion::DeletionPhase::Deleted)
-                });
-                if !retained {
-                    return Err(SessionError::Catalog {
-                        detail: "catalog transition would resurrect deletion authority".into(),
-                    });
-                }
-            }
+    fn commit_under_ownership(&mut self, mut next: CatalogDocument) -> Result<(), SessionError> {
+        // Root ownership precedes publication exclusion. Lock a stable directory,
+        // never the replaced catalog inode. The generation comparison and rename
+        // are one serialized publication; cloned/planned views cannot lose updates.
+        fs::create_dir_all(&self.root).map_err(|e| SessionError::Catalog {
+            detail: e.to_string(),
+        })?;
+        let file = fs::File::open(&self.root).map_err(|e| SessionError::Catalog {
+            detail: e.to_string(),
+        })?;
+        let _publication =
+            nix::fcntl::Flock::lock(file, nix::fcntl::FlockArg::LockExclusiveNonblock).map_err(
+                |(_, e)| SessionError::Catalog {
+                    detail: e.to_string(),
+                },
+            )?;
+        let current = Self::read_under_guard(&self.product)?;
+        if next.generation != self.document.generation
+            || current.as_ref().map(|c| c.document.generation)
+                != self.published.then_some(self.document.generation)
+        {
+            return Err(SessionError::Catalog {
+                detail: "stale catalog generation".into(),
+            });
         }
+        next.generation = next
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| SessionError::Catalog {
+                detail: "catalog generation exhausted".into(),
+            })?;
+        validate_document(&next)?;
         match self.persist(&next) {
             Ok(()) => {
                 self.document = next;
@@ -1710,6 +1759,20 @@ impl SessionCatalog {
         let result = atomic_write(&self.path, &bytes);
         result.map_err(SessionError::from)
     }
+}
+
+fn native_ordinal(id: &str, prefix: &str) -> Option<u64> {
+    let suffix = id.strip_prefix(prefix)?;
+    let ordinal: u64 = suffix.parse().ok()?;
+    (ordinal.to_string() == suffix).then_some(ordinal)
+}
+
+fn native_successor(id: &str, prefix: &str) -> Result<u64, SessionError> {
+    native_ordinal(id, prefix)
+        .and_then(|n| n.checked_add(1))
+        .ok_or_else(|| SessionError::Catalog {
+            detail: "native allocation ordinal exhausted or invalid".into(),
+        })
 }
 
 /// The selected fork/tree boundary, resolved against what the source's

@@ -4,19 +4,10 @@
     "preview": {
       "session_id": "session-1",
       "target_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "scopes": [
-        {
-          "kind": "node",
-          "node_id": "node-1",
-          "conversation_id": "conversation-1"
-        },
-        {
-          "kind": "child",
-          "conversation_id": "child-1",
-          "parent_conversation": "conversation-1"
-        }
-      ],
-      "name": null
+      "name": null,
+      "owned_node_count": 1,
+      "owned_conversation_count": 2,
+      "owned_child_count": 1
     }
   },
   {
@@ -37,45 +28,11 @@
   },
   {
     "status": "committed_cleanup_pending",
-    "record": {
-      "session_id": "session-1",
-      "target_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "scopes": [
-        {
-          "kind": "node",
-          "node_id": "node-1",
-          "conversation_id": "conversation-1"
-        },
-        {
-          "kind": "child",
-          "conversation_id": "child-1",
-          "parent_conversation": "conversation-1"
-        }
-      ],
-      "phase": "cleanup_pending"
-    },
-    "detail": null
+    "session_id": "session-1"
   },
   {
     "status": "committed_durability_uncertain",
-    "record": {
-      "session_id": "session-1",
-      "target_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "scopes": [
-        {
-          "kind": "node",
-          "node_id": "node-1",
-          "conversation_id": "conversation-1"
-        },
-        {
-          "kind": "child",
-          "conversation_id": "child-1",
-          "parent_conversation": "conversation-1"
-        }
-      ],
-      "phase": "cleanup_pending"
-    },
-    "detail": "directory barrier failed"
+    "session_id": "session-1"
   },
   {
     "status": "not_found",

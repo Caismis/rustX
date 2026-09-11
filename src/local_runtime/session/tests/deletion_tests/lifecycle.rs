@@ -1,6 +1,6 @@
 use super::*;
-use crate::local_runtime::session::LineageSeed;
 use crate::local_runtime::session::deletion::*;
+use crate::local_runtime::session::{LineageSeed, SessionNodeId};
 use crate::runtime::local_storage::{ConversationAccess, ProductController, ProductRoot};
 use crate::runtime_client::types::{RequestId, RuntimeClientRequest};
 use std::io::{BufRead, BufReader};
@@ -109,7 +109,7 @@ fn deletion_before_visibility_preserves_every_source_and_live_authority() {
 fn deletion_uncertain_visibility_never_cleans_and_recovery_confirms_same_record() {
     let (dir, mut catalog, preview) = fixture();
     catalog.arm_write_fault_after_rename();
-    let Err(SessionDeleteResult::CommittedDurabilityUncertain { record, .. }) = catalog
+    let Err(SessionDeleteResult::CommittedDurabilityUncertain { .. }) = catalog
         .commit_delete(&preview.session_id, &preview.target_revision)
         .unwrap()
     else {
@@ -117,6 +117,7 @@ fn deletion_uncertain_visibility_never_cleans_and_recovery_confirms_same_record(
     };
     assert!(residue(dir.path(), &preview).iter().all(|p| p.exists()));
     assert!(catalog.snapshot(&preview.session_id).is_err());
+    let record = catalog.document.deletions[&preview.session_id].clone();
     drop(catalog);
     let mut catalog = reopen_catalog(dir.path());
     assert_eq!(catalog.document.deletions[&preview.session_id], record);
@@ -132,6 +133,7 @@ fn deletion_uncertain_visibility_never_cleans_and_recovery_confirms_same_record(
         [SessionDeleteResult::Deleted { .. }]
     ));
     assert!(catalog.recover_deletions().is_empty());
+    assert_completed_absent(dir.path(), &preview.session_id);
 }
 
 #[test]
@@ -143,7 +145,10 @@ fn deletion_cleanup_owns_frozen_plan_without_root_guard_and_identity_is_absorbin
         .commit_delete(&preview.session_id, &preview.target_revision)
         .unwrap()
         .unwrap();
-    assert_eq!(work.record.phase, DeletionPhase::CleanupPending);
+    assert_eq!(
+        catalog.document.deletions.get(&preview.session_id),
+        Some(&work.record)
+    );
     assert!(matches!(
         catalog
             .commit_delete(&preview.session_id, "ignored")
@@ -223,29 +228,32 @@ fn deletion_cleanup_failure_and_final_publication_faults_remain_retryable() {
         SessionDeleteResult::CommittedCleanupPending { .. }
     ));
     assert!(residue(dir.path(), &preview).iter().all(|p| p.exists()));
+    assert_eq!(
+        reopen_catalog(dir.path()).document.deletions[&preview.session_id],
+        work.record
+    );
     let result = work.run();
     catalog.arm_write_fault_before_rename();
     assert!(matches!(
         catalog.finish_delete(&work.record, result),
         SessionDeleteResult::CommittedCleanupPending { .. }
     ));
+    assert_eq!(
+        reopen_catalog(dir.path()).document.deletions[&preview.session_id],
+        work.record
+    );
     let work = catalog.recover_delete(&preview.session_id).unwrap();
     let result = work.run();
     catalog.arm_write_fault_after_rename();
     assert!(matches!(
         catalog.finish_delete(&work.record, result),
-        SessionDeleteResult::CommittedDurabilityUncertain {
-            record: DeletionRecord {
-                phase: DeletionPhase::Deleted,
-                ..
-            },
-            ..
-        }
+        SessionDeleteResult::CommittedDurabilityUncertain { .. }
     ));
+    assert_completed_absent(dir.path(), &preview.session_id);
     let mut reopened = reopen_catalog(dir.path());
     assert!(matches!(
         reopened.recover_delete(&preview.session_id),
-        Err(SessionDeleteResult::Deleted { .. })
+        Err(SessionDeleteResult::NotFound { .. })
     ));
 }
 
@@ -326,6 +334,7 @@ fn deletion_process_death_after_commit_and_mid_cleanup_converges_without_discove
         assert!(paths.iter().all(|p| !p.exists()));
         assert!(catalog.recover_deletions().is_empty());
         assert!(reopen_catalog(dir.path()).recover_deletions().is_empty());
+        assert_completed_absent(dir.path(), &preview.session_id);
     }
 }
 
@@ -354,7 +363,8 @@ fn deletion_rust_types_roundtrip_every_shared_sdk_result_and_reject_paths() {
     let mut statuses = BTreeSet::new();
     for fixture in fixtures {
         statuses.insert(fixture["status"].as_str().unwrap().to_owned());
-        let result: SessionDeleteResult = serde_json::from_value(fixture.clone()).unwrap();
+        let result: crate::runtime_client::session_deletion::RuntimeClientSessionDeletionResult =
+            serde_json::from_value(fixture.clone()).unwrap();
         assert_eq!(serde_json::to_value(result).unwrap(), fixture);
     }
     assert_eq!(statuses.len(), 7);
@@ -523,6 +533,12 @@ fn deletion_stale_catalog_cannot_resurrect_committed_identity() {
         catalog.finish_delete(&work.record, result),
         SessionDeleteResult::Deleted { .. }
     ));
+    assert!(
+        stale
+            .rename(&preview.session_id, "resurrect after removal")
+            .is_err()
+    );
+    assert_completed_absent(dir.path(), &preview.session_id);
 }
 
 #[test]
@@ -612,7 +628,7 @@ fn deletion_workspace_transition_is_stale_and_preview_blockers_are_typed() {
 }
 
 #[test]
-fn deletion_identity_reservation_rejects_cross_allocation_restore() {
+fn deletion_retired_native_domains_reject_stale_allocation_access() {
     let (dir, mut catalog, preview) = fixture();
     let work = catalog
         .commit_delete(&preview.session_id, &preview.target_revision)
@@ -644,7 +660,7 @@ fn deletion_identity_reservation_rejects_cross_allocation_restore() {
         fs::create_dir_all(&alternate).unwrap();
         assert!(
             ConversationAccess::existing(&root, &alternate).is_err(),
-            "reserved {conversation}"
+            "retired native domain {conversation}"
         );
     }
 }
@@ -668,14 +684,14 @@ fn deletion_duplicate_recovery_cannot_regress_terminal_or_mint_a_second_snapshot
             &duplicate.record,
             Err(std::io::Error::other("delayed worker failure"))
         ),
-        SessionDeleteResult::Deleted { .. }
+        SessionDeleteResult::NotFound { .. }
     ));
-    assert_eq!(catalog.document.deletions.len(), 1);
+    assert!(catalog.document.deletions.is_empty());
     assert!(matches!(
         catalog
             .commit_delete(&preview.session_id, "old token")
             .unwrap(),
-        Err(SessionDeleteResult::Deleted { .. })
+        Err(SessionDeleteResult::NotFound { .. })
     ));
 }
 
@@ -713,4 +729,218 @@ fn deletion_live_ownership_cannot_claim_a_pending_frozen_child() {
         catalog.document.deletions[&preview.session_id].scopes,
         preview.scopes
     );
+}
+
+fn assert_completed_absent(root: &Path, id: &SessionId) {
+    let disk: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("sessions/catalog.json")).unwrap()).unwrap();
+    assert!(disk["deletions"].as_object().unwrap().is_empty());
+    assert!(disk["sessions"].get(id.as_str()).is_none());
+    let mut reopened = reopen_catalog(root);
+    assert!(reopened.recover_deletions().is_empty());
+    assert!(matches!(
+        reopened.delete_preview(id),
+        SessionDeleteResult::NotFound { .. }
+    ));
+}
+
+#[test]
+fn deletion_completed_worksets_do_not_accumulate_and_native_allocators_advance() {
+    let (dir, mut catalog, _) = open_catalog();
+    for n in 1..=6 {
+        let target = catalog.active_snapshot().unwrap();
+        assert_eq!(target.id.as_str(), format!("session-{n}"));
+        assert_eq!(
+            target.active_conversation_id.as_str(),
+            format!("conversation-{n}")
+        );
+        let next = catalog.prepare_session(&state(), &[]).unwrap();
+        assert_eq!(next.node_id.as_str(), format!("node-{}", n + 1));
+        catalog
+            .publish_session(&next, SessionNodeOrigin::New)
+            .unwrap();
+        let SessionDeleteResult::Preview { preview } = catalog.delete_preview(&target.id) else {
+            panic!("preview")
+        };
+        let work = catalog
+            .commit_delete(&target.id, &preview.target_revision)
+            .unwrap()
+            .unwrap();
+        let disk = reopen_catalog(dir.path());
+        assert_eq!(disk.document.deletions.len(), 1);
+        assert_eq!(disk.document.deletions[&target.id], work.record);
+        let cleaned = work.run();
+        assert!(matches!(
+            catalog.finish_delete(&work.record, cleaned),
+            SessionDeleteResult::Deleted { .. }
+        ));
+        assert_completed_absent(dir.path(), &target.id);
+        catalog = reopen_catalog(dir.path());
+    }
+}
+
+#[test]
+fn catalog_generation_rejects_stale_metadata_and_planned_publication() {
+    let (dir, mut catalog, _) = open_catalog();
+    let target = catalog.active_snapshot().unwrap();
+    let mut stale = catalog.clone();
+    let old_plan = catalog.document.clone();
+    catalog
+        .rename(&target.id, "new authoritative name")
+        .unwrap();
+    let bytes = fs::read(&catalog.path).unwrap();
+    assert!(
+        stale
+            .rename(&target.id, "lost update")
+            .unwrap_err()
+            .to_string()
+            .contains("stale catalog generation")
+    );
+    assert!(
+        catalog
+            .commit(old_plan)
+            .unwrap_err()
+            .to_string()
+            .contains("stale catalog generation")
+    );
+    assert_eq!(fs::read(&catalog.path).unwrap(), bytes);
+    assert_eq!(
+        reopen_catalog(dir.path())
+            .active_snapshot()
+            .unwrap()
+            .name
+            .as_deref(),
+        Some("new authoritative name")
+    );
+}
+
+#[test]
+fn deletion_protocol_projection_is_bounded_for_large_frozen_graphs() {
+    use crate::local_runtime::supervisor::project_session_deletion;
+    let mut lengths = Vec::new();
+    for size in [1, 10, 10_000] {
+        let scopes: Vec<_> = (0..size)
+            .map(|i| DeletionScope::Child {
+                conversation_id: ConversationId::new(format!("conversation-1-subagent-{i}")),
+                parent_conversation: ConversationId::new("conversation-1"),
+            })
+            .chain(std::iter::once(DeletionScope::Node {
+                node_id: SessionNodeId::new("node-1"),
+                conversation_id: ConversationId::new("conversation-1"),
+            }))
+            .collect();
+        let preview = SessionDeletePreview {
+            session_id: SessionId::new("session-1"),
+            name: Some("x".repeat(10_000)),
+            target_revision: "a".repeat(64),
+            scopes: scopes.clone(),
+        };
+        let projected =
+            serde_json::to_value(project_session_deletion(SessionDeleteResult::Preview {
+                preview,
+            }))
+            .unwrap();
+        assert_eq!(projected["preview"]["owned_child_count"], size);
+        assert_eq!(projected["preview"]["owned_conversation_count"], size + 1);
+        assert_eq!(projected["preview"]["owned_node_count"], 1);
+        let text = projected.to_string();
+        assert!(text.len() < 600);
+        assert!(!text.contains("scopes"));
+        let record = DeletionRecord {
+            session_id: SessionId::new("session-1"),
+            target_revision: "a".repeat(64),
+            scopes,
+        };
+        let results = [
+            SessionDeleteResult::CommittedCleanupPending {
+                record: record.clone(),
+                detail: Some("/private/path".repeat(size)),
+            },
+            SessionDeleteResult::CommittedDurabilityUncertain {
+                session_id: record.session_id,
+                detail: "/private/path".repeat(size),
+            },
+            SessionDeleteResult::Blocked {
+                session_id: SessionId::new("session-1"),
+                reason: DeletionBlocker::Workspace {
+                    resources: vec!["private resource".into(); size],
+                },
+            },
+        ];
+        let serialized: Vec<_> = results
+            .into_iter()
+            .map(|r| serde_json::to_string(&project_session_deletion(r)).unwrap())
+            .collect();
+        for text in &serialized {
+            assert!(text.len() < 140);
+            assert!(!text.contains("private"));
+            assert!(!text.contains("scopes"));
+        }
+        lengths.push((text.len(), serialized[0].len(), serialized[1].len()));
+    }
+    assert_eq!(lengths[0].1, lengths[2].1);
+    assert_eq!(lengths[0].2, lengths[2].2);
+    // Only the decimal count widths may grow, never the descendant collection.
+    assert_eq!(lengths[2].0 - lengths[0].0, 8);
+}
+
+#[test]
+fn deletion_protocol_counts_real_durable_ownership_without_exporting_it() {
+    let (dir, mut catalog, _) = open_catalog();
+    let target = catalog.active_snapshot().unwrap();
+    let store = store_for(&catalog, &target.id, &target.active_conversation_id);
+    for ordinal in 1..=128 {
+        child(dir.path(), &store, ordinal, false);
+    }
+    drop(store);
+    let next = catalog.prepare_session(&state(), &[]).unwrap();
+    catalog
+        .publish_session(&next, SessionNodeOrigin::New)
+        .unwrap();
+    let result = crate::local_runtime::supervisor::project_session_deletion(
+        catalog.delete_preview(&target.id),
+    );
+    let value = serde_json::to_value(&result).unwrap();
+    assert_eq!(value["preview"]["owned_node_count"], 1);
+    assert_eq!(value["preview"]["owned_child_count"], 128);
+    assert_eq!(value["preview"]["owned_conversation_count"], 129);
+    assert!(serde_json::to_string(&result).unwrap().len() < 300);
+    assert!(value["preview"].get("scopes").is_none());
+}
+
+#[test]
+fn deletion_allocator_watermarks_advance_past_skipped_orphan_ids() {
+    let (dir, mut catalog, _) = open_catalog();
+    let orphan = catalog.prepare_session(&state(), &[]).unwrap();
+    let target = catalog.prepare_session(&state(), &[]).unwrap();
+    assert_eq!(target.session_id.as_str(), "session-3");
+    catalog
+        .publish_session(&target, SessionNodeOrigin::New)
+        .unwrap();
+    // An orphan has no published identity and may be discarded, but its gap
+    // must never let the allocator rewind past the later published identity.
+    fs::remove_dir_all(orphan.database_path.parent().unwrap()).unwrap();
+    let survivor = catalog.prepare_session(&state(), &[]).unwrap();
+    assert_eq!(survivor.session_id.as_str(), "session-4");
+    catalog
+        .publish_session(&survivor, SessionNodeOrigin::New)
+        .unwrap();
+    let SessionDeleteResult::Preview { preview } = catalog.delete_preview(&target.session_id)
+    else {
+        panic!("preview")
+    };
+    let work = catalog
+        .commit_delete(&target.session_id, &preview.target_revision)
+        .unwrap()
+        .unwrap();
+    let cleaned = work.run();
+    assert!(matches!(
+        catalog.finish_delete(&work.record, cleaned),
+        SessionDeleteResult::Deleted { .. }
+    ));
+    assert_completed_absent(dir.path(), &target.session_id);
+    let reopened = reopen_catalog(dir.path());
+    let next = reopened.prepare_session(&state(), &[]).unwrap();
+    assert_eq!(next.session_id.as_str(), "session-5");
+    assert_eq!(next.node_id.as_str(), "node-5");
 }

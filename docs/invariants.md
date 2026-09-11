@@ -8244,5 +8244,7 @@ publication. Rename visibility without a proven directory barrier returns typed
 uncertainty and admits no cleanup. Frozen records alone authorize restart cleanup;
 recovery never discovers a new ownership set or activates the deleted Conversation.
 Cleanup holds neither the root ownership freeze nor supervisor catalog mutex.
-Completed catalog records reserve identities against reuse, including stale catalog
-publication. See [Session deletion lifecycle](session-deletion-lifecycle.md).
+Completed cleanup records are durably removed. Native allocator high-water marks
+prevent generated identity reuse; catalog generation compare-and-publish prevents
+stale writers from replacing newer state. Runtime Client receives bounded DTOs,
+never the internal frozen workset. See [Session deletion lifecycle](session-deletion-lifecycle.md).

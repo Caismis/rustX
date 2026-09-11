@@ -96,6 +96,7 @@ pub mod endpoint;
 pub mod event;
 pub mod host;
 pub mod projection;
+pub mod session_deletion;
 pub mod settings;
 pub mod snapshot;
 pub mod transport;

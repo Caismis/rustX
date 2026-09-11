@@ -982,7 +982,7 @@ pub enum RuntimeClientSubagentWorkspaceDisposalOutcome {
 pub enum RuntimeClientResult {
     /// Native deletion control state, including post-commit uncertainty.
     SessionDeletion {
-        result: crate::local_runtime::session::deletion::SessionDeleteResult,
+        result: super::session_deletion::RuntimeClientSessionDeletionResult,
     },
     /// `initialize` succeeded: the attachment is admitted and the initial
     /// authoritative snapshot (linearized with its cursor) is returned.
