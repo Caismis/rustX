@@ -260,7 +260,18 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
             .collect::<Vec<_>>(),
         vec!["new-skill"]
     );
-    assert!(snapshot.tool_registry().is_empty());
+    // Issue #259 regression 1/4: the ordinary selection is empty and stays
+    // empty — and the extension-provided `todo` Tool is still active, because
+    // ordinary Tool selection is not the authority that composes it.
+    assert_eq!(snapshot.tool_registry().names(), vec!["todo"]);
+    assert!(
+        !snapshot
+            .available_tools()
+            .definitions()
+            .iter()
+            .any(|tool| tool.name == "todo"),
+        "and it is not an ordinary available capability, so no selector can name it"
+    );
     assert!(snapshot.skill_catalog().is_none());
     assert!(!snapshot.available_tools().tools().is_empty());
 
@@ -287,8 +298,24 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         Some(RuntimeClientResult::Capability { capabilities }) => capabilities,
         other => panic!("capability_get returned an unexpected result: {other:?}"),
     };
-    assert!(capabilities.tools.is_empty());
+    // The client view agrees with the runtime: the active set is exactly the
+    // extension-provided Tool, and the ordinary available catalog does not
+    // contain it (Issue #259).
+    assert_eq!(
+        capabilities
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["todo"]
+    );
     assert!(!capabilities.available_tools.is_empty());
+    assert!(
+        !capabilities
+            .available_tools
+            .iter()
+            .any(|tool| tool.name == "todo")
+    );
     // `/new` over an untouched empty Session is a semantic no-op, so the
     // switch this test fences needs the active Session to own durable user
     // work first. Durable Pending Inbound acceptance is exactly that
@@ -702,7 +729,7 @@ async fn ext256_reload_cannot_recompose_extensions_but_the_next_launch_does() {
     // reports the *new* launch's composition, not the retired one.
     assert_eq!(
         attached_projection(&resumed_endpoint, 4),
-        Some(uncomposed()),
+        Some(agent_status_absent()),
         "the restarted launch projects its own extension composition"
     );
     assert_eq!(
@@ -737,7 +764,7 @@ async fn ext256_reload_cannot_recompose_extensions_but_the_next_launch_does() {
     );
     assert_eq!(
         attached_projection(&empty.endpoint(), 6),
-        Some(uncomposed()),
+        Some(agent_status_absent()),
         "and cannot install one into the effective projection either"
     );
 }
@@ -787,6 +814,14 @@ fn projected_extensions(
         .effective_extensions
 }
 
+/// A composition with the given Agent Status contributors and the Todo
+/// extension composed.
+///
+/// Todo is composed in every fixture below because none of them authors a
+/// `todo` member, and an unauthored member takes the closed document's own
+/// default — which since Issue #259 composes Todo. That is exactly the point
+/// of the migration: the default is owned by extension composition, not by
+/// `defaultTools`, whose fixtures here select only `read`.
 fn composed(
     time: bool,
     timezone: Option<chrono_tz::Tz>,
@@ -802,12 +837,27 @@ fn composed(
                 enabled: background,
             },
         }),
+        todo: Some(rustx::runtime_client::settings::EffectiveTodoExtension {}),
+    }
+}
+
+/// The composition with no Agent Status, and Todo composed by default.
+///
+/// The two members are independent axes: switching Agent Status off says
+/// nothing about Todo, and this value is what proves it on the wire.
+fn agent_status_absent() -> EffectiveNativeAgentExtensions {
+    EffectiveNativeAgentExtensions {
+        agent_status: None,
+        todo: Some(rustx::runtime_client::settings::EffectiveTodoExtension {}),
     }
 }
 
 /// The composition with no native Agent Extension at all.
 fn uncomposed() -> EffectiveNativeAgentExtensions {
-    EffectiveNativeAgentExtensions { agent_status: None }
+    EffectiveNativeAgentExtensions {
+        agent_status: None,
+        todo: None,
+    }
 }
 
 /// Issue #256 regressions 1, 2 and 3, plus the deliberate disagreement with
@@ -909,7 +959,11 @@ async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition(
     .expect("config v2");
     let prospective = paths(root.path(), &config_path).resolve();
     assert!(
-        prospective.config().extension_composition().is_empty(),
+        prospective
+            .config()
+            .extension_composition()
+            .agent_status()
+            .is_none(),
         "a fresh prospective resolution reads the edited document"
     );
     assert_eq!(
@@ -930,8 +984,13 @@ async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition(
     .await
     .expect("interactive composition");
     let projected = projected_extensions(&empty).expect("a live runtime always projects one");
-    assert_eq!(projected, uncomposed());
+    assert_eq!(projected, agent_status_absent());
     assert!(projected.agent_status.is_none());
+    assert!(
+        projected.todo.is_some(),
+        "disabling Agent Status says nothing about Todo (Issue #259)"
+    );
+    assert_ne!(projected, uncomposed());
     assert_ne!(
         projected,
         composed(false, None, false),

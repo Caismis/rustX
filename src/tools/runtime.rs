@@ -227,6 +227,23 @@ pub struct ConversationRuntimeConfig {
     /// The explicit authorized tool environment; an empty environment is
     /// used when omitted.
     pub environment: Option<ToolEnvironment>,
+    /// The frozen Todo Agent Extension composition of this conversation
+    /// (Issue #259).
+    ///
+    /// `Some` composes the conversation's [`ConversationTodoList`] — rebuilt
+    /// here from the conversation's own canonical history — and is the
+    /// materialized fact the effective-extension projection reads back.
+    /// `None` composes no list at all: the runtime holds no current Todo
+    /// authority, publishes no `todo` Tool, and contributes nothing to Agent
+    /// Status, while canonical history keeps every Todo result it already
+    /// holds.
+    ///
+    /// It defaults to composed, which is the product default of
+    /// [`NativeAgentExtensionsDocument`](crate::extensions::NativeAgentExtensionsDocument).
+    /// The two real composition sites — `LocalConversationCore::compose` and
+    /// `compose_subagent_child` — always set it explicitly from their frozen
+    /// composition.
+    pub todo: Option<crate::extensions::TodoExtensionConfig>,
 }
 
 impl ConversationRuntimeConfig {
@@ -242,7 +259,15 @@ impl ConversationRuntimeConfig {
             clock: None,
             event_sink: None,
             environment: None,
+            todo: Some(crate::extensions::TodoExtensionConfig {}),
         }
+    }
+
+    /// The same configuration with the Todo extension composed or not.
+    #[must_use]
+    pub const fn with_todo(mut self, todo: Option<crate::extensions::TodoExtensionConfig>) -> Self {
+        self.todo = todo;
+        self
     }
 }
 
@@ -263,8 +288,9 @@ pub struct ConversationToolRuntime {
     environment: ToolEnvironment,
     background: ConversationBackgroundRegistry,
     /// The conversation's task list, rebuilt from its own durable history at
-    /// construction.
-    todos: ConversationTodoList,
+    /// construction — present exactly when this conversation composes the
+    /// Todo Agent Extension (Issue #259).
+    todos: Option<ConversationTodoList>,
     /// The one composition-time binding shared by the runtime and its narrow
     /// mailbox capability.
     durable_binding: ConversationStoreBinding,
@@ -441,21 +467,35 @@ impl ConversationToolRuntime {
                 event_sink: config.event_sink,
             },
         );
-        // The task list is conversation state that was already published as
-        // canonical tool results, so it is *rebuilt* here rather than
-        // restored from a second persistence path: whatever the last
-        // committed `todo` result said the list was, it still is. A
-        // conversation with no such result opens with an empty list.
-        let todos = ConversationTodoList::rebuilt(
-            conversation_id.clone(),
-            &durable_binding
-                .full_store()
-                .load_canonical()
-                .map_err(|error| {
-                    ConversationRuntimeError::DurableConversation(error.to_string())
-                })?,
-        )
-        .map_err(ConversationRuntimeError::TodoList)?;
+        // The Todo extension's materialization seam (Issue #259). The task
+        // list is conversation state that was already published as canonical
+        // tool results, so it is *rebuilt* here rather than restored from a
+        // second persistence path: whatever the last committed `todo` result
+        // said the list was, it still is. A conversation with no such result
+        // opens with an empty list.
+        //
+        // A composition without the extension does not read that history at
+        // all — not even read-only. Reconstruction exists to serve a current
+        // Todo authority, and this runtime has none; the canonical results
+        // stay exactly where they are, as historical facts of the
+        // conversation, and a later launch that composes Todo again rebuilds
+        // the same latest accepted snapshot from them without replaying a
+        // single mutation.
+        let todos = match config.todo {
+            None => None,
+            Some(crate::extensions::TodoExtensionConfig {}) => Some(
+                ConversationTodoList::rebuilt(
+                    conversation_id.clone(),
+                    &durable_binding
+                        .full_store()
+                        .load_canonical()
+                        .map_err(|error| {
+                            ConversationRuntimeError::DurableConversation(error.to_string())
+                        })?,
+                )
+                .map_err(ConversationRuntimeError::TodoList)?,
+            ),
+        };
         Ok(Self {
             _lifecycle: config.lifecycle,
             workflows: crate::runtime::workflow::read_model::WorkflowReadModel::new(
@@ -488,20 +528,28 @@ impl ConversationToolRuntime {
     /// because only it holds the durable batch commit the claim refers to.
     /// A consumer that wants to read the list uses
     /// [`Self::todo_snapshot`], which carries no such authority.
+    ///
+    /// `None` is the composed/absent fact of the Todo extension, not a
+    /// lifecycle state: a runtime that does not compose Todo never has one.
     #[must_use]
-    pub(crate) fn todos(&self) -> &ConversationTodoList {
-        &self.todos
+    pub(crate) fn todos(&self) -> Option<&ConversationTodoList> {
+        self.todos.as_ref()
     }
 
-    /// The conversation's committed task list.
+    /// The conversation's committed task list, when Todo is composed.
     ///
     /// The authoritative list as canonical history left it: what a restart
     /// would rebuild, and what the Runtime Client projection carries. A
     /// batch in flight is invisible here, because a mutation nothing has
     /// committed is not yet part of the conversation.
+    ///
+    /// `None` means this runtime composes no Todo extension, which is
+    /// deliberately *not* the same fact as the empty list: a client must show
+    /// no current Todo surface at all rather than an empty one, however many
+    /// historical `todo` results the transcript still carries.
     #[must_use]
-    pub fn todo_snapshot(&self) -> crate::tools::todo::TodoSnapshot {
-        self.todos.committed()
+    pub fn todo_snapshot(&self) -> Option<crate::tools::todo::TodoSnapshot> {
+        self.todos.as_ref().map(ConversationTodoList::committed)
     }
 
     /// Process-local Workflow read authority shared with the native orchestrator.

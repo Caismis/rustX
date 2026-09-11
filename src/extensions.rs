@@ -10,7 +10,8 @@
 //!   durability / cancellation / recovery
 //!
 //! Native Agent Extensions
-//!   Agent Status        <- the first migrated extension
+//!   Agent Status        <- the first migrated extension (Issue #256)
+//!   Todo                <- the first STATEFUL, Tool-providing one (#259)
 //! ```
 //!
 //! # What a Native Agent Extension is
@@ -20,6 +21,28 @@
 //! plugin, not a capability, and not an ordinary Tool: ordinary tool
 //! selection stays the business of `defaultTools`/`--tools` and the
 //! capability plane.
+//!
+//! # Two authority planes, not one list
+//!
+//! Tool *selection* and extension *composition* are separate authorities, and
+//! the model's Tool set is their composition:
+//!
+//! ```text
+//! ordinary selected Tool capabilities        the capability plane decides
+//! + enabled extension-provided Tool surfaces this module decides
+//! + already-admitted domain protocols        the admitting domain decides
+//! ```
+//!
+//! Neither plane filters the other. `--no-tools` selects zero *ordinary*
+//! capabilities; it does not disable an independently composed extension, so a
+//! genuinely Tool-free model request needs no ordinary Tools **and** no
+//! Tool-providing extension. Symmetrically, naming an extension's Tool in
+//! `defaultTools`, `--tools`, `--exclude-tools`, a role's `tools.builtin`, or a
+//! Workflow capability selection is refused: those surfaces address ordinary
+//! execution capabilities only, and an extension is switched on by composing
+//! it. The classification is semantic, not incidental — `--no-builtin-tools`
+//! removes ordinary built-ins, not every Tool that happens to be written in
+//! Rust.
 //!
 //! The one core invariant:
 //!
@@ -111,6 +134,10 @@ pub struct NativeAgentExtensionsDocument {
     /// The Agent Status extension: optional provider-independent runtime
     /// context for an already-established model step.
     pub agent_status: AgentStatusExtensionDocument,
+    /// The Todo extension: the conversation-owned task list, its
+    /// model-facing `todo` Tool, and its bounded status presentation
+    /// (Issue #259).
+    pub todo: TodoExtensionDocument,
 }
 
 /// The authored Agent Status extension.
@@ -144,6 +171,53 @@ impl Default for AgentStatusExtensionDocument {
     }
 }
 
+/// The authored Todo extension (Issue #259).
+///
+/// Todo is *one* capability with several faces, and `enabled` composes all
+/// of them together or none of them:
+///
+/// ```text
+/// enabled = true    conversation-owned ConversationTodoList authority
+///                   the model-facing `todo` Tool
+///                   the bounded read-only Todo status presentation
+///                   the Runtime Client / TUI Todo projection
+///
+/// enabled = false   none of the above for this runtime; canonical history
+///                   keeps every Todo ToolCall/ToolResult it already holds
+/// ```
+///
+/// It carries no contributor settings today. That is a statement about the
+/// extension, not a placeholder: the list's bounds, transitions, and
+/// dependency rules are owned by
+/// [`ConversationTodoList`](crate::tools::todo::ConversationTodoList) and are
+/// not launch configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[derive(schemars::JsonSchema)]
+pub struct TodoExtensionDocument {
+    /// Whether this composition includes the Todo extension at all.
+    pub enabled: bool,
+}
+
+impl Default for TodoExtensionDocument {
+    fn default() -> Self {
+        // The product default. It is deliberately expressed here rather than
+        // in `defaultTools`: Todo is an extension, and only extension
+        // composition may decide whether it exists.
+        Self { enabled: true }
+    }
+}
+
+/// The **frozen** Todo extension configuration of one composition.
+///
+/// Present means "this Agent/Conversation composes Todo". The type carries no
+/// field because nothing about the list is launch-configurable; it exists so
+/// the closed composition holds one typed member per extension rather than a
+/// bare `bool`, exactly like [`AgentStatusConfig`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+pub struct TodoExtensionConfig {}
+
 impl NativeAgentExtensionsDocument {
     /// Freezes this authored document into the composition one launch runs
     /// against.
@@ -159,6 +233,7 @@ impl NativeAgentExtensionsDocument {
                 time: self.agent_status.time.clone(),
                 background: self.agent_status.background.clone(),
             }),
+            todo: self.todo.enabled.then(TodoExtensionConfig::default),
         }
     }
 }
@@ -204,6 +279,20 @@ pub struct NativeAgentExtensionSelection {
     // would advertise a spelling the deserializer refuses.
     #[schemars(with = "AgentStatusExtensionDocument")]
     pub agent_status: Option<AgentStatusExtensionDocument>,
+    /// The requested Todo extension, when this selection composes it
+    /// (Issue #259).
+    ///
+    /// Absent means the child composes no Todo at all — no list authority, no
+    /// `todo` Tool, no status contribution — never "whatever the role
+    /// authored". `null` is refused for the same reason `agentStatus` refuses
+    /// it: one wire spelling may not carry two meanings.
+    #[serde(
+        default,
+        deserialize_with = "crate::extensions::present_and_not_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "TodoExtensionDocument")]
+    pub todo: Option<TodoExtensionDocument>,
 }
 
 /// Deserializes a field that may be **absent**, but never explicitly `null`.
@@ -243,6 +332,10 @@ impl NativeAgentExtensionSelection {
                     time: status.time.clone(),
                     background: status.background.clone(),
                 }),
+            todo: self
+                .todo
+                .filter(|todo| todo.enabled)
+                .map(|_| TodoExtensionConfig::default()),
         }
     }
 
@@ -261,6 +354,9 @@ impl NativeAgentExtensionSelection {
                     time: config.time.clone(),
                     background: config.background.clone(),
                 }),
+            todo: frozen
+                .todo()
+                .map(|_| TodoExtensionDocument { enabled: true }),
         }
     }
 }
@@ -275,10 +371,10 @@ impl NativeAgentExtensionSelection {
 ///
 /// The match below is exhaustive over the closed composition on purpose: it
 /// is the seam a future extension author has to visit, and it is a compile
-/// error to add a member without deciding this question. Today's whole
-/// vocabulary is one member, Agent Status, and it is supported: a child is an
-/// ordinary `ConversationRuntime` whose Agent Loop composes the same status
-/// engine the root does.
+/// error to add a member without deciding this question. Both members of
+/// today's vocabulary are supported: a child is an ordinary
+/// `ConversationRuntime` whose Agent Loop composes the same status engine and
+/// the same conversation-owned task list a root does.
 #[must_use]
 pub fn unsupported_child_scope(
     composition: &NativeAgentExtensions,
@@ -290,8 +386,16 @@ pub fn unsupported_child_scope(
         // Assembly admits at request time. A one-shot child owns Context
         // Assembly exactly like a root Agent and needs no multi-round or
         // resumable lifecycle for it, so it is supported in child scope.
+        //
+        // Todo is conversation-owned state published through ordinary
+        // canonical ToolResults. A one-shot child owns its own conversation,
+        // its own Ledger, and its own Tool Plane, so it composes its own list
+        // — which is exactly why a child's list can never alias its parent's.
+        // The child's bounded final report is unchanged: a list is working
+        // state of the child conversation, never part of its result.
         NativeAgentExtensions {
             agent_status: None | Some(AgentStatusConfig { .. }),
+            todo: None | Some(TodoExtensionConfig { .. }),
         } => None,
     }
 }
@@ -303,10 +407,13 @@ pub fn unsupported_child_scope(
 /// does not actually hold — and adding a member updates every caller at once.
 #[must_use]
 pub fn composed_extension_names(composition: &NativeAgentExtensions) -> Vec<&'static str> {
-    let NativeAgentExtensions { agent_status } = composition;
+    let NativeAgentExtensions { agent_status, todo } = composition;
     let mut names = Vec::new();
     if agent_status.is_some() {
         names.push(AGENT_STATUS_EXTENSION);
+    }
+    if todo.is_some() {
+        names.push(TODO_EXTENSION);
     }
     names
 }
@@ -347,13 +454,20 @@ pub struct NativeAgentExtensions {
     /// composition includes the extension.
     #[serde(default)]
     agent_status: Option<AgentStatusConfig>,
+    /// The frozen Todo extension configuration, when this composition
+    /// includes the extension (Issue #259).
+    #[serde(default)]
+    todo: Option<TodoExtensionConfig>,
 }
 
 impl NativeAgentExtensions {
     /// The composition with no native Agent Extension at all.
     #[must_use]
     pub const fn none() -> Self {
-        Self { agent_status: None }
+        Self {
+            agent_status: None,
+            todo: None,
+        }
     }
 
     /// The composition containing exactly the Agent Status extension with
@@ -362,7 +476,24 @@ impl NativeAgentExtensions {
     pub const fn with_agent_status(agent_status: AgentStatusConfig) -> Self {
         Self {
             agent_status: Some(agent_status),
+            todo: None,
         }
+    }
+
+    /// The composition containing exactly the Todo extension (Issue #259).
+    #[must_use]
+    pub const fn with_todo() -> Self {
+        Self {
+            agent_status: None,
+            todo: Some(TodoExtensionConfig {}),
+        }
+    }
+
+    /// This composition with the Todo extension composed.
+    #[must_use]
+    pub const fn and_todo(mut self) -> Self {
+        self.todo = Some(TodoExtensionConfig {});
+        self
     }
 
     /// The frozen Agent Status configuration, when the extension is composed.
@@ -371,10 +502,20 @@ impl NativeAgentExtensions {
         self.agent_status.as_ref()
     }
 
+    /// The frozen Todo configuration, when the extension is composed.
+    ///
+    /// `Some` is the *whole* Todo composition decision: the conversation
+    /// composes a [`ConversationTodoList`](crate::tools::todo::ConversationTodoList),
+    /// publishes the `todo` Tool, and offers its bounded status presentation.
+    #[must_use]
+    pub const fn todo(&self) -> Option<&TodoExtensionConfig> {
+        self.todo.as_ref()
+    }
+
     /// Whether this composition contains no native Agent Extension.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.agent_status.is_none()
+        self.agent_status.is_none() && self.todo.is_none()
     }
 
     /// Recovers this composition from the runtime extension owners it
@@ -383,7 +524,9 @@ impl NativeAgentExtensions {
     /// This is deliberately **not** a second stored copy of the frozen
     /// decision. The Agent Status engine a composition materializes carries
     /// the exact frozen contributor configuration it was built from, and
-    /// whether that engine exists at all *is* the composed/absent fact. So
+    /// whether that engine exists at all *is* the composed/absent fact; the
+    /// conversation's [`ConversationTodoList`] exists for exactly as long as
+    /// the Todo extension is composed, and its presence *is* that fact. So
     /// reading the owners back yields the same value by construction: there
     /// is no second field that could drift from the materialization, and no
     /// path here that could consult a configuration document instead.
@@ -391,11 +534,91 @@ impl NativeAgentExtensions {
     /// [`ConversationRuntime::native_extensions`](crate::runtime::ConversationRuntime::native_extensions)
     /// is the one caller: it is how the Runtime Client effective-extension
     /// projection reads the composition of the attached Agent runtime.
+    ///
+    /// [`ConversationTodoList`]: crate::tools::todo::ConversationTodoList
     #[must_use]
-    pub fn from_materialized(status_engine: Option<&AgentStatusEngine>) -> Self {
+    pub(crate) fn from_materialized(
+        status_engine: Option<&AgentStatusEngine>,
+        todos: Option<&crate::tools::todo::ConversationTodoList>,
+    ) -> Self {
         Self {
             agent_status: status_engine.map(|engine| engine.config().clone()),
+            todo: todos.map(|_| TodoExtensionConfig {}),
         }
+    }
+
+    /// The extension-provided model Tool registrations of this frozen
+    /// composition (Issue #259).
+    ///
+    /// This is the one seam by which an extension contributes to the model
+    /// Tool set, and it is deliberately *not* ordinary Tool selection:
+    ///
+    /// ```text
+    /// ordinary selected Tool capabilities      defaultTools / --tools /
+    ///                                          --exclude-tools / tools.builtin
+    /// + enabled extension-provided Tools       THIS function
+    /// + already-admitted domain protocols      Workflow output, ...
+    /// ```
+    ///
+    /// The two planes never filter one another: `--no-tools` selects zero
+    /// *ordinary* capabilities and says nothing about an independently
+    /// composed extension, and an extension can never be switched on by
+    /// naming its Tool in an ordinary allowlist.
+    ///
+    /// The returned set is a function of the frozen composition alone, so it
+    /// is stable for the composition's whole lifetime: Todo list contents,
+    /// emptiness, and mutations cannot add or remove a Tool definition, and a
+    /// resource reload — which never reaches a frozen composition — cannot
+    /// install or uninstall one.
+    #[must_use]
+    pub(crate) fn tool_registrations(&self) -> Vec<crate::tools::executor::ToolRegistration> {
+        let NativeAgentExtensions {
+            // Agent Status contributes context, never a Tool.
+            agent_status: _,
+            todo,
+        } = self;
+        let mut registrations = Vec::new();
+        if todo.is_some() {
+            registrations.push(crate::tools::native::todo_tool_registration());
+        }
+        registrations
+    }
+
+    /// Registers this composition's extension-provided model Tools into
+    /// `registry` (Issue #259).
+    ///
+    /// This is the public counterpart of
+    /// [`register_native_tools`](crate::tools::native::register_native_tools),
+    /// and the separation is the contract: native registration composes the
+    /// ordinary capability plane, this composes the extension plane, and no
+    /// ordinary activation policy is applied to what it registers.
+    ///
+    /// # Errors
+    ///
+    /// Returns the specific [`ToolRegistryError`] of the first registration
+    /// violation — in practice, an identity collision with a Tool the
+    /// registry already holds.
+    ///
+    /// [`ToolRegistryError`]: crate::tools::executor::ToolRegistryError
+    pub fn register_tools(
+        &self,
+        registry: &mut crate::tools::executor::ToolRegistry,
+    ) -> Result<(), crate::tools::executor::ToolRegistryError> {
+        for registration in self.tool_registrations() {
+            let crate::tools::executor::ToolRegistration {
+                definition,
+                executor,
+                normalizer,
+                ..
+            } = registration;
+            registry.register_with_execution_metadata(
+                definition,
+                executor,
+                normalizer,
+                crate::tools::deadline::ForegroundPolicy::Leaf,
+            )?;
+        }
+        Ok(())
     }
 
     /// Materializes the attempt-owned Agent Status engine of this frozen
@@ -429,7 +652,7 @@ impl NativeAgentExtensions {
     /// framing for the latter; the two are deliberately different questions.
     #[must_use]
     pub fn authored_digest_framing(&self) -> String {
-        match &self.agent_status {
+        let agent_status = match &self.agent_status {
             None => "agent_status=\u{0}absent".to_owned(),
             Some(config) => format!(
                 "agent_status=present:time={}:timezone={}:background={}",
@@ -440,6 +663,21 @@ impl NativeAgentExtensions {
                     .map_or_else(|| "\u{0}none".to_owned(), |zone| zone.name().to_owned()),
                 config.background.enabled,
             ),
+        };
+        format!("{agent_status}|{}", self.todo_digest_framing())
+    }
+
+    /// The framing of the Todo member, shared by both digests.
+    ///
+    /// Todo has no contributor configuration, so "composed" and "absent" are
+    /// the whole vocabulary and the authored and effective framings coincide.
+    /// It is still framed explicitly rather than omitted: a role that
+    /// composes Todo is a different definition — and a different execution
+    /// profile — from one that does not.
+    fn todo_digest_framing(&self) -> &'static str {
+        match &self.todo {
+            None => "todo=\u{0}absent",
+            Some(TodoExtensionConfig {}) => "todo=present",
         }
     }
 
@@ -481,7 +719,7 @@ impl NativeAgentExtensions {
     /// identifies the **source document**, not the behavior it produces.
     #[must_use]
     pub fn effective_digest_framing(&self) -> String {
-        match &self.agent_status {
+        let agent_status = match &self.agent_status {
             None => "agent_status=\u{0}absent".to_owned(),
             Some(config) => format!(
                 "agent_status=present:time={}:timezone={}:background={}",
@@ -493,7 +731,8 @@ impl NativeAgentExtensions {
                 },
                 config.background.enabled,
             ),
-        }
+        };
+        format!("{agent_status}|{}", self.todo_digest_framing())
     }
 }
 
@@ -506,6 +745,9 @@ const INACTIVE_TIMEZONE_FRAMING: &str = "\u{0}inactive";
 
 /// The canonical authored name of the Agent Status extension.
 pub const AGENT_STATUS_EXTENSION: &str = "agentStatus";
+
+/// The canonical authored name of the Todo extension (Issue #259).
+pub const TODO_EXTENSION: &str = "todo";
 
 /// One refused delegated extension configuration.
 ///
@@ -545,15 +787,21 @@ pub struct ExtensionDelegationRefusal {
 ///
 /// ```text
 /// Agent Status composed at all  some source composes Agent Status
-///   (this is load-bearing: composing the extension composes the always-on
-///    Todo contributor, so it is never a free wrapper)
 /// time.enabled = true           some source composes Agent Status with Time
 ///                               enabled AND the same EFFECTIVE timezone
 /// background.enabled = true     some source composes Agent Status with
 ///                               Background enabled
+/// Todo composed at all          some source composes Todo
 /// a contributor set to false    narrowing; needs no authority at all
 /// requested extension absent    narrowing; needs no authority at all
 /// ```
+///
+/// Todo has no contributor axis, so it needs no per-contributor union: the
+/// extension is either composed or not. Note what is *not* being authorized —
+/// access to anyone's task list. A child composes its own
+/// [`ConversationTodoList`](crate::tools::todo::ConversationTodoList) over its
+/// own conversation, so the authority question is only whether this caller may
+/// ask for the capability at all.
 ///
 /// Timezone authority is decided on
 /// [`effective_status_timezone`](crate::context::effective_status_timezone),
@@ -578,7 +826,25 @@ pub fn authorize_delegated_extensions(
     // Destructured so a new member cannot be silently left unauthorized.
     let NativeAgentExtensions {
         agent_status: requested_agent_status,
+        todo: requested_todo,
     } = requested;
+
+    // ---- Todo (Issue #259) ----
+    //
+    // Todo has no contributor configuration, so composing it is the whole
+    // request and one source composing it is the whole authority. The child
+    // gets its *own* list either way: what is being authorized is whether
+    // this caller may ask for the capability, never whose state it reads.
+    if requested_todo.is_some()
+        && role_authority.todo.is_none()
+        && invoking_authority.todo.is_none()
+    {
+        return Err(ExtensionDelegationRefusal {
+            extension: TODO_EXTENSION,
+            detail: "neither authority composes the Todo extension".to_owned(),
+        });
+    }
+
     let Some(requested_agent_status) = requested_agent_status.as_ref() else {
         // Composing nothing is narrowing under every authority.
         return Ok(());
@@ -600,9 +866,10 @@ pub fn authorize_delegated_extensions(
         })
     };
 
-    // Composing Agent Status at all is itself behavior: the engine carries
-    // the always-on Todo contributor, which neither `time` nor `background`
-    // can switch off.
+    // Composing Agent Status at all is itself behavior, independently of its
+    // two contributors: the composed/absent fact is what the effective
+    // execution profile digest frames and what the Runtime Client projects,
+    // so it is never a free wrapper that a caller may add unauthorized.
     if !covered(&|_| true) {
         return refuse("neither authority composes the Agent Status extension at all".to_owned());
     }
@@ -646,9 +913,73 @@ mod tests {
         assert!(!resolved.is_empty());
     }
 
+    /// Issue #259: the product default of the Todo extension lives here, in
+    /// the closed extension document — not in `defaultTools`, which no
+    /// longer knows the name at all.
+    #[test]
+    fn ext259_an_omitted_document_composes_the_todo_extension() {
+        let resolved = NativeAgentExtensionsDocument::default().resolve();
+        assert!(resolved.todo().is_some());
+        assert_eq!(
+            resolved.tool_registrations().len(),
+            1,
+            "a composed Todo contributes exactly one model Tool"
+        );
+        assert_eq!(
+            resolved.tool_registrations()[0].definition.name,
+            crate::tools::native::TODO_TOOL_NAME
+        );
+        assert_eq!(
+            composed_extension_names(&resolved),
+            vec![AGENT_STATUS_EXTENSION, TODO_EXTENSION]
+        );
+    }
+
+    /// The two members are independent axes. Switching either off leaves the
+    /// other exactly as it was, and only switching both off yields the empty
+    /// composition.
+    #[test]
+    fn ext259_todo_and_agent_status_compose_independently() {
+        let todo_only = document(serde_json::json!({"agentStatus": {"enabled": false}})).resolve();
+        assert!(todo_only.agent_status().is_none() && todo_only.todo().is_some());
+        assert_eq!(todo_only, NativeAgentExtensions::with_todo());
+        assert!(!todo_only.is_empty());
+        assert_eq!(todo_only.tool_registrations().len(), 1);
+
+        let status_only = document(serde_json::json!({"todo": {"enabled": false}})).resolve();
+        assert!(status_only.agent_status().is_some() && status_only.todo().is_none());
+        assert!(
+            status_only.tool_registrations().is_empty(),
+            "Agent Status contributes context, never a Tool"
+        );
+
+        let neither = document(
+            serde_json::json!({"agentStatus": {"enabled": false}, "todo": {"enabled": false}}),
+        )
+        .resolve();
+        assert_eq!(neither, NativeAgentExtensions::none());
+        assert!(neither.is_empty());
+        assert!(composed_extension_names(&neither).is_empty());
+    }
+
+    /// Todo is supported in one-shot child scope: a child is an ordinary
+    /// conversation with its own Ledger, so it composes its own list.
+    #[test]
+    fn ext259_todo_is_supported_in_child_scope() {
+        for composition in [
+            NativeAgentExtensions::with_todo(),
+            NativeAgentExtensionsDocument::default().resolve(),
+        ] {
+            assert!(unsupported_child_scope(&composition).is_none());
+        }
+    }
+
     #[test]
     fn ext256_disabling_agent_status_removes_the_extension_from_the_composition() {
-        let resolved = document(serde_json::json!({"agentStatus": {"enabled": false}})).resolve();
+        let resolved = document(
+            serde_json::json!({"agentStatus": {"enabled": false}, "todo": {"enabled": false}}),
+        )
+        .resolve();
         assert_eq!(resolved, NativeAgentExtensions::none());
         assert!(resolved.is_empty());
         assert!(resolved.agent_status().is_none());
@@ -697,10 +1028,13 @@ mod tests {
     #[test]
     fn ext256_unknown_extension_names_and_fields_are_rejected() {
         for value in [
-            serde_json::json!({"todo": {"enabled": true}}),
+            serde_json::json!({"goal": {"enabled": true}}),
             serde_json::json!({"agentStatus": {"future": true}}),
             serde_json::json!({"agentStatus": {"time": {"future": true}}}),
             serde_json::json!({"agentStatus": {"background": {"future": true}}}),
+            // Todo's closed record is just as strict: it has one member.
+            serde_json::json!({"todo": {"future": true}}),
+            serde_json::json!({"todo": {"enabled": "true"}}),
         ] {
             assert!(
                 serde_json::from_value::<NativeAgentExtensionsDocument>(value.clone()).is_err(),
@@ -719,6 +1053,10 @@ mod tests {
                 .resolve(),
             document(serde_json::json!({"agentStatus": {"time": {"timezone": "Asia/Shanghai"}}}))
                 .resolve(),
+            // Issue #259: Todo is framed too, so a role that composes it is a
+            // different definition from one that does not.
+            document(serde_json::json!({"todo": {"enabled": false}})).resolve(),
+            NativeAgentExtensions::with_todo(),
         ]
         .map(|composition| composition.authored_digest_framing());
         let mut unique = framings.to_vec();
@@ -745,10 +1083,20 @@ mod tests {
                 .resolve(),
             document(serde_json::json!({"agentStatus": {"time": {"timezone": "Asia/Shanghai"}}}))
                 .resolve(),
+            document(serde_json::json!({"todo": {"enabled": false}})).resolve(),
+            NativeAgentExtensions::with_todo(),
         ] {
             let engine = composition.agent_status_engine(Arc::new(crate::context::SystemClock));
+            // The Todo owner a composition materializes is the conversation's
+            // own list; its presence is the composed/absent fact, exactly as
+            // the status engine's is.
+            let todos = composition.todo().map(|_| {
+                crate::tools::todo::ConversationTodoList::new(
+                    crate::runtime::identity::ConversationId::new("ext-materialization"),
+                )
+            });
             assert_eq!(
-                NativeAgentExtensions::from_materialized(engine.as_ref()),
+                NativeAgentExtensions::from_materialized(engine.as_ref(), todos.as_ref()),
                 composition,
                 "the materialized owners recover exactly what was frozen"
             );
@@ -761,6 +1109,7 @@ mod tests {
     fn ext256_the_frozen_composition_survives_its_wire_contract() {
         for composition in [
             NativeAgentExtensions::none(),
+            NativeAgentExtensions::with_todo(),
             document(serde_json::json!({"agentStatus": {"time": {"timezone": "Asia/Shanghai"}}}))
                 .resolve(),
         ] {

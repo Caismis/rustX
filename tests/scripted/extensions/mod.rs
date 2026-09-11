@@ -428,7 +428,11 @@ async fn ext256_an_empty_extension_composition_changes_nothing_but_agent_status(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ext256_a_disabled_agent_status_extension_emits_nothing_anywhere() {
     let extensions = composition(serde_json::json!({"agentStatus": {"enabled": false}}));
-    assert!(extensions.is_empty());
+    assert!(
+        extensions.agent_status().is_none(),
+        "this regression is about the Agent Status extension only; Todo composes \
+         independently of it (Issue #259)"
+    );
     let call = scripted("ext256-none", "ext256-tool", "worker");
     let fixture = common::native_fixture();
     let tool = FakeTool::new(

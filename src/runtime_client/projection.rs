@@ -262,7 +262,7 @@ impl RuntimeClientProjection {
                 capabilities: initial_capabilities,
                 resources: super::snapshot::RuntimeClientResourcesView::default(),
                 model: initial_model,
-                todos: crate::tools::todo::TodoSnapshot::empty(),
+                todos: None,
             },
             replay: VecDeque::new(),
             replay_sizes: VecDeque::new(),
@@ -361,6 +361,10 @@ impl RuntimeClientProjection {
             upsert_subagent(&mut self.snapshot.subagents, subagent_view(existing));
         }
         self.snapshot.resources = resources_view(&seed.resources);
+        // The bootstrap cut is the *only* place the Todo composition fact
+        // enters this projection: `None` here means the attached runtime
+        // composes no Todo extension, and the live fold below deliberately
+        // cannot turn that back into a list.
         self.snapshot.todos = seed.todos.clone();
         // An inactive runtime has never admitted an attempt, composed an
         // Agent Status, or compacted, so `attempt`, `statuses`, and
@@ -523,8 +527,17 @@ impl RuntimeClientProjection {
                 // decode is left out rather than allowed to replace a good
                 // list with a broken one — the runtime writes these, so an
                 // undecodable one is a defect, not a list.
-                if let Some(Ok(todos)) = crate::tools::todo::published_snapshot(&block) {
-                    self.snapshot.todos = todos;
+                //
+                // The fold is guarded on the composition fact rather than on
+                // the message: a runtime that composes no Todo extension must
+                // present no current list at all, and canonical history it
+                // inherited — which still legitimately contains `todo`
+                // results, and still renders as transcript history — must
+                // never be able to manufacture one.
+                if let Some(current) = self.snapshot.todos.as_mut()
+                    && let Some(Ok(todos)) = crate::tools::todo::published_snapshot(&block)
+                {
+                    *current = todos;
                 }
                 self.snapshot.messages.push(block.clone());
                 let transcript_cursor = transcript_cursor.map(RuntimeClientTranscriptCursor::from);
@@ -2207,9 +2220,7 @@ fn admit_status(statuses: &mut Vec<AgentStatusView>, view: AgentStatusView) -> O
     None
 }
 
-fn todo_status_task_view(
-    task: &crate::context::status::TodoStatusTask,
-) -> RuntimeClientTodoStatusTask {
+fn todo_status_task_view(task: &crate::tools::todo::TodoStatusTask) -> RuntimeClientTodoStatusTask {
     RuntimeClientTodoStatusTask {
         id: task.id,
         subject: task.subject.clone(),

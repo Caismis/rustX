@@ -1061,14 +1061,33 @@ impl LocalConversationCore {
         SessionModelState::new(registry.clone(), runtime_config.model.clone())?;
         let model = SessionModelState::new(registry.clone(), session_state.model.clone())?;
 
+        // The root Agent's native Agent Extension composition freeze point
+        // (Issues #256, #259). It is resolved once, here, from this launch's
+        // already-resolved configuration document. Nothing downstream reads
+        // `runtime_config.extensions` again, and resource reload publishes a
+        // new `RuntimeResourceSnapshot` that deliberately cannot reach this
+        // value: a running ConversationRuntime executes against the
+        // composition frozen for its launch.
+        //
+        // It is resolved before the tool runtime because it decides one of
+        // the tool runtime's owned resources: the conversation's task list
+        // exists exactly when this composition includes the Todo extension.
+        //
+        // It is deliberately *not* handed to the subagent spawn plan: root
+        // and named-role extension sets are independently authored, and a
+        // child's set is frozen by the resolver from its own definition.
+        let extensions = runtime_config.extension_composition();
+
         // 5-6. The conversation identity authority and the one conversation
         // tool runtime (workspace, runtime-private artifact root, canonical
-        // mailbox, background registry, base authorized environment).
+        // mailbox, background registry, base authorized environment, and the
+        // Todo extension owner when composed).
         let base_environment = runtime_config.tool_environment()?;
         let mut tool_runtime_config = crate::tools::runtime::ConversationRuntimeConfig::new(
             &paths.workspace,
             artifacts_root.clone(),
-        );
+        )
+        .with_todo(extensions.todo().copied());
         let conversation_access = Arc::new(
             crate::runtime::local_storage::ConversationAccess::start(lifecycle, &artifacts_root)
                 .map_err(|e| LocalRuntimeError::ToolRuntime {
@@ -1121,18 +1140,6 @@ impl LocalConversationCore {
         // same inheritance: one generic policy for the parent runtime and
         // every subagent child, carried through the typed child spec.
         let tool_deadline_policy = runtime_config.tool_deadline_policy()?;
-        // The root Agent's native Agent Extension composition freeze point
-        // (Issue #256). It is resolved once, here, from this launch's
-        // already-resolved configuration document. Nothing downstream reads
-        // `runtime_config.extensions` again, and resource reload publishes a
-        // new `RuntimeResourceSnapshot` that deliberately cannot reach this
-        // value: a running ConversationRuntime executes against the
-        // composition frozen for its launch.
-        //
-        // It is deliberately *not* handed to the subagent spawn plan: root
-        // and named-role extension sets are independently authored, and a
-        // child's set is frozen by the resolver from its own definition.
-        let extensions = runtime_config.extension_composition();
         let subagents = crate::runtime::subagent::SubagentRegistry::new(
             crate::runtime::subagent::SubagentRegistryConfig {
                 conversation_id: tool_runtime.conversation_id().clone(),
@@ -1223,6 +1230,11 @@ impl LocalConversationCore {
             conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: Arc::new(base_registry),
+            // The same frozen composition the tool runtime and the Agent
+            // Loop materialize. The coordinator uses it only to compose the
+            // extension-provided Tool surfaces, once, outside its reloadable
+            // inputs (Issue #259).
+            extensions: extensions.clone(),
             tool_activation: ToolActivationPolicy {
                 default_tools: Some(default_tools),
                 no_builtin_tools: paths.no_builtin_tools,
@@ -1334,6 +1346,8 @@ impl LocalConversationCore {
                 estimator: Arc::clone(&dependencies.estimator),
                 // The root Agent's frozen native Agent Extension composition
                 // is materialized here, once, and never again (Issue #256).
+                // Its Todo half was materialized alongside the conversation's
+                // other owned resources in the tool runtime above.
                 status_engine: extensions
                     .agent_status_engine(Arc::new(crate::context::SystemClock)),
             },
@@ -1461,7 +1475,14 @@ impl LocalConversationCore {
         let mut runtime_config = crate::tools::runtime::ConversationRuntimeConfig::new(
             &spec.workspace_snapshot.logical_workspace,
             runtime_root.join("artifacts"),
-        );
+        )
+        // The child's Todo extension owner, composed from exactly the
+        // extension set its invoking generation froze into
+        // `ResolvedSubagentSpec` (Issue #259). The list is rebuilt from this
+        // *child conversation's* own canonical history — empty at birth —
+        // which is why a child's list can never alias its parent's, or a
+        // concurrent sibling's, and why no child list merges upward.
+        .with_todo(spec.resolved.extensions.todo().copied());
         let durable_store_path = lifecycle
             .confined(&child_conversation_store_path(
                 lifecycle.root(),
@@ -1518,6 +1539,10 @@ impl LocalConversationCore {
             conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: Arc::new(base_registry),
+            // The frozen child composition again, for its Tool half. The
+            // child never rereads a role file or a configuration document to
+            // reinterpret which extensions it owns.
+            extensions: spec.resolved.extensions.clone(),
             tool_activation: ToolActivationPolicy::default(),
             skill_discovery: SkillDiscoveryConfig::default(),
             mcp_servers,
@@ -2805,6 +2830,10 @@ mod subagent_child_tests {
                 },
                 background: EffectiveBackgroundStatus { enabled: false },
             }),
+            // The R1 role document authors no `todo` member, so the closed
+            // document's own default composes it — and it crosses the child
+            // boundary frozen, exactly like every other member (Issue #259).
+            todo: Some(crate::runtime_client::settings::EffectiveTodoExtension {}),
         };
 
         // A child frozen on R1, composed and projected while R2 sits on disk.
@@ -2876,7 +2905,10 @@ mod subagent_child_tests {
         .expect("the child binds its own Runtime Client host");
         assert_eq!(
             child_projection(&bare),
-            Some(EffectiveNativeAgentExtensions { agent_status: None }),
+            Some(EffectiveNativeAgentExtensions {
+                agent_status: None,
+                todo: None,
+            }),
             "an absent frozen extension stays absent in the projection"
         );
 
@@ -3037,8 +3069,11 @@ mod subagent_child_tests {
         );
         assert_eq!(
             core.capability().current_snapshot().tool_registry().names(),
-            vec!["read"],
-            "the child's active set is exactly its authorized set"
+            // The frozen ordinary selection is `read`; `todo` is the second
+            // contribution — the child's frozen Todo extension (Issue #259).
+            vec!["read", "todo"],
+            "the child's active set is exactly its authorized ordinary selection plus its \
+             frozen extension Tools"
         );
     }
 
@@ -3267,7 +3302,7 @@ mod subagent_child_tests {
                 .current_snapshot()
                 .tool_registry()
                 .names(),
-            ["grep"]
+            ["grep", "todo"]
         );
         assert!(
             without_read
@@ -3662,9 +3697,15 @@ mod subagent_child_tests {
         names.sort_unstable();
         assert_eq!(
             names,
-            vec!["alpha_echo", "read"],
-            "the child Tool Plane is exactly the frozen selection: the fixture also \
-             publishes alpha_mutate and alpha_slow, and neither is materialized"
+            // `todo` is here because the fixture's frozen extension set
+            // composes the Todo extension, and extension-provided Tools are a
+            // second, independent contribution to the model Tool set
+            // (Issue #259). It is deliberately *not* part of the frozen
+            // ordinary selection: no `tools.builtin` entry names it.
+            vec!["alpha_echo", "read", "todo"],
+            "the child Tool Plane is exactly the frozen ordinary selection plus its \
+             frozen extension Tools: the fixture also publishes alpha_mutate and \
+             alpha_slow, and neither is materialized"
         );
     }
 

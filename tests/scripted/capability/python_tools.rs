@@ -309,6 +309,7 @@ fn fixture_with_decision(
             conversation_id: ConversationId::new("conv-python-tools"),
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(ToolRegistry::new()),
+            extensions: rustx::extensions::NativeAgentExtensions::none(),
             tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
             skill_discovery: rustx::skills::SkillDiscoveryConfig {
                 automatic_roots: vec![workspace_root.join(".agents/skills")],

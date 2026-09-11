@@ -105,8 +105,13 @@ pub struct CurrentRuntimeConfig {
     /// The current base authorized tool environment.
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
-    /// Native/built-in names active by default. An empty list selects no
-    /// built-ins; Read has no activation exception.
+    /// Ordinary native/built-in names active by default. An empty list
+    /// selects no built-ins; Read has no activation exception.
+    ///
+    /// This is the *ordinary capability* plane only. A Tool contributed by a
+    /// Native Agent Extension — today `todo` — may not appear here: it is
+    /// composed by `extensions`, and naming it is a validation error rather
+    /// than a silently ineffective entry (Issue #259).
     #[serde(default = "default_tools")]
     pub default_tools: Vec<String>,
     /// Explicit Skill roots/packages; launch provenance retains host/project/CLI authority.
@@ -440,7 +445,6 @@ fn default_tools() -> Vec<String> {
         "grep",
         "bash",
         "subagent",
-        "todo",
     ]
     .into_iter()
     .map(str::to_owned)
@@ -523,6 +527,18 @@ impl CurrentRuntimeConfig {
             return Err(CurrentRuntimeConfigError::Invalid {
                 detail: "defaultTools entries must be non-empty names".to_owned(),
             });
+        }
+        // `defaultTools` addresses ordinary capabilities. An extension's Tool
+        // is refused here, at authoring time, rather than tolerated as an
+        // unknown name that quietly decides nothing (Issue #259).
+        for name in &self.default_tools {
+            if let Some(extension) = crate::capabilities::extension_provided_tool(name) {
+                return Err(CurrentRuntimeConfigError::Invalid {
+                    detail: format!(
+                        "defaultTools entry {name:?} is provided by the {extension:?} Agent                          Extension, not by ordinary Tool selection; compose it with                          extensions.{extension}.enabled instead"
+                    ),
+                });
+            }
         }
         // Duplicate MCP identity is structurally impossible: `mcpServers` is
         // a keyed map. Normalization is the remaining semantic gate, and it
@@ -850,9 +866,11 @@ impl Default for ContextPolicyDocument {
 /// The per-tool execution, concurrency, and approval policies of the native
 /// tool plane.
 ///
-/// `execution`, `ask_user`, and `todo` are deliberately outside this
-/// set: they own fixed foreground-only, sequential, approval-never policies,
-/// and the registry enforces the intrinsic ones itself.
+/// `execution` and `ask_user` are deliberately outside this set: they own
+/// fixed foreground-only, sequential, approval-never policies, and the
+/// registry enforces the intrinsic ones itself. The extension-provided `todo`
+/// Tool is outside it for a stronger reason — it is not an ordinary native
+/// capability at all (Issue #259).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 #[derive(schemars::JsonSchema)]
@@ -1697,8 +1715,9 @@ mod tests {
     #[test]
     fn ext256_unknown_extension_names_and_fields_are_rejected() {
         for unknown in [
-            r#""extensions": {"todo": {"enabled": true}}"#,
             r#""extensions": {"goal": {}}"#,
+            r#""extensions": {"todo": {"future": true}}"#,
+            r#""extensions": {"todo": {"enabled": "true"}}"#,
             r#""extensions": {"agentStatus": {"future": true}}"#,
             r#""extensions": {"agentStatus": {"time": {"future": true}}}"#,
             r#""extensions": {"agentStatus": {"background": {"future": true}}}"#,
@@ -1740,8 +1759,21 @@ mod tests {
         );
         let config = CurrentRuntimeConfig::from_jsonc_slice(disabled.as_bytes()).expect("valid");
         assert!(
-            config.extension_composition().is_empty(),
+            config.extension_composition().agent_status().is_none(),
             "a disabled extension leaves an empty composition, not a disabled one"
+        );
+
+        // Issue #259: the members are independent, and switching both off is
+        // what empties the composition.
+        let neither = MINIMAL.replace(
+            r#""agentId": "agent-a""#,
+            r#""agentId": "agent-a", "extensions": {"agentStatus": {"enabled": false}, "todo": {"enabled": false}}"#,
+        );
+        assert!(
+            CurrentRuntimeConfig::from_jsonc_slice(neither.as_bytes())
+                .expect("valid")
+                .extension_composition()
+                .is_empty()
         );
     }
 

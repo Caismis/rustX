@@ -9,10 +9,21 @@
 //! `Never`/`Always` approval through the concrete bounded
 //! [`NativeToolPolicies`] configuration. The only intentionally fixed
 //! policy is the runtime intrinsic `execution` (foreground-only,
-//! sequential, approval-never), and `ask_user` and `todo` are likewise
-//! fixed to foreground-only, sequential, approval-never: one is the native
-//! Questionnaire capability itself, and the other mutates conversation-owned
-//! task state that two concurrent calls would race on.
+//! sequential, approval-never), and `ask_user` is likewise fixed to
+//! foreground-only, sequential, approval-never because it is the native
+//! Questionnaire capability itself.
+//!
+//! # `todo` is not here
+//!
+//! The `todo` Tool is **not** an ordinary native capability and is
+//! deliberately absent from every composition below. It is contributed by the
+//! Todo Native Agent Extension
+//! ([`NativeAgentExtensions::tool_registrations`](crate::extensions::NativeAgentExtensions::tool_registrations)),
+//! which is why it cannot be named in `defaultTools`, `--tools`,
+//! `--exclude-tools`, a role's `tools.builtin`, or a Workflow capability
+//! selection — and why `--no-tools` does not remove it. Its module lives here
+//! because this is where native Tool implementations live; ownership of its
+//! *activation* does not.
 //!
 //! Read/Glob/Grep default to foreground, parallel, approval-never.
 //! Write/Edit default to foreground, sequential, approval-always.
@@ -91,7 +102,6 @@ pub(crate) fn definitions(
         glob::definition(policies.glob),
         grep::definition(policies.grep),
         bash::definition(policies.bash),
-        todo::definition(),
     ];
     definitions.extend(subagent::definition(subagents));
     definitions
@@ -325,7 +335,6 @@ pub(crate) fn native_tool_registrations(
         glob::registration(policies.glob),
         grep::registration(policies.grep),
         bash::registration(policies.bash),
-        todo::registration(),
     ];
     // The `subagent` intrinsic exists only in a runtime that owns a
     // subagent registry (never inside a child runtime) and whose frozen
@@ -354,9 +363,13 @@ pub(crate) fn native_tool_registrations(
 ///
 /// The requested `policy` is the parent-frozen one, so the returned
 /// registration's definition is built from the frozen policy rather than
-/// from a default table. `todo` owns a fixed policy of its own; a frozen
-/// definition that disagrees with it simply fails the identity check below
-/// instead of being quietly rewritten.
+/// from a default table.
+///
+/// `todo` is a third structural absence, and for a different reason than the
+/// other two: it is not an ordinary capability at all. A child composes it by
+/// composing the Todo extension its invoking generation froze into
+/// `ResolvedSubagentSpec::extensions`, never by a frozen Builtin selection —
+/// which is why a definition naming it is rejected long before this point.
 fn subagent_child_registration(
     name: &str,
     policy: ToolInvocationPolicy,
@@ -369,10 +382,37 @@ fn subagent_child_registration(
         "grep" => grep::registration(policy),
         "bash" => bash::registration(policy),
         "ask_user" => ask_user::registration(),
-        "todo" => todo::registration(),
         _ => return None,
     })
 }
+
+/// The extension-provided `todo` Tool registration (Issue #259).
+///
+/// This is the *only* construction site of the `todo` Tool in the runtime,
+/// and its one caller is
+/// [`NativeAgentExtensions::tool_registrations`](crate::extensions::NativeAgentExtensions::tool_registrations).
+/// Ordinary native composition, subagent child materialization, and every
+/// selection surface deliberately cannot reach it.
+pub(crate) fn todo_tool_registration() -> crate::tools::executor::ToolRegistration {
+    let NativeToolRegistration {
+        definition,
+        executor,
+        normalizer,
+        // The `todo` Tool is an ordinary foreground leaf, which is exactly
+        // what `ToolRegistration::plain` composes. Asserting it here keeps a
+        // later policy change from silently crossing this seam.
+        foreground: crate::tools::deadline::ForegroundPolicy::Leaf,
+    } = todo::registration()
+    else {
+        unreachable!("the todo Tool registration is a foreground leaf")
+    };
+    let mut registration = crate::tools::executor::ToolRegistration::plain(definition, executor);
+    registration.normalizer = normalizer;
+    registration
+}
+
+/// The canonical model-facing name of the extension-provided `todo` Tool.
+pub(crate) const TODO_TOOL_NAME: &str = todo::NAME;
 
 /// The canonical child-plane definition of one native capability under one
 /// invocation policy, for in-crate tests that need to build a frozen
@@ -630,18 +670,56 @@ mod tests {
         assert_eq!(registry.len(), 0);
     }
 
-    /// `todo` owns a fixed policy; a frozen definition that disagrees with
-    /// it is refused instead of being quietly rewritten.
+    /// `ask_user` owns a fixed policy; a frozen definition that disagrees
+    /// with it is refused instead of being quietly rewritten.
     #[test]
     fn a_fixed_policy_tool_refuses_a_conflicting_frozen_policy() {
-        let mut conflicting = subagent_child_definition("todo", ToolInvocationPolicy::default())
-            .expect("todo exists");
+        let mut conflicting =
+            subagent_child_definition("ask_user", ToolInvocationPolicy::default())
+                .expect("ask_user exists");
         assert_eq!(conflicting.approval_policy, ToolApprovalPolicy::Never);
         conflicting.approval_policy = ToolApprovalPolicy::Always;
         let mut registry = ToolRegistry::new();
         assert!(
             register_subagent_child_tools(&mut registry, &[conflicting]).is_err(),
-            "todo's fixed policy is never silently overwritten by a frozen one"
+            "a fixed policy is never silently overwritten by a frozen one"
         );
+    }
+
+    /// Issue #259: `todo` is structurally unregistrable as a child *ordinary*
+    /// capability. The child composes it — when its frozen extension set says
+    /// so — through the extension plane, and a frozen Builtin selection
+    /// naming it fails closed instead of materializing a second activation
+    /// path for the same Tool.
+    #[test]
+    fn ext259_todo_is_not_an_ordinary_child_capability() {
+        assert!(
+            subagent_child_definition("todo", ToolInvocationPolicy::default()).is_none(),
+            "todo has no ordinary child-plane implementation at all"
+        );
+        let definition = ToolDefinition {
+            name: "todo".to_owned(),
+            ..subagent_child_definition("read", ToolInvocationPolicy::default())
+                .expect("read exists")
+        };
+        let mut registry = ToolRegistry::new();
+        assert!(
+            register_subagent_child_tools(&mut registry, &[definition]).is_err(),
+            "a frozen ordinary selection naming todo is refused"
+        );
+        assert_eq!(registry.len(), 0);
+
+        // And the extension plane does register it, from the composition
+        // alone — the one seam that can.
+        let mut composed = ToolRegistry::new();
+        crate::extensions::NativeAgentExtensions::with_todo()
+            .register_tools(&mut composed)
+            .expect("the composed extension registers its Tool");
+        assert_eq!(composed.names(), vec![super::TODO_TOOL_NAME]);
+        let mut absent = ToolRegistry::new();
+        crate::extensions::NativeAgentExtensions::none()
+            .register_tools(&mut absent)
+            .expect("an absent extension registers nothing");
+        assert_eq!(absent.len(), 0);
     }
 }

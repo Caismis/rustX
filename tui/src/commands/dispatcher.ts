@@ -37,7 +37,7 @@ import {
   toolsByOrigin,
   unavailableInputModalities,
 } from "../presentation/selectors.ts";
-import { selectTodos } from "../presentation/todos.ts";
+import { isTodoComposed, selectTodos } from "../presentation/todos.ts";
 import type { PresentationState } from "../presentation/state.ts";
 import { renderAgentStatusDetail } from "../ui/components/agent-status.ts";
 import { renderTodoInspection } from "../ui/components/todos.ts";
@@ -244,7 +244,10 @@ export class CommandDispatcher {
         case "/skills":
           return inspect("Skills", renderSkills(state));
         case "/todos":
-          return inspect("Todos", renderTodoInspection(selectTodos(state)));
+          return inspect(
+            "Todos",
+            renderTodoInspection(selectTodos(state), isTodoComposed(state)),
+          );
         case "/status":
           return inspect("Agent Status", renderStatus(state));
         case "/compact":
@@ -1047,14 +1050,20 @@ function boundaryLabel(boundary: import("../protocol/types.ts").SettingsBoundary
  * - `effectiveExtensions === null` — the runtime published no authoritative
  *   composition to project (historical-only inspection). Nothing is filled
  *   in from disk configuration or built-in defaults;
- * - `agent_status === null` — the extension is not part of this Agent's
+ * - a member `=== null` — that extension is not part of this Agent's
  *   composition at all;
- * - `agent_status` present — the extension is composed, and its frozen
+ * - a member present — the extension is composed, and its frozen
  *   contributor configuration is shown as the runtime froze it.
+ *
+ * Each member is read independently, because the extensions compose
+ * independently (Issue #259): Todo is not implied by Agent Status, and
+ * disabling Agent Status does not disable Todo.
  *
  * Enablement is read from this projection alone: the `statuses` window says
  * what was composed for a step, and an enabled extension with no eligible
- * contribution yet is still enabled.
+ * contribution yet is still enabled. Todo's line is likewise never inferred
+ * from `todo` results in the transcript, which are history rather than facts
+ * about this runtime.
  */
 function renderExtensions(state: PresentationState): string[] {
   const effective = state.effectiveExtensions;
@@ -1067,17 +1076,23 @@ function renderExtensions(state: PresentationState): string[] {
   }
   const heading = `### Native Agent Extensions (${lifetime(state, "extensions")})`;
   const status = effective.agent_status;
-  if (status === null) {
-    return [heading, "- Agent Status: disabled (not composed for this Agent)", extensionNote(state)];
-  }
-  return [
-    heading,
-    "- Agent Status: enabled",
-    `  - Time: ${status.time.enabled ? "enabled" : "disabled"}`,
-    `  - timezone: ${status.time.timezone ?? "none configured"}`,
-    `  - Background: ${status.background.enabled ? "enabled" : "disabled"}`,
-    extensionNote(state),
-  ];
+  const agentStatusLines =
+    status === null
+      ? ["- Agent Status: disabled (not composed for this Agent)"]
+      : [
+          "- Agent Status: enabled",
+          `  - Time: ${status.time.enabled ? "enabled" : "disabled"}`,
+          `  - timezone: ${status.time.timezone ?? "none configured"}`,
+          `  - Background: ${status.background.enabled ? "enabled" : "disabled"}`,
+        ];
+  const todoLines =
+    effective.todo == null
+      ? ["- Todo: disabled (not composed for this Agent)"]
+      : [
+          "- Todo: enabled",
+          "  - provides the model-facing `todo` Tool, independently of ordinary Tool selection",
+        ];
+  return [heading, ...agentStatusLines, ...todoLines, extensionNote(state)];
 }
 
 /** The lifetime this composition actually has, in the reader's terms. */

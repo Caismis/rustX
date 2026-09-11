@@ -21,6 +21,12 @@ use rustx::tools::types::{
 };
 use std::sync::Arc;
 
+/// Every native Tool implementation, whichever plane composes it.
+///
+/// `todo` is here because this constant names *implementations* whose schema
+/// contract is checked below — not ordinary selectable capabilities. Since
+/// Issue #259 the `todo` Tool reaches the fixture registry through the Todo
+/// Agent Extension, never through `register_native_tools`.
 const NATIVE_TOOL_NAMES: [&str; 9] = [
     "read",
     "write",
@@ -650,6 +656,7 @@ async fn selected_capabilities(
             conversation_id: fixture.runtime.conversation_id().clone(),
             workspace: fixture.runtime.workspace().clone(),
             base_tool_registry: Arc::new(selection_registry(fixture)),
+            extensions: rustx::extensions::NativeAgentExtensions::none(),
             tool_activation: policy,
             skill_discovery: rustx::skills::SkillDiscoveryConfig {
                 automatic_roots: vec![fixture.runtime.workspace().root().join(".agents/skills")],
@@ -689,7 +696,6 @@ async fn exact_selection_reaches_provider_requests_and_domain_skill_projection()
                     "glob",
                     "grep",
                     "bash",
-                    "todo",
                     "subagent",
                     "review_task",
                     "external",
@@ -716,7 +722,6 @@ async fn exact_selection_reaches_provider_requests_and_domain_skill_projection()
                     "glob",
                     "grep",
                     "bash",
-                    "todo",
                     "subagent",
                     "review_task",
                     "external",

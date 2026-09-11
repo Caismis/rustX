@@ -85,6 +85,7 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
             environment_store_root: fixture.dir().path().join("environments"),
             python_sources: inputs.python_sources.clone(),
             base_tool_registry: inputs.base_tool_registry.clone(),
+            extensions: rustx::extensions::NativeAgentExtensions::none(),
             tool_activation: selection.clone(),
             skill_discovery: inputs.skill_discovery.clone(),
             mcp_servers: inputs.mcp_servers.clone(),

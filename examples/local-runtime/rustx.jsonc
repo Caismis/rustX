@@ -29,6 +29,14 @@
   // single surface for optional Agent augmentation; ordinary execution
   // capabilities remain `defaultTools`/`--tools`. It is frozen at composition
   // and never changed by resource reload.
+  //
+  // Tool selection and extension composition are separate authority planes.
+  // An extension that contributes a model-facing Tool — `todo` does — is
+  // switched on here and nowhere else: naming that Tool in `defaultTools`,
+  // `--tools`, `--exclude-tools`, a role's `tools.builtin`, or a Workflow
+  // capability selection is a validation error, and `--no-tools` does not
+  // remove it. A truly Tool-free model request needs no ordinary Tools *and*
+  // no Tool-providing extension.
   "extensions": {
     "agentStatus": {
       "enabled": true,
@@ -39,6 +47,13 @@
       "background": {
         "enabled": true,
       },
+    },
+    // The conversation-owned task list, its `todo` Tool, its bounded Agent
+    // Status presentation, and its client projection — one capability, one
+    // switch. Enabled by default; set `false` to compose none of it. Existing
+    // `todo` results in canonical history stay exactly where they are.
+    "todo": {
+      "enabled": true,
     },
   },
 
@@ -80,8 +95,10 @@
   // MCP invocation policy is host-owned: configure mcpToolPolicies in user
   // settings, never here. Project trust does not grant Tool approval.
 
-  // Optional native capabilities active in the main Agent. Fixed intrinsics
-  // keep their intrinsic semantics; `subagent` exposes only `subagents.main`.
+  // Optional ordinary native capabilities active in the main Agent. Fixed
+  // intrinsics keep their intrinsic semantics; `subagent` exposes only
+  // `subagents.main`. Extension-provided Tools are not listed here — see
+  // `extensions` above.
   "defaultTools": [
     "execution",
     "ask_user",
@@ -92,7 +109,6 @@
     "grep",
     "bash",
     "subagent",
-    "todo",
   ],
 
   // Additional Skill roots/packages. `.agents/skills/` is the canonical

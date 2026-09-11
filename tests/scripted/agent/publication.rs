@@ -1005,6 +1005,7 @@ async fn runtime_fixture(conversation: &str, model: Arc<FakeModel>) -> RuntimeFi
         conversation_id: tool_runtime.conversation_id().clone(),
         workspace: tool_runtime.workspace().clone(),
         base_tool_registry: Arc::new(ToolRegistry::new()),
+        extensions: rustx::extensions::NativeAgentExtensions::none(),
         tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
         skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
         mcp_servers: std::collections::BTreeMap::new(),

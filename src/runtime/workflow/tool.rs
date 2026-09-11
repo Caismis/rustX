@@ -59,8 +59,14 @@ fn eligible(definition: &ToolDefinition) -> bool {
             .id
             .as_str()
             .starts_with(super::WORKFLOW_TOOL_ID_PREFIX)
+        // `todo` is deliberately absent from this list. It is no longer an
+        // ordinary Builtin capability at all, so it never appears in the
+        // available catalog a Workflow selector resolves against and is
+        // refused one step earlier, as an unknown ordinary identity
+        // (Issue #259). Naming it here too would imply it could otherwise
+        // have been selected.
         && !(definition.origin == crate::tools::types::ToolOrigin::Builtin
-            && matches!(definition.name.as_str(), "subagent" | "execution" | "todo"))
+            && matches!(definition.name.as_str(), "subagent" | "execution"))
 }
 
 impl WorkflowCatalog {

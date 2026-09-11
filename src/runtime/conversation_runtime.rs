@@ -2174,6 +2174,7 @@ impl RuntimeInner {
                         // authorized invocation override.
                         crate::extensions::NativeAgentExtensions::from_materialized(
                             self.context.status_engine.as_ref(),
+                            self.tool_runtime.todos(),
                         ),
                     )
                 }),
@@ -3487,6 +3488,7 @@ impl ConversationRuntime {
     pub fn native_extensions(&self) -> crate::extensions::NativeAgentExtensions {
         crate::extensions::NativeAgentExtensions::from_materialized(
             self.inner.context.status_engine.as_ref(),
+            self.inner.tool_runtime.todos(),
         )
     }
 
@@ -5134,14 +5136,20 @@ pub(crate) struct RuntimeBootstrapSnapshot {
     pub resources: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
     /// Live process-owned native interactions at the bootstrap cut.
     pub pending_interactions: Vec<crate::runtime::interaction::RoutedInteraction>,
-    /// The conversation's committed task list at the cut.
+    /// The conversation's committed task list at the cut, when this runtime
+    /// composes the Todo extension (Issue #259).
     ///
     /// The tool runtime rebuilt it from the whole canonical history at
     /// construction, so seeding it here is what lets a client that holds
     /// only the newest transcript page still show the current list. Every
     /// later change arrives as an ordinary committed `todo` result on the
     /// live observation stream.
-    pub todos: crate::tools::todo::TodoSnapshot,
+    ///
+    /// `None` means this runtime composes no Todo extension. It is
+    /// deliberately distinct from `Some(empty)`: a client must present no
+    /// current Todo surface at all, however many historical `todo` results
+    /// the conversation's transcript still carries.
+    pub todos: Option<crate::tools::todo::TodoSnapshot>,
 }
 
 /// The accepted identity of one submitted inbound message.
@@ -6347,6 +6355,7 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(base_tool_registry.unwrap_or_default()),
+                extensions: crate::extensions::NativeAgentExtensions::none(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: options.skill_discovery,
                 mcp_servers: options.mcp_servers.clone(),
@@ -6474,6 +6483,7 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
+                extensions: crate::extensions::NativeAgentExtensions::none(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
@@ -6551,6 +6561,7 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
+                extensions: crate::extensions::NativeAgentExtensions::none(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
@@ -6667,6 +6678,7 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
+                extensions: crate::extensions::NativeAgentExtensions::none(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
@@ -10436,6 +10448,7 @@ mod tests {
                 conversation_id: other_runtime.conversation_id().clone(),
                 workspace: other_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
+                extensions: crate::extensions::NativeAgentExtensions::none(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
@@ -10500,6 +10513,7 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
+                extensions: crate::extensions::NativeAgentExtensions::none(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
@@ -14275,6 +14289,7 @@ mod tests {
                 conversation_id,
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(registry),
+                extensions: crate::extensions::NativeAgentExtensions::none(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
@@ -15068,6 +15083,7 @@ mod tests {
                 conversation_id,
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(registry),
+                extensions: crate::extensions::NativeAgentExtensions::none(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
@@ -16753,6 +16769,7 @@ mod tests {
                 conversation_id,
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(ToolRegistry::new()),
+                extensions: crate::extensions::NativeAgentExtensions::none(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
@@ -16861,6 +16878,7 @@ mod tests {
                 conversation_id,
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(ToolRegistry::new()),
+                extensions: crate::extensions::NativeAgentExtensions::none(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
@@ -16944,6 +16962,7 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
+                extensions: crate::extensions::NativeAgentExtensions::none(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),

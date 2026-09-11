@@ -193,7 +193,9 @@ export interface PresentationState {
   runtimeShutdown: boolean;
   /**
    * The conversation's task list, as the runtime derived it from canonical
-   * history. `undefined` only before the first snapshot arrives.
+   * history. `undefined` before the first snapshot arrives, and whenever the
+   * attached runtime composes no Todo Agent Extension — see
+   * {@link isTodoComposed} for the composition fact itself.
    */
   todos?: TodoSnapshot;
   /** Runtime-authoritative ApprovalMode control state. */

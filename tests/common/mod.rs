@@ -961,6 +961,29 @@ pub fn native_fixture_with(
     environment: Vec<(String, String)>,
     policies: rustx::tools::native::NativeToolPolicies,
 ) -> NativeFixture {
+    native_fixture_with_extensions(
+        environment,
+        policies,
+        rustx::extensions::NativeAgentExtensionsDocument::default().resolve(),
+    )
+}
+
+/// A native tool fixture composed against an explicit native Agent Extension
+/// set (Issue #259).
+///
+/// The two planes are composed the way production composes them: ordinary
+/// native tools through `register_native_tools` under `policies`, and the
+/// extension-provided Tools through the frozen composition's own
+/// `register_tools`. Passing
+/// [`NativeAgentExtensions::none`](rustx::extensions::NativeAgentExtensions::none)
+/// therefore yields a fixture with no `todo` Tool *and* no task list, which
+/// is exactly what a Todo-disabled runtime is.
+#[must_use]
+pub fn native_fixture_with_extensions(
+    environment: Vec<(String, String)>,
+    policies: rustx::tools::native::NativeToolPolicies,
+    extensions: rustx::extensions::NativeAgentExtensions,
+) -> NativeFixture {
     use rustx::tools::runtime::ConversationRuntimeConfig;
     let dir = tempfile::tempdir().expect("temporary workspace");
     let workspace_root = dir.path().join("workspace");
@@ -983,6 +1006,7 @@ pub fn native_fixture_with(
             durable_binding: Some(rustx::durable::ConversationStoreBinding::new(store.clone())),
             environment: Some(environment),
             ..ConversationRuntimeConfig::new(&workspace_root, &artifacts)
+                .with_todo(extensions.todo().copied())
         },
     )
     .expect("tool runtime");
@@ -997,6 +1021,9 @@ pub fn native_fixture_with(
         policies,
     )
     .expect("native tool registration");
+    extensions
+        .register_tools(&mut registry)
+        .expect("extension Tool registration");
     let mailbox = runtime.mailbox();
     NativeFixture {
         _dir: dir,
@@ -1298,6 +1325,7 @@ pub async fn capability_lease(
             conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: std::sync::Arc::new(tools),
+            extensions: rustx::extensions::NativeAgentExtensions::none(),
             tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
             skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),

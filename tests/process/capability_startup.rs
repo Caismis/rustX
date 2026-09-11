@@ -358,6 +358,7 @@ fn base_only_capability_setup_is_structurally_independent_of_python_storage() {
             conversation_id: rustx::runtime::identity::ConversationId::new("conv-81-base-only"),
             workspace: rustx::tools::Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
+            extensions: rustx::extensions::NativeAgentExtensions::none(),
             tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
             skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),

@@ -42,6 +42,17 @@ pub struct CapabilityCoordinatorConfig {
     pub workspace: Workspace,
     /// The deterministic native/runtime registry used as the composition base.
     pub base_tool_registry: Arc<ToolRegistry>,
+    /// The frozen Native Agent Extension composition of the Agent this
+    /// coordinator serves (Issue #259).
+    ///
+    /// It is taken **once**, here, and stored outside
+    /// [`CapabilityResourceInputs`] on purpose: resource inputs are what a
+    /// reload replaces, and a reload must not be able to install or uninstall
+    /// an extension in a composition that is already running. Keeping the
+    /// value out of the reloadable half makes that structural rather than
+    /// conventional — there is no code path from a republished
+    /// `RuntimeResourceSnapshot` to this field.
+    pub extensions: crate::extensions::NativeAgentExtensions,
     /// Current startup availability/activation policy. It is not durable
     /// Session state and is re-applied for every process composition.
     pub tool_activation: ToolActivationPolicy,
@@ -143,6 +154,15 @@ struct CoordinatorInner {
     /// The mutex is held only across the synchronous store construction
     /// (a bounded `create_dir_all` sequence) — never across `.await`.
     python_store: Mutex<Option<PythonToolStore>>,
+    /// The extension-provided Tool registrations of the frozen composition
+    /// (Issue #259).
+    ///
+    /// Composed once at construction and never replaced: this is the whole
+    /// reason a resource reload cannot hot-install or hot-remove a
+    /// Tool-providing extension. Every candidate — full preparation,
+    /// base-only, and selected-only — composes exactly this set on top of its
+    /// own ordinary selection.
+    extension_tools: Vec<ToolRegistration>,
     environment_store: EnvironmentStore,
     state: Mutex<CoordinatorState>,
     condvar: Condvar,
@@ -524,6 +544,7 @@ impl CapabilityCoordinator {
             })
             .collect();
         let tool_activation = config.tool_activation;
+        let extension_tools = config.extensions.tool_registrations();
         let skill_discovery = config.skill_discovery;
         // Only the Python store *location* is computed here; the store
         // itself is opened inside the optional managed-package preparation
@@ -568,6 +589,7 @@ impl CapabilityCoordinator {
                 mcp_invalidation: Arc::new(McpInvalidationState::new()),
                 python_store_root,
                 python_store: Mutex::new(None),
+                extension_tools,
                 environment_store,
                 state: Mutex::new(CoordinatorState {
                     revision: CapabilityRevision::default(),
@@ -949,9 +971,12 @@ impl CapabilityCoordinator {
                 .into_iter()
                 .map(|(definition, executor)| ToolRegistration::plain(definition, executor)),
         );
-        let (available_tools, candidate_registry) =
-            select_tools(&discovered_tools, &inputs.tool_activation)
-                .map_err(CapabilityPreparationError::ToolActivation)?;
+        let (available_tools, candidate_registry) = select_tools(
+            &discovered_tools,
+            &self.inner.extension_tools,
+            &inputs.tool_activation,
+        )
+        .map_err(CapabilityPreparationError::ToolActivation)?;
         let candidate_registry = Arc::new(candidate_registry);
         Ok(PreparedCapabilityCandidate {
             base_revision,
@@ -1219,9 +1244,12 @@ impl CapabilityCoordinator {
             .expect("capability resource-input lock poisoned")
             .clone();
         let base_registrations = inputs.base_tool_registry.registrations();
-        let (available_tools, candidate_registry) =
-            select_tools(&base_registrations, &inputs.tool_activation)
-                .map_err(CapabilityPreparationError::ToolActivation)?;
+        let (available_tools, candidate_registry) = select_tools(
+            &base_registrations,
+            &self.inner.extension_tools,
+            &inputs.tool_activation,
+        )
+        .map_err(CapabilityPreparationError::ToolActivation)?;
         let candidate_registry = Arc::new(candidate_registry);
         Ok(PreparedCapabilityCandidate {
             base_revision,
@@ -1373,15 +1401,21 @@ impl CapabilityCoordinator {
 
         // The frozen set IS the active set: activation policy has nothing
         // left to decide, so the default (activate everything composed) is
-        // exactly the authorized projection.
-        let (available_tools, candidate_registry) =
-            match select_tools(&registrations, &ToolActivationPolicy::default()) {
-                Ok(selected) => selected,
-                Err(error) => {
-                    retire_candidate_runtimes(mcp_runtimes).await;
-                    return Err(CapabilityPreparationError::ToolActivation(error));
-                }
-            };
+        // exactly the authorized projection. The child's extension-provided
+        // Tools are composed alongside it from the extension set its invoking
+        // generation froze into `ResolvedSubagentSpec` — never from its
+        // ordinary selection, and never from a document it reads itself.
+        let (available_tools, candidate_registry) = match select_tools(
+            &registrations,
+            &self.inner.extension_tools,
+            &ToolActivationPolicy::default(),
+        ) {
+            Ok(selected) => selected,
+            Err(error) => {
+                retire_candidate_runtimes(mcp_runtimes).await;
+                return Err(CapabilityPreparationError::ToolActivation(error));
+            }
+        };
         Ok(PreparedCapabilityCandidate {
             base_revision,
             skills: Arc::new(SkillSnapshot::new(Vec::new())),
@@ -2466,6 +2500,7 @@ body
             conversation_id: crate::runtime::identity::ConversationId::new("conv-test"),
             workspace: workspace.clone(),
             base_tool_registry: Arc::new(ToolRegistry::new()),
+            extensions: crate::extensions::NativeAgentExtensions::none(),
             tool_activation: crate::capabilities::ToolActivationPolicy::default(),
             // Keep this unit fixture independent of the developer's HOME:
             // the relocation proof owns both current roots explicitly.
@@ -2726,6 +2761,7 @@ body
             conversation_id: crate::runtime::identity::ConversationId::new("conv-lazy-store"),
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(ToolRegistry::new()),
+            extensions: crate::extensions::NativeAgentExtensions::none(),
             tool_activation: crate::capabilities::ToolActivationPolicy::default(),
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
@@ -3098,6 +3134,7 @@ mod mcp_race_tests {
             conversation_id: ConversationId::new("mcp-race"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
+            extensions: crate::extensions::NativeAgentExtensions::none(),
             tool_activation: crate::capabilities::ToolActivationPolicy::default(),
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::from([(
@@ -3176,6 +3213,7 @@ mod mcp_race_tests {
             conversation_id: ConversationId::new("mcp-drain"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
+            extensions: crate::extensions::NativeAgentExtensions::none(),
             tool_activation: crate::capabilities::ToolActivationPolicy::default(),
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
             mcp_servers,

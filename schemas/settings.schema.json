@@ -250,6 +250,13 @@
             }
           },
           "description": "The Agent Status extension: optional provider-independent runtime\ncontext for an already-established model step."
+        },
+        "todo": {
+          "$ref": "#/$defs/TodoExtensionDocument",
+          "default": {
+            "enabled": true
+          },
+          "description": "The Todo extension: the conversation-owned task list, its\nmodel-facing `todo` Tool, and its bounded status presentation\n(Issue #259)."
         }
       },
       "type": "object"
@@ -275,7 +282,7 @@
     },
     "NativeToolPoliciesDocument": {
       "additionalProperties": false,
-      "description": "The per-tool execution, concurrency, and approval policies of the native\ntool plane.\n\n`execution`, `ask_user`, and `todo` are deliberately outside this\nset: they own fixed foreground-only, sequential, approval-never policies,\nand the registry enforces the intrinsic ones itself.",
+      "description": "The per-tool execution, concurrency, and approval policies of the native\ntool plane.\n\n`execution` and `ask_user` are deliberately outside this set: they own\nfixed foreground-only, sequential, approval-never policies, and the\nregistry enforces the intrinsic ones itself. The extension-provided `todo`\nTool is outside it for a stronger reason — it is not an ordinary native\ncapability at all (Issue #259).",
       "properties": {
         "bash": {
           "$ref": "#/$defs/NativePolicyOverrideDocument",
@@ -552,6 +559,18 @@
             "string",
             "null"
           ]
+        }
+      },
+      "type": "object"
+    },
+    "TodoExtensionDocument": {
+      "additionalProperties": false,
+      "description": "The authored Todo extension (Issue #259).\n\nTodo is *one* capability with several faces, and `enabled` composes all\nof them together or none of them:\n\n```text\nenabled = true    conversation-owned ConversationTodoList authority\n                  the model-facing `todo` Tool\n                  the bounded read-only Todo status presentation\n                  the Runtime Client / TUI Todo projection\n\nenabled = false   none of the above for this runtime; canonical history\n                  keeps every Todo ToolCall/ToolResult it already holds\n```\n\nIt carries no contributor settings today. That is a statement about the\nextension, not a placeholder: the list's bounds, transitions, and\ndependency rules are owned by\n[`ConversationTodoList`](crate::tools::todo::ConversationTodoList) and are\nnot launch configuration.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Whether this composition includes the Todo extension at all.",
+          "type": "boolean"
         }
       },
       "type": "object"

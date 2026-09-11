@@ -26,7 +26,20 @@ use rustx::tools::types::ToolExecutionResult;
 /// behind" is a property of the transaction design rather than something the
 /// runtime acts on, so no consumer needs to read it and only a suite does.
 pub(crate) fn has_staged(fixture: &NativeFixture) -> bool {
-    fixture.runtime.todos().has_staged()
+    todos(fixture).has_staged()
+}
+
+/// The fixture's composed task list.
+///
+/// Every caller here composes the Todo extension, so the list exists. A
+/// fixture that does *not* compose it has no list at all — which is the
+/// point of the extension, and is asserted where it belongs rather than
+/// tolerated here.
+pub(crate) fn todos(fixture: &NativeFixture) -> &rustx::tools::todo::ConversationTodoList {
+    fixture
+        .runtime
+        .todos()
+        .expect("this fixture composes the Todo extension")
 }
 
 /// One native tool fixture with one open `ToolResult` batch over its list.
@@ -42,9 +55,7 @@ impl TodoPlane {
     /// A fresh conversation with one batch open over its empty list.
     pub(crate) fn open() -> Self {
         let fixture = common::native_fixture();
-        let batch = fixture
-            .runtime
-            .todos()
+        let batch = todos(&fixture)
             .open_batch()
             .expect("a fresh list opens one batch");
         Self {
@@ -111,16 +122,19 @@ impl TodoPlane {
 
     /// The authoritative list: what canonical history committed.
     pub(crate) fn committed(&self) -> TodoSnapshot {
-        self.fixture.runtime.todo_snapshot()
+        self.fixture
+            .runtime
+            .todo_snapshot()
+            .expect("this fixture composes the Todo extension")
     }
 
     /// The list this batch is building on top of the authority.
     pub(crate) fn working(&self) -> TodoSnapshot {
-        self.fixture.runtime.todos().snapshot()
+        todos(&self.fixture).snapshot()
     }
 
     /// Whether anything provisional is outstanding.
     pub(crate) fn has_staged(&self) -> bool {
-        self.fixture.runtime.todos().has_staged()
+        todos(&self.fixture).has_staged()
     }
 }

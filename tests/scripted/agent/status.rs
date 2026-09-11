@@ -599,7 +599,15 @@ async fn committed_todo_state_emits_one_bounded_post_tool_reminder() {
 
     assert!(matches!(result.outcome, AttemptOutcome::Completed { .. }));
     assert_eq!(model.requests().len(), 2);
-    assert_eq!(fixture.runtime.todo_snapshot().tasks.len(), 1);
+    assert_eq!(
+        fixture
+            .runtime
+            .todo_snapshot()
+            .expect("the fixture composes the Todo extension")
+            .tasks
+            .len(),
+        1
+    );
     let observations = recorder.observations();
     assert_eq!(observations.len(), 1);
     assert!(observations[0].opportunities.post_tool_batch.is_some());

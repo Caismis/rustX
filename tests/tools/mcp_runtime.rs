@@ -1135,6 +1135,7 @@ mod unix_tests {
                 conversation_id: rustx::runtime::identity::ConversationId::new("conv-raw-attribution"),
                 workspace: rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace"),
                 base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
+                extensions: rustx::extensions::NativeAgentExtensions::none(),
                 tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: rustx::skills::SkillDiscoveryConfig {
                     automatic_roots: vec![workspace_dir.path().join(".agents/skills")],

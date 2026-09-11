@@ -47,7 +47,8 @@
         "background": {
           "enabled": true
         }
-      }
+      },
+      "todo": {}
     },
     "contributors_disabled": {
       "agent_status": {
@@ -58,10 +59,16 @@
         "background": {
           "enabled": false
         }
-      }
+      },
+      "todo": {}
     },
     "not_composed": {
-      "agent_status": null
+      "agent_status": null,
+      "todo": null
+    },
+    "todo_only": {
+      "agent_status": null,
+      "todo": {}
     }
   },
   "child_lifetimes": {
