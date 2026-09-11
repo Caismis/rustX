@@ -1212,10 +1212,8 @@ async fn ext259_disabling_todo_preserves_history_and_re_enabling_reconstructs_it
         second.todos().is_none() && second.todo_snapshot().is_none(),
         "a Todo-disabled launch composes no current list at all"
     );
-    let mut extension_registry = rustx::tools::executor::ToolRegistry::new();
-    second
-        .extension_tool_plane()
-        .register_into(&mut extension_registry)
+    let extension_registry = second
+        .compose_model_tools(rustx::tools::executor::ToolRegistry::new())
         .expect("an unmaterialized extension registers nothing");
     assert!(
         extension_registry.names().is_empty(),
@@ -1438,6 +1436,37 @@ async fn conversation_runtime_with_extension_plane(
     tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
     extension_tools: rustx::extensions::ExtensionToolPlane,
 ) -> Result<ComposedRuntime, rustx::runtime::ConversationRuntimeError> {
+    let capability = extension_capability(tool_runtime, extension_tools, Publication::Published)
+        .published()
+        .await;
+    conversation_runtime_over(tool_runtime, capability)
+}
+
+/// Whether a fixture publishes an executable capability generation before the
+/// runtime is constructed (Issue #259).
+///
+/// This is a caller decision precisely because the two are different facts.
+/// A `CapabilityCoordinator` holds its configured extension Tool plane from
+/// construction, but opens at revision zero with an **empty** executable
+/// registry and publishes nothing until a prepared candidate is committed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Publication {
+    /// `prepare_candidate()` then `commit()`: the active generation really
+    /// carries the configured extension Tools.
+    Published,
+    /// Neither prepared nor committed. The configured plane still names the
+    /// extension Tool; nothing executable carries it.
+    Unpublished,
+}
+
+/// One capability coordinator over `tool_runtime`'s conversation, configured
+/// with `extension_tools` and published — or deliberately not — per
+/// `publication`.
+fn extension_capability(
+    tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
+    extension_tools: rustx::extensions::ExtensionToolPlane,
+    publication: Publication,
+) -> ExtensionCapability {
     let dir = tempfile::tempdir().expect("capability temp dir");
     let coordinator = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
@@ -1454,11 +1483,69 @@ async fn conversation_runtime_with_extension_plane(
         },
     )
     .expect("capability coordinator");
-    let candidate = coordinator
-        .prepare_candidate()
-        .await
-        .expect("candidate preparation");
-    coordinator.commit(candidate).expect("candidate commit");
+    match publication {
+        // `prepare_candidate` is async, so publication is driven by the
+        // caller's runtime through `publish()`; keeping it out of this
+        // constructor is what lets the unpublished case contain literally no
+        // preparation call.
+        Publication::Published => ExtensionCapability {
+            coordinator,
+            publish: true,
+            _dir: dir,
+        },
+        Publication::Unpublished => ExtensionCapability {
+            coordinator,
+            publish: false,
+            _dir: dir,
+        },
+    }
+}
+
+/// A coordinator and the environment-store root it outlives.
+struct ExtensionCapability {
+    coordinator: rustx::capabilities::CapabilityCoordinator,
+    publish: bool,
+    _dir: tempfile::TempDir,
+}
+
+impl ExtensionCapability {
+    /// Publishes the configured generation, when this fixture asked for one.
+    async fn published(self) -> Self {
+        if self.publish {
+            let candidate = self
+                .coordinator
+                .prepare_candidate()
+                .await
+                .expect("candidate preparation");
+            self.coordinator
+                .commit(candidate)
+                .expect("candidate commit");
+        }
+        self
+    }
+
+    /// The extension Tool authority the **currently active** generation
+    /// carries, by exact canonical `ToolDefinition` rather than by name.
+    fn active_carries_todo(&self) -> bool {
+        let canonical = rustx::tools::native::todo_tool_definition();
+        self.coordinator
+            .current_snapshot()
+            .tool_registry()
+            .definitions()
+            .contains(&canonical)
+    }
+}
+
+/// Composes one `ConversationRuntime` over an already-built capability.
+fn conversation_runtime_over(
+    tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
+    capability: ExtensionCapability,
+) -> Result<ComposedRuntime, rustx::runtime::ConversationRuntimeError> {
+    let ExtensionCapability {
+        coordinator,
+        publish: _,
+        _dir: dir,
+    } = capability;
     let estimator: std::sync::Arc<dyn rustx::context::TokenEstimator> =
         std::sync::Arc::new(rustx::context::DefaultTokenEstimator);
     let runtime =
@@ -1633,7 +1720,8 @@ async fn ext259_neither_mismatched_todo_runtime_can_be_constructed() {
                 rustx::runtime::ConversationRuntimeError::ExtensionCompositionMismatch {
                     composed_todo: true,
                     materialized_todo_state: true,
-                    published_todo_tool: false,
+                    configured_todo_tool: false,
+                    active_todo_tool: false,
                     ..
                 }
             )
@@ -1659,7 +1747,8 @@ async fn ext259_neither_mismatched_todo_runtime_can_be_constructed() {
                 rustx::runtime::ConversationRuntimeError::ExtensionCompositionMismatch {
                     composed_todo: false,
                     materialized_todo_state: false,
-                    published_todo_tool: true,
+                    configured_todo_tool: true,
+                    active_todo_tool: true,
                     ..
                 }
             )
@@ -1677,6 +1766,169 @@ async fn ext259_neither_mismatched_todo_runtime_can_be_constructed() {
         coherent.is_ok(),
         "the coherent composition constructs: {:?}",
         coherent.err()
+    );
+}
+
+/// Issue #259: a coordinator *configured* to publish `todo` is not a
+/// coordinator that *has* published it.
+///
+/// `CapabilityCoordinator::new` deliberately opens at revision zero, whose
+/// active executable registry is empty — only a prepared, committed candidate
+/// publishes executable authority. So the configured extension Tool plane and
+/// the currently active capability generation are different facts, and only
+/// the second one lets the Agent Loop dispatch the Tool:
+///
+/// ```text
+/// configured plane   what a FUTURE prepared candidate will carry
+/// active snapshot    what the CURRENT executable generation carries
+/// ```
+///
+/// Checking only the configured plane would therefore admit a runtime whose
+/// model is offered `todo` while the active registry cannot dispatch it —
+/// exactly the architectural failure #259 exists to prevent. This drives both
+/// halves over one composition:
+///
+/// ```text
+/// Case A  no prepare, no commit  -> construction refused
+/// Case B  prepare + commit       -> construction succeeds
+/// ```
+///
+/// Case B is what proves Case A fails because executable authority was never
+/// published, and not because the fixture is malformed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ext259_a_configured_but_unpublished_todo_tool_cannot_become_a_runtime() {
+    // ---- Case A: configured, never published ----
+    let (_dir, tool_runtime) = todo_tool_runtime(
+        "conv-ext259-unpublished",
+        &NativeAgentExtensions::with_todo(),
+    );
+
+    // The coordinator is built from this conversation's own materialization,
+    // so every *configured* facet agrees. It is then deliberately left
+    // unprepared and uncommitted: there is no `prepare_candidate`,
+    // no `prepare_candidate_with_inputs`, and no `commit` anywhere below.
+    let capability = extension_capability(
+        &tool_runtime,
+        tool_runtime.extension_tool_plane(),
+        Publication::Unpublished,
+    );
+
+    // The precondition, stated explicitly: state present, configured plane
+    // present, active executable authority absent.
+    assert!(
+        tool_runtime.todos().is_some(),
+        "the conversation materialized its Todo state owner"
+    );
+    assert!(
+        tool_runtime
+            .extension_tool_plane()
+            .tool_names()
+            .contains(&"todo".to_owned()),
+        "and the configured extension plane names the Tool"
+    );
+    assert!(
+        !capability.active_carries_todo(),
+        "but nothing executable carries it: revision zero publishes an empty registry"
+    );
+
+    let unpublished = conversation_runtime_over(&tool_runtime, capability);
+    assert!(
+        matches!(
+            unpublished,
+            Err(
+                rustx::runtime::ConversationRuntimeError::ExtensionCompositionMismatch {
+                    composed_todo: true,
+                    materialized_todo_state: true,
+                    configured_todo_tool: true,
+                    active_todo_tool: false,
+                    agent_status_agrees: true,
+                    ..
+                }
+            )
+        ),
+        "a composition whose Tool was never published into an executable \
+         generation is refused, and the diagnostic separates the configured \
+         plane from the active authority: {:?}",
+        unpublished.err()
+    );
+
+    // ---- Case B: the same composition, actually published ----
+    //
+    // A fresh conversation, because the refused construction above must not
+    // have consumed one-shot ownership — proved separately by
+    // `ext259_a_refused_active_capability_check_consumes_no_ownership` — and
+    // because one coordinator identity binds at most one runtime.
+    let (_published_dir, published_runtime) =
+        todo_tool_runtime("conv-ext259-published", &NativeAgentExtensions::with_todo());
+    let published = extension_capability(
+        &published_runtime,
+        published_runtime.extension_tool_plane(),
+        Publication::Published,
+    )
+    .published()
+    .await;
+    assert!(
+        published.active_carries_todo(),
+        "a committed candidate publishes the exact canonical Todo Tool authority"
+    );
+    let composed = conversation_runtime_over(&published_runtime, published);
+    assert!(
+        composed.is_ok(),
+        "the identical composition constructs once its Tool is really executable: {:?}",
+        composed.err()
+    );
+}
+
+/// Issue #259: the refused active-capability check consumes no one-shot
+/// ownership.
+///
+/// The coherence validation runs in the pure-validation half of
+/// `ConversationRuntime::new`, before the conversation tool runtime's
+/// inactive claim, before the coordinator's runtime claim, and before mailbox,
+/// lifecycle and subagent ownership transfer. A construction it refuses must
+/// therefore leave every plane reusable — otherwise one unpublished attempt
+/// would permanently poison a conversation that is about to become valid.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ext259_a_refused_active_capability_check_consumes_no_ownership() {
+    let (_dir, tool_runtime) = todo_tool_runtime(
+        "conv-ext259-no-consume",
+        &NativeAgentExtensions::with_todo(),
+    );
+
+    // One refused construction over an unpublished coordinator.
+    let refused = conversation_runtime_over(
+        &tool_runtime,
+        extension_capability(
+            &tool_runtime,
+            tool_runtime.extension_tool_plane(),
+            Publication::Unpublished,
+        ),
+    );
+    assert!(
+        matches!(
+            refused,
+            Err(rustx::runtime::ConversationRuntimeError::ExtensionCompositionMismatch { .. })
+        ),
+        "the unpublished capability is refused: {:?}",
+        refused.err()
+    );
+
+    // The *same* tool runtime — not a fresh one — now composes successfully
+    // against a coordinator that really published. That is only possible if
+    // the refusal claimed neither its inactive runtime identity nor its
+    // mailbox, background or lifecycle ownership.
+    let capability = extension_capability(
+        &tool_runtime,
+        tool_runtime.extension_tool_plane(),
+        Publication::Published,
+    )
+    .published()
+    .await;
+    let accepted = conversation_runtime_over(&tool_runtime, capability);
+    assert!(
+        accepted.is_ok(),
+        "a refused coherence check leaves the tool runtime claimable: {:?}",
+        accepted.err()
     );
 }
 
