@@ -629,6 +629,7 @@ async fn restart_preserves_resume_visibility_until_a_shell_owns_work() {
         visible_session_ids(&runtime_root),
         vec![first_session.clone()]
     );
+    first.runtime().shutdown().await.unwrap();
     drop(first_endpoint);
     drop(first);
 
@@ -693,6 +694,7 @@ async fn restart_preserves_resume_visibility_until_a_shell_owns_work() {
         visible_session_ids(&runtime_root),
         vec![first_session.clone(), second_session.clone()]
     );
+    second.runtime().shutdown().await.unwrap();
     drop(second_endpoint);
     drop(second);
 

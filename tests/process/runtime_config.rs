@@ -190,6 +190,8 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         model_set.result,
         Some(RuntimeClientResult::ModelSet { .. })
     ));
+    product.runtime().shutdown().await.unwrap();
+    drop(endpoint);
     drop(product);
 
     std::fs::remove_dir_all(skills_root.join("old-skill")).expect("remove old Skill");
@@ -324,6 +326,8 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         ),
         "unexpected SessionNew response: {new_session:?}"
     );
+    drop(snapshot);
+    drop(resumed_endpoint);
     drop(resumed);
     let fresh = LocalSessionProduct::compose(&(startup).resolve(), &dependencies())
         .await
@@ -677,6 +681,8 @@ async fn ext256_reload_cannot_recompose_extensions_but_the_next_launch_does() {
         !before.is_empty(),
         "the Session owns durable history before the restart"
     );
+    // The endpoint retains controller authority; a real restart releases it too.
+    drop(endpoint);
     drop(product);
 
     // Restart/resume is a new launch: it resolves the *current* document
@@ -704,6 +710,12 @@ async fn ext256_reload_cannot_recompose_extensions_but_the_next_launch_does() {
         before,
         "an extension configuration change rewrites no canonical Session history"
     );
+    resumed
+        .runtime()
+        .shutdown()
+        .await
+        .expect("resumed runtime shuts down");
+    drop(resumed_endpoint);
     drop(resumed);
 
     // The symmetric direction: a launch that composes nothing cannot have

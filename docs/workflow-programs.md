@@ -1138,3 +1138,8 @@ Runtime Client protocol 22 projects live native run cuts into the foreground
 Workflow Tool details. See [run projection](workflow-run-projection.md) for
 ownership, revision domains, cursor/resync synchronization, finite retention,
 cancellation draining, candidate applicability, and reconnect/process death.
+
+Invocation overrides never change `borrowed_from`, Workflow run identity, or
+physical disposal authority. Borrowing Agent children own their Conversations,
+while a shared Workflow-owned worktree contributes exactly one Session deletion
+blocker. See [capability identity and Session ownership](subagent-resources.md#capability-identity-and-session-ownership).

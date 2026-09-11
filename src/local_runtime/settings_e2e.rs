@@ -123,6 +123,9 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
         &support::model::ScriptedAdapterFactory::new(fake.clone() as Arc<dyn ModelAdapter>),
     )
     .unwrap();
+    let controller = Arc::new(
+        crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root).unwrap(),
+    );
     let core = super::composition::LocalConversationCore::compose_from_config(
         &launch,
         &super::LocalRuntimeDependencies::default(),
@@ -132,7 +135,8 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
             model: launch.config().model.clone(),
         },
         crate::runtime::identity::ConversationId::new("cfg238"),
-        launch.artifacts_root(),
+        controller.root().join("artifacts"),
+        controller,
     )
     .await
     .unwrap();
@@ -557,6 +561,8 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
     assert!(next.pending_approval_mode.is_none());
     drop(subscription);
     runtime.shutdown().await.unwrap();
+    drop((attachment, observer, reconnected, sub));
+    drop(local);
     // A fresh resolver and new native Session, not a restarted old execution.
     let next_launch = super::launch::analyze(&request, &host)
         .unwrap()

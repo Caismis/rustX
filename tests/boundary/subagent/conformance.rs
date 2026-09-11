@@ -299,7 +299,8 @@ async fn child_fixture_at(
 fn test_spawn_plan(runtime_root: &std::path::Path) -> SubagentSpawnPlan {
     SubagentSpawnPlan {
         program: std::path::PathBuf::from("/nonexistent/rustx"),
-        runtime_root: runtime_root.to_path_buf(),
+        product_root: crate::runtime::local_storage::ProductRoot::create(runtime_root)
+            .expect("product root"),
         // The frozen policies every child launch inherits (Issues #138/#204).
         model_timeout_policy: inherited_policy(),
         tool_deadline_policy: inherited_tool_deadline_policy(),
@@ -398,8 +399,11 @@ struct ParentPlane {
 /// A standalone registry plane: no parent runtime adopts the terminal
 /// inbound, so the parent's pending batch stays directly observable.
 fn standalone_parent_plane(dir: &tempfile::TempDir, conversation: &str) -> ParentPlane {
-    let runtime_root = dir.path().join("parent-runtime");
-    std::fs::create_dir_all(&runtime_root).expect("parent runtime root");
+    // Keep the canonical socket pathname within Unix sockaddr_un limits.
+    // The fixture uses the same canonical authority as native composition.
+    let product = rustx::runtime::local_storage::ProductRoot::create(&dir.path().join("p"))
+        .expect("parent product root");
+    let runtime_root = product.root().to_path_buf();
     let conversation_id = ConversationId::new(conversation);
     let store = Arc::new(
         rustx::durable::SqliteConversationStore::in_memory(conversation_id.clone())
@@ -1054,7 +1058,7 @@ async fn the_child_spec_carries_the_frozen_timeout_policy() {
     let workspace_path = dir.path().join("parent-workspace");
     std::fs::create_dir_all(&workspace_path).expect("parent workspace");
     let workspace =
-        rustx::runtime::workspace::WorkspaceManager::new(&workspace_path, &plan.runtime_root)
+        rustx::runtime::workspace::WorkspaceManager::new(&workspace_path, plan.product_root.root())
             .acquire(
                 rustx::runtime::workspace::WorkspacePolicy::SharedWorkspace,
                 &subagent_id,

@@ -357,8 +357,16 @@ impl Child {
             ],
             &ScriptedAdapterFactory::new(adapter),
         );
-        let (conversation_id, artifacts_root) =
-            lineage.unwrap_or_else(|| (ConversationId::new(CONVERSATION), paths.artifacts_root()));
+        let controller = Arc::new(
+            crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root)
+                .unwrap(),
+        );
+        let (conversation_id, artifacts_root) = lineage.unwrap_or_else(|| {
+            (
+                ConversationId::new(CONVERSATION),
+                controller.root().join("artifacts"),
+            )
+        });
         let core = LocalConversationCore::compose_from_config(
             &launch,
             &LocalRuntimeDependencies::default(),
@@ -369,6 +377,7 @@ impl Child {
             },
             conversation_id,
             artifacts_root,
+            controller,
         )
         .await
         .map_err(|error| format!("{error:?}"))?;
@@ -1190,7 +1199,11 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 )],
                 &ScriptedAdapterFactory::new(adapter),
             );
-            let artifacts_root = paths.artifacts_root();
+            let controller = Arc::new(
+                crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root)
+                    .unwrap(),
+            );
+            let artifacts_root = controller.root().join("artifacts");
             let core = LocalConversationCore::compose_from_config(
                 &launch,
                 &LocalRuntimeDependencies::default(),
@@ -1201,6 +1214,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 },
                 ConversationId::new(CONVERSATION),
                 artifacts_root,
+                controller,
             )
             .await
             .expect("compose the FND-06 child runtime");

@@ -102,10 +102,23 @@ impl std::fmt::Debug for LocalSessionSupervisor {
 }
 
 impl LocalSessionSupervisor {
-    /// Creates a supervisor over a loaded native catalog. The active runtime
+    /// Freeze a historical Session target without detaching the active runtime.
+    /// The returned snapshot retains OS exclusion until dropped.
+    /// # Errors
+    /// Live target access or uncertain durable ownership fails closed.
+    pub async fn deletion_preflight(
+        &self,
+        id: &SessionId,
+    ) -> std::io::Result<super::session_deletion::SessionDeletionPreflight> {
+        self.state.lock().await.catalog.deletion_preflight(id)
+    }
+
+    /// Creates a supervisor under the product composition's retained OS writer
+    /// guard. This is not a public unguarded storage-controller constructor.
+    /// The active runtime
     /// is installed by the local product composition after ordinary recovery.
     #[must_use]
-    pub fn new(catalog: SessionCatalog, default_model: SessionModelConfig) -> Self {
+    pub(crate) fn new(catalog: SessionCatalog, default_model: SessionModelConfig) -> Self {
         Self {
             state: Arc::new(tokio::sync::Mutex::new(SupervisorState {
                 catalog,

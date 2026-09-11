@@ -241,7 +241,9 @@ use super::inbox::{
 /// framing are independent version domains and are unchanged by this: the
 /// envelope shape did not move, only the semantic vocabulary stored inside
 /// `events.event_json`.
-pub const SQLITE_SCHEMA_VERSION: i64 = 32;
+/// Version 33 requires rollback journaling for non-creating management reads
+/// and the separated local product workspace allocation contract.
+pub const SQLITE_SCHEMA_VERSION: i64 = 33;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -297,8 +299,11 @@ pub(crate) enum RequestStartFaultOperation {
 pub struct SqliteConversationStore {
     conversation_id: ConversationId,
     conn: Arc<Mutex<Connection>>,
+    lifecycle: Option<Arc<crate::runtime::local_storage::ConversationAccess>>,
     #[cfg(test)]
     pub(crate) fail_accept_remaining: Arc<AtomicUsize>,
+    #[cfg(test)]
+    head_read_probe: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
     pub(crate) fail_adopt_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
@@ -341,6 +346,53 @@ impl std::fmt::Debug for SqliteConversationStore {
 }
 
 impl SqliteConversationStore {
+    /// Bound a management traversal while unrelated execution may append events.
+    pub(crate) fn event_high_watermark(&self) -> Result<u64, ConversationStoreError> {
+        self.lock()?
+            .query_row("SELECT coalesce(max(sequence),0) FROM events", [], |row| {
+                row.get(0)
+            })
+            .map_err(|e| storage(format!("event high watermark: {e}")))
+    }
+
+    fn ownership_transition(
+        &self,
+        event: &RuntimeEvent,
+    ) -> Result<Option<crate::runtime::local_storage::OwnershipMutation>, ConversationStoreError>
+    {
+        if matches!(
+            event,
+            RuntimeEvent::SubagentOwnershipCommitted { .. }
+                | RuntimeEvent::SubagentTerminalPublished { .. }
+                | RuntimeEvent::SubagentTerminalSettled { .. }
+                | RuntimeEvent::SubagentWorkspaceDisposalStarted { .. }
+                | RuntimeEvent::SubagentWorkspaceDisposalSettled { .. }
+                | RuntimeEvent::WorkflowWorkspaceOwned { .. }
+                | RuntimeEvent::WorkflowWorkspaceSettled { .. }
+                | RuntimeEvent::WorkflowWorkspaceDisposalStarted { .. }
+                | RuntimeEvent::WorkflowWorkspaceDisposalSettled { .. }
+        ) {
+            self.lifecycle
+                .as_ref()
+                .map(|access| {
+                    access
+                        .ownership_mutation()
+                        .map_err(|e| storage(e.to_string()))
+                })
+                .transpose()
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub(crate) fn with_lifecycle(
+        mut self,
+        guard: Arc<crate::runtime::local_storage::ConversationAccess>,
+    ) -> Self {
+        self.lifecycle = Some(guard);
+        self
+    }
+
     /// Opens a durable store at `path`, creating its development schema when
     /// the file is new.
     ///
@@ -358,8 +410,100 @@ impl SqliteConversationStore {
         );
         let mut connection = Connection::open(path)
             .map_err(|error| storage(format!("open {}: {error}", path.display())))?;
+        // Refuse obsolete development state before changing journal settings.
+        reject_legacy_schema(&connection)?;
+        if has_table(&connection, "rustx_store")? {
+            validate_existing_schema(&connection)?;
+        }
         configure_connection(&mut connection, false)?;
         Self::from_connection(conversation_id, connection)
+    }
+
+    /// Opens an existing bound store for management without initializing state.
+    ///
+    /// # Errors
+    /// Missing, unbound, incompatible and wrong-identity stores are rejected.
+    pub fn open_existing(
+        conversation_id: ConversationId,
+        path: &Path,
+    ) -> Result<Self, ConversationStoreError> {
+        Self::open_bound_existing(
+            conversation_id,
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+    }
+
+    /// Startup recovery is an explicit writer operation, never a management read.
+    /// It may roll back a hot journal, but cannot create or initialize a store.
+    pub(crate) fn recover_existing(
+        conversation_id: ConversationId,
+        path: &Path,
+        guard: &Arc<crate::runtime::local_storage::ProductController>,
+    ) -> Result<Self, ConversationStoreError> {
+        let path = guard
+            .confined(path)
+            .map_err(|error| storage(error.to_string()))?;
+        let access = Arc::new(
+            crate::runtime::local_storage::ConversationAccess::existing_for_controller(
+                guard.clone(),
+                path.parent().ok_or_else(|| storage("missing allocation"))?,
+            )
+            .map_err(|e| storage(e.to_string()))?,
+        );
+        Self::open_bound_existing(
+            conversation_id,
+            &path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+        )
+        .map(|store| store.with_lifecycle(access))
+    }
+
+    fn open_bound_existing(
+        conversation_id: ConversationId,
+        path: &Path,
+        flags: rusqlite::OpenFlags,
+    ) -> Result<Self, ConversationStoreError> {
+        // READ_ONLY alone can create WAL sidecars, even while querying the
+        // journal mode. Reject that format before entering SQLite at all.
+        // SQLite's documented header offsets 18/19 are the write/read format
+        // versions: both must be 1 for rollback journaling.
+        // https://www.sqlite.org/fileformat.html#file_format_version_numbers
+        use std::io::Read as _;
+        let mut header = [0; 20];
+        std::fs::File::open(path)
+            .and_then(|mut file| file.read_exact(&mut header))
+            .map_err(|error| storage(format!("read existing database header: {error}")))?;
+        if &header[..16] != b"SQLite format 3\0" || header[18..20] != [1, 1] {
+            return Err(storage(
+                "existing-only access requires rollback-journal SQLite format",
+            ));
+        }
+        let connection = Connection::open_with_flags(path, flags)
+            .map_err(|error| storage(format!("open existing {}: {error}", path.display())))?;
+        let mode: String = connection
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .map_err(|error| storage(format!("read journal mode: {error}")))?;
+        if mode != "delete" {
+            return Err(storage(
+                "existing-only management requires rollback-journal storage",
+            ));
+        }
+        validate_existing_schema(&connection)?;
+        let stored: String = connection
+            .query_row(
+                "SELECT conversation_id FROM rustx_store WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| storage(format!("read existing identity: {error}")))?;
+        if stored != conversation_id.as_str() {
+            return Err(ConversationStoreError::ConversationIdMismatch {
+                stored: ConversationId::new(stored),
+                requested: conversation_id,
+            });
+        }
+        Ok(Self::from_validated_connection(conversation_id, connection))
     }
 
     /// Creates an in-memory store for tests and headless ephemeral runs.
@@ -386,9 +530,16 @@ impl SqliteConversationStore {
             create_schema(&connection)?;
         }
         bind_identity(&mut connection, &conversation_id)?;
-        Ok(Self {
+        Ok(Self::from_validated_connection(conversation_id, connection))
+    }
+
+    fn from_validated_connection(conversation_id: ConversationId, connection: Connection) -> Self {
+        Self {
             conversation_id,
             conn: Arc::new(Mutex::new(connection)),
+            lifecycle: None,
+            #[cfg(test)]
+            head_read_probe: Mutex::new(None),
             #[cfg(test)]
             fail_accept_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
@@ -421,7 +572,7 @@ impl SqliteConversationStore {
             fail_publication_terminal_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
             fail_publication_audit_remaining: Arc::new(AtomicUsize::new(0)),
-        })
+        }
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, Connection>, ConversationStoreError> {
@@ -805,6 +956,7 @@ impl SqliteConversationStore {
         &self,
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        let _ownership = self.ownership_transition(&event.event)?;
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -949,6 +1101,7 @@ impl ConversationStore for SqliteConversationStore {
         ),
         ConversationStoreError,
     > {
+        let _ownership = self.ownership_transition(&event.event)?;
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1248,7 +1401,18 @@ impl ConversationStore for SqliteConversationStore {
 
     fn load_head(&self) -> Result<DurableConversationHead, ConversationStoreError> {
         let connection = self.lock()?;
-        load_head(&connection)
+        // A second connection may append ordinary execution while management
+        // reads. Validate the head, checkpoint and operation history in one
+        // read snapshot, not across independently committed query snapshots.
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(format!("begin head read snapshot: {error}")))?;
+        #[cfg(test)]
+        if let Some(probe) = self.head_read_probe.lock().unwrap().take() {
+            read_surface_head(&transaction)?;
+            probe();
+        }
+        load_head(&transaction)
     }
 
     fn load_messages(
@@ -1887,6 +2051,7 @@ impl ConversationStore for SqliteConversationStore {
                     .to_owned(),
             ));
         }
+        let _ownership = self.ownership_transition(&event.event)?;
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1948,6 +2113,7 @@ impl ConversationStore for SqliteConversationStore {
             ));
         }
 
+        let _ownership = self.ownership_transition(&terminal.event)?;
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -2504,6 +2670,7 @@ fn commit_subagent_workspace_disposal_transition(
     event: RuntimeEventEnvelope,
     phase: &str,
 ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+    let _ownership = store.ownership_transition(&event.event)?;
     let mut connection = store.lock()?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -4139,7 +4306,7 @@ fn configure_connection(
         .map_err(|error| storage(format!("configure SQLite: {error}")))?;
     if !in_memory {
         connection
-            .execute_batch("PRAGMA journal_mode = WAL;")
+            .execute_batch("PRAGMA journal_mode = DELETE;")
             .map_err(|error| storage(format!("configure SQLite journal: {error}")))?;
     }
     Ok(())
@@ -8522,6 +8689,45 @@ mod tests {
     }
 
     #[test]
+    fn existing_management_head_read_excludes_cross_connection_commit_until_snapshot_ends() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("conversation.sqlite");
+        let id = ConversationId::new("management-read-snapshot");
+        let writer = SqliteConversationStore::open(id.clone(), &path).unwrap();
+        let reader = SqliteConversationStore::open_existing(id, &path).unwrap();
+        let competing = Connection::open(&path).unwrap();
+        competing.busy_timeout(std::time::Duration::ZERO).unwrap();
+        *reader.head_read_probe.lock().unwrap() = Some(Box::new(move || {
+            let transaction = competing.unchecked_transaction().unwrap();
+            transaction
+                .execute(
+                    "UPDATE rustx_store SET next_inbound_sequence=next_inbound_sequence+1",
+                    [],
+                )
+                .unwrap();
+            let error = transaction.commit().unwrap_err();
+            assert_eq!(
+                error.sqlite_error_code(),
+                Some(rusqlite::ErrorCode::DatabaseBusy)
+            );
+        }));
+        assert_eq!(reader.load_head().unwrap(), writer.load_head().unwrap());
+        let accepted = writer.accept_inbound(draft("after snapshot")).unwrap();
+        writer
+            .adopt_pending_batch(
+                accepted.sequence,
+                crate::durable::inbox::inbound_adoption_event(
+                    writer.conversation_id(),
+                    None,
+                    vec![accepted.message_id],
+                ),
+            )
+            .unwrap();
+        assert_eq!(reader.load_head().unwrap(), writer.load_head().unwrap());
+        assert_eq!(reader.load_head().unwrap().active_message_ids.len(), 1);
+    }
+
+    #[test]
     fn acceptance_and_adoption_share_durable_identity() {
         let store = store();
         let accepted = store.accept_inbound(draft("hello")).unwrap();
@@ -9740,6 +9946,49 @@ mod tests {
         assert_eq!(found.todo_progress_origin, 1);
         assert_eq!(reopened.current_todo_progress().unwrap(), 1);
         assert_eq!(reopened.agent_status_head_lookup_reads(), 1);
+    }
+
+    #[test]
+    fn a_version_32_profile_store_is_refused_without_migration() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("profile-v32.sqlite");
+        let id = ConversationId::new("conv-v32");
+        {
+            let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+            store
+                .conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE rustx_store SET schema_version = 32 WHERE id = 1",
+                    [],
+                )
+                .unwrap();
+        }
+        for result in [
+            SqliteConversationStore::open(id.clone(), &path),
+            SqliteConversationStore::open_existing(id, &path),
+        ] {
+            assert!(matches!(
+                result,
+                Err(ConversationStoreError::SchemaVersionMismatch {
+                    stored: 32,
+                    expected: 33
+                })
+            ));
+        }
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        let stored: i64 = connection
+            .query_row(
+                "SELECT schema_version FROM rustx_store WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            stored, 32,
+            "neither runtime nor management opening migrates"
+        );
     }
 
     /// Issue #12 (M9b): the request-scoped context, the Request Snapshot,
@@ -12195,9 +12444,10 @@ mod tests {
             SqliteConversationStore::open(conversation_id, &path),
             Err(ConversationStoreError::SchemaVersionMismatch {
                 stored: 30,
-                expected: 32
+                expected: SQLITE_SCHEMA_VERSION
             })
         ));
+        assert_eq!(SQLITE_SCHEMA_VERSION, 33);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -12263,10 +12513,10 @@ mod tests {
             SqliteConversationStore::open(conversation_id, &path),
             Err(ConversationStoreError::SchemaVersionMismatch {
                 stored: 31,
-                expected: 32
+                expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 32);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 33);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -12301,7 +12551,7 @@ mod tests {
                 )
                 .unwrap()
         };
-        assert_eq!(stored, 32);
+        assert_eq!(stored, 33);
         assert_eq!(stored, SQLITE_SCHEMA_VERSION);
         SqliteConversationStore::open(conversation_id, &path).expect("a current store reopens");
     }

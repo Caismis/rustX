@@ -1,5 +1,54 @@
 # Architecture
 
+Canonical `ProductRoot` is the sole authority for rustX-owned product storage
+paths. Session, Conversation and child allocations are derived from that identity
+before any private path is authored. Equivalent root aliases converge; symlinks
+below the product root remain invalid private identities. Subagent IPC v22 carries
+canonical product identity plus child Conversation identity and an incarnation
+name, never a second absolute private runtime root. Inspection uses the same
+identity-derived allocation. Embedded workspace managers may remain independent;
+native workspace managers derive storage from their composed Conversation access.
+
+## Session ownership and local lifecycle exclusion (Issue #254)
+
+Session deletion cascades along durable ownership, never provenance. `/tree`
+nodes belong to the same Session; `/fork` and `/clone` materialize independent
+Sessions. Catalog membership and native typed child ownership commits establish
+the finite target. Retained worktrees and branches are blockers requiring
+explicit disposal, not implicit cleanup targets. A Workflow Agent borrowing a
+Workflow-owned candidate/worktree acquires no independent physical disposal
+authority. Preflight validates the typed borrow against the durable Workflow
+owner in the same Conversation and emits one Workflow blocker, regardless of
+the number of borrowers. Workflow disposal clears that blocker without child
+terminal events; each child still owns its Conversation/private runtime state. Shared environments, capability
+resources, caches, config, credentials and project files remain outside it.
+
+Canonical `ProductRoot` identity, `ProductController` admission and target
+Conversation lifecycle access are separate. Preflight freezes ownership
+transitions, derives native ownership, then locks only target Conversation
+allocations exclusively in sorted identity order. A live unrelated Session and
+its Runtime Client remain usable; actual target runtime/child/inspection/private
+writer access blocks exclusivity. Ordinary activity does not hold the ownership
+freeze. Guards release through drop or OS process death; aliases share identity.
+The local WorkspaceManager retains ownership-mutation authority from before
+reading disposal facts through durable Started, physical removal and settlement,
+including retries. `WorkflowWorkspaceDisposalStarted` is the destructive
+admission boundary: a retained ownership snapshot excludes it. Conversely, an
+admitted disposal excludes new ownership snapshots until it finishes. Neither
+operation can cross the other's conflicting boundary. Started alone does not
+change the semantic blocker revision.
+Local composition binds ConversationAccess to WorkspaceManager independently of
+its durable store, including existing-only access for historical management.
+ConversationStore exposes durable semantics only, with no local OS-lock capability.
+Concrete SQLite internally guards ownership-sensitive event transactions; the
+WorkspaceManager independently guards the full physical disposal interval.
+The semantic revision hashes only target membership, owned allocations and
+final workspace-blocker state, never raw catalog bytes or execution history.
+Management reads never create missing stores or directories. See
+[the ownership and storage contract](session-deletion-ownership.md) for the exact
+lock order, acquisition/release points, participant lifetimes and regression map.
+
+
 ## Native invocation ownership
 
 | Concern | Owner |
@@ -51,7 +100,10 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 31. Version 31 freezes Issue
+The SQLite schema is development schema version 33. Version 32 freezes Issue #258’s durable
+`profile_digest` for the effective admitted child execution profile. Version 33 establishes
+non-creating rollback-journal management reads and separated workspace storage.
+Version 31 froze Issue
 #242's provider-independent typed Questionnaire interaction audit: a requested
 subject carries canonical requester identity and a typed `AnswerSpecification`
 per question, and a settled submission carries typed scalar answers addressing
@@ -102,7 +154,7 @@ prove a complete handoff. Version 21 and every older development schema are
 rejected rather than decoded with missing or invented workspace authority; the
 review-only intermediate schema history is not a supported format.
 File-backed stores
-use WAL, `synchronous=FULL`, foreign-key enforcement, and a busy timeout. A
+use rollback journaling (`DELETE`), `synchronous=FULL`, foreign-key enforcement, and a busy timeout. A
 successful SQLite commit is the local durability linearization point
 documented here.
 

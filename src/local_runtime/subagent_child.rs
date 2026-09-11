@@ -98,8 +98,7 @@ use crate::runtime::subagent::ipc::{
     SUBAGENT_IPC_VERSION, SubagentChildSpec, read_parent_frame, write_child_frame,
 };
 use crate::runtime::subagent::{
-    MAX_RESULT_CONTENT_BYTES, bound_utf8, child_conversation_inspection_liveness_path,
-    child_conversation_inspection_socket_path,
+    MAX_RESULT_CONTENT_BYTES, bound_utf8, child_conversation_inspection_socket_path,
 };
 
 use super::composition::{ChildPreparation, LocalConversationCore, LocalRuntimeDependencies};
@@ -308,44 +307,31 @@ async fn run_child(
         .map_err(|error| ChildExit::Startup(error.to_string()))?;
     let runtime = interactive.runtime().clone();
     let host = interactive.host().clone();
-    let semantic_root = spec.runtime_root.parent().ok_or_else(|| {
-        ChildExit::Startup(format!(
-            "physical child runtime root {} has no stable semantic parent",
-            spec.runtime_root.display()
-        ))
-    })?;
-    let parent_runtime_root = semantic_root
-        .parent()
-        .and_then(std::path::Path::parent)
-        .ok_or_else(|| {
-            ChildExit::Startup(format!(
-                "stable child semantic root {} has no parent runtime root",
-                semantic_root.display()
-            ))
-        })?;
+    let product = crate::runtime::local_storage::ProductRoot::existing(&spec.product_root)
+        .map_err(|e| ChildExit::Startup(e.to_string()))?;
+    let parent_runtime_root = product.root();
     // This lease is disposable process-routing state, not a durable
     // conversation fact. It lets an inspector distinguish a live child whose
     // optional endpoint failed from a child whose runtime is already gone.
     // If the lease itself cannot be created, execution still proceeds; the
     // failure is diagnosable in the child's private stderr log and through
     // the existing bounded Diagnostic frame.
-    let live_lease =
-        match LiveConversationInspectionLease::acquire(child_conversation_inspection_liveness_path(
-            parent_runtime_root,
-            &spec.child_conversation_id,
-        )) {
-            Ok(lease) => Some(lease),
-            Err(error) => {
-                let message = format!("live inspection liveness lease unavailable: {error}");
-                eprintln!("subagent child: {message}");
-                let _ = handle
-                    .send_reliable(ChildFrame::Diagnostic(DiagnosticFrame {
-                        message: bound_diagnostic(message),
-                    }))
-                    .await;
-                None
-            }
-        };
+    let live_lease = match LiveConversationInspectionLease::acquire(
+        &spec.product_root,
+        &spec.child_conversation_id,
+    ) {
+        Ok(lease) => Some(lease),
+        Err(error) => {
+            let message = format!("live inspection liveness lease unavailable: {error}");
+            eprintln!("subagent child: {message}");
+            let _ = handle
+                .send_reliable(ChildFrame::Diagnostic(DiagnosticFrame {
+                    message: bound_diagnostic(message),
+                }))
+                .await;
+            None
+        }
+    };
     let live_server = match LiveConversationInspectionServer::bind(
         child_conversation_inspection_socket_path(parent_runtime_root, &spec.child_conversation_id),
         host,
@@ -1632,13 +1618,14 @@ mod tests {
     /// composition's own settlement checks are what must hold: the
     /// composition must never be publishable as `Ready`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // complete child composition and ownership fixture
     async fn a_step_completing_after_cancellation_never_publishes_ready() {
         let dir = tempfile::tempdir().expect("temp root");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        let runtime_root = dir.path().join("child");
         let spec = SubagentChildSpec {
             protocol_version: SUBAGENT_IPC_VERSION,
+            product_root: dir.path().to_path_buf(),
             subagent_id: crate::runtime::identity::SubagentId::new("conv-issue145-race-subagent-1"),
             child_conversation_id: ConversationId::new("conv-issue145-race-subagent-1"),
             child_agent_id: AgentId::new("agent-child"),
@@ -1674,9 +1661,20 @@ mod tests {
             workspace_snapshot: crate::runtime::workspace::WorkspaceSnapshot::shared(
                 workspace.clone(),
             ),
-            runtime_root: runtime_root.clone(),
+            incarnation: "incarnation-test".to_owned(),
             terminal: crate::runtime::subagent::ipc::ChildTerminalMode::Normal,
         };
+        let product =
+            crate::runtime::local_storage::ProductRoot::existing(&spec.product_root).unwrap();
+        let allocation = crate::runtime::subagent::child_conversation_store_path(
+            product.root(),
+            &spec.child_conversation_id,
+        )
+        .parent()
+        .unwrap()
+        .join(&spec.incarnation);
+        std::fs::create_dir_all(&allocation).unwrap();
+        let runtime_root = spec.runtime_root().unwrap();
         let gate = crate::local_runtime::composition::arm_test_preparation_gate(&runtime_root);
 
         let (parent, child) = tokio::net::UnixStream::pair().expect("control pair");
@@ -1684,13 +1682,17 @@ mod tests {
             tokio::net::UnixStream::pair().expect("observation pair");
         let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
         let handle = dispatcher.handle();
-        let composed = tokio::spawn(async move {
+        let mut composed = tokio::spawn(async move {
             let outcome = Box::pin(compose_cancellably(&mut dispatcher, &handle, &spec)).await;
             (outcome, dispatcher)
         });
 
         // 1. The child is provably inside external preparation.
-        gate.entered().await;
+        tokio::select! {
+            () = gate.entered() => {},
+            result = &mut composed => panic!("composition exited before preparation gate: {:?}",
+                result.map(|(outcome, _)| outcome.map(|core| core.is_some()))),
+        }
 
         // 2. The parent's Cancel frame is written...
         let (mut parent_read, mut parent_write) = parent.into_split();

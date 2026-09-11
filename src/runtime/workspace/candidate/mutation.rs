@@ -30,12 +30,18 @@ fn existing_directories(root: &std::path::Path) -> Result<BTreeSet<PathBuf>, Str
         }
         let file =
             super::open_directory_relative(&root_file, &relative).map_err(|e| e.to_string())?;
-        let mut directory =
-            nix::dir::Dir::from_fd(file.try_clone().map_err(|e| e.to_string())?.into())
-                .map_err(|e| e.to_string())?;
+        let mut directory = nix::dir::Dir::from_fd(
+            super::super::observation::retry_io(|| file.try_clone())
+                .map_err(|e| e.to_string())?
+                .into(),
+        )
+        .map_err(|e| e.to_string())?;
         directories.insert(root.join(&relative));
         for entry in directory.iter() {
-            let entry = entry.map_err(|e| e.to_string())?;
+            let entry = match entry {
+                Err(nix::errno::Errno::EINTR) => continue, // same directory stream
+                result => result.map_err(|e| e.to_string())?,
+            };
             let name = entry.file_name().to_bytes();
             if name == b"." || name == b".." {
                 continue;
@@ -45,8 +51,10 @@ fn existing_directories(root: &std::path::Path) -> Result<BTreeSet<PathBuf>, Str
                 return Err("candidate directory enumeration bound exceeded".into());
             }
             let name = std::ffi::OsStr::from_bytes(name);
-            let stat =
-                fstatat(&file, name, AtFlags::AT_SYMLINK_NOFOLLOW).map_err(|e| e.to_string())?;
+            let stat = super::super::observation::retry_nix(|| {
+                fstatat(&file, name, AtFlags::AT_SYMLINK_NOFOLLOW)
+            })
+            .map_err(|e| e.to_string())?;
             if SFlag::from_bits_truncate(stat.st_mode) & SFlag::S_IFMT == SFlag::S_IFDIR {
                 pending.push((relative.join(name), depth + 1));
             }
@@ -135,7 +143,17 @@ impl MutationWatch {
         for path in source.iter().chain(&control) {
             let mut parent = path.parent();
             while let Some(path) = parent {
-                if path.is_dir() {
+                if super::super::observation::retry_io(|| std::fs::metadata(path))
+                    .map(|metadata| metadata.is_dir())
+                    .or_else(|error| {
+                        if error.kind() == std::io::ErrorKind::NotFound {
+                            Ok(false)
+                        } else {
+                            Err(error)
+                        }
+                    })
+                    .map_err(|e| e.to_string())?
+                {
                     directories.insert(path.to_path_buf());
                 }
                 if path == root || !path.starts_with(&root) {
@@ -240,7 +258,7 @@ impl Kernel {
         let mut changed = BTreeSet::new();
         let mut directory_mutation = false;
         loop {
-            let events = match self.watch.read_events() {
+            let events = match super::super::observation::retry_nix(|| self.watch.read_events()) {
                 Ok(events) => events,
                 Err(nix::errno::Errno::EAGAIN) => return Ok((changed, directory_mutation)),
                 Err(error) => return Err(error.to_string()),
@@ -296,16 +314,20 @@ impl Kernel {
         let mut files = Vec::new();
         let mut paths = std::collections::HashMap::new();
         for path in directories.iter().chain(source).chain(control) {
-            if !path.exists() {
+            if !super::super::observation::retry_io(|| path.try_exists())
+                .map_err(|e| e.to_string())?
+            {
                 continue;
             }
-            let fd = nix::fcntl::open(
-                path,
-                // nix does not name these Darwin-only flags. Retain their
-                // libc bits so symlinks are observed, never followed.
-                OFlag::from_bits_retain(libc::O_EVTONLY | libc::O_SYMLINK) | OFlag::O_CLOEXEC,
-                Mode::empty(),
-            )
+            let fd = super::super::observation::retry_nix(|| {
+                nix::fcntl::open(
+                    path,
+                    // nix does not name these Darwin-only flags. Retain their
+                    // libc bits so symlinks are observed, never followed.
+                    OFlag::from_bits_retain(libc::O_EVTONLY | libc::O_SYMLINK) | OFlag::O_CLOEXEC,
+                    Mode::empty(),
+                )
+            })
             .map_err(|e| e.to_string())?;
             let file = std::fs::File::from(fd);
             let ident = usize::try_from(file.as_raw_fd()).map_err(|e| e.to_string())?;
@@ -335,7 +357,11 @@ impl Kernel {
                 .map_err(|e| e.to_string())?;
             paths.insert(
                 ident,
-                (path.clone(), file.metadata().map_err(|e| e.to_string())?),
+                (
+                    path.clone(),
+                    super::super::observation::retry_io(|| file.metadata())
+                        .map_err(|e| e.to_string())?,
+                ),
             );
             files.push(file);
         }
@@ -360,9 +386,8 @@ impl Kernel {
         let mut changed = BTreeSet::new();
         let mut directory_mutation = false;
         loop {
-            let count = self
-                .queue
-                .kevent(
+            let count = super::super::observation::retry_nix(|| {
+                self.queue.kevent(
                     &[],
                     &mut events,
                     Some(libc::timespec {
@@ -370,7 +395,8 @@ impl Kernel {
                         tv_nsec: 0,
                     }),
                 )
-                .map_err(|e| e.to_string())?;
+            })
+            .map_err(|e| e.to_string())?;
             if count == 0 {
                 return Ok((changed, directory_mutation));
             }
@@ -398,7 +424,9 @@ impl Kernel {
                     directory_mutation = true;
                 }
                 if event.fflags() == FilterFlag::NOTE_ATTRIB {
-                    let current = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+                    let current =
+                        super::super::observation::retry_io(|| std::fs::symlink_metadata(path))
+                            .map_err(|e| e.to_string())?;
                     if unchanged_non_access_attributes(initial, &current) {
                         continue;
                     }

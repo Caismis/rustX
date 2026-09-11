@@ -80,3 +80,5 @@ pub use supervisor::{
 
 #[cfg(test)]
 mod settings_e2e;
+
+pub mod session_deletion;

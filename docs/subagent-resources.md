@@ -1,5 +1,28 @@
 # Canonical named Subagent resources
 
+## Session ownership and local lifecycle exclusion (Issue #254)
+
+Session deletion cascades along durable ownership, never provenance. `/tree`
+nodes belong to the same Session; `/fork` and `/clone` materialize independent
+Sessions. Catalog membership and native typed child ownership commits establish
+the finite target. Retained worktrees and branches are blockers requiring
+explicit disposal, not implicit cleanup targets. Shared environments, capability
+resources, caches, config, credentials and project files remain outside it.
+
+Canonical `ProductRoot` identity, `ProductController` admission and target
+Conversation lifecycle access are separate. Preflight freezes ownership
+transitions, derives native ownership, then locks only target Conversation
+allocations exclusively in sorted identity order. A live unrelated Session and
+its Runtime Client remain usable; actual target runtime/child/inspection/private
+writer access blocks exclusivity. Ordinary activity does not hold the ownership
+freeze. Guards release through drop or OS process death; aliases share identity.
+The semantic revision hashes only target membership, owned allocations and
+final workspace-blocker state, never raw catalog bytes or execution history.
+Management reads never create missing stores or directories. See
+[the ownership and storage contract](session-deletion-ownership.md) for the exact
+lock order, acquisition/release points, participant lifetimes and regression map.
+
+
 Runtime schema 8 registers role identities in JSONC. Each role's primary
 authoring resource is one Markdown file; Rust converts it into the existing
 native `SubagentDefinition` and `SubagentCatalog`.
@@ -560,3 +583,15 @@ retain their established progressive-disclosure semantics.
 Schema 8 removes inline role payloads and `instructionsFile`; older runtime
 document versions are rejected. There is one authoring path and no compatibility
 reader or automatic migration.
+
+### Capability identity and Session ownership
+
+Invocation overrides select the effective child tools, skills, and extensions;
+`profile_digest` records that admitted execution profile alongside
+`definition_digest`. Neither identity grants filesystem or disposal authority.
+Canonical `ProductRoot` alone determines native private allocations. Child IPC
+22 carries that product identity, child Conversation identity, and incarnation,
+without a second absolute runtime-root authority or a new profile-digest field.
+A Workflow child borrowing a Workflow-owned workspace still owns its child
+Conversation but adds no independent physical workspace blocker. Session deletion
+revisions project resource ownership and exclude capability-profile metadata.

@@ -3219,6 +3219,18 @@ mod tests {
             crate::durable::SqliteConversationStore::in_memory(conversation_id.clone())
                 .expect("workflow store"),
         );
+        workflow_test_plane_with_store(dir, conversation_id, store, max_active)
+    }
+
+    #[cfg(unix)]
+    fn workflow_test_plane_with_store(
+        dir: tempfile::TempDir,
+        conversation_id: ConversationId,
+        store: Arc<crate::durable::SqliteConversationStore>,
+        max_active: usize,
+    ) -> WorkflowTestPlane {
+        let workspace = dir.path().join("workspace");
+        let runtime_root = dir.path().join("subagents");
         let mailbox =
             crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
         let registry = SubagentRegistry::new(SubagentRegistryConfig {
@@ -3229,7 +3241,10 @@ mod tests {
             monotonic_clock: Arc::new(crate::runtime::ManualMonotonicClock::new()),
             spawn: SubagentSpawnPlan {
                 program: std::path::PathBuf::from("/nonexistent/rustx"),
-                runtime_root: runtime_root.clone(),
+                product_root: crate::runtime::local_storage::ProductRoot::create(
+                    &runtime_root.clone(),
+                )
+                .expect("product root"),
                 model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                 tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
                 ),

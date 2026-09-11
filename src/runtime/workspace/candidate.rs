@@ -14,6 +14,36 @@ use crate::runtime::workflow::{WorkflowNodeInstance, WorkflowRunId};
 use tokio::sync::{Mutex, OwnedMutexGuard};
 mod mutation;
 
+/// A fixture-owned fault, armed after the physical child has been admitted.
+/// No process-global state or scheduling dependency is involved.
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(crate) struct InspectionInterrupt {
+    fault: std::sync::Mutex<Option<(&'static str, Vec<u8>, usize)>>,
+}
+#[cfg(test)]
+impl InspectionInterrupt {
+    pub(crate) fn arm(&self, operation: &'static str, path: &[u8]) {
+        *self.fault.lock().unwrap() = Some((operation, path.to_vec(), 0));
+    }
+    fn attempt(&self, operation: &str, path: &[u8]) -> nix::Result<()> {
+        let mut fault = self.fault.lock().unwrap();
+        if let Some((expected, target, attempts)) = fault.as_mut()
+            && *expected == operation
+            && target == path
+        {
+            *attempts += 1;
+            if *attempts == 1 {
+                return Err(nix::errno::Errno::EINTR);
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn assert_retried(&self) {
+        assert!(self.fault.lock().unwrap().as_ref().unwrap().2 >= 2);
+    }
+}
+
 /// Historical source identity. Possession of this value grants no access.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -344,7 +374,14 @@ async fn hash_source(
     let mut remaining = 256 * 1024 * 1024;
     for path in paths {
         field(&mut hash, &path);
-        hash_path(&root, &path, &mut hash, &mut remaining)?;
+        hash_path(
+            &root,
+            &path,
+            &mut hash,
+            &mut remaining,
+            #[cfg(test)]
+            &manager.candidate_interrupt,
+        )?;
     }
     Ok(format!("{:x}", hash.finalize()))
 }
@@ -359,6 +396,7 @@ fn hash_path(
     bytes: &[u8],
     hash: &mut Sha256,
     remaining: &mut u64,
+    #[cfg(test)] interrupt: &InspectionInterrupt,
 ) -> Result<(), String> {
     use nix::fcntl::{AtFlags, readlinkat};
     use nix::sys::stat::{SFlag, fstatat};
@@ -376,7 +414,11 @@ fn hash_path(
         Err(error) => return Err(error.to_string()),
     };
     let name = path.file_name().ok_or("missing filename")?;
-    let stat = match fstatat(&parent, name, AtFlags::AT_SYMLINK_NOFOLLOW) {
+    let stat = match super::observation::retry_nix(|| {
+        #[cfg(test)]
+        interrupt.attempt("stat", bytes)?;
+        fstatat(&parent, name, AtFlags::AT_SYMLINK_NOFOLLOW)
+    }) {
         Ok(stat) => stat,
         Err(nix::errno::Errno::ENOENT) => {
             field(hash, b"deleted");
@@ -387,11 +429,17 @@ fn hash_path(
     let kind = SFlag::from_bits_truncate(stat.st_mode) & SFlag::S_IFMT;
     if kind == SFlag::S_IFLNK {
         field(hash, b"symlink");
-        let target = readlinkat(&parent, name).map_err(|e| e.to_string())?;
+        let target = super::observation::retry_nix(|| {
+            #[cfg(test)]
+            interrupt.attempt("readlink", bytes)?;
+            readlinkat(&parent, name)
+        })
+        .map_err(|e| e.to_string())?;
         field(hash, target.as_bytes());
     } else if kind == SFlag::S_IFREG {
         let file = open_overlay_source(root, path).map_err(|e| e.to_string())?;
-        let metadata = file.metadata().map_err(|e| e.to_string())?;
+        let metadata =
+            super::observation::retry_io(|| file.metadata()).map_err(|e| e.to_string())?;
         if !metadata.is_file() {
             return Err("candidate file changed type during inspection".into());
         }
@@ -418,7 +466,13 @@ fn hash_path(
 }
 
 #[cfg(not(unix))]
-fn hash_path(_: &std::fs::File, _: &[u8], _: &mut Sha256, _: &mut u64) -> Result<(), String> {
+fn hash_path(
+    _: &std::fs::File,
+    _: &[u8],
+    _: &mut Sha256,
+    _: &mut u64,
+    #[cfg(test)] _: &InspectionInterrupt,
+) -> Result<(), String> {
     Err("candidate inspection requires Unix descriptor-relative filesystem support".into())
 }
 
@@ -767,6 +821,78 @@ mod tests {
                 .await
                 .unwrap()
         }
+    }
+
+    #[tokio::test]
+    async fn candidate_stat_eintr_preserves_identity_and_settlement() {
+        candidate_eintr_case(false).await;
+    }
+
+    #[tokio::test]
+    async fn candidate_readlink_eintr_hashes_exact_symlink_bytes() {
+        candidate_eintr_case(true).await;
+    }
+
+    async fn candidate_eintr_case(link: bool) {
+        use std::os::unix::ffi::OsStrExt;
+        let fixture = Fixture::new();
+        let scope = fixture.acquire().await;
+        let access = fixture.access(&scope).await;
+        let root = access.snapshot().logical_workspace.clone();
+        // Deliberately dangling, non-UTF8 and escaping: hash link bytes,
+        // never follow the link or open its target.
+        let target = std::ffi::OsStr::from_bytes(b"../../outside-\xff");
+        if link {
+            symlink(target, root.join("link")).unwrap();
+        }
+        let expected = access.finish(false).await.unwrap();
+        let access = fixture.access(&scope).await;
+        fixture.manager.candidate_interrupt.arm(
+            if link { "readlink" } else { "stat" },
+            if link { b"link" } else { b"source" },
+        );
+        let actual = access.finish(false).await.unwrap();
+        fixture.manager.candidate_interrupt.assert_retried();
+        assert_eq!(actual, expected);
+        scope.assert_current(&expected).await.unwrap();
+        // A new user can still borrow and validate the same identity.
+        let access = fixture.access(&scope).await;
+        assert_eq!(access.finish(true).await.unwrap(), expected);
+        if link {
+            // Reproduce a system-root alias on Linux too. Only the existing
+            // runtime-allocation opener may resolve it; descriptor traversal
+            // itself still refuses symlinks.
+            let aliases = tempfile::tempdir().unwrap();
+            let runtime_alias = aliases.path().join("runtime");
+            symlink(fixture.runtime.path(), &runtime_alias).unwrap();
+            let aliased_root = runtime_alias
+                .join("worktrees")
+                .join(root.file_name().unwrap());
+            assert!(super::super::open_stable_directory(&aliased_root).is_err());
+            let allocation = super::super::open_stable_runtime_worktrees(&runtime_alias).unwrap();
+            let file = super::super::open_stable_child_logical_workspace(
+                &allocation,
+                &aliased_root,
+                Path::new(""),
+            )
+            .unwrap();
+            let mut hash = Sha256::new();
+            hash_path(
+                &file,
+                b"link",
+                &mut hash,
+                &mut 1024,
+                &InspectionInterrupt::default(),
+            )
+            .unwrap();
+            let mut exact = Sha256::new();
+            field(&mut exact, b"symlink");
+            field(&mut exact, target.as_bytes());
+            assert_eq!(hash.finalize(), exact.finalize());
+        }
+        let settlement = scope.settle().await;
+        assert_eq!(settlement.unresolved_reason(), None);
+        assert_eq!(scope.final_reference().await, Some(expected));
     }
 
     #[tokio::test]

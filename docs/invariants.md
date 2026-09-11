@@ -1,5 +1,54 @@
 # Runtime Invariants
 
+Canonical `ProductRoot` is the sole authority for rustX-owned product storage
+paths. Session, Conversation and child allocations are derived from that identity
+before any private path is authored. Equivalent root aliases converge; symlinks
+below the product root remain invalid private identities. Subagent IPC v22 carries
+canonical product identity plus child Conversation identity and an incarnation
+name, never a second absolute private runtime root. Inspection uses the same
+identity-derived allocation. Embedded workspace managers may remain independent;
+native workspace managers derive storage from their composed Conversation access.
+
+## Session ownership and local lifecycle exclusion (Issue #254)
+
+Session deletion cascades along durable ownership, never provenance. `/tree`
+nodes belong to the same Session; `/fork` and `/clone` materialize independent
+Sessions. Catalog membership and native typed child ownership commits establish
+the finite target. Retained worktrees and branches are blockers requiring
+explicit disposal, not implicit cleanup targets. A Workflow Agent borrowing a
+Workflow-owned candidate/worktree acquires no independent physical disposal
+authority. Preflight validates the typed borrow against the durable Workflow
+owner in the same Conversation and emits one Workflow blocker, regardless of
+the number of borrowers. Workflow disposal clears that blocker without child
+terminal events; each child still owns its Conversation/private runtime state. Shared environments, capability
+resources, caches, config, credentials and project files remain outside it.
+
+Canonical `ProductRoot` identity, `ProductController` admission and target
+Conversation lifecycle access are separate. Preflight freezes ownership
+transitions, derives native ownership, then locks only target Conversation
+allocations exclusively in sorted identity order. A live unrelated Session and
+its Runtime Client remain usable; actual target runtime/child/inspection/private
+writer access blocks exclusivity. Ordinary activity does not hold the ownership
+freeze. Guards release through drop or OS process death; aliases share identity.
+The local WorkspaceManager retains ownership-mutation authority from before
+reading disposal facts through durable Started, physical removal and settlement,
+including retries. `WorkflowWorkspaceDisposalStarted` is the destructive
+admission boundary: a retained ownership snapshot excludes it. Conversely, an
+admitted disposal excludes new ownership snapshots until it finishes. Neither
+operation can cross the other's conflicting boundary. Started alone does not
+change the semantic blocker revision.
+Local composition binds ConversationAccess to WorkspaceManager independently of
+its durable store, including existing-only access for historical management.
+ConversationStore exposes durable semantics only, with no local OS-lock capability.
+Concrete SQLite internally guards ownership-sensitive event transactions; the
+WorkspaceManager independently guards the full physical disposal interval.
+The semantic revision hashes only target membership, owned allocations and
+final workspace-blocker state, never raw catalog bytes or execution history.
+Management reads never create missing stores or directories. See
+[the ownership and storage contract](session-deletion-ownership.md) for the exact
+lock order, acquisition/release points, participant lifetimes and regression map.
+
+
 These invariants are architectural constraints. Implementations may change; these rules should change only through an explicit architecture decision.
 
 ## Configuration analysis and activation
@@ -78,9 +127,11 @@ revision, and keyed Ledger bodies.
 
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
-uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 31 is the only accepted schema; version 30 and every older
-development schema fail explicitly at open and are not migrated. Version 31
+uses rollback journaling (`DELETE`), `synchronous=FULL`, foreign keys, and a busy timeout. Development
+schema version 33 is the only accepted schema; version 32 and every older
+development schema fail explicitly at open and are not migrated. Version 32
+freezes Issue #258’s effective child `profile_digest`; version 33 establishes
+Issue #254’s rollback-journal management and local storage contract. Version 31
 freezes the Issue #242 typed Questionnaire interaction audit — canonical
 requester identity, typed answer specifications, and option-index answers — so
 a version-30 journal's obsolete choice-only Questionnaire payload is rejected
@@ -2807,9 +2858,13 @@ after ChildGuidanceOutcome::Accepted:
   either `UnixStream`; there is no listener and no network service.
 - **Anchor acknowledgements route by exact typed identity.** Two units with
   outstanding offers cannot open each other's start gates.
-- **The subagent IPC version is 20 and there is no compatibility decoding.** A
+- **The subagent IPC version is 22 and there is no compatibility decoding.** A
   peer that does not speak exactly this version exits before composing
-  anything. Version 20 removed the inherited launch-scoped Agent Status
+  anything. Version 22 removes the independently authored absolute child runtime
+  path: the child derives its private allocation from canonical `ProductRoot`,
+  child `ConversationId`, and incarnation identity. Version 21 introduced
+  canonical product-root identity for child lifecycle participation (Issue #254).
+  Version 20 removed the inherited launch-scoped Agent Status
   configuration from `SubagentChildSpec` and carries the child's own frozen
   native Agent Extension composition inside `resolved` instead (Issue #256):
   root and named-role extension sets are independently authored, so this

@@ -217,6 +217,8 @@ pub struct ConversationRuntimeConfig {
     /// derived here for the mailbox; the full handle is passed only to the
     /// owning conversation runtime.
     pub durable_binding: Option<ConversationStoreBinding>,
+    /// Local product lifecycle access, retained by all runtime clones.
+    pub lifecycle: Option<Arc<crate::runtime::local_storage::ConversationAccess>>,
     /// The runtime clock stamping terminal inbound messages; the system
     /// clock is used when omitted.
     pub clock: Option<Arc<dyn RuntimeClock>>,
@@ -236,6 +238,7 @@ impl ConversationRuntimeConfig {
             workspace_root: workspace_root.as_ref().to_path_buf(),
             artifacts_dir: artifacts_dir.as_ref().to_path_buf(),
             durable_binding: None,
+            lifecycle: None,
             clock: None,
             event_sink: None,
             environment: None,
@@ -270,6 +273,7 @@ pub struct ConversationToolRuntime {
     /// Shared by every clone, so cloning a runtime handle never creates a
     /// second bindable identity.
     runtime_client: Arc<RuntimeClientBinding>,
+    _lifecycle: Option<Arc<crate::runtime::local_storage::ConversationAccess>>,
 }
 
 impl core::fmt::Debug for ConversationToolRuntime {
@@ -363,6 +367,19 @@ impl ConversationToolRuntime {
     ) -> Result<Self, ConversationRuntimeError> {
         let workspace =
             Workspace::new(&config.workspace_root).map_err(ConversationRuntimeError::Workspace)?;
+        if let Some(root) = &config.lifecycle {
+            for path in [
+                config.artifacts_dir.clone(),
+                config.artifacts_dir.join("conversation.sqlite"),
+                config.artifacts_dir.join("tool-output"),
+            ] {
+                root.confined(&path).map_err(|error| {
+                    ConversationRuntimeError::Artifacts(ArtifactError::RootUnavailable(
+                        error.to_string(),
+                    ))
+                })?;
+            }
+        }
         let artifacts_root = prepare_artifact_root(&config.artifacts_dir)
             .map_err(ConversationRuntimeError::Artifacts)?;
         validate_disjoint_storage(workspace.root(), &artifacts_root)?;
@@ -379,22 +396,24 @@ impl ConversationToolRuntime {
             }
             binding
         } else {
-            let store = Arc::new(
-                SqliteConversationStore::open(
-                    conversation_id.clone(),
-                    &artifacts_root.join("conversation.sqlite"),
-                )
-                .map_err(|error| {
-                    ConversationRuntimeError::DurableConversation(error.to_string())
-                })?,
-            );
-            ConversationStoreBinding::new(store)
+            let store = SqliteConversationStore::open(
+                conversation_id.clone(),
+                &artifacts_root.join("conversation.sqlite"),
+            )
+            .map_err(|error| ConversationRuntimeError::DurableConversation(error.to_string()))?;
+            let store = if let Some(guard) = &config.lifecycle {
+                store.with_lifecycle(guard.clone())
+            } else {
+                store
+            };
+            ConversationStoreBinding::new(Arc::new(store))
         };
         let mailbox = ConversationInboundMailbox::over_inbound_capability(
             durable_binding.inbound_capability(),
         );
         let artifacts = ArtifactStore::new(conversation_id.clone(), &artifacts_root)
-            .map_err(ConversationRuntimeError::Artifacts)?;
+            .map_err(ConversationRuntimeError::Artifacts)?
+            .with_lifecycle(config.lifecycle.clone());
         // The managed tool-output root is a *dedicated* region below the
         // runtime-private root: textual spill files must be model-readable
         // through the read-only filesystem tools, but the enclosing
@@ -404,7 +423,8 @@ impl ConversationToolRuntime {
         // ManagedToolOutput rejects model-originated mutation there.
         let tool_output =
             ManagedToolOutput::new(conversation_id.clone(), artifacts_root.join("tool-output"))
-                .map_err(ConversationRuntimeError::ManagedOutput)?;
+                .map_err(ConversationRuntimeError::ManagedOutput)?
+                .with_lifecycle(config.lifecycle.clone());
         validate_managed_output_root(workspace.root(), &artifacts_root, tool_output.root())?;
         let clock = config
             .clock
@@ -437,6 +457,7 @@ impl ConversationToolRuntime {
         )
         .map_err(ConversationRuntimeError::TodoList)?;
         Ok(Self {
+            _lifecycle: config.lifecycle,
             workflows: crate::runtime::workflow::read_model::WorkflowReadModel::new(
                 conversation_id.clone(),
             ),

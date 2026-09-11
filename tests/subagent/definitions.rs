@@ -1788,6 +1788,13 @@ async fn skill_version_identity_is_frozen_across_the_boundary() {
         "---\nname: alpha\ndescription: a completely different description\n---\n\nrewritten body\n",
     )
     .expect("rewrite SKILL.md");
+    product
+        .runtime()
+        .shutdown()
+        .await
+        .expect("settle the original owner");
+    drop(resources);
+    drop(product);
     let reloaded = LocalSessionProduct::compose(&(lab.paths()).resolve(), &dependencies())
         .await
         .expect("the rewritten workspace composes");

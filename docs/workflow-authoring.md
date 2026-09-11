@@ -155,3 +155,8 @@ credentials, WorkflowRun, interaction publication/waiter creation, workspace
 acquisition, resource generation construction, and Tool registration/domain
 admission mutation. Measurement wraps the synchronous inspection entry point;
 no sleep or live provider serves as correctness evidence.
+
+Invocation overrides never change `borrowed_from`, Workflow run identity, or
+physical disposal authority. Borrowing Agent children own their Conversations,
+while a shared Workflow-owned worktree contributes exactly one Session deletion
+blocker. See [capability identity and Session ownership](subagent-resources.md#capability-identity-and-session-ownership).
