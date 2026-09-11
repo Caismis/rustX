@@ -1677,11 +1677,11 @@ async function deletionAppHarness(overlapInitial = false) {
   const executes: string[][] = [], recovers: string[] = [], responses: unknown[] = [];
   let cancelled = 0;
   let rows: SessionSummaryView[] = [{ id: "old", name: "historical-target", updated_at: "today", active_node: "node-2", active: false }];
-  let listResponse: (() => Promise<{ sessions: SessionSummaryView[] }>) | undefined;
+  let listResponse: ((query?: string, offset?: number) => Promise<{ sessions: SessionSummaryView[]; nextOffset?: number }>) | undefined;
   session.listSessions = async (query, offset = 0) => {
     lists.push([query, offset]);
     if (overlapInitial && lists.length === 1) return lateList.promise;
-    return listResponse ? listResponse() : { sessions: [...rows] };
+    return listResponse ? listResponse(query, offset) : { sessions: [...rows] };
   };
   session.previewSessionDeletion = (id) => { previews.push(id); return preview.promise; };
   session.deleteSession = (id, revision) => { executes.push([id, revision]); return execution.promise; };
@@ -1958,5 +1958,40 @@ it("failed reconciliation cannot revive a pre-mutation initial response after a 
     await waitForApplicationContinuation();
     assert.equal(h.surface(), fresh); assert.match(h.text(), /fresh-A/);
     assert.doesNotMatch(h.text(), /historical-target/); assert.equal(h.executes.length, 1);
+  } finally { await h.finish(); }
+});
+
+it("reopening resume retains the current query while recovery retains the original target", async () => {
+  const h = await deletionAppHarness();
+  const row = (id: string): SessionSummaryView => ({ id, name: id, active_node: id, active: false, updated_at: "today" });
+  try {
+    await h.input("\x1b[27u"); await h.input("old"); await h.input("\x04");
+    await h.resolvePreview(); await h.input("\t\r");
+    h.setList(async () => ({ sessions: [row("old-A")], nextOffset: 101 }));
+    h.execution.resolve({ status: "committed_cleanup_pending", session_id: "old" }); await waitForApplicationContinuation();
+    await h.input("\x1b[27u");
+    h.setList(async () => ({ sessions: [row("new-A"), row("new-C")], nextOffset: 202 }));
+    await h.input("\x7f\x7f\x7fnew");
+    assert.match(h.text(), /Search: new/); assert.match(h.text(), /new-C/);
+    await h.input("\x1b[27u"); assert.equal(h.surface(), undefined);
+    const reopened = h.lists.length;
+    await h.input("/resume\r");
+    assert.deepEqual(h.lists.slice(reopened), [["new", 0]]);
+    assert.match(h.text(), /R retry native cleanup/);
+    await h.input("\x1b[27u");
+    assert.match(h.text(), /new-A/); assert.match(h.text(), /new-C/); assert.doesNotMatch(h.text(), /old-A/);
+    await h.input("\x1b[B\x04");
+    const recoveryStart = h.lists.length;
+    h.setList(async (query, offset) => {
+      assert.equal(query, "new");
+      if (offset === 0) return { sessions: [row("new-A")], nextOffset: 202 };
+      assert.equal(offset, 202); return { sessions: [row("new-C")] };
+    });
+    await h.input("rr\r\x04\x1b[A\x1b[B\x1b[27u");
+    assert.deepEqual(h.recovers, ["old"]); assert.equal(h.executes.length, 1);
+    h.recovery.resolve({ status: "deleted", session_id: "old" }); await waitForApplicationContinuation();
+    assert.deepEqual(h.lists.slice(recoveryStart), [["new", 0], ["new", 202]]);
+    assert.match(h.text(), /Search: new/); assert.match(h.text(), /new-A/); assert.match(h.text(), /new-C/);
+    assert.doesNotMatch(h.text(), /old-A|historical-target/); assert.equal(h.cancelled(), 0);
   } finally { await h.finish(); }
 });

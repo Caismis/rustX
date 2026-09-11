@@ -284,7 +284,7 @@ for (const outcome of ["committed_cleanup_pending", "committed_durability_uncert
 test("only a successful reconciliation can publish an authoritative empty page", async () => {
   const h = harness(); await h.open(); confirm(h.view); h.rows([]);
   h.execution.resolve({ status: "committed_cleanup_pending", session_id: "b" }); await turn();
-  assert.deepEqual(h.workflow.reconciliation, { kind: "ready", page: { sessions: [], nextOffset: undefined } });
+  assert.deepEqual(h.workflow.reconciliation, { kind: "ready", query: "", page: { sessions: [], nextOffset: undefined } });
   h.view.handleInput(esc);
   assert.deepEqual(h.view.selector.visibleSessions(), []);
   assert.doesNotMatch(h.text(), /visibility unavailable/);
@@ -362,5 +362,58 @@ test("a fresh current-generation page survives a concurrent reconciliation failu
   replacement.handleInput(esc);
   assert.deepEqual(replacement.selector.visibleSessions().map((r) => r.id), ["a", "c"]);
   assert.doesNotMatch(replacement.render(100).join(), /visibility unavailable/);
+  replacement.dispose();
+});
+
+test("recovery freezes B but rebuilds the current query with only its fresh offsets", async () => {
+  const old = (id: string) => ({ ...row(id), name: `old-${id}` });
+  const fresh = (id: string) => ({ ...row(id), name: `new-${id}` });
+  const h = harness({ rows: [old("A"), old("B"), old("C")], query: "old", nextOffset: 101 });
+  h.view.handleInput(down); h.view.handleInput(del);
+  h.previewResponse.resolve(preview("B")); await turn(); confirm(h.view);
+  h.setList(async (query, offset) => {
+    assert.equal(query, "old");
+    if (offset === 0) return { sessions: [old("A"), old("C")], nextOffset: 101 };
+    assert.equal(offset, 101); return { sessions: [old("X")], nextOffset: 102 };
+  });
+  h.execution.resolve({ status: "committed_cleanup_pending", session_id: "B" }); await turn();
+  h.view.handleInput(esc);
+  h.setList(async () => ({ sessions: [fresh("D"), fresh("E"), fresh("F")], nextOffset: 202 }));
+  for (const input of ["\x7f", "\x7f", "\x7f", "n", "e", "w"]) h.view.handleInput(input);
+  await turn(); h.view.selector.selectIdentity("E");
+  assert.deepEqual(h.view.reconciliationContext(), { query: "new", ids: ["D", "E", "F"], index: 1, loaded: 3 });
+  h.view.handleInput(del);
+  const start = h.lists.length;
+  h.setList(async (query, offset) => {
+    assert.equal(query, "new");
+    if (offset === 0) return { sessions: [fresh("D")], nextOffset: 202 };
+    if (offset === 202) return { sessions: [fresh("E")], nextOffset: 303 };
+    if (offset === 303) return { sessions: [fresh("F")], nextOffset: 404 };
+    assert.equal(offset, 404); return { sessions: [fresh("G")] };
+  });
+  for (const input of ["r", "r", "\r", del, "\x1b[A", down, esc]) h.view.handleInput(input);
+  assert.deepEqual(h.recovers, ["B"]); assert.equal(h.executes.length, 1);
+  h.recovery.resolve({ status: "deleted", session_id: "B" }); await turn();
+  assert.deepEqual(h.lists.slice(start), [["new", 0], ["new", 202], ["new", 303]]);
+  assert.deepEqual(h.view.selector.visibleSessions().map((r) => r.id), ["D", "E", "F"]);
+  assert.equal(h.view.selector.selectedSession()?.id, "E"); assert.match(h.text(), /Search: new/);
+  h.view.selector.selectIdentity("F"); h.view.handleInput(down); await turn();
+  assert.deepEqual(h.lists.slice(start), [["new", 0], ["new", 202], ["new", 303], ["new", 404]]);
+  assert.deepEqual(h.view.selector.visibleSessions().map((r) => r.id), ["D", "E", "F", "G"]);
+  h.dispose();
+});
+
+test("recovery with unavailable visibility uses the current query without fabricated anchors", async () => {
+  const h = harness(); await h.open(); confirm(h.view);
+  h.execution.resolve({ status: "committed_cleanup_pending", session_id: "b" }); await turn(); h.dispose();
+  const replacement = new ResumeSelector({ query: "new", client: h.client, workflow: h.workflow, alive: () => true, feedback: () => {} });
+  assert.deepEqual(replacement.reconciliationContext(), { query: "new", ids: [], index: 0, loaded: 0 });
+  const start = h.lists.length;
+  h.setList(async () => ({ sessions: [row("new-A")], nextOffset: 202 }));
+  replacement.handleInput("r"); replacement.handleInput("r");
+  assert.deepEqual(h.recovers, ["b"]);
+  h.recovery.resolve({ status: "deleted", session_id: "b" }); await turn();
+  assert.deepEqual(h.lists.slice(start), [["new", 0]]);
+  assert.deepEqual(replacement.selector.visibleSessions().map((r) => r.id), ["new-A"]);
   replacement.dispose();
 });

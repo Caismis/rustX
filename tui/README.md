@@ -895,6 +895,10 @@ Reopening `/resume` queries the preserved search and uses the fresh native rows;
 only a successful empty response represents an empty list. Old pre-deletion
 responses remain invalid even when the refresh fails.
 
+Recovery always targets the original Session. Pressing **R** captures the current
+search and selected neighborhood for the list refresh, including after reopening
+`/resume`; it never reuses another query's continuation offsets.
+
 Search survives reconciliation. The selector rebuilds from offset zero using
 fresh native continuation pages, rejecting responses from older list generations,
 and selects the next matching neighbor (otherwise the previous or empty state).

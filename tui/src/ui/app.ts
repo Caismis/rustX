@@ -254,6 +254,7 @@ export class RustxTuiApp {
   #presentationEpoch = 0;
   #deletion!: SessionDeletionWorkflow;
   #resumePresentation: ResumeSelector | undefined;
+  #resumeQuery: string | undefined;
   #terminalFinishStarted = false;
   #removeStateListener: (() => void) | undefined;
   #removeSnapshotListener: (() => void) | undefined;
@@ -318,6 +319,7 @@ export class RustxTuiApp {
         connection.closed === undefined && !this.#finished && !this.#terminalFinishStarted,
       (text) => this.#showTransient("info", text));
     this.#deletion = deletion;
+    this.#resumeQuery = undefined;
     deletion.subscribe(() => {
       if (this.#deletion !== deletion) return;
       this.#syncDeletionPresentation();
@@ -556,7 +558,7 @@ export class RustxTuiApp {
     try {
       // Reopening a retained deletion workflow queries its actual native search,
       // rather than relabeling an unfiltered page with the preserved query.
-      const query = this.#deletion.context.query;
+      const query = this.#resumeQuery ?? this.#deletion.context.query;
       const outcome = line === "/resume" && this.#deletion.state.kind !== "idle"
         ? { kind: "choose_session" as const, ...await lease.session.listSessions(query, 0), query }
         : await this.#dispatcher.submit(text);
@@ -1085,7 +1087,6 @@ export class RustxTuiApp {
     const workflow = this.#deletion;
     // Initial /resume command responses obey the same mutation boundary as pages.
     if (lease.sessionListGeneration !== workflow.generation) return;
-    if (workflow.state.kind !== "idle") query = workflow.context.query;
     if (sessions?.length === 0 && workflow.state.kind === "idle") {
       this.#showTransient("info", "no persisted sessions are available");
       return;
@@ -1125,9 +1126,10 @@ export class RustxTuiApp {
     }
     if (!workflow?.needsPresentation || this.#overlay !== undefined || this.#finished || this.#terminalFinishStarted) return;
     const reconciliation = workflow.reconciliation;
-    const page = reconciliation.kind === "ready" ? reconciliation.page : undefined;
+    const query = this.#resumeQuery ?? workflow.context.query;
+    const page = reconciliation.kind === "ready" && reconciliation.query === query ? reconciliation.page : undefined;
     this.#showSessionSelector(page?.sessions, page?.nextOffset,
-      workflow.context.query, this.#presentationLease());
+      query, this.#presentationLease());
   }
 
   #showBoundarySelector(
@@ -1246,6 +1248,7 @@ export class RustxTuiApp {
   #closeOverlay(replacing = false): void {
     const handle = this.#overlay;
     if (handle === undefined) return;
+    if (this.#resumePresentation) this.#resumeQuery = this.#resumePresentation.reconciliationContext().query;
     this.#resumePresentation?.dispose();
     this.#resumePresentation = undefined;
     handle.hide();

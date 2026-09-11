@@ -8,7 +8,7 @@ export interface ReconciledSessions { sessions: SessionSummaryView[]; nextOffset
 export type SessionListReconciliation =
   | { kind: "none" }
   | { kind: "pending" }
-  | { kind: "ready"; page: ReconciledSessions }
+  | { kind: "ready"; query: string; page: ReconciledSessions }
   | { kind: "failed" };
 export type DeletionOutcome = SessionDeleteResult | { status: "unknown" };
 type State =
@@ -51,9 +51,11 @@ export class SessionDeletionWorkflow {
     this.#context = { ...context, ids: [...context.ids] };
     void this.#submit({ operation: "execute", sessionId: preview.session_id, revision: preview.target_revision });
   }
-  recover(): void {
+  recover(context: DeletionContext): void {
     const state = this.#state;
     if (!this.#live() || state.kind !== "result" || !this.canRecover()) return;
+    // Native recovery authority stays frozen; only the view domain is recaptured.
+    this.#context = { ...context, ids: [...context.ids] };
     void this.#submit({ operation: "recover", sessionId: state.sessionId });
   }
   canRecover(): boolean {
@@ -108,7 +110,7 @@ export class SessionDeletionWorkflow {
         page = await this.#client.listSessions(query, page.nextOffset);
         sessions.push(...page.sessions);
       }
-      if (this.#live()) this.#reconciliation = { kind: "ready", page: { sessions, nextOffset: page.nextOffset } };
+      if (this.#live()) this.#reconciliation = { kind: "ready", query, page: { sessions, nextOffset: page.nextOffset } };
     } catch {
       if (this.#live()) {
         this.#reconciliation = { kind: "failed" };

@@ -1,6 +1,6 @@
 /** Focused Session management presentation; deletion authority stays native. */
 import { matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { SessionDeletionWorkflow, type DeletionClient, type ReconciledSessions } from "../session-deletion-workflow.ts";
+import { SessionDeletionWorkflow, type DeletionClient, type DeletionContext, type ReconciledSessions } from "../session-deletion-workflow.ts";
 import type { SessionDeletePreview, SessionDeleteResult, SessionSummaryView } from "../../protocol/types.ts";
 import { sanitizeField } from "../../sanitize.ts";
 import { ConfirmationView } from "./confirmation.ts";
@@ -48,7 +48,7 @@ export class ResumeSelector implements PopupContent {
     if (options.initialPage && this.#workflow.reconciliation.kind === "ready") {
       this.#appliedPage = this.#workflow.reconciliation.page;
     }
-    if (this.#workflow.state.kind !== "idle") {
+    if (this.#workflow.state.kind !== "idle" && this.#workflow.context.query === (options.query ?? "")) {
       const { ids, index, loaded } = this.#workflow.context;
       this.#anchor = { ids: [...ids], index, loaded };
     }
@@ -57,7 +57,7 @@ export class ResumeSelector implements PopupContent {
     this.#query = options.query ?? "";
     this.#nextOffset = options.initialPage?.nextOffset;
     this.selector = new SessionSelector({ ...options, sessions: options.initialPage?.sessions ?? [], nextOffset: this.#nextOffset });
-    if (options.initialPage && this.#workflow.state.kind !== "idle") this.#restoreSelection(this.#anchor);
+    if (options.initialPage && this.#workflow.state.kind !== "idle" && this.#workflow.context.query === this.#query) this.#restoreSelection(this.#anchor);
     this.selector.onChange = () => this.onChange?.();
     this.selector.onCancel = () => this.onCancel?.();
     this.selector.onSelect = (session) => this.onSelect?.(session);
@@ -72,6 +72,13 @@ export class ResumeSelector implements PopupContent {
     };
     this.#unsubscribe = this.#workflow.subscribe(() => this.#syncWorkflow());
     this.#syncWorkflow();
+  }
+  /** Current view context is not recovery authority. Unknown visibility has no anchor. */
+  reconciliationContext(): DeletionContext {
+    const rows = this.#listStatus === "ready" ? this.selector.visibleSessions() : [];
+    const selected = this.#listStatus === "ready" ? this.selector.selectedSession()?.id : undefined;
+    return { query: this.#query, ids: rows.map((row) => row.id),
+      index: Math.max(0, rows.findIndex((row) => row.id === selected)), loaded: rows.length };
   }
   dispose(): void { ++this.#workflowSerial; ++this.#requestSerial; this.#unsubscribe(); }
   popupTitle(): string { return this.#state.kind === "selector" ? "Resume session" : "Session deletion"; }
@@ -102,7 +109,7 @@ export class ResumeSelector implements PopupContent {
       this.#state = { kind: "selector" };
     } else if (state.kind === "confirm") state.view.handleInput(data);
     else if (state.kind === "notice" && state.recoveryId && (data === "r" || data === "R")) {
-      this.#workflow.recover();
+      this.#workflow.recover(this.reconciliationContext());
     }
     this.onChange?.();
   }
@@ -140,7 +147,7 @@ export class ResumeSelector implements PopupContent {
     const reconciliation = workflow.reconciliation;
     if (reconciliation.kind === "pending" && this.#listStatus !== "ready") this.#listStatus = "pending";
     else if (reconciliation.kind === "failed" && this.#listStatus === "pending") this.#listStatus = "unavailable";
-    const page = reconciliation.kind === "ready" ? reconciliation.page : undefined;
+    const page = reconciliation.kind === "ready" && reconciliation.query === this.#query ? reconciliation.page : undefined;
     if (page && page !== this.#appliedPage) {
       this.#appliedPage = page;
       this.#listStatus = "ready";
