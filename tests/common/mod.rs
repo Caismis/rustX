@@ -1049,12 +1049,12 @@ pub fn native_fixture_with_extensions(
     )
     .expect("native tool registration");
     let ordinary_registry = registry.clone();
-    // The extension plane is derived from the owners the tool runtime just
-    // materialized — the only way to obtain one — rather than registered from
-    // the composition a second time (Issue #259).
-    runtime
-        .extension_tool_plane()
-        .register_into(&mut registry)
+    // The complete model Tool set, composed by the conversation whose state
+    // backs it: the extension half is derived from the owners the tool runtime
+    // just materialized, never registered from the composition a second time
+    // (Issue #259).
+    let registry = runtime
+        .compose_model_tools(registry)
         .expect("extension Tool registration");
     let mailbox = runtime.mailbox();
     NativeFixture {

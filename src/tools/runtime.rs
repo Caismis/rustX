@@ -626,6 +626,32 @@ impl ConversationToolRuntime {
         crate::extensions::ExtensionToolPlane::of_materialized_owners(self.todos.as_ref())
     }
 
+    /// This conversation's complete model Tool set: `ordinary` composed with
+    /// the extension Tools this runtime's frozen composition materialized
+    /// (Issue #259).
+    ///
+    /// The two planes are composed exactly as the capability coordinator
+    /// composes them, and the composition is named by the conversation whose
+    /// state backs it: there is no way to obtain one conversation's extension
+    /// Tools and register them somewhere unrelated.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first [`ToolRegistryError`] the composition violates — in
+    /// practice, an identity collision between an ordinary Tool and an
+    /// extension-provided one.
+    ///
+    /// [`ToolRegistryError`]: crate::tools::executor::ToolRegistryError
+    pub fn compose_model_tools(
+        &self,
+        ordinary: crate::tools::executor::ToolRegistry,
+    ) -> Result<crate::tools::executor::ToolRegistry, crate::tools::executor::ToolRegistryError>
+    {
+        let mut composed = ordinary;
+        self.extension_tool_plane().register_into(&mut composed)?;
+        Ok(composed)
+    }
+
     /// Process-local Workflow read authority shared with the native orchestrator.
     #[must_use]
     pub fn workflows(&self) -> &crate::runtime::workflow::read_model::WorkflowReadModel {
