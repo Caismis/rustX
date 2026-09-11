@@ -1147,3 +1147,57 @@ describe("real rustx child repeated compaction", { skip: SKIP }, () => {
     assert.ok(transcript.includes(FILLER_TWO_MARKER));
   });
 });
+
+it("Session deletion: real resume UI → attachment → native preview/block/delete; restart and zero provider calls", { skip: SKIP, timeout: 30_000 }, async (t) => {
+  const { ResumeSelector } = await import("../src/ui/components/resume-selector.ts");
+  const provider = await ProviderEmulator.start("tui_integration");
+  const fixture = TempFixture.create("rustx-resume-delete-");
+  const workspace = fixture.path("workspace"); mkdirSync(workspace);
+  writeFileSync(fixture.path("models.jsonc"), modelsJson(provider.url("/v1")));
+  writeFileSync(fixture.path("rustx.jsonc"), RUNTIME_CONFIG_JSON);
+  const options: ChildRuntimeProcessOptions = { binary: BINARY, paths: {
+    models: fixture.path("models.jsonc"), config: fixture.path("rustx.jsonc"), workspace, runtimeRoot: fixture.path("private"),
+  }, env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE } };
+  let child = spawnTrusted(options);
+  const attach = async () => {
+    const connection = new RuntimeClientConnection({ input: child.stdout, output: child.stdin });
+    void child.wait().then((exit) => connection.reportProcessExit(exit.code, exit.signal, exit.spawnError));
+    const session = new RuntimeClientAttachment({ connection }); await session.attach(); return session;
+  };
+  t.after(async () => {
+    try { await session.shutdown(); } catch { /* A completed Session switch already quiesced this runtime. */ }
+    child.closeStdin(); await child.waitOrTerminate();
+    try { await provider.finish(); } finally { fixture.cleanup(); }
+  });
+  let session = await attach();
+  await session.submitInbound([{ type: "text", text: "hello from the tui" }]);
+  await until(() => session.state?.attempt?.phase.type === "settled", "fixture history committed");
+  const historical = await session.refreshSession();
+  await session.cloneSession();
+  child.closeStdin(); await child.waitOrTerminate();
+  options.startup = { continueActiveSession: true, skillPaths: [], noSkills: false, noBuiltinTools: false, noTools: false };
+  child = spawnTrusted(options); session = await attach();
+  const active = await session.refreshSession();
+  const before = structuredClone(session.state), beforeModel = await session.modelGet(), beforeProvider = await provider.requests();
+  const feedback: string[] = [];
+  const page = await session.listSessions();
+  const view = new ResumeSelector({ ...page, client: session, alive: () => true, feedback: (text) => feedback.push(text) });
+  view.selector.selectIdentity(active.id); view.handleInput("\x04");
+  await until(() => view.render(100).map(plainText).join(" ").includes("/new"), "native current Session blocker");
+  view.handleInput("\x1b");
+  view.selector.selectIdentity(historical.id); view.handleInput("\x04");
+  await until(() => view.render(100).map(plainText).join(" ").includes("❯ Cancel"), "native historical preview");
+  view.handleInput("\r");
+  assert.ok((await session.listSessions()).sessions.some((row) => row.id === historical.id), "safe default cancels");
+  view.handleInput("\x04");
+  await until(() => view.render(100).map(plainText).join(" ").includes("❯ Cancel"), "fresh explicit preview");
+  view.handleInput("\t"); view.handleInput("\r"); view.handleInput("\r");
+  await until(() => feedback.includes("Session permanently deleted.") && !view.selector.visibleSessions().some((row) => row.id === historical.id), "native deletion and rebuilt list");
+  assert.deepEqual(session.state, before);
+  assert.deepEqual(await session.modelGet(), beforeModel);
+  assert.equal((await session.refreshSession()).id, active.id);
+  assert.deepEqual(await provider.requests(), beforeProvider, "management UI generated zero provider requests");
+  await session.shutdown(); child.closeStdin(); await child.waitOrTerminate(); child = spawnTrusted(options); session = await attach();
+  assert.ok(!(await session.listSessions()).sessions.some((row) => row.id === historical.id));
+  assert.ok((await session.listSessions()).sessions.some((row) => row.id === active.id), "independent clone preserved");
+});

@@ -83,7 +83,6 @@ import type {
 } from "../protocol/types.ts";
 import {
   BoundarySelector,
-  SessionSelector,
 } from "./components/session-selector.ts";
 import { TreeSelector, type TreeSelection } from "./components/tree-selector.ts";
 import {
@@ -98,6 +97,7 @@ import {
 } from "./subagent-navigation.ts";
 import { ModelSelector } from "./components/model-selector.ts";
 import { InspectionView } from "./components/inspection-view.ts";
+import { ResumeSelector } from "./components/resume-selector.ts";
 import { ConfirmationView } from "./components/confirmation.ts";
 import { PopupFrame, type PopupContent } from "./components/popup-frame.ts";
 import { TransientFeedbackSurface } from "./components/transient-feedback.ts";
@@ -498,6 +498,8 @@ export class RustxTuiApp {
           return { consume: true };
         }
         if (matchesKey(data, "escape")) {
+          // Focused popup components own cancellation and nested presentation state.
+          if (this.#overlay !== undefined && this.#hitlOverlay === undefined) return undefined;
           const state = this.#session.state;
           const attempt = state?.attempt;
           const acted = this.#overlay !== undefined || (
@@ -665,6 +667,7 @@ export class RustxTuiApp {
     const lease = this.#presentationLease();
     const confirmation = new ConfirmationView({
       title: "Dispose retained workspace",
+      confirmLabel: "Dispose workspace",
       subject: `Subagent ${subagentId}`,
       warning: resourceState === "preserved_unresolved"
         ? "This workspace was preserved because physical settlement could not be proven. rustX will re-check ownership before attempting disposal."
@@ -1061,46 +1064,17 @@ export class RustxTuiApp {
       this.#showTransient("info", "no persisted sessions are available");
       return;
     }
-    let currentQuery = query;
-    let currentNextOffset = nextOffset;
-    let requestSerial = 0;
-    const selector = new SessionSelector({ sessions, nextOffset, query });
+    const selector = new ResumeSelector({
+      sessions, nextOffset, query, client: lease.session,
+      alive: () => this.#isCurrentPresentationLease(lease) && this.#overlay === handle,
+      feedback: (text) => this.#showTransient("info", text),
+    });
     const handle = this.#showPopup(selector, { width: "80%", heightPercent: 70 });
     selector.onChange = () => {
       if (this.#isCurrentPresentationLease(lease)) this.#tui.requestRender();
     };
     selector.onCancel = () => {
-      if (this.#isCurrentPresentationLease(lease) && this.#overlay === handle) {
-        this.#closeOverlay();
-      }
-    };
-    selector.onQueryChange = (nextQuery) => {
-      currentQuery = nextQuery;
-      currentNextOffset = undefined;
-      const serial = ++requestSerial;
-      void lease.session.listSessions(nextQuery, 0).then((page) => {
-        if (!this.#isCurrentPresentationLease(lease) || serial !== requestSerial) return;
-        currentNextOffset = page.nextOffset;
-        selector.replacePage(page.sessions, page.nextOffset);
-      }).catch((error: unknown) => {
-        if (!this.#isCurrentPresentationLease(lease) || serial !== requestSerial) return;
-        this.#showTransient("error", `session search failed: ${compactDiagnostic(error)}`);
-        selector.replacePage([], undefined);
-      });
-    };
-    selector.onLoadMore = () => {
-      const offset = currentNextOffset;
-      if (offset === undefined) return;
-      const serial = requestSerial;
-      void lease.session.listSessions(currentQuery, offset).then((page) => {
-        if (!this.#isCurrentPresentationLease(lease) || serial !== requestSerial) return;
-        currentNextOffset = page.nextOffset;
-        selector.appendPage(page.sessions, page.nextOffset);
-      }).catch((error: unknown) => {
-        if (!this.#isCurrentPresentationLease(lease) || serial !== requestSerial) return;
-        this.#showTransient("error", `session page failed: ${compactDiagnostic(error)}`);
-        selector.appendPage([], currentNextOffset);
-      });
+      if (this.#isCurrentPresentationLease(lease) && this.#overlay === handle) this.#closeOverlay();
     };
     selector.onSelect = (session) => {
       if (!this.#isCurrentPresentationLease(lease)) return;

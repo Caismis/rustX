@@ -25,6 +25,8 @@
  * model selector reads the catalog directly.
  */
 
+import { sanitizeField } from "../sanitize.ts";
+
 import type {
   AgentStatusView,
   BackgroundLifecycle,
@@ -58,7 +60,7 @@ import type { PresentationState } from "./state.ts";
  * them, and says so plainly when a Session has neither.
  */
 export function sessionRowLabel(session: SessionSummaryView): string {
-  return session.name ?? session.preview ?? "(no messages)";
+  return sanitizeField(session.name ?? session.preview ?? "(no messages)");
 }
 
 /**

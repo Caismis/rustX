@@ -40,6 +40,7 @@ export interface SessionSelectorOptions {
 export class SessionSelector implements PopupContent, Focusable {
   focused = false;
   onSelect?: (session: SessionSummaryView) => void;
+  onDelete?: (sessionId: string) => void;
   onCancel?: () => void;
   onChange?: () => void;
   onQueryChange?: (query: string) => void;
@@ -67,6 +68,16 @@ export class SessionSelector implements PopupContent, Focusable {
     this.onChange?.();
   }
 
+  selectedSession(): SessionSummaryView | undefined {
+    return this.visibleSessions()[this.#selected];
+  }
+
+  selectIdentity(id: string | undefined): void {
+    const index = this.visibleSessions().findIndex((session) => session.id === id);
+    this.#selected = Math.max(0, index);
+    this.onChange?.();
+  }
+
   /** Appends one native continuation page. */
   appendPage(sessions: SessionSummaryView[], nextOffset?: number): void {
     this.#sessions = [...this.#sessions, ...sessions];
@@ -82,7 +93,7 @@ export class SessionSelector implements PopupContent, Focusable {
 
   /** The popup's help line, contained by the frame below the body. */
   popupFooter(): string[] {
-    return ["↑↓ navigate · Enter select · Esc close"];
+    return ["↑↓ navigate · Enter select · Ctrl+D delete · Esc close"];
   }
 
   /**
@@ -117,6 +128,9 @@ export class SessionSelector implements PopupContent, Focusable {
     const visible = this.visibleSessions();
     if (matchesKey(data, "escape")) {
       this.onCancel?.();
+    } else if (matchesKey(data, "ctrl+d")) {
+      const selected = visible[this.#selected];
+      if (selected !== undefined) this.onDelete?.(selected.id);
     } else if (matchesKey(data, "enter")) {
       const selected = visible[this.#selected];
       if (selected !== undefined) this.onSelect?.(selected);

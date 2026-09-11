@@ -844,3 +844,34 @@ are rejected; reread and review before retrying. `/model` does not save defaults
 
 `/reload` requires quiescence and publishes resources only, not startup settings.
 See [the complete source/lifetime matrix and write guarantee](../docs/effective-settings.md).
+
+### Delete historical Sessions inside `/resume`
+
+Select a Session and press **Ctrl+D**. Rust first returns an authoritative preview
+for that exact Session identity. Review the target and native ownership counts.
+**Cancel is selected initially**: Enter cancels; use Tab or Left/Right to choose
+**Permanently delete**, then Enter. Esc cancels the focused surface. The same safe
+choice behavior applies to retained-workspace disposal.
+
+Deletion is permanent from rustX's perspective, including owned internal lineages
+and child conversations. Independent `/fork` and `/clone` Sessions and project
+files are preserved. The current Session is blocked: switch or use `/new` first.
+In-use Sessions or owned children must be released before deletion. Retained
+worktrees must be disposed explicitly through the existing subagent workspace
+action; Session deletion never disposes them automatically.
+
+A changed preview requires a fresh preview and another explicit confirmation.
+`CleanupPending` means the Session has been removed and cannot be resumed, but
+some local data still needs cleanup. Press **R** on the focused notice for one
+native recovery attempt. Durability uncertainty and unknown request outcomes are
+shown distinctly, with native list reconciliation and explicit recovery available;
+they are not reported as definite deletion failures.
+
+Search survives reconciliation. The selector rebuilds from offset zero using
+fresh native continuation pages, rejecting responses from older list generations,
+and selects the next matching neighbor (otherwise the previous or empty state).
+Deletion of unrelated history leaves the current runtime, transcript, editor,
+model and resources untouched and causes no model request.
+
+The TUI only confirms SessionId/revision; Rust owns scope, blockers, commit and
+cleanup. See [the native Session deletion lifecycle](../docs/session-deletion-lifecycle.md).

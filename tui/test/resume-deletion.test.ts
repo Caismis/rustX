@@ -1,0 +1,150 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { ResumeSelector } from "../src/ui/components/resume-selector.ts";
+import type { SessionDeleteResult, SessionSummaryView } from "../src/protocol/types.ts";
+import { plainText } from "../src/ui/theme.ts";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+const turn = () => new Promise<void>((resolve) => setImmediate(resolve));
+const row = (id: string): SessionSummaryView => ({ id, name: id, active_node: id, active: false, updated_at: "2026-09-11" });
+const preview = (id = "b", revision = "revision-1"): SessionDeleteResult => ({ status: "preview", preview: { session_id: id, name: id, target_revision: revision, owned_node_count: 1, owned_conversation_count: 2, owned_child_count: 1 } });
+const down = "\x1b[B", del = "\x04", esc = "\x1b";
+const confirm = (view: ResumeSelector) => { view.handleInput("\t"); view.handleInput("\r"); };
+function harness(options: { rows?: SessionSummaryView[]; query?: string; nextOffset?: number } = {}) {
+  const previews: string[] = [], executes: string[][] = [], recovers: string[] = [], lists: Array<[string | undefined, number | undefined]> = [], feedback: string[] = [];
+  let nativeRows = options.rows ?? [row("a"), row("b"), row("c")];
+  let previewResponse = deferred<SessionDeleteResult>();
+  let execution = deferred<SessionDeleteResult>();
+  let recovery = deferred<SessionDeleteResult>();
+  let list = async (_query?: string, _offset?: number): Promise<{ sessions: SessionSummaryView[]; nextOffset?: number }> => ({ sessions: nativeRows });
+  const view = new ResumeSelector({ sessions: nativeRows, query: options.query, nextOffset: options.nextOffset, alive: () => true, feedback: (text) => feedback.push(text), client: {
+    previewSessionDeletion: (id) => { previews.push(id); return previewResponse.promise; },
+    deleteSession: (id, revision) => { executes.push([id, revision]); return execution.promise; },
+    recoverSessionDeletion: (id) => { recovers.push(id); return recovery.promise; },
+    listSessions: (query, offset) => { lists.push([query, offset]); return list(query, offset); },
+  } });
+  return { view, previews, executes, recovers, lists, feedback,
+    get previewResponse() { return previewResponse; }, get execution() { return execution; }, get recovery() { return recovery; },
+    setPreview: () => { previewResponse = deferred(); }, setExecution: () => { execution = deferred(); },
+    rows: (rows: SessionSummaryView[]) => { nativeRows = rows; }, setList: (fn: typeof list) => { list = fn; },
+    text: () => view.render(100).map(plainText).join("\n"),
+    open: async () => { view.handleInput(down); view.handleInput(del); previewResponse.resolve(preview()); await turn(); },
+  };
+}
+
+test("1–7: exact preview, safe default/cancel, immutable confirmation, focus and single submit", async () => {
+  const h = harness();
+  await h.open();
+  assert.deepEqual(h.previews, ["b"]);
+  assert.deepEqual(h.executes, []);
+  assert.match(h.text(), /❯ Cancel/);
+  h.view.handleInput("\r");
+  assert.deepEqual(h.executes, []);
+  h.view.handleInput(del); await turn(); h.view.handleInput(esc);
+  assert.deepEqual(h.executes, []);
+  h.view.handleInput(del); await turn();
+  h.view.selector.replacePage([row("different")]);
+  for (const input of [down, "x", del]) h.view.handleInput(input);
+  assert.deepEqual(h.lists, []);
+  assert.equal(h.previews.length, 3);
+  confirm(h.view); h.view.handleInput("\r"); h.view.handleInput(del);
+  assert.deepEqual(h.executes, [["b", "revision-1"]]);
+});
+for (const [reason, text] of [
+  [{ kind: "current_session" }, /\/new/], [{ kind: "in_use" }, /currently in use/],
+  [{ kind: "workspace", resource_count: 3 }, /3 retained.*disposal/], [{ kind: "invalid_ownership" }, /ownership.*blocked/],
+] as const) test(`8–10: native ${reason.kind} is a non-executable blocker`, async () => {
+  const h = harness({ rows: [{ ...row("b"), active: true }] });
+  h.view.handleInput(del);
+  assert.deepEqual(h.previews, ["b"], "active flag cannot bypass Rust preview");
+  h.previewResponse.resolve({ status: "blocked", session_id: "b", reason }); await turn();
+  assert.match(h.text(), text);
+  confirm(h.view); h.view.handleInput(del); h.view.handleInput("r");
+  assert.deepEqual(h.executes, []); assert.deepEqual(h.recovers, []); assert.equal(h.previews.length, 1);
+  h.view.handleInput(esc); assert.equal(h.view.selector.visibleSessions().length, 1);
+});
+test("11: stale requires a fresh token and second explicit confirmation", async () => {
+  const h = harness(); await h.open(); confirm(h.view);
+  h.setPreview(); h.execution.resolve({ status: "stale", session_id: "b" }); await turn();
+  assert.deepEqual(h.previews, ["b", "b"]);
+  h.previewResponse.resolve(preview("b", "revision-2")); await turn();
+  assert.equal(h.executes.length, 1); assert.match(h.text(), /❯ Cancel/);
+  h.setExecution(); confirm(h.view);
+  assert.deepEqual(h.executes, [["b", "revision-1"], ["b", "revision-2"]]);
+});
+test("12–13,20: no optimistic removal; authoritative rebuild selects next, previous, empty", async () => {
+  for (const rows of [[row("a"), row("c")], [row("a")], []]) {
+    const h = harness(); await h.open(); confirm(h.view);
+    assert.deepEqual(h.view.selector.visibleSessions().map((r) => r.id), ["a", "b", "c"]);
+    h.rows(rows); h.execution.resolve({ status: "deleted", session_id: "b" }); await turn();
+    assert.deepEqual(h.lists, [["", 0]]);
+    assert.equal(h.view.selector.selectedSession()?.id, rows.at(-1)?.id);
+    assert.match(h.feedback.join(), /permanently deleted/);
+  }
+});
+test("12,16: rejected execute reconciles native rows and never calls execute again", async () => {
+  for (const remains of [true, false]) {
+    const h = harness(); await h.open(); confirm(h.view);
+    if (!remains) h.rows([row("a"), row("c")]);
+    h.execution.reject(new Error("response lost or pre-commit error")); await turn();
+    assert.match(h.text(), /outcome unknown/); assert.doesNotMatch(h.text(), /delete failed/);
+    assert.equal(h.view.selector.visibleSessions().some((r) => r.id === "b"), remains);
+    assert.equal(h.executes.length, 1); assert.deepEqual(h.lists, [["", 0]]);
+  }
+});
+test("14: committed cleanup stays absent and retry is native and single-submit", async () => {
+  const h = harness(); await h.open(); confirm(h.view); h.rows([row("a")]);
+  h.execution.resolve({ status: "committed_cleanup_pending", session_id: "b" }); await turn();
+  assert.match(h.text(), /removed and cannot be resumed/);
+  assert.deepEqual(h.view.selector.visibleSessions().map((r) => r.id), ["a"]);
+  h.view.handleInput("r"); h.view.handleInput("r"); confirm(h.view);
+  assert.deepEqual(h.recovers, ["b"]); assert.equal(h.executes.length, 1);
+  h.recovery.resolve({ status: "deleted", session_id: "b" }); await turn();
+  assert.equal(h.lists.length, 2);
+});
+test("15: durability uncertainty and not-found are distinct from definite failure/success", async () => {
+  for (const status of ["committed_durability_uncertain", "not_found"] as const) {
+    const h = harness(); await h.open(); confirm(h.view); h.rows([]);
+    h.execution.resolve({ status, session_id: "b" }); await turn();
+    assert.match(h.text(), status === "not_found" ? /absent/ : /durability is uncertain/);
+    assert.doesNotMatch(h.text() + h.feedback.join(), /permanently deleted|delete failed/);
+    assert.deepEqual(h.view.selector.visibleSessions(), []);
+  }
+});
+test("17–19: old continuation cannot resurrect rows; search and fresh page offsets survive mutation", async () => {
+  const h = harness({ rows: [row("b0"), row("b1")], query: "b", nextOffset: 2 });
+  const oldPage = deferred<{ sessions: SessionSummaryView[]; nextOffset?: number }>();
+  h.setList(async () => oldPage.promise);
+  h.view.handleInput(down); h.view.handleInput(down); // starts old continuation
+  h.view.selector.selectIdentity("b1"); h.view.handleInput(del);
+  h.previewResponse.resolve(preview("b1")); await turn(); confirm(h.view);
+  h.setList(async (_q, offset) => offset === 0 ? { sessions: [row("b0")], nextOffset: 1 } : { sessions: [row("b2")], nextOffset: 2 });
+  h.execution.resolve({ status: "deleted", session_id: "b1" }); await turn();
+  oldPage.resolve({ sessions: [row("b1"), row("b2")], nextOffset: 4 }); await turn();
+  assert.deepEqual(h.lists, [["b", 2], ["b", 0], ["b", 1]]);
+  assert.deepEqual(h.view.selector.visibleSessions().map((r) => r.id), ["b0", "b2"]);
+  assert.equal(h.view.selector.selectedSession()?.id, "b2");
+});
+test("empty/nonmatching Ctrl+D is inert; confirmation is bounded and sanitizes external names", async () => {
+  const empty = harness({ rows: [] }); empty.view.handleInput(del); assert.deepEqual(empty.previews, []);
+  const h = harness(); h.view.handleInput(del);
+  const value = preview("a"); assert.equal(value.status, "preview");
+  if (value.status === "preview") value.preview.name = "weird\x1b[2J\n\u202e名字";
+  h.previewResponse.resolve(value); await turn();
+  h.view.setBodyHeight(3); const lines = h.view.render(12).map(plainText);
+  assert.ok(lines.length <= 3); assert.ok(lines.every((line) => !/[\x1b\n\u202e]/.test(line)));
+});
+
+test("22: presentation deletion path has no filesystem/process/provider authority", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../src/ui/components/resume-selector.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /node:|RuntimeClientConnection|submitInbound|selectSession|newSession|modelSet|spawn|unlink|removeDirectory|\.request\(/);
+  const attachment = await readFile(new URL("../src/runtime/attachment.ts", import.meta.url), "utf8");
+  const deletion = attachment.slice(attachment.indexOf("  previewSessionDeletion("), attachment.indexOf("  /** Lists bounded persisted Sessions"));
+  assert.doesNotMatch(deletion, /node:|unlink|spawn|submitInbound|#state\s*=/);
+});

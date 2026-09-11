@@ -59,6 +59,8 @@ import {
   type RuntimeClientTranscriptPage,
   type RuntimeClientOutcome,
   type SessionSummaryView,
+  type SessionDeleteResult,
+  type RuntimeClientRequestBody,
   type SessionNodeView,
   type SessionUserMessageBoundaryView,
   type SessionView,
@@ -540,6 +542,30 @@ export class RuntimeClientAttachment {
     }
     this.#sessionInfo = result.session;
     return result.session;
+  }
+
+  /** Native Session control only; no projection or active attachment mutation. */
+  previewSessionDeletion(sessionId: string): Promise<SessionDeleteResult> {
+    return this.#sessionDeletion({ method: "session_delete_preview", session_id: sessionId });
+  }
+
+  deleteSession(sessionId: string, expectedTargetRevision: string): Promise<SessionDeleteResult> {
+    return this.#sessionDeletion({ method: "session_delete", session_id: sessionId, expected_target_revision: expectedTargetRevision });
+  }
+
+  recoverSessionDeletion(sessionId: string): Promise<SessionDeleteResult> {
+    return this.#sessionDeletion({ method: "session_delete_recover", session_id: sessionId });
+  }
+
+  async #sessionDeletion(request: Extract<RuntimeClientRequestBody, { method: "session_delete_preview" | "session_delete" | "session_delete_recover" }>): Promise<SessionDeleteResult> {
+    const response = await this.#connection.request(request);
+    if (response.type !== "session_deletion") {
+      throw new Error(`${request.method} returned ${response.type}`);
+    }
+    const result = response.result;
+    const id = result.status === "preview" ? result.preview.session_id : result.session_id;
+    if (id !== request.session_id) throw new Error(`${request.method} returned a different Session`);
+    return result;
   }
 
   /** Lists bounded persisted Sessions for `/resume`. */

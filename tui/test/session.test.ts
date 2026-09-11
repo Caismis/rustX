@@ -650,3 +650,23 @@ describe("RuntimeClientAttachment", () => {
     assert.equal((await reading).configured.model, "alpha/model-a");
   });
 });
+
+for (const [method, invoke] of [
+  ["session_delete_preview", (session: RuntimeClientAttachment) => session.previewSessionDeletion("session-2")],
+  ["session_delete", (session: RuntimeClientAttachment) => session.deleteSession("session-2", "revision")],
+  ["session_delete_recover", (session: RuntimeClientAttachment) => session.recoverSessionDeletion("session-2")],
+] as const) {
+  it(`${method} wrapper preserves native results and exact request envelope`, async () => {
+    const { peer, session } = connect();
+    const result = invoke(session);
+    await peer.awaitRequests(1);
+    assert.deepEqual(peer.requests[0], { id: 1, method, session_id: "session-2", ...(method === "session_delete" ? { expected_target_revision: "revision" } : {}) });
+    peer.respond(1, { type: "session_deletion", result: { status: "not_found", session_id: "session-2" } });
+    assert.deepEqual(await result, { status: "not_found", session_id: "session-2" });
+  });
+  it(`${method} wrapper rejects the wrong response envelope`, async () => {
+    const { peer, session } = connect(); const result = invoke(session);
+    await peer.awaitRequests(1); peer.respond(1, { type: "session", session: sessionView() });
+    await assert.rejects(result, /returned session/);
+  });
+}

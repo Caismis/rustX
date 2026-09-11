@@ -9,7 +9,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { TUI } from "@earendil-works/pi-tui";
+import { TUI, Editor } from "@earendil-works/pi-tui";
 
 import { RustxTuiApp } from "../src/ui/app.ts";
 import { ConnectionClosedError, RuntimeRequestError } from "../src/runtime/connection.ts";
@@ -435,6 +435,35 @@ describe("RustxTuiApp lifecycle", () => {
 
     await app.quit();
     await running;
+  });
+
+  it("Session deletion overlay preserves editor, attachment and active projection and owns Esc", async () => {
+    const state = emptyPresentationState(sessionModel("alpha/model-a"));
+    const session = fakeSession(async () => {}, state);
+    const log: string[] = [];
+    const api = session as RuntimeClientAttachment;
+    let previews = 0, executes = 0, cancelled = 0;
+    api.listSessions = async () => ({ sessions: [{ id: "old", name: "history", updated_at: "today", active_node: "node-2", active: false }] });
+    api.previewSessionDeletion = async () => { previews++; return { status: "preview", preview: { session_id: "old", name: "history", target_revision: "revision", owned_node_count: 1, owned_conversation_count: 1, owned_child_count: 0 } }; };
+    api.deleteSession = async (id, revision) => { assert.equal(id, "old"); assert.equal(revision, "revision"); executes++; api.listSessions = async () => ({ sessions: [] }); return { status: "deleted", session_id: id }; };
+    api.cancelCurrentAttempt = async () => { cancelled++; return "attempt"; };
+    const app = new RustxTuiApp({ session, connection: fakeConnection(), child: fakeChild(log) });
+    const originalSetText = Editor.prototype.setText;
+    let editorWrites = 0;
+    Editor.prototype.setText = function(text: string): void { editorWrites++; originalSetText.call(this, text); };
+    const running = app.run();
+    try {
+      process.stdin.emit("data", "/resume\r"); await waitForApplicationContinuation();
+      const writesBeforeDeletion = editorWrites;
+      process.stdin.emit("data", "\x04"); await waitForApplicationContinuation();
+      process.stdin.emit("data", "\x1b"); await waitForPiEscapeDisambiguation();
+      assert.equal(cancelled, 0); assert.equal(executes, 0);
+      process.stdin.emit("data", "\x04"); await waitForApplicationContinuation();
+      process.stdin.emit("data", "\t\r"); await waitForApplicationContinuation();
+      assert.equal(previews, 2); assert.equal(executes, 1);
+      assert.equal(session.state, state); assert.deepEqual(log, []);
+      assert.equal(editorWrites, writesBeforeDeletion, "deletion never resets the editor");
+    } finally { Editor.prototype.setText = originalSetText; await app.quit(); await running; }
   });
 
   it("opens a questionnaire overlay and submits one typed response", async () => {
