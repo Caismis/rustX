@@ -97,6 +97,7 @@ import {
 } from "./subagent-navigation.ts";
 import { ModelSelector } from "./components/model-selector.ts";
 import { InspectionView } from "./components/inspection-view.ts";
+import { SessionDeletionWorkflow } from "./session-deletion-workflow.ts";
 import { ResumeSelector } from "./components/resume-selector.ts";
 import { ConfirmationView } from "./components/confirmation.ts";
 import { PopupFrame, type PopupContent } from "./components/popup-frame.ts";
@@ -250,6 +251,8 @@ export class RustxTuiApp {
   #subagentListFocused = false;
   #selectedSubagentId: string | undefined;
   #presentationEpoch = 0;
+  #deletion!: SessionDeletionWorkflow;
+  #resumePresentation: ResumeSelector | undefined;
   #terminalFinishStarted = false;
   #removeStateListener: (() => void) | undefined;
   #removeSnapshotListener: (() => void) | undefined;
@@ -300,6 +303,7 @@ export class RustxTuiApp {
   ): void {
     // Binding a new attachment invalidates every local surface and every
     // continuation that was started against the previous one.
+    this.#deletion?.terminate();
     this.#invalidatePresentation();
     this.#removeStateListener?.();
     this.#removeSnapshotListener?.();
@@ -308,6 +312,16 @@ export class RustxTuiApp {
     this.#connection = connection;
     this.#child = child;
     this.#dispatcher.setSession(session);
+    const deletion = new SessionDeletionWorkflow(session,
+      () => this.#session === session && this.#connection === connection &&
+        connection.closed === undefined && !this.#finished && !this.#terminalFinishStarted,
+      (text) => this.#showTransient("info", text));
+    this.#deletion = deletion;
+    deletion.subscribe(() => {
+      if (this.#deletion !== deletion) return;
+      this.#syncDeletionPresentation();
+      this.#tui.requestRender();
+    });
     this.#removeSnapshotListener = session.onSnapshot(() => {
       // A resync is an authoritative replacement within this attachment. It
       // invalidates local inspection, picker, and transient ownership, while
@@ -325,6 +339,7 @@ export class RustxTuiApp {
     const boundSession = session;
     this.#removeCloseListener = connection.onClose((error) => {
       if (this.#connection !== connection || this.#session !== boundSession) return;
+      deletion.terminate();
       if (this.#restarting || this.#quitting || this.#terminalFinishStarted) return;
       if (this.#navigating) return;
       if (this.#navigationStack.length > 0) {
@@ -990,7 +1005,7 @@ export class RustxTuiApp {
     content: PopupContent,
     options: { width: SizeValue; heightPercent: number; minWidth?: number },
   ): OverlayHandle {
-    this.#closeOverlay();
+    this.#closeOverlay(true);
     const frame = new PopupFrame(content);
     const handle = this.#tui.showOverlay(frame, {
       width: options.width,
@@ -1060,16 +1075,20 @@ export class RustxTuiApp {
     lease: PresentationLease,
   ): void {
     if (!this.#isCurrentPresentationLease(lease)) return;
-    if (sessions.length === 0) {
+    if (this.#hitlOverlay !== undefined) return;
+    const workflow = this.#deletion;
+    if (workflow.state.kind !== "idle") query = workflow.context.query;
+    if (sessions.length === 0 && workflow.state.kind === "idle") {
       this.#showTransient("info", "no persisted sessions are available");
       return;
     }
     const selector = new ResumeSelector({
-      sessions, nextOffset, query, client: lease.session,
+      sessions, nextOffset, query, client: lease.session, workflow,
       alive: () => this.#isCurrentPresentationLease(lease) && this.#overlay === handle,
       feedback: (text) => this.#showTransient("info", text),
     });
     const handle = this.#showPopup(selector, { width: "80%", heightPercent: 70 });
+    this.#resumePresentation = selector;
     selector.onChange = () => {
       if (this.#isCurrentPresentationLease(lease)) this.#tui.requestRender();
     };
@@ -1087,6 +1106,18 @@ export class RustxTuiApp {
           }
         });
     };
+  }
+
+  /** HITL and any current popup keep focus; unresolved native outcomes wait here. */
+  #syncDeletionPresentation(): void {
+    const workflow = this.#deletion;
+    if (workflow?.state.kind === "result" && workflow.state.outcome.status === "deleted" && !this.#resumePresentation) {
+      workflow.dismiss();
+      return;
+    }
+    if (!workflow?.needsPresentation || this.#overlay !== undefined || this.#finished || this.#terminalFinishStarted) return;
+    this.#showSessionSelector(workflow.page?.sessions ?? [], workflow.page?.nextOffset,
+      workflow.context.query, this.#presentationLease());
   }
 
   #showBoundarySelector(
@@ -1202,13 +1233,16 @@ export class RustxTuiApp {
     };
   }
 
-  #closeOverlay(): void {
+  #closeOverlay(replacing = false): void {
     const handle = this.#overlay;
     if (handle === undefined) return;
+    this.#resumePresentation?.dispose();
+    this.#resumePresentation = undefined;
     handle.hide();
     this.#overlay = undefined;
     this.#hitlOverlay = undefined;
     this.#tui.setFocus(this.#editor);
+    if (!replacing) this.#syncDeletionPresentation();
     this.#tui.requestRender();
   }
 
@@ -1539,7 +1573,7 @@ export class RustxTuiApp {
   }
 
   #resetLocalSurfaces(): void {
-    this.#closeOverlay();
+    this.#closeOverlay(true);
     // An authoritative replacement re-derives presentation focus from the
     // new projection: no stale overlay or dismissed marker may submit
     // against, or hide, an interaction the runtime owns now.
@@ -1658,6 +1692,7 @@ export class RustxTuiApp {
       ),
     );
     this.#syncHitlOverlay(state);
+    this.#syncDeletionPresentation();
     this.#tui.requestRender();
   }
 
@@ -1744,7 +1779,9 @@ export class RustxTuiApp {
             ),
           ),
         };
-        if (this.#hitlOverlay === overlay) this.#closeOverlay();
+        if (this.#hitlOverlay === overlay) {
+          this.#closeOverlay();
+        }
       },
       onInterrupt: () => void this.#onInterrupt(),
       onNavigate: (interaction) => {
@@ -1828,6 +1865,7 @@ export class RustxTuiApp {
   }
 
   #finish(code: number): void {
+    this.#deletion.terminate();
     if (this.#finished) {
       return;
     }

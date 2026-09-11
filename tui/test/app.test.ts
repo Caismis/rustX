@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { TUI, Editor } from "@earendil-works/pi-tui";
 
+import { plainText } from "../src/ui/theme.ts";
 import { RustxTuiApp } from "../src/ui/app.ts";
 import { ConnectionClosedError, RuntimeRequestError } from "../src/runtime/connection.ts";
 import { emptyPresentationState } from "../src/presentation/projection.ts";
@@ -1658,4 +1659,222 @@ describe("RustxTuiApp lifecycle", () => {
     await app.quit();
     await running;
   });
+});
+
+/** Real app routing with native operations held at explicit submission gates. */
+async function deletionAppHarness() {
+  const state = { ...emptyPresentationState(sessionModel("alpha/model-a")), attempt: { ...attemptView(), phase: { type: "running" as const } } };
+  const session = fakeSession(async () => {}, state) as RuntimeClientAttachment & {
+    publishState(next: typeof state): void;
+    publishSnapshot(): void;
+  };
+  let preview = deferred<SessionDeleteResult>();
+  const previews: string[] = [];
+  const execution = deferred<SessionDeleteResult>();
+  const recovery = deferred<SessionDeleteResult>();
+  const lists: Array<[string | undefined, number | undefined]> = [];
+  const executes: string[][] = [], recovers: string[] = [], responses: unknown[] = [];
+  let cancelled = 0;
+  let rows: SessionSummaryView[] = [{ id: "old", name: "historical-target", updated_at: "today", active_node: "node-2", active: false }];
+  session.listSessions = async (query, offset = 0) => { lists.push([query, offset]); return { sessions: [...rows] }; };
+  session.previewSessionDeletion = (id) => { previews.push(id); return preview.promise; };
+  session.deleteSession = (id, revision) => { executes.push([id, revision]); return execution.promise; };
+  session.recoverSessionDeletion = (id) => { recovers.push(id); return recovery.promise; };
+  session.cancelCurrentAttempt = async () => { cancelled++; return "attempt-1"; };
+  session.respondInteraction = async (interaction, response) => { responses.push({ interaction, response }); };
+  session.submitInbound = async () => { assert.fail("deletion must not submit model-visible input"); };
+  let close!: (error: ConnectionClosedError) => void;
+  const connection = fakeConnection((listener) => { close = listener; });
+  const original = TUI.prototype.showOverlay;
+  const surfaces: Array<{ content: Parameters<TUI["showOverlay"]>[0]; visible: boolean }> = [];
+  TUI.prototype.showOverlay = function(content, options) {
+    const surface = { content, visible: true };
+    surfaces.push(surface);
+    const handle = original.call(this, content, options);
+    const hide = handle.hide;
+    handle.hide = () => { surface.visible = false; hide(); };
+    return handle;
+  };
+  const app = new RustxTuiApp({ session, connection, child: fakeChild([]) });
+  const running = app.run();
+  const input = async (data: string) => { process.stdin.emit("data", data); await waitForApplicationContinuation(); };
+  await input("/resume\r");
+  await input("\x04");
+  return {
+    session, state, execution, recovery, lists, executes, recovers, responses, previews,
+    cancelled: () => cancelled,
+    surface: () => surfaces.findLast((surface) => surface.visible),
+    text: () => surfaces.findLast((surface) => surface.visible)?.content.render(120).map(plainText).join("\n") ?? "",
+    absent: () => { rows = []; },
+    input,
+    resetPreview: () => { preview = deferred<SessionDeleteResult>(); },
+    resolvePreview: async (revision = "revision") => {
+      preview.resolve({ status: "preview", preview: { session_id: "old", name: "historical-target", target_revision: revision, owned_node_count: 1, owned_conversation_count: 1, owned_child_count: 0 } });
+      await waitForApplicationContinuation();
+    },
+    takeover: (interaction: typeof state.pendingInteractions[number]) => {
+      session.publishState({ ...state, pendingInteractions: [interaction] });
+    },
+    resync: () => { session.publishSnapshot(); session.publishState(state); },
+    terminal: () => close(new ConnectionClosedError("process_exit", "transport ended")),
+    finish: async () => { await app.quit(); await running; TUI.prototype.showOverlay = original; },
+  };
+}
+
+it("execute settlement survives approval takeover and retains exact cleanup recovery", async () => {
+  const h = await deletionAppHarness();
+  try {
+    await h.resolvePreview(); await h.input("\t\r");
+    assert.deepEqual(h.executes, [["old", "revision"]]);
+    const deletionSurface = h.surface();
+    h.takeover(approvalInteraction());
+    const approvalSurface = h.surface();
+    assert.notEqual(approvalSurface, deletionSurface);
+    assert.equal(deletionSurface?.visible, false);
+    assert.match(h.text(), /Deny/);
+    h.absent(); h.execution.resolve({ status: "committed_cleanup_pending", session_id: "old" });
+    await waitForApplicationContinuation();
+    assert.equal(h.surface(), approvalSurface, "cleanup cannot steal HITL focus");
+    assert.deepEqual(h.lists, [[undefined, 0], ["", 0]]);
+    assert.deepEqual(h.responses, []); assert.equal(h.cancelled(), 0);
+    await h.input("\x1b[27u"); // ordinary approval dismissal, not an answer
+    assert.match(h.text(), /removed and cannot be resumed/);
+    assert.match(h.text(), /R retry native cleanup/);
+    assert.doesNotMatch(h.text(), /historical-target/);
+    await h.input("rr\r\x04\x1b[27u");
+    assert.deepEqual(h.recovers, ["old"]); assert.equal(h.executes.length, 1);
+    assert.equal(h.cancelled(), 0); assert.deepEqual(h.responses, []);
+  } finally { await h.finish(); }
+});
+
+it("deleted settlement reconciles during questionnaire takeover without stealing focus", async () => {
+  const h = await deletionAppHarness();
+  try {
+    await h.resolvePreview(); await h.input("\t\r");
+    const question = questionnaireInteraction(); h.takeover(question);
+    const surface = h.surface();
+    h.absent(); h.execution.resolve({ status: "deleted", session_id: "old" });
+    await waitForApplicationContinuation();
+    assert.deepEqual(h.lists, [[undefined, 0], ["", 0]]);
+    assert.equal(h.surface(), surface); assert.equal(h.executes.length, 1);
+    assert.equal(h.cancelled(), 0); assert.deepEqual(h.responses, []);
+    await h.input("\x1b[27u");
+    assert.deepEqual(h.responses, [{ interaction: question.interaction, response: { type: "questionnaire", response: { type: "declined" } } }]);
+    h.session.publishState(h.state);
+    assert.equal(h.surface(), undefined, "success does not reopen the deleted popup");
+    await h.input("/resume\r");
+    assert.doesNotMatch(h.text(), /historical-target/);
+  } finally { await h.finish(); }
+});
+
+for (const takeover of ["HITL", "snapshot"] as const) {
+  it(`recovery settlement survives ${takeover} replacement and reconciles fresh native visibility`, async () => {
+    const h = await deletionAppHarness();
+    try {
+      await h.resolvePreview(); await h.input("\t\r"); h.absent();
+      h.execution.resolve({ status: "committed_cleanup_pending", session_id: "old" });
+      await waitForApplicationContinuation(); await h.input("rr");
+      assert.deepEqual(h.recovers, ["old"]);
+      const old = h.surface();
+      if (takeover === "HITL") h.takeover(approvalInteraction()); else h.resync();
+      assert.equal(old?.visible, false, "disposable popup really was invalidated");
+      const replacement = h.surface();
+      h.recovery.resolve({ status: "deleted", session_id: "old" });
+      await waitForApplicationContinuation();
+      assert.deepEqual(h.lists, [[undefined, 0], ["", 0], ["", 0]]);
+      assert.equal(h.executes.length, 1); assert.deepEqual(h.recovers, ["old"]);
+      assert.equal(h.cancelled(), 0); assert.deepEqual(h.responses, []);
+      if (takeover === "HITL") assert.equal(h.surface(), replacement);
+      else assert.doesNotMatch(h.text(), /historical-target/);
+    } finally { await h.finish(); }
+  });
+}
+
+for (const status of ["committed_cleanup_pending", "committed_durability_uncertain", "unknown"] as const) {
+  it(`execute ${status} remains recoverable across same-attachment snapshot invalidation`, async () => {
+    const h = await deletionAppHarness();
+    try {
+      await h.resolvePreview(); await h.input("\t\r");
+      const old = h.surface(); h.resync(); assert.equal(old?.visible, false);
+      h.absent();
+      if (status === "unknown") h.execution.reject(new Error("response rejected on live transport"));
+      else h.execution.resolve({ status, session_id: "old" });
+      await waitForApplicationContinuation();
+      assert.deepEqual(h.lists, [[undefined, 0], ["", 0]]);
+      assert.match(h.text(), status === "unknown" ? /outcome unknown/ : status === "committed_cleanup_pending" ? /removed and cannot be resumed/ : /durability is uncertain/);
+      assert.doesNotMatch(h.text(), /delete failed|historical-target/);
+      await h.input("rr"); assert.deepEqual(h.recovers, ["old"]);
+      assert.equal(h.executes.length, 1); assert.equal(h.cancelled(), 0);
+    } finally { await h.finish(); }
+  });
+}
+
+for (const takeover of ["HITL", "snapshot"] as const) {
+  it(`preview remains disposable across ${takeover} replacement`, async () => {
+    const h = await deletionAppHarness();
+    try {
+      const old = h.surface();
+      if (takeover === "HITL") h.takeover(approvalInteraction()); else h.resync();
+      assert.equal(old?.visible, false);
+      const replacement = h.surface();
+      await h.resolvePreview();
+      assert.equal(h.surface(), replacement);
+      assert.doesNotMatch(h.text(), /Permanently delete/);
+      assert.deepEqual(h.executes, []); assert.deepEqual(h.recovers, []);
+      assert.equal(h.cancelled(), 0);
+    } finally { await h.finish(); }
+  });
+}
+
+it("terminal transport ends deletion observation without execute replay or fabricated failure", async () => {
+  const h = await deletionAppHarness();
+  try {
+    await h.resolvePreview(); await h.input("\t\r");
+    h.terminal(); await waitForApplicationContinuation();
+    h.execution.reject(new Error("transport ended")); await waitForApplicationContinuation();
+    assert.equal(h.surface(), undefined);
+    assert.deepEqual(h.executes, [["old", "revision"]]);
+    assert.deepEqual(h.recovers, []); assert.deepEqual(h.lists, [[undefined, 0]]);
+    assert.equal(h.cancelled(), 0);
+  } finally { await h.finish(); }
+});
+
+it("stale settlement waits through HITL for fresh preview and a second explicit confirmation", async () => {
+  const h = await deletionAppHarness();
+  try {
+    await h.resolvePreview(); await h.input("\t\r"); h.resetPreview();
+    h.takeover(approvalInteraction()); const approval = h.surface();
+    h.execution.resolve({ status: "stale", session_id: "old" });
+    await waitForApplicationContinuation();
+    assert.equal(h.surface(), approval); assert.deepEqual(h.previews, ["old"]);
+    await h.input("\x1b[27u");
+    assert.deepEqual(h.previews, ["old", "old"]);
+    assert.match(h.text(), /Waiting for native preview/);
+    await h.resolvePreview("new-revision");
+    assert.match(h.text(), /❯ Cancel/); assert.equal(h.executes.length, 1);
+    await h.input("\t\r");
+    assert.deepEqual(h.executes, [["old", "revision"], ["old", "new-revision"]]);
+  } finally { await h.finish(); }
+});
+
+for (const outcome of [
+  { status: "blocked", session_id: "old", reason: { kind: "in_use" } },
+  { status: "committed_durability_uncertain", session_id: "old" },
+  { status: "not_found", session_id: "old" },
+] as const) it(`${outcome.status} settlement survives HITL and presents the native result afterward`, async () => {
+  const h = await deletionAppHarness();
+  try {
+    await h.resolvePreview(); await h.input("\t\r");
+    h.takeover(approvalInteraction()); const approval = h.surface();
+    h.execution.resolve(outcome); await waitForApplicationContinuation();
+    assert.equal(h.surface(), approval);
+    assert.deepEqual(h.lists, [[undefined, 0], ["", 0]]);
+    await h.input("\x1b[27u");
+    assert.match(h.text(), outcome.status === "blocked" ? /currently in use/ : outcome.status === "not_found" ? /absent from native authority/ : /durability is uncertain/);
+    assert.doesNotMatch(h.text(), /delete failed/);
+    if (outcome.status === "committed_durability_uncertain") {
+      await h.input("rr"); assert.deepEqual(h.recovers, ["old"]);
+    }
+    assert.equal(h.executes.length, 1); assert.equal(h.cancelled(), 0);
+  } finally { await h.finish(); }
 });

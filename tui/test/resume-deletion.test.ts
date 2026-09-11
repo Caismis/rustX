@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { SessionDeletionWorkflow, type DeletionClient } from "../src/ui/session-deletion-workflow.ts";
 import { ResumeSelector } from "../src/ui/components/resume-selector.ts";
 import type { SessionDeleteResult, SessionSummaryView } from "../src/protocol/types.ts";
 import { plainText } from "../src/ui/theme.ts";
@@ -23,12 +24,14 @@ function harness(options: { rows?: SessionSummaryView[]; query?: string; nextOff
   let execution = deferred<SessionDeleteResult>();
   let recovery = deferred<SessionDeleteResult>();
   let list = async (_query?: string, _offset?: number): Promise<{ sessions: SessionSummaryView[]; nextOffset?: number }> => ({ sessions: nativeRows });
-  const view = new ResumeSelector({ sessions: nativeRows, query: options.query, nextOffset: options.nextOffset, alive: () => !closed, feedback: (text) => feedback.push(text), client: {
+  const client: DeletionClient = {
     previewSessionDeletion: (id) => { previews.push(id); return previewResponse.promise; },
     deleteSession: (id, revision) => { executes.push([id, revision]); return execution.promise; },
     recoverSessionDeletion: (id) => { recovers.push(id); return recovery.promise; },
     listSessions: (query, offset) => { lists.push([query, offset]); return list(query, offset); },
-  } });
+  };
+  const workflow = new SessionDeletionWorkflow(client, () => true, (text) => feedback.push(text));
+  const view = new ResumeSelector({ sessions: nativeRows, query: options.query, nextOffset: options.nextOffset, alive: () => !closed, feedback: (text) => feedback.push(text), client, workflow });
   view.onCancel = () => { closed = true; };
   return { view, previews, executes, recovers, lists, feedback,
     get closed() { return closed; },
@@ -145,7 +148,7 @@ test("empty/nonmatching Ctrl+D is inert; confirmation is bounded and sanitizes e
 
 test("22: presentation deletion path has no filesystem/process/provider authority", async () => {
   const { readFile } = await import("node:fs/promises");
-  const source = await readFile(new URL("../src/ui/components/resume-selector.ts", import.meta.url), "utf8");
+  const source = (await Promise.all(["../src/ui/components/resume-selector.ts", "../src/ui/session-deletion-workflow.ts"].map((path) => readFile(new URL(path, import.meta.url), "utf8")))).join("\n");
   assert.doesNotMatch(source, /node:|RuntimeClientConnection|submitInbound|selectSession|newSession|modelSet|spawn|unlink|removeDirectory|\.request\(/);
   const attachment = await readFile(new URL("../src/runtime/attachment.ts", import.meta.url), "utf8");
   const deletion = attachment.slice(attachment.indexOf("  previewSessionDeletion("), attachment.indexOf("  /** Lists bounded persisted Sessions"));

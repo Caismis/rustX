@@ -1,16 +1,12 @@
 /** Focused Session management presentation; deletion authority stays native. */
 import { matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import type { RuntimeClientAttachment } from "../../runtime/attachment.ts";
+import { SessionDeletionWorkflow, type DeletionClient } from "../session-deletion-workflow.ts";
 import type { SessionDeletePreview, SessionDeleteResult, SessionSummaryView } from "../../protocol/types.ts";
 import { sanitizeField } from "../../sanitize.ts";
 import { ConfirmationView } from "./confirmation.ts";
 import type { PopupContent } from "./popup-frame.ts";
 import { SessionSelector, type SessionSelectorOptions } from "./session-selector.ts";
 
-type Client = Pick<RuntimeClientAttachment, "listSessions" | "previewSessionDeletion" | "deleteSession" | "recoverSessionDeletion">;
-type Operation =
-  | { kind: "preview" | "recover"; sessionId: string }
-  | { kind: "execute"; preview: Readonly<SessionDeletePreview> };
 type State =
   | { kind: "selector" }
   | { kind: "pending"; operation: "preview" | "execute" | "recover" }
@@ -24,7 +20,11 @@ export class ResumeSelector implements PopupContent {
   onChange?: () => void;
   onCancel?: () => void;
   onSelect?: (session: SessionSummaryView) => void;
-  readonly #client: Client;
+  readonly #client: DeletionClient;
+  readonly #workflow: SessionDeletionWorkflow;
+  readonly #unsubscribe: () => void;
+  #generation = 0;
+  #appliedPage: object | undefined;
   readonly #alive: () => boolean;
   readonly #feedback: (text: string) => void;
   #state: State = { kind: "selector" };
@@ -37,8 +37,9 @@ export class ResumeSelector implements PopupContent {
   #bodyHeight = 24;
   #anchor: Anchor = { ids: [], index: 0, loaded: 0 };
 
-  constructor(options: SessionSelectorOptions & { client: Client; alive: () => boolean; feedback: (text: string) => void }) {
+  constructor(options: SessionSelectorOptions & { client: DeletionClient; workflow: SessionDeletionWorkflow; alive: () => boolean; feedback: (text: string) => void }) {
     this.#client = options.client;
+    this.#workflow = options.workflow;
     this.#alive = options.alive;
     this.#feedback = options.feedback;
     this.#query = options.query ?? "";
@@ -51,11 +52,15 @@ export class ResumeSelector implements PopupContent {
     this.selector.onLoadMore = () => { void this.#loadMore(); };
     this.selector.onDelete = (id) => {
       if (this.#state.kind !== "selector") return;
+      if (this.#workflow.canRecover()) { this.#syncWorkflow(); return; }
       const rows = this.selector.visibleSessions();
       this.#anchor = { ids: rows.map((row) => row.id), index: rows.findIndex((row) => row.id === id), loaded: rows.length };
-      void this.#request({ kind: "preview", sessionId: id });
+      void this.#preview(id);
     };
+    this.#unsubscribe = this.#workflow.subscribe(() => this.#syncWorkflow());
+    this.#syncWorkflow();
   }
+  dispose(): void { ++this.#workflowSerial; ++this.#requestSerial; this.#unsubscribe(); }
   popupTitle(): string { return this.#state.kind === "selector" ? "Resume session" : "Session deletion"; }
   popupFooter(): string[] {
     if (this.#state.kind === "selector") return this.selector.popupFooter();
@@ -73,11 +78,12 @@ export class ResumeSelector implements PopupContent {
       // Execute/recovery may already have committed. Keep focus and the request
       // serial until native settlement; local Esc cannot abandon that outcome.
       if (state.kind === "pending" && state.operation !== "preview") return;
+      this.#workflow.dismiss();
       ++this.#workflowSerial;
       this.#state = { kind: "selector" };
     } else if (state.kind === "confirm") state.view.handleInput(data);
     else if (state.kind === "notice" && state.recoveryId && (data === "r" || data === "R")) {
-      void this.#request({ kind: "recover", sessionId: state.recoveryId });
+      this.#workflow.recover();
     }
     this.onChange?.();
   }
@@ -97,24 +103,48 @@ export class ResumeSelector implements PopupContent {
       : state.text;
     return wrapTextWithAnsi(sanitizeField(text), Math.max(1, width)).slice(0, this.#bodyHeight);
   }
-  async #request(request: Operation): Promise<void> {
-    const operation = request.kind;
-    const id = request.kind === "execute" ? request.preview.session_id : request.sessionId;
+  #syncWorkflow(): void {
+    const workflow = this.#workflow;
+    if (workflow.state.kind === "idle") return;
+    if (workflow.generation !== this.#generation) {
+      this.#generation = workflow.generation;
+      ++this.#requestSerial;
+      this.#nextOffset = undefined;
+      this.#listBusy = false;
+      this.selector.replacePage([]);
+    }
+    const page = workflow.page;
+    if (page && page !== this.#appliedPage) {
+      this.#appliedPage = page;
+      this.#nextOffset = page.nextOffset;
+      this.selector.replacePage(page.sessions, page.nextOffset);
+      this.#restoreSelection(workflow.context);
+    }
+    const state = workflow.state;
+    if (state.kind === "pending") this.#state = { kind: "pending", operation: state.operation };
+    else if (state.kind === "result") {
+      if (state.outcome.status === "stale") {
+        // A new preview belongs to this surface, and disappears with it.
+        const id = workflow.takeStale();
+        if (id) void this.#preview(id);
+      } else if (state.outcome.status === "unknown") {
+        this.#state = { kind: "notice", recoveryId: state.sessionId, text: "Deletion outcome unknown. Rechecking native Session visibility; this is not proof of failure. Press R for native recovery." };
+      } else void this.#result(state.outcome, state.sessionId);
+    }
+    this.onChange?.();
+  }
+  async #preview(id: string): Promise<void> {
     const serial = ++this.#workflowSerial;
-    this.#state = { kind: "pending", operation };
+    this.#state = { kind: "pending", operation: "preview" };
     this.onChange?.();
     try {
-      const result = request.kind === "execute" ? await this.#client.deleteSession(id, request.preview.target_revision)
-        : request.kind === "preview" ? await this.#client.previewSessionDeletion(id)
-        : await this.#client.recoverSessionDeletion(id);
+      const result = await this.#client.previewSessionDeletion(id);
       if (!this.#alive() || serial !== this.#workflowSerial) return;
       await this.#result(result, id);
+      if (result.status === "not_found") await this.#rebuild(this.#anchor);
     } catch {
       if (!this.#alive() || serial !== this.#workflowSerial) return;
-      this.#state = { kind: "notice", text: operation === "preview"
-        ? "Preview unavailable. Reconciling the Session list; no deletion was submitted."
-        : "Deletion outcome unknown. Rechecking native Session visibility; this is not proof of failure.",
-        ...(operation === "preview" ? {} : { recoveryId: id }) };
+      this.#state = { kind: "notice", text: "Preview unavailable. Reconciling the Session list; no deletion was submitted." };
       await this.#rebuild(this.#anchor);
     }
     if (this.#alive()) this.onChange?.();
@@ -128,14 +158,14 @@ export class ResumeSelector implements PopupContent {
           subject: `${preview.name ?? "Unnamed Session"} · ${preview.session_id}`,
           warning: `Deletes ${preview.owned_node_count} nodes, ${preview.owned_conversation_count} conversations, ${preview.owned_child_count} children. Independent fork/clone Sessions and project files are preserved.`,
           onCancel: () => { this.#state = { kind: "selector" }; },
-          onConfirm: () => { void this.#request({ kind: "execute", preview }); },
+          onConfirm: () => { this.#workflow.execute(preview, { ...this.#anchor, query: this.#query }); },
         });
         this.#state = { kind: "confirm", preview, view };
         break;
       }
       case "stale":
         this.#feedback("Session changed. Review a fresh preview and confirm again.");
-        await this.#request({ kind: "preview", sessionId: id });
+        await this.#preview(id);
         break;
       case "blocked": {
         const reason = result.reason;
@@ -148,20 +178,16 @@ export class ResumeSelector implements PopupContent {
       }
       case "deleted":
         this.#state = { kind: "selector" };
-        this.#feedback("Session permanently deleted.");
-        await this.#rebuild(this.#anchor);
+        this.#workflow.dismiss();
         break;
       case "committed_cleanup_pending":
         this.#state = { kind: "notice", recoveryId: id, text: "The Session has been removed and cannot be resumed, but some local data still needs cleanup. Press R to retry native cleanup." };
-        await this.#rebuild(this.#anchor);
         break;
       case "committed_durability_uncertain":
         this.#state = { kind: "notice", recoveryId: id, text: "Deletion visibility may already be committed, but durability is uncertain. Rechecking native state. Press R for native recovery." };
-        await this.#rebuild(this.#anchor);
         break;
       case "not_found":
         this.#state = { kind: "notice", text: "Session is absent from native authority; it may have been removed elsewhere. Refreshing the list." };
-        await this.#rebuild(this.#anchor);
         break;
     }
   }
@@ -182,19 +208,21 @@ export class ResumeSelector implements PopupContent {
       if (!this.#alive() || serial !== this.#requestSerial) return;
       this.#nextOffset = page.nextOffset;
       this.selector.replacePage(rows, page.nextOffset);
-      if (anchor) {
-        const ids = new Set(rows.map((row) => row.id));
-        const target = anchor.ids[anchor.index];
-        const next = anchor.ids.slice(anchor.index + 1).find((id) => ids.has(id));
-        const previous = anchor.ids.slice(0, anchor.index).reverse().find((id) => ids.has(id));
-        this.selector.selectIdentity(target && ids.has(target) ? target : next ?? rows[anchor.index]?.id ?? previous ?? rows.at(-1)?.id);
-      }
+      if (anchor) this.#restoreSelection(anchor);
     } catch {
       if (this.#alive() && serial === this.#requestSerial) this.#feedback("Session list unavailable. Reopen /resume to query native authority.");
     } finally {
       if (serial === this.#requestSerial) this.#listBusy = false;
       if (this.#alive()) this.onChange?.();
     }
+  }
+  #restoreSelection(anchor: Anchor): void {
+    const rows = this.selector.visibleSessions();
+    const ids = new Set(rows.map((row) => row.id));
+    const target = anchor.ids[anchor.index];
+    const next = anchor.ids.slice(anchor.index + 1).find((id) => ids.has(id));
+    const previous = anchor.ids.slice(0, anchor.index).reverse().find((id) => ids.has(id));
+    this.selector.selectIdentity(target && ids.has(target) ? target : next ?? rows[anchor.index]?.id ?? previous ?? rows.at(-1)?.id);
   }
   async #loadMore(): Promise<void> {
     if (this.#listBusy || this.#nextOffset === undefined) return;

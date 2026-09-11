@@ -1149,6 +1149,7 @@ describe("real rustx child repeated compaction", { skip: SKIP }, () => {
 });
 
 it("Session deletion: real resume UI → attachment → native preview/block/delete; restart and zero provider calls", { skip: SKIP, timeout: 30_000 }, async (t) => {
+  const { SessionDeletionWorkflow } = await import("../src/ui/session-deletion-workflow.ts");
   const { ResumeSelector } = await import("../src/ui/components/resume-selector.ts");
   const provider = await ProviderEmulator.start("tui_integration");
   const fixture = TempFixture.create("rustx-resume-delete-");
@@ -1181,7 +1182,7 @@ it("Session deletion: real resume UI → attachment → native preview/block/del
   const before = structuredClone(session.state), beforeModel = await session.modelGet(), beforeProvider = await provider.requests();
   const feedback: string[] = [];
   const page = await session.listSessions();
-  const view = new ResumeSelector({ ...page, client: session, alive: () => true, feedback: (text) => feedback.push(text) });
+  const view = new ResumeSelector({ ...page, client: session, workflow: new SessionDeletionWorkflow(session, () => true, (text) => feedback.push(text)), alive: () => true, feedback: (text) => feedback.push(text) });
   view.selector.selectIdentity(active.id); view.handleInput("\x04");
   await until(() => view.render(100).map(plainText).join(" ").includes("/new"), "native current Session blocker");
   view.handleInput("\x1b");

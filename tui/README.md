@@ -851,9 +851,15 @@ Select a Session and press **Ctrl+D**. Rust first returns an authoritative previ
 for that exact Session identity. Review the target and native ownership counts.
 **Cancel is selected initially**: Enter cancels; use Tab or Left/Right to choose
 **Permanently delete**, then Enter. Esc cancels a pending preview or confirmation.
-Once deletion or cleanup recovery is submitted, Esc is consumed and the surface
-keeps focus until native settlement (or global transport termination); no cancel
-hint is shown while these requests are pending. The same safe confirmation
+Once deletion or cleanup recovery is submitted, Esc is consumed; no cancel hint
+is shown while these requests are pending. An attachment-bound
+`SessionDeletionWorkflow` owns settlement and native list reconciliation even
+when the popup disappears. Approvals and questionnaires still take focus
+immediately. Unresolved deletion results wait while another popup owns focus
+and are presented again afterward. A same-attachment snapshot invalidates the
+old popup and preview, but preserves submitted-operation ownership. Actual
+attachment replacement or terminal transport ends observation without replay
+or a fabricated outcome. The same safe confirmation
 choice behavior applies to retained-workspace disposal.
 
 Deletion is permanent from rustX's perspective, including owned internal lineages
@@ -868,7 +874,9 @@ A changed preview requires a fresh preview and another explicit confirmation.
 some local data still needs cleanup. Press **R** on the focused notice for one
 native recovery attempt. Durability uncertainty and unknown request outcomes are
 shown distinctly, with native list reconciliation and explicit recovery available;
-they are not reported as definite deletion failures.
+they are not reported as definite deletion failures. Closing a recovery notice
+hides it without discarding its native recovery action; reopening `/resume`
+restores it. Resolve that action before starting another deletion.
 
 Search survives reconciliation. The selector rebuilds from offset zero using
 fresh native continuation pages, rejecting responses from older list generations,
