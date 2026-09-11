@@ -1286,13 +1286,52 @@ state the types can hold, and the deterministic Tool failure it would cause has
 no reachable precondition. The only publicly constructible plane,
 `ExtensionToolPlane::none()`, is empty, which is safe from anywhere.
 
-The one remaining way to build an incoherent runtime is to pair facets
-materialized for two *different* compositions, and that is refused at the
-ownership-transfer boundary: `ConversationRuntime::new` proves the Todo state
-owner, the coordinator's Tool plane, and the Agent Status engine all follow
-from the conversation's one stored composition, and fails closed with
-`ConversationRuntimeError::ExtensionCompositionMismatch` otherwise. The
-effective-extension projection then cannot disagree with the Tool Plane,
+The remaining ways to build an incoherent runtime are refused at the
+ownership-transfer boundary, where `ConversationRuntime::new` fails closed with
+`ConversationRuntimeError::ExtensionCompositionMismatch`.
+
+#### Configured to publish is not published
+
+Two Tool facets are checked, because they are different facts:
+
+```text
+configured ExtensionToolPlane     what a FUTURE prepared candidate will carry
+current CapabilitySnapshot        what the CURRENT executable generation carries
+```
+
+`CapabilityCoordinator::new` deliberately opens at revision zero with an
+**empty** executable registry: only a prepared, committed candidate publishes
+executable authority. A coordinator therefore names `todo` in its configured
+plane from construction while nothing executable carries it, and checking the
+configured plane alone would admit a runtime whose model is offered `todo` that
+the active generation cannot dispatch. A revision-zero or otherwise unprepared
+coordinator cannot masquerade as a coherent Todo-enabled runtime.
+
+Construction requires all four to agree:
+
+```text
+materialized owners      == frozen composition
+configured plane         == frozen composition's expected Tool plane
+ACTIVE snapshot registry == frozen composition's expected Tool plane
+```
+
+The active comparison is by **exact canonical `ToolDefinition`**, never by
+model-facing name, so a same-named MCP Tool or a differently-shaped `todo`
+cannot satisfy it. The identity knowledge lives in the extension owner
+(`ExtensionToolPlaneShape::of_published_registry`, built from the same
+registration the plane publishes): this boundary compares closed typed shapes
+and never names a Tool id, and the check is deliberately *not* "reject revision
+zero" — a future generation may legitimately publish zero Tools; what must hold
+is that the active generation carries exactly the extension Tool authority the
+frozen composition requires.
+
+The whole check runs in the pure-validation half of construction, before the
+tool runtime's inactive claim, the coordinator's runtime claim, and mailbox,
+lifecycle and subagent ownership transfer, so a refusal consumes no one-shot
+ownership and the same conversation composes normally once its capability is
+really published.
+
+The effective-extension projection then cannot disagree with the Tool Plane,
 because it returns that same proved value rather than reconstructing one.
 
 ### Ownership: closed composition, not a plugin runtime

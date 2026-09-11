@@ -1478,8 +1478,14 @@ no list" is not a state the types can represent. Pairing facets materialized
 for two *different* compositions is refused at the ownership-transfer boundary:
 `ConversationRuntime` construction fails closed with
 `ExtensionCompositionMismatch` unless the Todo state owner, the coordinator's
-Tool plane, and the status engine all follow from the conversation's one stored
-composition.
+configured Tool plane, its **currently active** `CapabilitySnapshot` Tool
+authority, and the status engine all follow from the conversation's one stored
+composition. The active generation is checked separately from the configured
+plane because a coordinator holds its configured plane from construction but
+publishes nothing until a prepared candidate is committed — so "configured to
+publish `todo`" is not "the currently executable generation carries `todo`",
+and the active comparison is by exact canonical `ToolDefinition` rather than by
+model-facing name.
 
 Composition is launch-frozen exactly like every other extension. A resource
 reload cannot install or remove Todo in a running composition — the extension
