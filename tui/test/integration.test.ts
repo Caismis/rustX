@@ -1182,7 +1182,7 @@ it("Session deletion: real resume UI → attachment → native preview/block/del
   const before = structuredClone(session.state), beforeModel = await session.modelGet(), beforeProvider = await provider.requests();
   const feedback: string[] = [];
   const page = await session.listSessions();
-  const view = new ResumeSelector({ ...page, client: session, workflow: new SessionDeletionWorkflow(session, () => true, (text) => feedback.push(text)), alive: () => true, feedback: (text) => feedback.push(text) });
+  const view = new ResumeSelector({ initialPage: page, client: session, workflow: new SessionDeletionWorkflow(session, () => true, (text) => feedback.push(text)), alive: () => true, feedback: (text) => feedback.push(text) });
   view.selector.selectIdentity(active.id); view.handleInput("\x04");
   await until(() => view.render(100).map(plainText).join(" ").includes("/new"), "native current Session blocker");
   view.handleInput("\x1b");

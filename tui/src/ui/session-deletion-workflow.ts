@@ -5,6 +5,11 @@ import type { SessionDeletePreview, SessionDeleteResult, SessionSummaryView } fr
 export type DeletionClient = Pick<RuntimeClientAttachment, "listSessions" | "previewSessionDeletion" | "deleteSession" | "recoverSessionDeletion">;
 export interface DeletionContext { query: string; ids: string[]; index: number; loaded: number }
 export interface ReconciledSessions { sessions: SessionSummaryView[]; nextOffset?: number }
+export type SessionListReconciliation =
+  | { kind: "none" }
+  | { kind: "pending" }
+  | { kind: "ready"; page: ReconciledSessions }
+  | { kind: "failed" };
 export type DeletionOutcome = SessionDeleteResult | { status: "unknown" };
 type State =
   | { kind: "idle" }
@@ -19,7 +24,7 @@ export class SessionDeletionWorkflow {
   #state: State = { kind: "idle" };
   #context: DeletionContext = { query: "", ids: [], index: 0, loaded: 0 };
   #generation = 0;
-  #page: ReconciledSessions | undefined;
+  #reconciliation: SessionListReconciliation = { kind: "none" };
   #attention = false;
   #terminated = false;
 
@@ -32,7 +37,7 @@ export class SessionDeletionWorkflow {
   get state(): State { return this.#state; }
   get context(): DeletionContext { return this.#context; }
   get generation(): number { return this.#generation; }
-  get page(): ReconciledSessions | undefined { return this.#page; }
+  get reconciliation(): SessionListReconciliation { return this.#reconciliation; }
   get needsPresentation(): boolean { return this.#live() && this.#attention; }
   subscribe(listener: () => void): () => void {
     this.#listeners.add(listener);
@@ -93,7 +98,7 @@ export class SessionDeletionWorkflow {
   }
   async #reconcile(): Promise<void> {
     ++this.#generation;
-    this.#page = undefined;
+    this.#reconciliation = { kind: "pending" };
     this.#publish(); // Invalidate every mounted selector's pre-mutation requests now.
     const { query, loaded } = this.#context;
     try {
@@ -103,11 +108,11 @@ export class SessionDeletionWorkflow {
         page = await this.#client.listSessions(query, page.nextOffset);
         sessions.push(...page.sessions);
       }
-      if (this.#live()) this.#page = { sessions, nextOffset: page.nextOffset };
+      if (this.#live()) this.#reconciliation = { kind: "ready", page: { sessions, nextOffset: page.nextOffset } };
     } catch {
       if (this.#live()) {
-        this.#page = { sessions: [] };
-        this.#feedback("Session list unavailable. Reopen /resume to query native authority.");
+        this.#reconciliation = { kind: "failed" };
+        this.#feedback("Session visibility could not be refreshed. Reopen /resume to query native authority.");
       }
     }
   }

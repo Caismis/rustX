@@ -1,6 +1,6 @@
 /** Focused Session management presentation; deletion authority stays native. */
 import { matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { SessionDeletionWorkflow, type DeletionClient } from "../session-deletion-workflow.ts";
+import { SessionDeletionWorkflow, type DeletionClient, type ReconciledSessions } from "../session-deletion-workflow.ts";
 import type { SessionDeletePreview, SessionDeleteResult, SessionSummaryView } from "../../protocol/types.ts";
 import { sanitizeField } from "../../sanitize.ts";
 import { ConfirmationView } from "./confirmation.ts";
@@ -23,8 +23,9 @@ export class ResumeSelector implements PopupContent {
   readonly #client: DeletionClient;
   readonly #workflow: SessionDeletionWorkflow;
   readonly #unsubscribe: () => void;
-  #generation = 0;
-  #appliedPage: object | undefined;
+  #generation: number;
+  #listStatus: "ready" | "pending" | "unavailable";
+  #appliedPage: ReconciledSessions | undefined;
   readonly #alive: () => boolean;
   readonly #feedback: (text: string) => void;
   #state: State = { kind: "selector" };
@@ -37,9 +38,16 @@ export class ResumeSelector implements PopupContent {
   #bodyHeight = 24;
   #anchor: Anchor = { ids: [], index: 0, loaded: 0 };
 
-  constructor(options: SessionSelectorOptions & { client: DeletionClient; workflow: SessionDeletionWorkflow; alive: () => boolean; feedback: (text: string) => void }) {
+  constructor(options: Omit<SessionSelectorOptions, "sessions" | "nextOffset"> & { initialPage?: ReconciledSessions; client: DeletionClient; workflow: SessionDeletionWorkflow; alive: () => boolean; feedback: (text: string) => void }) {
     this.#client = options.client;
     this.#workflow = options.workflow;
+    // A fresh initial response already belongs to this generation. Mounting is
+    // not a mutation, and an older workflow page must not overwrite that read.
+    this.#generation = this.#workflow.generation;
+    this.#listStatus = options.initialPage ? "ready" : "unavailable";
+    if (options.initialPage && this.#workflow.reconciliation.kind === "ready") {
+      this.#appliedPage = this.#workflow.reconciliation.page;
+    }
     if (this.#workflow.state.kind !== "idle") {
       const { ids, index, loaded } = this.#workflow.context;
       this.#anchor = { ids: [...ids], index, loaded };
@@ -47,8 +55,9 @@ export class ResumeSelector implements PopupContent {
     this.#alive = options.alive;
     this.#feedback = options.feedback;
     this.#query = options.query ?? "";
-    this.#nextOffset = options.nextOffset;
-    this.selector = new SessionSelector(options);
+    this.#nextOffset = options.initialPage?.nextOffset;
+    this.selector = new SessionSelector({ ...options, sessions: options.initialPage?.sessions ?? [], nextOffset: this.#nextOffset });
+    if (options.initialPage && this.#workflow.state.kind !== "idle") this.#restoreSelection(this.#anchor);
     this.selector.onChange = () => this.onChange?.();
     this.selector.onCancel = () => this.onCancel?.();
     this.selector.onSelect = (session) => this.onSelect?.(session);
@@ -67,7 +76,7 @@ export class ResumeSelector implements PopupContent {
   dispose(): void { ++this.#workflowSerial; ++this.#requestSerial; this.#unsubscribe(); }
   popupTitle(): string { return this.#state.kind === "selector" ? "Resume session" : "Session deletion"; }
   popupFooter(): string[] {
-    if (this.#state.kind === "selector") return this.selector.popupFooter();
+    if (this.#state.kind === "selector") return this.#listStatus === "ready" ? this.selector.popupFooter() : ["Esc close"];
     if (this.#state.kind === "confirm") return this.#state.view.popupFooter();
     if (this.#state.kind === "pending") return this.#state.operation === "preview" ? ["Esc cancel"] : [];
     return [this.#state.kind === "notice" && this.#state.recoveryId ? "R retry native cleanup · Esc close" : "Esc close"];
@@ -77,7 +86,13 @@ export class ResumeSelector implements PopupContent {
   handleInput(data: string): void {
     if (!this.#alive()) return;
     const state = this.#state;
-    if (state.kind === "selector") { this.selector.handleInput(data); return; }
+    if (state.kind === "selector") {
+      // Search remains editable while a native query is pending/unavailable,
+      // but old rows cannot be navigated, resumed, or selected for deletion.
+      if (this.#listStatus !== "ready" && (["ctrl+d", "enter", "up", "down"] as const).some((key) => matchesKey(data, key))) return;
+      this.selector.handleInput(data);
+      return;
+    }
     if (matchesKey(data, "escape")) {
       // Execute/recovery may already have committed. Keep focus and the request
       // serial until native settlement; local Esc cannot abandon that outcome.
@@ -93,6 +108,11 @@ export class ResumeSelector implements PopupContent {
   }
   render(width: number): string[] {
     const state = this.#state;
+    if (state.kind === "selector" && this.#listStatus !== "ready") {
+      const text = this.#listStatus === "pending" ? "Refreshing native Session visibility…"
+        : "Session visibility unavailable. Reopen /resume to query native authority.";
+      return wrapTextWithAnsi(text, Math.max(1, width)).slice(0, this.#bodyHeight);
+    }
     if (state.kind === "selector") {
       this.selector.focused = this.focused;
       this.selector.setBodyHeight(this.#bodyHeight);
@@ -115,11 +135,15 @@ export class ResumeSelector implements PopupContent {
       ++this.#requestSerial;
       this.#nextOffset = undefined;
       this.#listBusy = false;
-      this.selector.replacePage([]);
+      this.#listStatus = "unavailable";
     }
-    const page = workflow.page;
+    const reconciliation = workflow.reconciliation;
+    if (reconciliation.kind === "pending" && this.#listStatus !== "ready") this.#listStatus = "pending";
+    else if (reconciliation.kind === "failed" && this.#listStatus === "pending") this.#listStatus = "unavailable";
+    const page = reconciliation.kind === "ready" ? reconciliation.page : undefined;
     if (page && page !== this.#appliedPage) {
       this.#appliedPage = page;
+      this.#listStatus = "ready";
       this.#nextOffset = page.nextOffset;
       this.selector.replacePage(page.sessions, page.nextOffset);
       this.#restoreSelection(workflow.context);
@@ -199,8 +223,8 @@ export class ResumeSelector implements PopupContent {
     const serial = ++this.#requestSerial;
     this.#nextOffset = undefined;
     this.#listBusy = true;
-    // Clear an untrusted generation, never splice a target row.
-    this.selector.replacePage([]);
+    // Hide the untrusted generation; absence of rows is only native truth on success.
+    this.#listStatus = "pending";
     const query = this.#query;
     try {
       let page = await this.#client.listSessions(query, 0);
@@ -211,10 +235,14 @@ export class ResumeSelector implements PopupContent {
       }
       if (!this.#alive() || serial !== this.#requestSerial) return;
       this.#nextOffset = page.nextOffset;
+      this.#listStatus = "ready";
       this.selector.replacePage(rows, page.nextOffset);
       if (anchor) this.#restoreSelection(anchor);
     } catch {
-      if (this.#alive() && serial === this.#requestSerial) this.#feedback("Session list unavailable. Reopen /resume to query native authority.");
+      if (this.#alive() && serial === this.#requestSerial) {
+        this.#listStatus = "unavailable";
+        this.#feedback("Session visibility could not be refreshed. Reopen /resume to query native authority.");
+      }
     } finally {
       if (serial === this.#requestSerial) this.#listBusy = false;
       if (this.#alive()) this.onChange?.();

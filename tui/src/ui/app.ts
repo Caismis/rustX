@@ -554,7 +554,12 @@ export class RustxTuiApp {
     this.#editor.setText("");
 
     try {
-      const outcome = await this.#dispatcher.submit(text);
+      // Reopening a retained deletion workflow queries its actual native search,
+      // rather than relabeling an unfiltered page with the preserved query.
+      const query = this.#deletion.context.query;
+      const outcome = line === "/resume" && this.#deletion.state.kind !== "idle"
+        ? { kind: "choose_session" as const, ...await lease.session.listSessions(query, 0), query }
+        : await this.#dispatcher.submit(text);
       if (!this.#isCurrentPresentationLease(lease)) return;
       await this.#handleOutcome(outcome, lease);
     } catch (error: unknown) {
@@ -1070,7 +1075,7 @@ export class RustxTuiApp {
   }
 
   #showSessionSelector(
-    sessions: SessionSummaryView[],
+    sessions: SessionSummaryView[] | undefined,
     nextOffset: number | undefined,
     query: string,
     lease: PresentationLease,
@@ -1081,12 +1086,12 @@ export class RustxTuiApp {
     // Initial /resume command responses obey the same mutation boundary as pages.
     if (lease.sessionListGeneration !== workflow.generation) return;
     if (workflow.state.kind !== "idle") query = workflow.context.query;
-    if (sessions.length === 0 && workflow.state.kind === "idle") {
+    if (sessions?.length === 0 && workflow.state.kind === "idle") {
       this.#showTransient("info", "no persisted sessions are available");
       return;
     }
     const selector = new ResumeSelector({
-      sessions, nextOffset, query, client: lease.session, workflow,
+      initialPage: sessions === undefined ? undefined : { sessions, nextOffset }, query, client: lease.session, workflow,
       alive: () => this.#isCurrentPresentationLease(lease) && this.#overlay === handle,
       feedback: (text) => this.#showTransient("info", text),
     });
@@ -1119,7 +1124,9 @@ export class RustxTuiApp {
       return;
     }
     if (!workflow?.needsPresentation || this.#overlay !== undefined || this.#finished || this.#terminalFinishStarted) return;
-    this.#showSessionSelector(workflow.page?.sessions ?? [], workflow.page?.nextOffset,
+    const reconciliation = workflow.reconciliation;
+    const page = reconciliation.kind === "ready" ? reconciliation.page : undefined;
+    this.#showSessionSelector(page?.sessions, page?.nextOffset,
       workflow.context.query, this.#presentationLease());
   }
 

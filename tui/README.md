@@ -889,6 +889,12 @@ they are not reported as definite deletion failures. Closing a recovery notice
 hides it without discarding its native recovery action; reopening `/resume`
 restores it. Resolve that action before starting another deletion.
 
+A failed Session-list refresh means visibility is unavailable, not that the list
+is empty. The native deletion result and any recovery action remain intact.
+Reopening `/resume` queries the preserved search and uses the fresh native rows;
+only a successful empty response represents an empty list. Old pre-deletion
+responses remain invalid even when the refresh fails.
+
 Search survives reconciliation. The selector rebuilds from offset zero using
 fresh native continuation pages, rejecting responses from older list generations,
 and selects the next matching neighbor (otherwise the previous or empty state).

@@ -31,7 +31,7 @@ function harness(options: { rows?: SessionSummaryView[]; query?: string; nextOff
     listSessions: (query, offset) => { lists.push([query, offset]); return list(query, offset); },
   };
   const workflow = new SessionDeletionWorkflow(client, () => true, (text) => feedback.push(text));
-  const view = new ResumeSelector({ sessions: nativeRows, query: options.query, nextOffset: options.nextOffset, alive: () => !closed, feedback: (text) => feedback.push(text), client, workflow });
+  const view = new ResumeSelector({ initialPage: { sessions: nativeRows, nextOffset: options.nextOffset }, query: options.query, alive: () => !closed, feedback: (text) => feedback.push(text), client, workflow });
   view.onCancel = () => { closed = true; };
   return { view, workflow, client, previews, executes, recovers, lists, feedback,
     dispose: () => { closed = true; view.dispose(); },
@@ -231,7 +231,7 @@ test("a remounted stale workflow preserves the query and neighbor anchor through
   await h.open(); confirm(h.view); h.dispose(); h.setPreview();
   h.execution.resolve({ status: "stale", session_id: "b" }); await turn();
   assert.deepEqual(h.previews, ["b"], "no disposed surface can start a new preview");
-  const replacement = new ResumeSelector({ sessions: [], query: h.workflow.context.query,
+  const replacement = new ResumeSelector({ query: h.workflow.context.query,
     client: h.client, workflow: h.workflow, alive: () => true, feedback: () => {} });
   h.previewResponse.resolve(preview("b", "revision-2")); await turn();
   assert.equal(h.executes.length, 1);
@@ -241,5 +241,126 @@ test("a remounted stale workflow preserves the query and neighbor anchor through
   h.execution.resolve({ status: "deleted", session_id: "b" }); await turn();
   assert.deepEqual(h.lists, [["history", 0], ["history", 0]]);
   assert.equal(replacement.selector.selectedSession()?.id, "c");
+  replacement.dispose();
+});
+
+for (const outcome of ["committed_cleanup_pending", "committed_durability_uncertain", "unknown"] as const) {
+  test(`${outcome}: failed reconciliation is not empty authority and fresh remount retains recovery`, async () => {
+    const h = harness();
+    assert.deepEqual(h.workflow.reconciliation, { kind: "none" });
+    await h.open(); confirm(h.view);
+    const refresh = deferred<{ sessions: SessionSummaryView[] }>();
+    h.setList(() => refresh.promise);
+    if (outcome === "unknown") h.execution.reject(new Error("healthy request rejection"));
+    else h.execution.resolve({ status: outcome, session_id: "b" });
+    await turn();
+    assert.deepEqual(h.workflow.reconciliation, { kind: "pending" });
+    assert.equal(h.workflow.generation, 1);
+    refresh.reject(new Error("native list unavailable")); await turn();
+    assert.deepEqual(h.workflow.reconciliation, { kind: "failed" });
+    assert.deepEqual(h.workflow.state, { kind: "result", outcome: outcome === "unknown" ? { status: "unknown" } : { status: outcome, session_id: "b" }, sessionId: "b" });
+    assert.equal(h.workflow.canRecover(), true);
+    assert.equal(h.executes.length, 1);
+    assert.doesNotMatch(h.text() + h.feedback.join(), /delete failed/);
+    assert.match(h.feedback.join(), /visibility could not be refreshed/);
+    h.view.handleInput(esc);
+    assert.match(h.text(), /visibility unavailable/);
+    assert.doesNotMatch(h.text(), /No sessions|❯/);
+    h.dispose();
+    // An explicit current-generation native list succeeds independently of the
+    // retained deletion result. Its rows must survive mounting the old workflow.
+    h.rows([row("a"), row("c")]); h.setList(async () => ({ sessions: [row("a"), row("c")] }));
+    const initialPage = await h.client.listSessions("", 0);
+    const replacement = new ResumeSelector({ initialPage, client: h.client, workflow: h.workflow, alive: () => true, feedback: () => {} });
+    assert.deepEqual(replacement.selector.visibleSessions().map((r) => r.id), ["a", "c"]);
+    assert.equal(replacement.selector.selectedSession()?.id, "c");
+    replacement.handleInput("r"); replacement.handleInput("r");
+    assert.deepEqual(h.recovers, ["b"], "recovery uses the native result, not selected C");
+    assert.equal(h.executes.length, 1);
+    replacement.dispose();
+  });
+}
+
+test("only a successful reconciliation can publish an authoritative empty page", async () => {
+  const h = harness(); await h.open(); confirm(h.view); h.rows([]);
+  h.execution.resolve({ status: "committed_cleanup_pending", session_id: "b" }); await turn();
+  assert.deepEqual(h.workflow.reconciliation, { kind: "ready", page: { sessions: [], nextOffset: undefined } });
+  h.view.handleInput(esc);
+  assert.deepEqual(h.view.selector.visibleSessions(), []);
+  assert.doesNotMatch(h.text(), /visibility unavailable/);
+});
+
+test("Deleted plus failed list refresh reports success without empty authority or recovery attention", async () => {
+  const h = harness(); await h.open(); confirm(h.view);
+  h.setList(async () => { throw new Error("list rejected"); });
+  h.execution.resolve({ status: "deleted", session_id: "b" }); await turn();
+  assert.deepEqual(h.workflow.reconciliation, { kind: "failed" });
+  assert.equal(h.workflow.canRecover(), false); assert.equal(h.workflow.needsPresentation, false);
+  assert.match(h.feedback.join(), /permanently deleted/);
+  assert.match(h.text(), /visibility unavailable/);
+  h.view.handleInput(del); h.view.handleInput("r"); h.view.handleInput("\r");
+  assert.deepEqual(h.recovers, []); assert.equal(h.executes.length, 1);
+  h.dispose();
+  const replacement = new ResumeSelector({ initialPage: { sessions: [row("a"), row("c")] }, client: h.client, workflow: h.workflow, alive: () => true, feedback: () => {} });
+  assert.deepEqual(replacement.selector.visibleSessions().map((r) => r.id), ["a", "c"]);
+  assert.doesNotMatch(replacement.render(100).join(), /visibility unavailable/);
+  replacement.dispose();
+});
+
+test("failed continuation reconciliation publishes neither a partial page nor empty authority", async () => {
+  const h = harness(); await h.open(); confirm(h.view);
+  h.setList(async (_q, offset) => {
+    if (offset === 0) return { sessions: [row("a")], nextOffset: 1 };
+    throw new Error("fresh continuation rejected");
+  });
+  h.execution.resolve({ status: "committed_cleanup_pending", session_id: "b" }); await turn();
+  assert.deepEqual(h.workflow.reconciliation, { kind: "failed" });
+  assert.deepEqual(h.lists, [["", 0], ["", 1]]);
+  assert.equal(h.workflow.canRecover(), true);
+});
+
+test("pre-mutation continuation stays invalid after reconciliation failure and a fresh remount", async () => {
+  const h = harness({ rows: [row("b0"), row("b1")], query: "b", nextOffset: 2 });
+  const oldPage = deferred<{ sessions: SessionSummaryView[] }>();
+  h.setList(() => oldPage.promise);
+  h.view.handleInput(down); h.view.handleInput(down);
+  h.view.selector.selectIdentity("b1"); h.view.handleInput(del);
+  h.previewResponse.resolve(preview("b1")); await turn(); confirm(h.view);
+  h.setList(async () => { throw new Error("refresh failed"); });
+  h.execution.resolve({ status: "committed_cleanup_pending", session_id: "b1" }); await turn();
+  assert.deepEqual(h.workflow.reconciliation, { kind: "failed" });
+  assert.equal(h.workflow.generation, 1);
+  h.dispose();
+  h.setList(async () => ({ sessions: [row("b0"), row("b2")] }));
+  const initialPage = await h.client.listSessions("b", 0);
+  const replacement = new ResumeSelector({ initialPage, query: "b", client: h.client, workflow: h.workflow, alive: () => true, feedback: () => {} });
+  oldPage.resolve({ sessions: [row("b1")] }); await turn();
+  assert.deepEqual(replacement.selector.visibleSessions().map((r) => r.id), ["b0", "b2"]);
+  assert.deepEqual(h.lists, [["b", 2], ["b", 0], ["b", 0]]);
+  assert.equal(h.workflow.generation, 1);
+  replacement.handleInput("r"); replacement.handleInput("r"); assert.deepEqual(h.recovers, ["b1"]);
+  replacement.dispose();
+});
+
+test("fresh initial native authority supersedes an older successful workflow page", async () => {
+  const h = harness(); await h.open(); confirm(h.view); h.rows([row("a"), row("c")]);
+  h.execution.resolve({ status: "committed_cleanup_pending", session_id: "b" }); await turn(); h.dispose();
+  const replacement = new ResumeSelector({ initialPage: { sessions: [] }, client: h.client, workflow: h.workflow, alive: () => true, feedback: () => {} });
+  assert.deepEqual(replacement.selector.visibleSessions(), []);
+  replacement.handleInput(esc);
+  assert.doesNotMatch(replacement.render(100).join(), /visibility unavailable/);
+  replacement.dispose();
+});
+
+test("a fresh current-generation page survives a concurrent reconciliation failure", async () => {
+  const h = harness(); await h.open(); confirm(h.view);
+  const refresh = deferred<{ sessions: SessionSummaryView[] }>(); h.setList(() => refresh.promise);
+  h.execution.resolve({ status: "committed_cleanup_pending", session_id: "b" }); await turn();
+  h.dispose();
+  const replacement = new ResumeSelector({ initialPage: { sessions: [row("a"), row("c")] }, client: h.client, workflow: h.workflow, alive: () => true, feedback: () => {} });
+  refresh.reject(new Error("concurrent workflow read failed")); await turn();
+  replacement.handleInput(esc);
+  assert.deepEqual(replacement.selector.visibleSessions().map((r) => r.id), ["a", "c"]);
+  assert.doesNotMatch(replacement.render(100).join(), /visibility unavailable/);
   replacement.dispose();
 });

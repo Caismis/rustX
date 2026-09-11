@@ -1677,10 +1677,11 @@ async function deletionAppHarness(overlapInitial = false) {
   const executes: string[][] = [], recovers: string[] = [], responses: unknown[] = [];
   let cancelled = 0;
   let rows: SessionSummaryView[] = [{ id: "old", name: "historical-target", updated_at: "today", active_node: "node-2", active: false }];
+  let listResponse: (() => Promise<{ sessions: SessionSummaryView[] }>) | undefined;
   session.listSessions = async (query, offset = 0) => {
     lists.push([query, offset]);
     if (overlapInitial && lists.length === 1) return lateList.promise;
-    return { sessions: [...rows] };
+    return listResponse ? listResponse() : { sessions: [...rows] };
   };
   session.previewSessionDeletion = (id) => { previews.push(id); return preview.promise; };
   session.deleteSession = (id, revision) => { executes.push([id, revision]); return execution.promise; };
@@ -1712,6 +1713,7 @@ async function deletionAppHarness(overlapInitial = false) {
     surface: () => surfaces.findLast((surface) => surface.visible),
     text: () => surfaces.findLast((surface) => surface.visible)?.content.render(120).map(plainText).join("\n") ?? "",
     absent: () => { rows = []; },
+    setList: (response: typeof listResponse) => { listResponse = response; },
     input,
     resetPreview: () => { preview = deferred<SessionDeleteResult>(); },
     resolvePreview: async (revision = "revision") => {
@@ -1900,5 +1902,61 @@ it("a delayed initial resume response cannot resurrect a row after deletion reco
     assert.doesNotMatch(h.text(), /historical-target/);
     assert.deepEqual(h.lists, [[undefined, 0], [undefined, 0], ["", 0]]);
     assert.equal(h.executes.length, 1);
+  } finally { await h.finish(); }
+});
+
+
+for (const outcome of ["committed_cleanup_pending", "committed_durability_uncertain", "unknown"] as const) {
+  for (const empty of [false, true]) it(`${outcome}: reopening after failed reconciliation honors fresh ${empty ? "empty" : "matching"} authority and retains recovery`, async () => {
+    const h = await deletionAppHarness();
+    try {
+      await h.input("\x1b[27u"); // cancel the initial disposable preview
+      await h.input("histor");
+      await h.input("\x04"); await h.resolvePreview(); await h.input("\t\r");
+      const refresh = deferred<{ sessions: SessionSummaryView[] }>();
+      h.setList(() => refresh.promise);
+      if (outcome === "unknown") h.execution.reject(new Error("healthy request rejection"));
+      else h.execution.resolve({ status: outcome, session_id: "old" });
+      await waitForApplicationContinuation();
+      refresh.reject(new Error("list rejected on live transport")); await waitForApplicationContinuation();
+      assert.equal(h.executes.length, 1);
+      assert.match(h.text(), outcome === "unknown" ? /outcome unknown/ : outcome === "committed_durability_uncertain" ? /durability is uncertain/ : /removed and cannot be resumed/);
+      assert.doesNotMatch(h.text(), /delete failed/);
+      await h.input("\x1b[27u"); assert.match(h.text(), /visibility unavailable/);
+      await h.input("\x1b[27u"); assert.equal(h.surface(), undefined);
+      h.setList(async () => ({ sessions: empty ? [] : ["A", "C"].map((id) => ({ id, name: `histor-${id}`, updated_at: "today", active_node: id, active: false })) }));
+      await h.input("/resume\r");
+      assert.deepEqual(h.lists.at(-1), ["histor", 0]);
+      assert.match(h.text(), /R retry native cleanup/);
+      await h.input("\x1b[27u");
+      assert.doesNotMatch(h.text(), /visibility unavailable|historical-target/);
+      if (empty) {
+        assert.doesNotMatch(h.text(), /histor-A|histor-C/);
+        assert.match(h.text(), /no persisted session matches/);
+      }
+      else { assert.match(h.text(), /histor-A/); assert.match(h.text(), /histor-C/); }
+      // The retained action remains available on reopening even with no rows.
+      await h.input("\x1b[27u"); await h.input("/resume\r"); await h.input("rr");
+      assert.deepEqual(h.recovers, ["old"]); assert.equal(h.executes.length, 1);
+      assert.equal(h.cancelled(), 0);
+    } finally { await h.finish(); }
+  });
+}
+
+it("failed reconciliation cannot revive a pre-mutation initial response after a fresh reopen", async () => {
+  const h = await deletionAppHarness(true);
+  try {
+    await h.resolvePreview(); await h.input("\t\r");
+    h.setList(async () => { throw new Error("list refresh rejected"); });
+    h.execution.resolve({ status: "committed_cleanup_pending", session_id: "old" });
+    await waitForApplicationContinuation();
+    await h.input("\x1b[27u\x1b[27u");
+    h.setList(async () => ({ sessions: [{ id: "A", name: "fresh-A", updated_at: "today", active_node: "A", active: false }] }));
+    await h.input("/resume\r"); await h.input("\x1b[27u");
+    const fresh = h.surface(); assert.match(h.text(), /fresh-A/);
+    h.lateList.resolve({ sessions: [{ id: "old", name: "historical-target", updated_at: "today", active_node: "old", active: false }] });
+    await waitForApplicationContinuation();
+    assert.equal(h.surface(), fresh); assert.match(h.text(), /fresh-A/);
+    assert.doesNotMatch(h.text(), /historical-target/); assert.equal(h.executes.length, 1);
   } finally { await h.finish(); }
 });
