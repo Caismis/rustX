@@ -240,7 +240,7 @@ regressions cover invalid authority and multiple legitimate borrowers.
 ## Development storage boundary
 
 Catalog schema **4 -> 5** establishes separated workspace allocation semantics.
-SQLite development schema **31 -> 32** uses rollback journaling (`DELETE`),
+SQLite development schema **32 -> 33** uses rollback journaling (`DELETE`),
 `synchronous=FULL`, and the same canonical linear Conversation tables. Read-only
 WAL can create shared-memory sidecars; existing-only management instead requires
 rollback-journal storage and never initializes, binds an identity, checkpoints,
@@ -328,3 +328,10 @@ proves rejection of this obsolete/tampered format without adding any file or
 changing database bytes. This is a format refusal, not a legacy reader.
 
 Existing-only Surface-head validation runs in one SQLite read transaction. The head, checkpoint, and immutable operation history therefore come from the same committed snapshot even while another connection performs ordinary execution. The transaction neither creates storage nor recovers journals; it ends when the bounded read returns.
+
+Version 32 on main freezes Issue #258’s effective child `profile_digest`; version
+33 additionally requires this Session deletion and local management contract.
+A v32 database is rejected, without migration or compatibility decoding.
+Invocation overrides affect tools, skills, and extensions, never ProductRoot,
+workspace borrowing, or disposal ownership. Capability-profile metadata, including
+`definition_digest` and `profile_digest`, is excluded from deletion revisions.

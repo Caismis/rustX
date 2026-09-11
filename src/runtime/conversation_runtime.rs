@@ -2167,6 +2167,14 @@ impl RuntimeInner {
                         model_config,
                         models,
                         approval_mode,
+                        // The composition this runtime is actually executing
+                        // against (Issue #258). It is delegation *authority*
+                        // only: a child never inherits it, and it reaches a
+                        // frozen child specification only through an explicit
+                        // authorized invocation override.
+                        crate::extensions::NativeAgentExtensions::from_materialized(
+                            self.context.status_engine.as_ref(),
+                        ),
                     )
                 }),
             workflow_output: self.workflow_output.clone(),

@@ -7,6 +7,8 @@
 //!
 //! - named child-definition admission, resolution, and the frozen child
 //!   specification ([`definitions`]);
+//! - invocation-scoped tools/Skills/extension overrides, their delegation
+//!   ceiling, and the effective execution-profile identity ([`overrides`]);
 //! - the real child-process handshake: a launched named child consumes the
 //!   frozen definition and policy through the typed spawn path
 //!   ([`process_conformance`]);
@@ -22,4 +24,5 @@ mod launch_fixture;
 
 mod definitions;
 mod end_to_end;
+mod overrides;
 mod process_conformance;

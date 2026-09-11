@@ -1,12 +1,128 @@
 {
   "$defs": {
+    "AgentStatusExtensionDocument": {
+      "additionalProperties": false,
+      "description": "The authored Agent Status extension.\n\n`enabled` composes the extension in or out of the runtime as a whole;\n`time` and `background` remain the two bounded status contributors, with\nexactly the semantics they had before the migration.",
+      "properties": {
+        "background": {
+          "$ref": "#/$defs/BackgroundStatusConfig",
+          "default": {
+            "enabled": true
+          },
+          "description": "The Background contributor configuration."
+        },
+        "enabled": {
+          "default": true,
+          "description": "Whether this composition includes the Agent Status extension at all.\n\nWith `false` the runtime composes no status engine: the Agent Loop\nemits no Agent Status and is otherwise a completely ordinary\n`ConversationRuntime`.",
+          "type": "boolean"
+        },
+        "time": {
+          "$ref": "#/$defs/TimeStatusConfig",
+          "default": {
+            "enabled": true
+          },
+          "description": "The Time contributor configuration."
+        }
+      },
+      "type": "object"
+    },
+    "BackgroundStatusConfig": {
+      "additionalProperties": false,
+      "description": "Configuration of the bounded Background status contributor.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Whether Background participates in an available Agent Status opportunity.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "McpServerId": {
       "description": "Identifies an MCP server bound to the runtime.",
       "type": "string"
     },
+    "NativeAgentExtensionSelection": {
+      "additionalProperties": false,
+      "description": "The **presence-aware** closed selection an invocation override expresses.\n\nThis is deliberately *not* [`NativeAgentExtensionsDocument`]. The authored\ndocument supplies launch/role **defaults** — its `agentStatus` member has\n`enabled: true` — which is exactly right for \"an unconfigured role composes\nAgent Status\" and exactly wrong for an override, where the whole point is\nthat a present `extensions` dimension **replaces** the role's composition:\n\n```text\nrole frontmatter   extensions: {}   ->  Agent Status composed (role default)\ninvocation override \"extensions\": {} ->  no extension composed at all\n```\n\nEvery member is therefore an explicit `Option`: absent means \"this\nextension is not part of the requested composition\", never \"use a default\".\nPresence is the only way to compose an extension, and a present member\nstill carries its own complete authored configuration.\n\nThe record stays closed exactly like the authored document: an unknown\nextension name is rejected by `deny_unknown_fields`, so a misspelled or\nnot-yet-implemented extension fails deterministically instead of being\nsilently ignored.",
+      "properties": {
+        "agentStatus": {
+          "$ref": "#/$defs/AgentStatusExtensionDocument",
+          "description": "The requested Agent Status extension, when this selection composes it.\n\n`null` is not accepted: the field is either absent (not composed) or a\ncomplete authored configuration. Collapsing an explicit `null` into\n\"absent\" would give one wire spelling two meanings."
+        }
+      },
+      "type": "object"
+    },
+    "SubagentInvocationOverride": {
+      "additionalProperties": false,
+      "description": "One invocation-scoped replacement of selected child capability\ndimensions.\n\nThe same value is produced by model-generated `subagent` arguments and by\ntrusted static Workflow program data. The two differ only in the\n[`SubagentOverrideAuthority`] their launch site supplies, never in this\nvocabulary or in the resolution algorithm that consumes it.\n\n[`SubagentOverrideAuthority`]: super::resolver::SubagentOverrideAuthority",
+      "properties": {
+        "extensions": {
+          "$ref": "#/$defs/NativeAgentExtensionSelection",
+          "description": "The complete replacement native Agent Extension composition, when this\ndimension is overridden. Absent uses the definition's composition."
+        },
+        "skills": {
+          "description": "The complete replacement Skill selection, when this dimension is\noverridden. Absent uses the definition's selection.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tools": {
+          "$ref": "#/$defs/ToolSelectionDocument",
+          "description": "The complete replacement Tool selection, when this dimension is\noverridden. Absent uses the definition's selection."
+        }
+      },
+      "type": "object"
+    },
     "SubagentName": {
       "description": "The canonical typed name of one admitted subagent definition.\n\nThe keyspace is deliberately narrow: lowercase ASCII letters, digits,\n`-`, and `_`, starting with a letter. A name is the model-facing routing\ntoken, the durable ownership identity, and the Runtime Client projection\nidentity, so an ambiguous or shell-shaped spelling is rejected at the\nconfiguration boundary rather than normalized later.",
       "type": "string"
+    },
+    "TimeStatusConfig": {
+      "additionalProperties": false,
+      "description": "Configuration of the bounded Time status contributor.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Whether Time participates in an available Agent Status opportunity.",
+          "type": "boolean"
+        },
+        "timezone": {
+          "description": "The optional IANA timezone used only by Time presentation. Omitting it\nrenders UTC.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ToolSelectionDocument": {
+      "additionalProperties": false,
+      "description": "The authored map form of an exact, source-qualified capability selection.\n\nThis is the one selection vocabulary shared by every trusted authoring\nsurface: named-role frontmatter (`tools:`), a Workflow Agent node's\ninvocation override, and the model-facing `subagent` Tool's `override`.\nOrigins are named explicitly rather than collapsed into bare strings, so a\nBuiltin `read` and an MCP server's `read` are never interchangeable.\nWildcards are deliberately absent: a selection is an exact list. Managed\nPython tool packages are selected through `mcp` under their synthesized\nserver identity (`python:<folder>`, Issue #174).\n\nThe `python:` namespace is reserved for those synthesized identities:\n`mcpServers` configuration may never declare a server under it (rejected\nduring validation), so a selection naming `python:<folder>` always resolves\nto the managed package, never to a configured server.",
+      "properties": {
+        "builtin": {
+          "default": [],
+          "description": "Built-in/native capabilities, by canonical model-facing name.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "mcp": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "default": {},
+          "description": "MCP capabilities, keyed by server identity.",
+          "type": "object"
+        }
+      },
+      "type": "object"
     },
     "ToolSelector": {
       "description": "Trusted selection syntax shared by Subagent and Workflow authoring.\nManaged Python uses the existing `python:<package>` MCP server identity.",
@@ -242,6 +358,10 @@
             },
             "output": {
               "description": "The frozen `AgentRun` output contract."
+            },
+            "override": {
+              "$ref": "#/$defs/SubagentInvocationOverride",
+              "description": "The optional invocation-scoped capability override of this node\n(Issue #258).\n\nThis is **trusted static program data**: it is part of the\ncompiled Workflow, is validated against the Workflow's own\nadmitted generation, and is not reachable from model output, node\ninput values, or task text. It may therefore legitimately replace\nthe role's defaults with capabilities the invoking main model does\nnot itself hold — never with capabilities the generation does not\nauthorize."
             },
             "profile": {
               "$ref": "#/$defs/SubagentName",

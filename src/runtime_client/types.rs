@@ -306,7 +306,16 @@ pub enum RuntimeClientSessionRequest {
 /// configuration and never inferred from Agent Status observations. It is
 /// absent only for historical-only durable inspection. No v25 decoding, and
 /// no legacy top-level `agent_status` configuration form.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 26;
+/// Version 27 adds `profile_digest` to every projected subagent: the
+/// deterministic identity of the **effective** child execution profile, beside
+/// the source `definition_digest` it can no longer be derived from once an
+/// authorized invocation override may replace a role's tools, Skills, or
+/// extensions (Issue #258). It is always present, on live and
+/// recovery-projected children alike, because the invoking attempt commits it
+/// durably with child ownership. No v26 decoding and no optional form: a
+/// child without an effective profile identity is not a state this runtime
+/// can produce.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 27;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1293,7 +1302,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 26);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 27);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1317,6 +1326,7 @@ mod tests {
             child_conversation_id: ConversationId::new("conversation-child"),
             agent: "conformance".to_owned(),
             definition_digest: "sha256:definition".to_owned(),
+            profile_digest: "sha256:profile".to_owned(),
             state: crate::runtime::subagent::SubagentState::Interrupted,
             detail: Some("child outcome unknown".to_owned()),
             observation: crate::runtime::subagent::SubagentObservation::default(),

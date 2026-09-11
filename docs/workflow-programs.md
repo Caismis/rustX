@@ -111,6 +111,23 @@ summary, otherwise the first failing definition key supplies its typed status.
 Child outcomes are immutable. Diagnostics are bounded without replacing status
 or claiming that remote effects stopped.
 
+An `Agent` node may carry one optional `override` object with the same three
+dimensions and the same replacement rule as the model-facing `subagent` Tool
+(see [Canonical named Subagent resources](subagent-resources.md#invocation-scoped-overrides)).
+A Workflow override is **trusted static program data**: it is part of the
+compiled program, is validated at compilation and again during
+resource-generation preparation against that generation's authority, and is not
+reachable from model output, node input values, task text, or any expression or
+interpolation language. It may therefore replace the role's defaults with
+capabilities the invoking main model does not itself hold — never with
+capabilities the admitted generation does not authorize.
+
+Workflow does not acquire a second resolver, Tool Plane, or `SubagentRuntime`
+for this: an `Agent` node still resolves one named profile through the same
+`SubagentResolver`, differing only in the typed authority its launch site
+supplies. Equivalent authorized inputs on the Workflow and Tool paths therefore
+produce one identical `ResolvedSubagentSpec`.
+
 `ToolInvocationId` separates Agent `ToolCallId` correlation from Workflow's
 concrete `WorkflowNodeInstance`. A Tool node creates no Assistant, model turn,
 canonical call slot or ToolResult message. Native preparation/start/progress/
@@ -654,7 +671,11 @@ cleanliness policies fail before acquisition or child/Tool side effects.
 Candidate Agents cannot select MCP (including managed Python) or nested
 `subagent`/`execution` orchestration: their existing bindings cannot safely
 promise candidate cwd or descendant access. These combinations are rejected,
-not stripped from a profile. Tool executors declare the shared `WorkspaceUse` contract:
+not stripped from a profile. Candidate eligibility reads each node's
+**effective** capability set, so an Agent node's invocation override (SUB-OVR)
+is applied before the check rather than after it: an override cannot smuggle an
+ineligible capability past this gate, and it cannot be blamed for one the role
+already had. Tool executors declare the shared `WorkspaceUse` contract:
 
 - `ConsumesProvided`: uses the supplied workspace as cwd/file authority. Native
   filesystem Tools and Bash acquire the exact candidate validation borrow.
@@ -1117,3 +1138,8 @@ Runtime Client protocol 22 projects live native run cuts into the foreground
 Workflow Tool details. See [run projection](workflow-run-projection.md) for
 ownership, revision domains, cursor/resync synchronization, finite retention,
 cancellation draining, candidate applicability, and reconnect/process death.
+
+Invocation overrides never change `borrowed_from`, Workflow run identity, or
+physical disposal authority. Borrowing Agent children own their Conversations,
+while a shared Workflow-owned worktree contributes exactly one Session deletion
+blocker. See [capability identity and Session ownership](subagent-resources.md#capability-identity-and-session-ownership).

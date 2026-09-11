@@ -124,6 +124,44 @@ pub(super) fn inspect(
             }
         }
     }
+    // An Agent node's invocation override selects *child* capabilities, not
+    // Workflow Tool-node leaves, so it is reported beside the role's own
+    // selection rather than folded into the Tool dependency list. An
+    // externally sourced selector stays an unresolved online fact: static
+    // analysis never invents a schema for it.
+    for node in program.agent_override_nodes() {
+        let Some(selection) = &node.invocation_override.tools else {
+            continue;
+        };
+        for selector in selection.selectors() {
+            if let crate::capabilities::selection::ToolSelector::Mcp { server_id, name } = &selector
+            {
+                report.validity = Validity::Incomplete;
+                let activation = launch.source_activations[server_id];
+                report.diagnostics.push(Diagnostic {
+                    classification: "warning",
+                    category: if activation
+                        == crate::capabilities::activation::SourceActivation::Enabled
+                    {
+                        "unresolved"
+                    } else {
+                        "dependency_inert"
+                    },
+                    file: Some(source.clone()),
+                    path: format!("{}.tools.mcp.{server_id}.{name}", node.path),
+                    reason: format!(
+                        "Agent override capability {selector}: source {activation:?}; online \
+                         schema compatibility is not established"
+                    ),
+                    correction: "review the node override and source policy; child admission \
+                                 must freeze actual capabilities"
+                        .into(),
+                    line: None,
+                    column: None,
+                });
+            }
+        }
+    }
     for dependency in &dependencies {
         let (category, reason) = match dependency.state {
             DependencyState::Known => continue,
@@ -157,6 +195,9 @@ pub(super) fn inspect(
         if !role.tools.is_empty() {
             runtime_requirements.insert("named_role_tool_invocation_and_source_availability");
         }
+    }
+    if !program.agent_override_nodes().is_empty() {
+        runtime_requirements.insert("agent_override_reference_resolution_and_source_availability");
     }
     report.workflow = Some(WorkflowProjection {
         id: id.clone(),

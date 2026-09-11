@@ -152,6 +152,7 @@ fn candidate_definition(agent: bool) -> WorkflowDefinition {
                 task: "Implement the explicitly bound request".into(),
                 input: BTreeMap::new(),
                 output: schema(json!({}), &[]),
+                invocation_override: None,
             },
         );
         definition.block.entry = "implement".into();
@@ -445,7 +446,26 @@ fn setup_context(
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // One cross-owner fixture checks bytes, authority and terminal ordering.
 async fn agent_dirty_bytes_reach_exact_tool_context_after_child_settlement_with_frozen_resources() {
-    let plane = workflow_test_plane(1);
+    // A native Session catalog lets this real Workflow admission continue all
+    // the way through the deletion ownership projection after settlement.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("workspace")).unwrap();
+    let catalog = crate::local_runtime::session::SessionCatalog::create(
+        &dir.path().join("subagents"),
+        &crate::local_runtime::session::SessionPersistentState {
+            model: SessionModelConfig::of(ModelRef::parse("local/model").unwrap()),
+        },
+    )
+    .unwrap();
+    let (session, node, _) = catalog.active_lineage().unwrap();
+    let store = Arc::new(
+        crate::durable::SqliteConversationStore::open(
+            node.conversation_id.clone(),
+            &catalog.database_path(&session, &node.conversation_id),
+        )
+        .unwrap(),
+    );
+    let plane = workflow_test_plane_with_store(dir, node.conversation_id, store, 1);
     initialize(&plane);
     let mut child = stage_workflow_child(&plane);
     let probe = Arc::new(CandidateProbe {
@@ -457,13 +477,31 @@ async fn agent_dirty_bytes_reach_exact_tool_context_after_child_settlement_with_
     let resources = context.resources().clone();
     let frozen_skills = resources.skill_catalog().map(str::to_owned);
     let frozen_instructions = resources.project_instructions().map(str::to_owned);
-    let frozen = context.resolve_workflow(&profile("reviewer")).unwrap();
+    let invocation = serde_json::from_value(json!({"extensions": {}})).unwrap();
+    let default = context
+        .resolve_workflow(&profile("reviewer"), None)
+        .unwrap();
+    let frozen = context
+        .resolve_workflow(&profile("reviewer"), Some(&invocation))
+        .unwrap();
+    assert_eq!(default.definition_digest, frozen.definition_digest);
+    assert_ne!(default.profile_digest(), frozen.profile_digest());
+    let mut definition = candidate_definition(true);
+    let WorkflowNodeDefinition::Agent {
+        invocation_override,
+        ..
+    } = definition.block.nodes.get_mut("implement").unwrap()
+    else {
+        panic!("Agent")
+    };
+    *invocation_override = Some(invocation);
+    let program = Arc::new(compile_test(definition).unwrap());
     let runtime = workflow_runtime(&plane);
     let (_, cancellation) = workflow_cancellation();
-    let task = tokio::spawn(async move {
+    let mut task = tokio::spawn(async move {
         runtime
             .run_foreground(
-                candidate_program(true),
+                program,
                 ToolCallId::new("candidate-run"),
                 context,
                 json!({"passed":true}),
@@ -471,7 +509,10 @@ async fn agent_dirty_bytes_reach_exact_tool_context_after_child_settlement_with_
             )
             .await
     });
-    child.expect_delegate().await;
+    tokio::select! {
+        () = child.expect_delegate() => {},
+        result = &mut task => panic!("Workflow ended before delegation: {result:?}"),
+    }
     let snapshot = plane.registry.all_snapshots().pop().unwrap();
     let path = snapshot.workspace.logical_workspace.clone();
     assert!(snapshot.workspace.borrowed_from.is_some());
@@ -537,6 +578,64 @@ async fn agent_dirty_bytes_reach_exact_tool_context_after_child_settlement_with_
             .is_empty()
     );
     let events = plane.store.read_events(None, 256).unwrap().events;
+    let ownership = events
+        .iter()
+        .find_map(|event| match &event.event {
+            RuntimeEvent::SubagentOwnershipCommitted {
+                definition_digest,
+                profile_digest,
+                child_conversation_id,
+                workspace,
+                ownership,
+                ..
+            } => Some((
+                definition_digest,
+                profile_digest,
+                child_conversation_id,
+                workspace,
+                ownership,
+            )),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(ownership.0, frozen.definition_digest.as_str());
+    assert_eq!(ownership.1, frozen.profile_digest().as_str());
+    assert_eq!(ownership.2, &settled.child_conversation_id);
+    assert_eq!(ownership.3, &settled.workspace);
+    // The staged test child owns a process but does not compose its SQLite
+    // store; seed that child's normal durable allocation before preflight.
+    let child_database =
+        crate::runtime::subagent::child_conversation_store_path(&plane.runtime_root, ownership.2);
+    std::fs::create_dir_all(child_database.parent().unwrap()).unwrap();
+    crate::durable::SqliteConversationStore::open(ownership.2.clone(), &child_database)
+        .unwrap()
+        .initialize(&[])
+        .unwrap();
+    let target = crate::local_runtime::session_deletion::SessionDeletionPreflight::acquire(
+        &plane.runtime_root,
+        &session,
+    )
+    .unwrap();
+    assert_eq!(target.conversations().len(), 2);
+    assert!(
+        target
+            .conversations()
+            .iter()
+            .any(|c| &c.conversation_id == ownership.2)
+    );
+    assert_eq!(target.workspace_blockers().len(), 1);
+    assert!(
+        target.workspace_blockers()[0]
+            .resource_id
+            .starts_with("workflow:")
+    );
+
+    assert!(ownership.3.borrowed_from.is_some());
+    assert_eq!(
+        *ownership.4,
+        crate::events::types::SubagentOwnershipKind::Workflow
+    );
+
     assert!(events.iter().any(|event| matches!(
         &event.event,
         RuntimeEvent::WorkflowCandidateInvocation {
@@ -664,6 +763,7 @@ async fn cancellation_agent_failure_and_tool_failure_share_dirty_run_handoff() {
                     task: "write".into(),
                     input: BTreeMap::new(),
                     output: schema(json!({}), &[]),
+                    invocation_override: None,
                 },
             );
             definition.block.entry = "implement".into();
@@ -1131,6 +1231,7 @@ async fn stale_check_after_writer(return_value: bool, parallel_export: bool) {
             task: "write B".into(),
             input: BTreeMap::new(),
             output: schema(json!({}), &[]),
+            invocation_override: None,
         },
     );
     definition.block.edges.retain(|edge| edge.from != "check");
@@ -1279,6 +1380,7 @@ fn agent_review_program(writer: bool, parallel: bool) -> Arc<WorkflowProgram> {
         task: "Review the current candidate".into(),
         input: BTreeMap::new(),
         output: result_schema.clone(),
+        invocation_override: None,
     };
     let mut definition = program_definition();
     definition.workspace = Some(WorkflowWorkspace {
@@ -1355,6 +1457,7 @@ fn agent_review_program(writer: bool, parallel: bool) -> Arc<WorkflowProgram> {
                 task: "Produce B".into(),
                 input: BTreeMap::new(),
                 output: schema(json!({}), &[]),
+                invocation_override: None,
             },
         );
         definition
@@ -1523,6 +1626,7 @@ async fn agent_writer_summary_is_bound_to_post_write_candidate_b_for_next_tool()
             task: "Write B and summarize".into(),
             input: BTreeMap::new(),
             output: schema(json!({"summary":{"type":"string"}}), &["summary"]),
+            invocation_override: None,
         },
     );
     definition.block.edges.push(edge("writer", "check"));
@@ -1794,6 +1898,7 @@ async fn review_dirty_candidate_accept_reject_mutation_and_cancel_gate_exact_dow
                 task: "Implement".into(),
                 input: BTreeMap::new(),
                 output: schema(json!({}), &[]),
+                invocation_override: None,
             },
         );
         definition.block.nodes.insert(

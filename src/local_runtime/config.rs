@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::capabilities::selection::ToolSelector;
+use crate::capabilities::selection::ToolSelectionDocument;
 use crate::context::SessionContextPolicy;
 use crate::extensions::{NativeAgentExtensions, NativeAgentExtensionsDocument};
 use crate::model::catalog::ModelRef;
@@ -173,9 +173,12 @@ pub const MAX_MAX_CONCURRENT_SUBAGENTS: usize = 64;
 
 /// Strict canonical role Markdown frontmatter. The body supplies primary instructions.
 ///
-/// Everything here is *definition* state. None of it is exposed as a
-/// per-call model argument: the model chooses which named agent runs and
-/// nothing else.
+/// Everything here is *definition* state, and the definition is the child's
+/// canonical **default** execution profile. One invocation may replace
+/// `tools`, `skills`, and `extensions` for exactly that child through the
+/// shared `SubagentInvocationOverride` (Issue #258), within an explicit
+/// delegation ceiling. Every other field here — model, instructions,
+/// `timeoutMs`, `agentsMd`, `worktree` — has no per-call form at all.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
@@ -229,45 +232,12 @@ impl SubagentDocument {
 
 /// The source-qualified capability selection of one named definition.
 ///
-/// Origins are named explicitly rather than collapsed into bare strings, so
-/// a Builtin `read` and an MCP server's `read` are never interchangeable and
-/// resolution keeps exact source identity. Wildcards are deliberately
-/// absent: a selection is an exact list. Managed Python tool packages are
-/// selected through the `mcp` map under their synthesized server identity
-/// (`python:<folder>`, Issue #174).
-///
-/// The `python:` namespace is reserved for those synthesized identities:
-/// `mcpServers` configuration may never declare a server under it (rejected
-/// during validation), so a subagent selection naming `python:<folder>`
-/// always resolves to the managed package, never to a configured server.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
-#[derive(schemars::JsonSchema)]
-pub struct SubagentToolsDocument {
-    /// Built-in/native capabilities, by canonical model-facing name.
-    pub builtin: Vec<String>,
-    /// MCP capabilities, keyed by server identity.
-    pub mcp: BTreeMap<McpServerId, Vec<String>>,
-}
-
-impl SubagentToolsDocument {
-    /// The typed selectors this document expresses.
-    #[must_use]
-    pub fn selectors(&self) -> Vec<ToolSelector> {
-        let mut selectors: Vec<ToolSelector> = self
-            .builtin
-            .iter()
-            .map(|name| ToolSelector::Builtin { name: name.clone() })
-            .collect();
-        for (server_id, names) in &self.mcp {
-            selectors.extend(names.iter().map(|name| ToolSelector::Mcp {
-                server_id: server_id.clone(),
-                name: name.clone(),
-            }));
-        }
-        selectors
-    }
-}
+/// Role frontmatter, a Workflow Agent node's invocation override, and the
+/// model-facing `subagent` Tool's `override` all express a capability
+/// selection with exactly this vocabulary, so the type is the shared
+/// [`ToolSelectionDocument`] rather than a second structurally identical
+/// authoring shape.
+pub type SubagentToolsDocument = ToolSelectionDocument;
 
 /// The project-instruction policy of one named definition.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

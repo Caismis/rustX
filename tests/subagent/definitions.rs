@@ -19,7 +19,8 @@ use rustx::model::invocation::ModelBindingRegistry;
 use rustx::model::session::SessionModelConfig;
 use rustx::runtime::RuntimeResourceSnapshot;
 use rustx::runtime::subagent::{
-    ResolvedSubagentSpec, ResolvedSubagentTool, SubagentDefinitionDigest, SubagentName,
+    InvokingAgentAuthority, ResolvedSubagentSpec, ResolvedSubagentTool, SubagentDefinitionDigest,
+    SubagentDomain, SubagentName, SubagentOverrideAuthority, SubagentResolution,
     SubagentResolutionError, SubagentResolver,
 };
 use rustx::runtime_client::settings::EffectiveNativeAgentExtensions;
@@ -77,6 +78,31 @@ fn model_registry() -> ModelBindingRegistry {
 
 fn agent(name: &str) -> SubagentName {
     SubagentName::parse(name).expect("canonical name")
+}
+
+/// Resolves one named agent with **no** invocation override, through the one
+/// shared resolution entry point.
+///
+/// The helper exists so the historical suites read the way they always did
+/// while still going through the single Issue #258 contract: no override, the
+/// Main admission domain, the dynamic delegation authority, and a caller that
+/// contributes nothing of its own.
+fn resolve(
+    resources: &RuntimeResourceSnapshot,
+    name: &SubagentName,
+    attempt_model: &SessionModelConfig,
+    models: &ModelBindingRegistry,
+) -> Result<ResolvedSubagentSpec, SubagentResolutionError> {
+    SubagentResolver::resolve(&SubagentResolution {
+        resources,
+        agent: name,
+        attempt_model,
+        models,
+        domain: SubagentDomain::Main,
+        invocation: None,
+        authority: SubagentOverrideAuthority::DelegatedByModel,
+        invoking: &InvokingAgentAuthority::none(),
+    })
 }
 
 fn inherited_model() -> SessionModelConfig {
@@ -362,7 +388,7 @@ async fn cfg236_gated_frozen_child_retains_r1_after_canonical_role_r2_publicatio
     let (admitted_tx, admitted_rx) = tokio::sync::oneshot::channel();
     let (release_tx, release_rx) = tokio::sync::oneshot::channel();
     let child = tokio::spawn(async move {
-        let frozen = SubagentResolver::resolve(
+        let frozen = resolve(
             &r1,
             &agent("explore"),
             &inherited_model(),
@@ -388,7 +414,7 @@ async fn cfg236_gated_frozen_child_retains_r1_after_canonical_role_r2_publicatio
     }}}));
     product.runtime().reload_resources().await.unwrap();
     let r2 = product.runtime().runtime_resources();
-    let next = SubagentResolver::resolve(
+    let next = resolve(
         &r2,
         &agent("explore"),
         &inherited_model(),
@@ -551,7 +577,7 @@ async fn an_attempt_frozen_on_r1_resolves_r1_after_r2_becomes_current() {
 
     let registry = model_registry();
     // The R1-owning attempt still sees exactly R1.
-    let resolved = SubagentResolver::resolve(&r1, &agent("explore"), &inherited_model(), &registry)
+    let resolved = resolve(&r1, &agent("explore"), &inherited_model(), &registry)
         .expect("R1 still resolves its own agent");
     assert_eq!(resolved.definition_digest, r1_digest);
     assert_eq!(
@@ -568,14 +594,14 @@ async fn an_attempt_frozen_on_r1_resolves_r1_after_r2_becomes_current() {
     );
     assert!(
         matches!(
-            SubagentResolver::resolve(&r1, &agent("research"), &inherited_model(), &registry),
+            resolve(&r1, &agent("research"), &inherited_model(), &registry),
             Err(SubagentResolutionError::UnknownAgent { .. })
         ),
         "an agent that only R2 admits is invisible to an R1-owning attempt"
     );
 
     // And the newly current generation is genuinely different.
-    let from_r2 = SubagentResolver::resolve(&r2, &agent("explore"), &inherited_model(), &registry)
+    let from_r2 = resolve(&r2, &agent("explore"), &inherited_model(), &registry)
         .expect("R2 resolves its own agent");
     assert_eq!(
         from_r2.execution_deadline.expect("R2 deadline").as_millis(),
@@ -583,9 +609,7 @@ async fn an_attempt_frozen_on_r1_resolves_r1_after_r2_becomes_current() {
         "the current R2 definition has its independent deadline"
     );
     assert_ne!(from_r2.definition_digest, r1_digest);
-    assert!(
-        SubagentResolver::resolve(&r2, &agent("research"), &inherited_model(), &registry).is_ok()
-    );
+    assert!(resolve(&r2, &agent("research"), &inherited_model(), &registry).is_ok());
 }
 
 /// A reload whose subagent catalog is invalid leaves the previous complete
@@ -687,7 +711,7 @@ async fn a_child_may_select_a_capability_that_is_available_but_inactive_for_the_
         .collect::<Vec<_>>();
     assert!(available.contains(&"grep".to_owned()) && available.contains(&"glob".to_owned()));
 
-    let resolved = SubagentResolver::resolve(
+    let resolved = resolve(
         &resources,
         &agent("explore"),
         &inherited_model(),
@@ -855,7 +879,7 @@ async fn an_unavailable_source_keeps_the_runtime_healthy_but_blocks_the_agent_th
 
     // But the agent that explicitly requires it cannot start, and the
     // failure is the source-unavailable fact rather than "unknown".
-    let error = SubagentResolver::resolve(
+    let error = resolve(
         &resources,
         &agent("explore"),
         &inherited_model(),
@@ -901,9 +925,8 @@ async fn model_semantics_inherit_the_invoking_attempt_or_freeze_the_explicit_sel
     // follow the attempt, not the composition-time capture.
     let attempt_model =
         SessionModelConfig::of(ModelRef::parse("local/model-b").expect("model reference"));
-    let inheriting =
-        SubagentResolver::resolve(&resources, &agent("explore"), &attempt_model, &registry)
-            .expect("the inheriting agent resolves");
+    let inheriting = resolve(&resources, &agent("explore"), &attempt_model, &registry)
+        .expect("the inheriting agent resolves");
     assert_eq!(
         inheriting.model.primary.model.to_string(),
         "local/model-b",
@@ -915,7 +938,7 @@ async fn model_semantics_inherit_the_invoking_attempt_or_freeze_the_explicit_sel
     );
 
     // And an explicit selection is independent of the invoking attempt.
-    let pinned = SubagentResolver::resolve(
+    let pinned = resolve(
         &resources,
         &agent("pinned"),
         &SessionModelConfig::of(ModelRef::parse("local/model-a").expect("model reference")),
@@ -966,9 +989,8 @@ async fn project_instruction_policy_freezes_a_deterministic_chain() {
         .collect::<Vec<_>>();
     assert!(parent_chain.contains(&"workspace instructions\n".to_owned()));
 
-    let inherited =
-        SubagentResolver::resolve(&resources, &agent("explore"), &inherited_model(), &registry)
-            .expect("the inheriting agent resolves");
+    let inherited = resolve(&resources, &agent("explore"), &inherited_model(), &registry)
+        .expect("the inheriting agent resolves");
     let inherited_contents = project_instruction_contents(&inherited);
     let mut expected = parent_chain.clone();
     expected.push("explicit agent instructions\n".to_owned());
@@ -978,7 +1000,7 @@ async fn project_instruction_policy_freezes_a_deterministic_chain() {
         "inherit=true is the exact parent chain followed by the explicit files in order"
     );
 
-    let isolated = SubagentResolver::resolve(
+    let isolated = resolve(
         &resources,
         &agent("isolated"),
         &inherited_model(),
@@ -1014,9 +1036,8 @@ async fn project_instruction_policy_freezes_a_deterministic_chain() {
         .await
         .expect("the reversed order publishes");
     let reloaded = product.runtime().runtime_resources();
-    let reordered =
-        SubagentResolver::resolve(&reloaded, &agent("isolated"), &inherited_model(), &registry)
-            .expect("the isolated agent resolves");
+    let reordered = resolve(&reloaded, &agent("isolated"), &inherited_model(), &registry)
+        .expect("the isolated agent resolves");
     assert_eq!(
         project_instruction_contents(&reordered),
         vec![
@@ -1053,7 +1074,7 @@ async fn the_skill_allowlist_is_exact_and_preserves_progressive_disclosure() {
     let parent_catalog = resources.skill_catalog().expect("the parent Skill catalog");
     assert!(parent_catalog.contains("alpha") && parent_catalog.contains("beta"));
 
-    let resolved = SubagentResolver::resolve(
+    let resolved = resolve(
         &resources,
         &agent("explore"),
         &inherited_model(),
@@ -1147,7 +1168,7 @@ async fn the_frozen_specification_preserves_exact_builtin_identity_through_seria
     lab.write_config(&config);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
-    let resolved = SubagentResolver::resolve(
+    let resolved = resolve(
         &resources,
         &agent("explore"),
         &inherited_model(),
@@ -1251,8 +1272,9 @@ fn invalid_agent_names_are_rejected_deterministically() {
     assert_eq!(agent("deep-research_2").as_str(), "deep-research_2");
 }
 
-/// The committed durable ownership fact carries `(agent, definition_digest)`
-/// and survives a round trip through the real durable authority unchanged.
+/// The committed durable ownership fact carries
+/// `(agent, definition_digest, profile_digest)` and survives a round trip
+/// through the real durable authority unchanged.
 #[test]
 fn the_committed_identity_survives_a_durable_round_trip() {
     use rustx::durable::{ConversationStore, SqliteConversationStore};
@@ -1284,6 +1306,7 @@ fn the_committed_identity_survives_a_durable_round_trip() {
             tool_call_id: ToolCallId::new("call-sub"),
             agent: "explore".to_owned(),
             definition_digest: "sha256:d1".to_owned(),
+            profile_digest: "sha256:profile".to_owned(),
             ownership: rustx::events::types::SubagentOwnershipKind::Normal,
             workspace: rustx::runtime::workspace::WorkspaceSnapshot::shared(
                 std::path::PathBuf::from("<shared-workspace>"),
@@ -1301,12 +1324,26 @@ fn the_committed_identity_survives_a_durable_round_trip() {
             RuntimeEvent::SubagentOwnershipCommitted {
                 agent,
                 definition_digest,
+                profile_digest,
                 ..
-            } => Some((agent.clone(), definition_digest.clone())),
+            } => Some((
+                agent.clone(),
+                definition_digest.clone(),
+                profile_digest.clone(),
+            )),
             _ => None,
         })
         .expect("the ownership fact round-trips");
-    assert_eq!(fact, ("explore".to_owned(), "sha256:d1".to_owned()));
+    assert_eq!(
+        fact,
+        (
+            "explore".to_owned(),
+            "sha256:d1".to_owned(),
+            "sha256:profile".to_owned()
+        ),
+        "both the source-definition identity and the effective execution-profile identity are \
+         durable facts"
+    );
 }
 
 /// The Runtime Client projection of a subagent carries the named-agent
@@ -1326,6 +1363,7 @@ fn the_runtime_client_projection_carries_the_named_identity() {
         tool_call_id: ToolCallId::new("call-1"),
         agent: "explore".to_owned(),
         definition_digest: "sha256:d1".to_owned(),
+        profile_digest: "sha256:p1".to_owned(),
         workspace: rustx::runtime::workspace::WorkspaceSnapshot::shared(std::path::PathBuf::from(
             "<shared-workspace>",
         )),
@@ -1346,6 +1384,7 @@ fn the_runtime_client_projection_carries_the_named_identity() {
         child_conversation_id: snapshot.child_conversation_id.clone(),
         agent: snapshot.agent.clone(),
         definition_digest: snapshot.definition_digest.clone(),
+        profile_digest: snapshot.profile_digest.clone(),
         state: snapshot.state,
         detail: None,
         observation: snapshot.observation.clone(),
@@ -1362,6 +1401,10 @@ fn the_runtime_client_projection_carries_the_named_identity() {
     let wire = serde_json::to_value(&view).expect("serialize the projection");
     assert_eq!(wire["agent"], "explore");
     assert_eq!(wire["definition_digest"], "sha256:d1");
+    assert_eq!(
+        wire["profile_digest"], "sha256:p1",
+        "the effective execution profile identity is projected beside the definition identity"
+    );
     assert!(
         wire.get("profile").is_none(),
         "the obsolete profile field is absent from the wire shape: {wire}"
@@ -1432,7 +1475,7 @@ async fn a_frozen_child_model_never_observes_a_later_models_jsonc_edit() {
     let resources = product.runtime().runtime_resources();
 
     // M1: freeze the child against the catalog the parent was admitted with.
-    let resolved = SubagentResolver::resolve(
+    let resolved = resolve(
         &resources,
         &agent("explore"),
         &inherited_model(),
@@ -1565,7 +1608,7 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
 
-    let resolved = SubagentResolver::resolve(
+    let resolved = resolve(
         &resources,
         &agent("explore"),
         &inherited_model(),
@@ -1694,7 +1737,7 @@ async fn skill_version_identity_is_frozen_across_the_boundary() {
         .expect("the generation admitted alpha")
         .clone();
 
-    let resolved = SubagentResolver::resolve(
+    let resolved = resolve(
         &resources,
         &agent("explore"),
         &inherited_model(),
@@ -1832,7 +1875,7 @@ fn frozen_extensions(
     resources: &RuntimeResourceSnapshot,
     name: &str,
 ) -> rustx::extensions::NativeAgentExtensions {
-    SubagentResolver::resolve(
+    resolve(
         resources,
         &agent(name),
         &inherited_model(),
@@ -2043,7 +2086,7 @@ async fn ext256_a_child_frozen_on_r1_keeps_r1_extensions_after_r2_publishes() {
     let (admitted_tx, admitted_rx) = tokio::sync::oneshot::channel();
     let (release_tx, release_rx) = tokio::sync::oneshot::channel();
     let child = tokio::spawn(async move {
-        let frozen = SubagentResolver::resolve(
+        let frozen = resolve(
             &r1,
             &agent("explore"),
             &inherited_model(),
@@ -2074,7 +2117,7 @@ async fn ext256_a_child_frozen_on_r1_keeps_r1_extensions_after_r2_publishes() {
         .expect("R2 publishes");
     let r2 = product.runtime().runtime_resources();
     assert!(r2.revision().get() > 1);
-    let next = SubagentResolver::resolve(
+    let next = resolve(
         &r2,
         &agent("explore"),
         &inherited_model(),

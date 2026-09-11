@@ -7,7 +7,12 @@
 //! {
 //!   "agent": "explore",
 //!   "task": "...",
-//!   "context": "..."   // optional, bounded
+//!   "context": "...",       // optional, bounded
+//!   "override": {           // optional, Issue #258
+//!     "tools":  {"builtin": ["read", "grep", "bash"]},
+//!     "skills": ["rust-review"],
+//!     "extensions": {"agentStatus": {"enabled": true}}
+//!   }
 //! }
 //! ```
 //!
@@ -34,9 +39,21 @@
 //! never reads mutable runtime-current resources, and never derives child
 //! capabilities from the parent model's active `ToolRegistry`.
 //!
-//! The model chooses only *which named agent* runs. Model, tools, Skills,
-//! project instructions, and workspace policy belong to the named
-//! definition and are deliberately not per-call arguments.
+//! The named definition is the child's **default** execution profile. The
+//! model chooses which named agent runs and may, through `override`, replace
+//! exactly three dimensions of that default — `tools`, `skills`,
+//! `extensions` — within an explicit delegation ceiling. Model, instructions,
+//! timeout, project instructions, workspace policy, approval policy, and
+//! credentials belong to the definition alone and are deliberately not
+//! per-call arguments.
+//!
+//! The ceiling is a native decision, never a model argument: this executor
+//! always resolves through
+//! [`AttemptSubagentContext::resolve`](crate::runtime::subagent::AttemptSubagentContext::resolve),
+//! which pins the Main admission domain and the dynamic
+//! `DelegatedByModel` authority. A model cannot request the trusted Workflow
+//! authority mode, change the admission domain, or supply an authority
+//! snapshot of its own.
 //!
 //! The executor stays a thin adapter over the conversation-owned
 //! [`SubagentRegistry`]: input validation, attempt-scoped resolution, the
@@ -44,6 +61,7 @@
 //! mapping. All lifecycle, durability, and supervision semantics live in
 //! the registry; all configuration semantics live in the catalog/resolver.
 
+use crate::runtime::subagent::SubagentInvocationOverride;
 use crate::runtime::subagent::catalog::{SubagentCatalog, SubagentName};
 use crate::runtime::subagent::resolver::render_agent_routing;
 use crate::runtime::subagent::{
@@ -150,8 +168,15 @@ pub(super) fn definition(catalog: &SubagentCatalog) -> Option<ToolDefinition> {
              can pass to the execution tool to inspect or cancel the child. The child's final \
              report arrives later as a new message, immediately preceded by a runtime message \
              that names the exact execution handle it belongs to; do not retry or poll \
-             for it. Each named agent has its own fixed instructions, model, capabilities, and \
-             Skills, which this call cannot override.\n\n{}",
+             for it.\n\nEach named agent defines the child's default instructions, model, \
+             tools, Skills, and extensions. Omit \"override\" to run those defaults exactly. \
+             Use \"override\" only to specialize this one child: each field you include \
+             REPLACES that whole dimension rather than adding to it, and each field you omit \
+             keeps the agent's default. \"tools\": {{}} means no tools, \"skills\": [] means \
+             no Skills, and \"extensions\": {{}} means no extensions. You may only request \
+             capabilities the named agent already has or that you hold yourself; anything \
+             else is refused and no child is started. The agent's instructions, model, \
+             timeout, and workspace policy can never be overridden.\n\n{}",
             render_agent_routing(catalog)
         ),
         input_schema: input_schema::<SubagentInput>(),
@@ -177,6 +202,17 @@ pub(super) struct SubagentInput {
     /// An explicit bounded context package for the child.
     #[serde(default)]
     pub context: Option<String>,
+    /// The optional invocation-scoped capability override (Issue #258).
+    ///
+    /// Omitting it runs the named agent's defaults exactly. A present field
+    /// inside it replaces that whole dimension; a missing field keeps the
+    /// definition's. `null` is not an accepted spelling for either.
+    #[serde(
+        rename = "override",
+        default,
+        deserialize_with = "crate::extensions::present_and_not_null"
+    )]
+    pub invocation_override: Option<SubagentInvocationOverride>,
 }
 
 impl SubagentInput {
@@ -230,10 +266,11 @@ impl ToolExecutor for SubagentExecutor {
                         ));
                     }
                 };
-                let resolved = match subagent_context.resolve(&agent) {
-                    Ok(resolved) => resolved,
-                    Err(error) => return failed_result(error.to_string()),
-                };
+                let resolved =
+                    match subagent_context.resolve(&agent, input.invocation_override.as_ref()) {
+                        Ok(resolved) => resolved,
+                        Err(error) => return failed_result(error.to_string()),
+                    };
                 let spec = SubagentStartSpec {
                     resolved,
                     approval_mode: subagent_context.approval_mode(),
@@ -438,16 +475,23 @@ mod tests {
         }
     }
 
+    /// Issue #258 opened exactly three dimensions, and only inside
+    /// `override`. Every non-goal dimension stays unrepresentable, and the
+    /// three goal dimensions stay unrepresentable at the top level: an
+    /// override is an explicitly scoped request, not a loose argument.
     #[test]
-    fn per_call_capability_overrides_are_not_representable() {
+    fn sub258_only_the_three_override_dimensions_are_representable() {
         for field in [
             "model",
             "tools",
             "skills",
+            "extensions",
             "instructions",
             "agents_md",
             "workspace",
             "worktree",
+            "timeoutMs",
+            "approval",
         ] {
             assert!(
                 SubagentInput::parse(&serde_json::json!({
@@ -459,6 +503,40 @@ mod tests {
                 "{field} must not be a per-call argument"
             );
         }
+        for dimension in ["model", "instructions", "timeoutMs", "worktree", "agentsMd"] {
+            assert!(
+                SubagentInput::parse(&serde_json::json!({
+                    "agent": "explore",
+                    "task": "inspect",
+                    "override": {dimension: serde_json::json!("anything")},
+                }))
+                .is_err(),
+                "{dimension} must not be an override dimension"
+            );
+        }
+        let accepted = SubagentInput::parse(&serde_json::json!({
+            "agent": "explore",
+            "task": "inspect",
+            "override": {
+                "tools": {"builtin": ["read"]},
+                "skills": ["code-review"],
+                "extensions": {"agentStatus": {"enabled": true}},
+            },
+        }))
+        .expect("the three goal dimensions are accepted together");
+        let requested = accepted
+            .invocation_override
+            .expect("the override is carried through the input contract");
+        assert!(requested.tools.is_some());
+        assert!(requested.skills.is_some());
+        assert!(requested.extensions.is_some());
+        assert!(
+            SubagentInput::parse(&serde_json::json!({"agent": "explore", "task": "t"}))
+                .expect("an omitted override parses")
+                .invocation_override
+                .is_none(),
+            "an omitted override is absent, never an empty request"
+        );
     }
 
     /// The real collaborators the `subagent` intrinsic needs to reach
@@ -651,6 +729,7 @@ mod tests {
                 SessionModelConfig::of(model),
                 models,
                 ApprovalMode::Policy,
+                crate::extensions::NativeAgentExtensions::none(),
             ),
             workspace: crate::tools::workspace::Workspace::new(&workspace_root).expect("workspace"),
             artifacts: crate::tools::artifacts::ArtifactStore::new(
@@ -669,6 +748,339 @@ mod tests {
             runtime_root,
             _dir: dir,
         }
+    }
+
+    /// The real collaborators needed to prove that an unauthorized override
+    /// is refused *before* anything physical is staged (Issue #258).
+    ///
+    /// The spawn program is deliberately a path that does not exist: if the
+    /// rejection ever moved behind child staging, the failure would be a
+    /// spawn error rather than the authority verdict, and the assertion below
+    /// would fail loudly instead of silently passing.
+    #[cfg(unix)]
+    struct DelegationPlane {
+        _dir: tempfile::TempDir,
+        conversation_id: crate::runtime::identity::ConversationId,
+        subagents: crate::runtime::subagent::SubagentRegistry,
+        subagent_context: crate::runtime::subagent::AttemptSubagentContext,
+        workspace: crate::tools::workspace::Workspace,
+        artifacts: crate::tools::artifacts::ArtifactStore,
+        tool_output: crate::tools::managed_output::ManagedToolOutput,
+        environment: crate::tools::environment::ToolEnvironment,
+        runtime_root: std::path::PathBuf,
+    }
+
+    #[cfg(unix)]
+    #[allow(clippy::too_many_lines)] // one cohesive real-collaborator fixture
+    fn delegation_plane() -> DelegationPlane {
+        use std::collections::BTreeSet;
+        use std::sync::Arc;
+
+        use crate::capabilities::CapabilitySnapshot;
+        use crate::capabilities::selection::ToolSelector;
+        use crate::context::SessionContextPolicy;
+        use crate::model::catalog::{MapCredentialEnvironment, ModelCatalog, ModelRef};
+        use crate::model::invocation::ModelBindingRegistry;
+        use crate::model::session::SessionModelConfig;
+        use crate::runtime::identity::{AgentId, CapabilityRevision, ConversationId, ToolId};
+        use crate::runtime::inbound::ConversationInboundMailbox;
+        use crate::runtime::subagent::{
+            AttemptSubagentContext, SubagentRegistry, SubagentRegistryConfig, SubagentSpawnPlan,
+        };
+        use crate::runtime::types::{ApprovalMode, SystemClock};
+        use crate::runtime::workspace::WorkspaceManager;
+        use crate::skills::SkillSnapshot;
+        use crate::tools::environment::ToolEnvironment;
+        use crate::tools::executor::{
+            ToolExecutionHandle, ToolExecutor, ToolRegistration, ToolRegistry,
+        };
+        use crate::tools::mcp::McpRuntimeLeaseAuthority;
+        use crate::tools::types::{
+            ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
+            ToolOrigin, ToolReplayPolicy,
+        };
+
+        struct NeverRuns;
+        impl ToolExecutor for NeverRuns {
+            fn start<'a>(
+                &'a self,
+                _: ToolInvocation,
+                _: crate::tools::executor::ToolExecutionContext<'a>,
+            ) -> ToolExecutionHandle<'a> {
+                panic!("the delegation plane never executes a child capability")
+            }
+            fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
+                crate::tools::deadline::ToolProgressCapability::None
+            }
+        }
+
+        let capability_definition = |name: &str| ToolDefinition {
+            id: ToolId::new(format!("tool-{name}")),
+            name: name.to_owned(),
+            description: format!("{name} capability"),
+            input_schema: serde_json::json!({"type": "object", "additionalProperties": false}),
+            execution_policy: ToolExecutionPolicy::ForegroundOnly,
+            concurrency_policy: ToolConcurrencyPolicy::Sequential,
+            approval_policy: ToolApprovalPolicy::Never,
+            replay_policy: ToolReplayPolicy::Never,
+            origin: ToolOrigin::Builtin,
+        };
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let workspace_root = dir.path().join("workspace");
+        let runtime_root = dir.path().join("runtime");
+        std::fs::create_dir_all(&workspace_root).expect("workspace");
+        std::fs::create_dir_all(&runtime_root).expect("runtime root");
+
+        let conversation_id = ConversationId::new("conv-delegation");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(conversation_id.clone())
+                .expect("in-memory store"),
+        );
+        let subagents = SubagentRegistry::new(SubagentRegistryConfig {
+            conversation_id: conversation_id.clone(),
+            agent_id: AgentId::new("agent-parent"),
+            mailbox: ConversationInboundMailbox::over_store(store),
+            clock: Arc::new(SystemClock),
+            monotonic_clock: Arc::new(crate::runtime::ManualMonotonicClock::new()),
+            spawn: SubagentSpawnPlan {
+                program: std::path::PathBuf::from("/nonexistent/rustx"),
+                product_root: crate::runtime::local_storage::ProductRoot::create(&runtime_root)
+                    .unwrap(),
+                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+                tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
+                ),
+                context: SessionContextPolicy {
+                    reserve_tokens: 0,
+                    keep_recent_tokens: 0,
+                    summary_output_cap: None,
+                },
+            },
+            workspace: WorkspaceManager::new(&workspace_root, &runtime_root),
+            max_active: 4,
+        });
+
+        let reviewer = SubagentName::parse("reviewer").expect("name");
+        let model = ModelRef::parse("local/model").expect("model");
+        let definition = SubagentDefinition::new(
+            reviewer.clone(),
+            "Read-only reviewer.".to_owned(),
+            "instructions".to_owned(),
+            workspace_root.join("reviewer.md"),
+            Some(model.clone()),
+            None,
+            vec![ToolSelector::Builtin {
+                name: "read".to_owned(),
+            }],
+            Vec::new(),
+            SubagentProjectInstructionPolicy {
+                inherit: false,
+                files: Vec::new(),
+            },
+            WorkspacePolicy::SharedWorkspace,
+            crate::extensions::NativeAgentExtensions::none(),
+        )
+        .expect("definition");
+
+        let models = ModelBindingRegistry::new(
+            ModelCatalog::from_jsonc_slice(DIRTY_PARENT_MODELS.as_bytes())
+                .expect("model catalog")
+                .resolve(&MapCredentialEnvironment::default())
+                .expect("model resolution"),
+        )
+        .expect("model bindings");
+
+        // The generation knows read, grep, and write; the invoking model was
+        // admitted with read and grep only. `write` is therefore
+        // generation-only authority.
+        let available = crate::capabilities::AvailableToolCatalog::new(
+            ["read", "grep", "write"]
+                .into_iter()
+                .map(|name| {
+                    ToolRegistration::plain(capability_definition(name), Arc::new(NeverRuns))
+                })
+                .collect(),
+        );
+        let mut registry = ToolRegistry::new();
+        for name in ["read", "grep"] {
+            registry
+                .register(capability_definition(name), Arc::new(NeverRuns))
+                .expect("register the invoking model's frozen capability");
+        }
+
+        let capabilities = Arc::new(CapabilitySnapshot::new(
+            conversation_id.clone(),
+            workspace_root.clone(),
+            CapabilityRevision::new(1),
+            Arc::new(registry),
+            Arc::new(available),
+            Arc::new(SkillSnapshot::new(Vec::new())),
+            None,
+            None,
+            ToolEnvironment::new(),
+            Arc::new(McpRuntimeLeaseAuthority::empty()),
+            Arc::new(std::collections::BTreeMap::new()),
+        ));
+        let resources = Arc::new(
+            crate::runtime::RuntimeResourceSnapshot::new(
+                crate::runtime::identity::RuntimeResourceRevision::new(1),
+                Vec::new(),
+                None,
+                crate::context::ContextAssembly::new(),
+                capabilities,
+            )
+            .with_subagent_catalog(SubagentCatalog::new([definition]).expect("catalog"))
+            .with_subagent_admissions(BTreeSet::from([reviewer]), BTreeSet::new()),
+        );
+
+        DelegationPlane {
+            subagent_context: AttemptSubagentContext::new(
+                crate::runtime::identity::AttemptId::new("delegation-test-attempt"),
+                resources,
+                SessionModelConfig::of(model),
+                models,
+                ApprovalMode::Policy,
+                crate::extensions::NativeAgentExtensions::none(),
+            ),
+            workspace: crate::tools::workspace::Workspace::new(&workspace_root).expect("workspace"),
+            artifacts: crate::tools::artifacts::ArtifactStore::new(
+                conversation_id.clone(),
+                dir.path().join("artifacts"),
+            )
+            .expect("artifact store"),
+            tool_output: crate::tools::managed_output::ManagedToolOutput::new(
+                conversation_id.clone(),
+                dir.path().join("tool-output"),
+            )
+            .expect("managed tool output"),
+            environment: ToolEnvironment::new(),
+            conversation_id,
+            subagents,
+            runtime_root,
+            _dir: dir,
+        }
+    }
+
+    /// Drives the real `subagent` intrinsic against a real registry and
+    /// returns the model-facing result.
+    #[cfg(unix)]
+    async fn invoke_subagent(
+        plane: &DelegationPlane,
+        arguments: serde_json::Value,
+    ) -> crate::tools::types::ToolExecutionResult {
+        use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolExecutor};
+
+        struct NoProgress;
+        impl ProgressReporter for NoProgress {
+            fn report(&self, _progress: crate::tools::types::ToolProgress) {}
+        }
+        let progress = NoProgress;
+        let context = ToolExecutionContext::new(
+            &plane.conversation_id,
+            None,
+            crate::runtime::cancellation::ExecutionCancellation::detached(
+                crate::runtime::cancellation::CancellationSignal::new(),
+                crate::runtime::types::CancellationReason::UserRequested,
+            ),
+            &plane.workspace,
+            &progress,
+            &plane.artifacts,
+            &plane.tool_output,
+            &plane.environment,
+        )
+        .with_subagent_context(plane.subagent_context.clone());
+        let executor = SubagentExecutor {
+            subagents: plane.subagents.clone(),
+        };
+        executor
+            .start(
+                ToolInvocation {
+                    id: crate::tools::types::ToolInvocationId::Agent {
+                        call_id: crate::runtime::identity::ToolCallId::new("call-1"),
+                    },
+                    tool_id: crate::runtime::identity::ToolId::new("tool-subagent"),
+                    tool_name: SUBAGENT_TOOL_NAME.to_owned(),
+                    mode: crate::tools::types::ToolInvocationMode::Foreground,
+                    arguments,
+                },
+                context,
+            )
+            .completion
+            .await
+    }
+
+    /// Issue #258 — the pre-staging authorization boundary, at the real
+    /// model-facing tool.
+    ///
+    /// An unauthorized override must be refused with the authority verdict
+    /// *before* any child process is staged and long before ownership
+    /// commits. The registry is asked afterwards: cleanup after a spawn is
+    /// not an authorization boundary, so "no record was ever created" is the
+    /// assertion, not "the record was removed".
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sub258_an_unauthorized_override_starts_no_child_and_commits_no_ownership() {
+        let plane = delegation_plane();
+        let result = invoke_subagent(
+            &plane,
+            serde_json::json!({
+                "agent": "reviewer",
+                "task": "review",
+                "override": {"tools": {"builtin": ["write"]}},
+            }),
+        )
+        .await;
+        let ToolExecutionStatus::Failed { error: rendered } = &result.status else {
+            panic!("an unauthorized override fails: {:?}", result.status);
+        };
+        assert!(
+            rendered.contains("builtin:write"),
+            "the refusal names the exact capability: {rendered}"
+        );
+        assert!(
+            !rendered.contains("nonexistent"),
+            "the refusal is the authority verdict, never a spawn failure: {rendered}"
+        );
+        assert!(
+            plane.subagents.listing(false, 16).snapshots.is_empty(),
+            "no child ownership was ever committed"
+        );
+        assert!(
+            !plane.runtime_root.join("subagents").exists(),
+            "no child runtime root was ever staged"
+        );
+    }
+
+    /// The same plane, with an override the caller is entitled to, reaches
+    /// staging — proving the refusal above is an authority decision and not
+    /// an inert code path that rejects everything.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sub258_an_authorized_override_reaches_child_staging() {
+        let plane = delegation_plane();
+        let result = invoke_subagent(
+            &plane,
+            serde_json::json!({
+                "agent": "reviewer",
+                "task": "review",
+                "override": {"tools": {"builtin": ["grep"]}},
+            }),
+        )
+        .await;
+        let ToolExecutionStatus::Failed { error: rendered } = &result.status else {
+            panic!(
+                "the fixture's spawn program does not exist: {:?}",
+                result.status
+            );
+        };
+        assert!(
+            !rendered.contains("builtin:grep"),
+            "a parent-held capability is authorized rather than refused: {rendered}"
+        );
+        assert!(
+            plane.subagents.listing(false, 16).snapshots.is_empty(),
+            "the deliberately missing spawn program still commits no ownership"
+        );
     }
 
     /// Issue #188 — the model-facing regression.
@@ -787,13 +1199,13 @@ mod tests {
             "an unsatisfiable subagent tool never enters the model-facing capability set"
         );
 
-        // The schema stays small: exactly agent/task/context.
+        // The schema stays small: exactly agent/task/context/override.
         let properties = described.input_schema["properties"]
             .as_object()
             .expect("object schema");
         let mut names = properties.keys().cloned().collect::<Vec<_>>();
         names.sort();
-        assert_eq!(names, vec!["agent", "context", "task"]);
+        assert_eq!(names, vec!["agent", "context", "override", "task"]);
         for forbidden in [
             "timeout",
             "timeoutMs",
@@ -805,6 +1217,68 @@ mod tests {
             assert!(
                 !properties.contains_key(forbidden),
                 "the model cannot control a named subagent deadline: {forbidden}"
+            );
+        }
+        assert_eq!(
+            described.input_schema["required"],
+            serde_json::json!(["agent", "task"]),
+            "the override stays optional: omitting it runs the role's defaults exactly"
+        );
+    }
+
+    /// The model-facing schema is the whole delegation vocabulary the model
+    /// can reach. It must expose exactly the three override dimensions, and
+    /// must not advertise a spelling the deserializer refuses.
+    #[test]
+    fn sub258_the_override_schema_exposes_exactly_three_dimensions() {
+        let described = definition(&catalog()).expect("a non-empty catalog has a route");
+        let over = &described.input_schema["properties"]["override"];
+        let mut names = over["properties"]
+            .as_object()
+            .expect("the override is an object schema")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(names, vec!["extensions", "skills", "tools"]);
+        assert_eq!(
+            over["additionalProperties"],
+            serde_json::json!(false),
+            "an unknown or non-goal override dimension is refused by the published schema"
+        );
+        assert!(
+            over.get("required").is_none(),
+            "every dimension is optional: a missing dimension inherits the definition"
+        );
+        // `null` is not an accepted spelling anywhere in the override, so the
+        // published schema must never widen a dimension to include it.
+        let rendered = serde_json::to_string(over).expect("schema serializes");
+        assert!(
+            !rendered.contains("\"null\""),
+            "no override dimension advertises an explicit null: {rendered}"
+        );
+        assert_eq!(
+            over["properties"]["extensions"]["additionalProperties"],
+            serde_json::json!(false),
+            "the extension vocabulary stays closed: an unknown extension name is refused"
+        );
+    }
+
+    /// The delegation ceiling is a native decision. Nothing the model can put
+    /// in its arguments selects an authority mode, an admission domain, or an
+    /// authority snapshot.
+    #[test]
+    fn sub258_the_model_cannot_name_its_own_delegation_authority() {
+        for arguments in [
+            serde_json::json!({"agent": "explore", "task": "t", "authority": "trusted_program"}),
+            serde_json::json!({"agent": "explore", "task": "t", "domain": "workflow"}),
+            serde_json::json!({"agent": "explore", "task": "t", "invoking": {"tools": []}}),
+            serde_json::json!({"agent": "explore", "task": "t", "override": {"authority": "trusted_program"}}),
+            serde_json::json!({"agent": "explore", "task": "t", "override": null}),
+        ] {
+            assert!(
+                SubagentInput::parse(&arguments).is_err(),
+                "accepted {arguments}"
             );
         }
     }

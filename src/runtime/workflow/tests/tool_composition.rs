@@ -385,6 +385,7 @@ async fn mixed_parallel_all_settles_in_key_order_without_internal_history() {
                     task: "Return a boolean".into(),
                     input: BTreeMap::new(),
                     output: leaf.output.clone(),
+                    invocation_override: None,
                 },
             ),
             (

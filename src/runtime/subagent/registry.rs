@@ -63,6 +63,7 @@ use super::catalog::{SubagentDefinitionDigest, SubagentExecutionDeadline, Subage
 use super::ipc::DelegationFrame;
 use super::process::{PhysicalOutcome, PhysicalSettlement, StagedChild, SubagentSpawnPlan};
 use super::resolver::ResolvedSubagentSpec;
+use super::resolver::SubagentExecutionProfileDigest;
 use super::{
     MAX_CONTEXT_PACKAGE_BYTES, MAX_RESULT_CONTENT_BYTES, MAX_TASK_BYTES, SubagentTerminalState,
     bound_utf8, ownership_event, terminal_publication, terminal_settlement, workflow_output_event,
@@ -251,6 +252,14 @@ struct SubagentRecord {
     tool_call_id: ToolCallId,
     agent: SubagentName,
     definition_digest: SubagentDefinitionDigest,
+    /// The deterministic identity of the **effective execution profile** this
+    /// child committed with (Issue #258): the definition plus whatever an
+    /// authorized invocation override replaced.
+    ///
+    /// It is a durable execution fact, committed with ownership, so a
+    /// recovery-projected record restores exactly the committed value and
+    /// never recomputes it from the current catalog.
+    profile_digest: SubagentExecutionProfileDigest,
     terminal: SubagentTerminalMode,
     workspace: WorkspaceSnapshot,
     handoff: Option<WorkspaceHandoff>,
@@ -406,6 +415,7 @@ impl SubagentRecord {
             tool_call_id: self.tool_call_id.clone(),
             agent: self.agent.as_str().to_owned(),
             definition_digest: self.definition_digest.as_str().to_owned(),
+            profile_digest: self.profile_digest.as_str().to_owned(),
             workspace: self.workspace.clone(),
             handoff: self.handoff.clone(),
             workspace_resource_state: self.workspace_resource_state,
@@ -679,6 +689,18 @@ pub struct SubagentSnapshot {
     /// so a resource reload that redefines the same agent name can never
     /// make an already-running child appear to have the new definition.
     pub definition_digest: String,
+    /// The deterministic **effective execution profile** digest frozen at
+    /// start (Issue #258).
+    ///
+    /// Two children of one named agent that were specialized differently by
+    /// an authorized invocation override report the same `definition_digest`
+    /// and different values here. It is committed durably with ownership, so
+    /// a recovery-projected record reports exactly the value its child
+    /// started with.
+    ///
+    /// This is diagnostic/recovery correlation only. No admission,
+    /// resolution, or execution decision reads it.
+    pub profile_digest: String,
     /// The immutable project-workspace authority selected before ownership.
     pub workspace: WorkspaceSnapshot,
     /// Retained work-product metadata, when terminal settlement preserves an
@@ -898,6 +920,7 @@ pub struct PreparedSubagent {
     tool_call_id: ToolCallId,
     agent: SubagentName,
     definition_digest: SubagentDefinitionDigest,
+    profile_digest: SubagentExecutionProfileDigest,
     terminal: SubagentTerminalMode,
     task: String,
     context: Option<String>,
@@ -1505,6 +1528,12 @@ impl SubagentRegistry {
             child_conversation_id: recovered.evidence.child_conversation_id.clone(),
             tool_call_id: recovered.evidence.tool_call_id.clone(),
             agent,
+            // Restored from the durable ownership fact, never recomputed:
+            // the role definition and the resource generation are both
+            // mutable and may have changed since the commit.
+            profile_digest: SubagentExecutionProfileDigest::from_committed_fact(
+                recovered.evidence.profile_digest.clone(),
+            ),
             definition_digest: serde_json::from_value(serde_json::Value::String(
                 recovered.evidence.definition_digest.clone(),
             ))
@@ -1592,6 +1621,12 @@ impl SubagentRegistry {
             child_conversation_id: recovered.evidence.child_conversation_id.clone(),
             tool_call_id: recovered.evidence.tool_call_id.clone(),
             agent,
+            // Restored from the durable ownership fact, never recomputed:
+            // the role definition and the resource generation are both
+            // mutable and may have changed since the commit.
+            profile_digest: SubagentExecutionProfileDigest::from_committed_fact(
+                recovered.evidence.profile_digest.clone(),
+            ),
             definition_digest: serde_json::from_value(serde_json::Value::String(
                 recovered.evidence.definition_digest.clone(),
             ))
@@ -1695,6 +1730,12 @@ impl SubagentRegistry {
             child_conversation_id: recovered.evidence.child_conversation_id.clone(),
             tool_call_id: recovered.evidence.tool_call_id.clone(),
             agent,
+            // Restored from the durable ownership fact, never recomputed:
+            // the role definition and the resource generation are both
+            // mutable and may have changed since the commit.
+            profile_digest: SubagentExecutionProfileDigest::from_committed_fact(
+                recovered.evidence.profile_digest.clone(),
+            ),
             definition_digest: serde_json::from_value(serde_json::Value::String(
                 recovered.evidence.definition_digest.clone(),
             ))
@@ -1968,6 +2009,7 @@ impl SubagentRegistry {
                         tool_call_id: spec.tool_call_id.clone(),
                         agent: spec.resolved.agent.clone(),
                         definition_digest: spec.resolved.definition_digest.clone(),
+                        profile_digest: spec.resolved.profile_digest(),
                         terminal: spec.terminal.clone(),
                         task: spec.task.clone(),
                         context: spec.context.clone(),
@@ -2046,6 +2088,7 @@ impl SubagentRegistry {
             tool_call_id: spec.tool_call_id.clone(),
             agent: spec.resolved.agent.clone(),
             definition_digest: spec.resolved.definition_digest.clone(),
+            profile_digest: spec.resolved.profile_digest(),
             terminal: spec.terminal.clone(),
             task: spec.task.clone(),
             context: spec.context.clone(),
@@ -2216,6 +2259,7 @@ impl SubagentRegistry {
             tool_call_id,
             agent,
             definition_digest,
+            profile_digest,
             terminal,
             task,
             context,
@@ -2322,6 +2366,7 @@ impl SubagentRegistry {
                             &tool_call_id,
                             &agent,
                             &definition_digest,
+                            &profile_digest,
                             match &terminal {
                                 SubagentTerminalMode::Normal => SubagentOwnershipKind::Normal,
                                 SubagentTerminalMode::WorkflowOutput { .. } => {
@@ -2360,6 +2405,7 @@ impl SubagentRegistry {
                             tool_call_id: tool_call_id.clone(),
                             agent: agent.clone(),
                             definition_digest: definition_digest.clone(),
+                            profile_digest: profile_digest.clone(),
                             terminal: terminal.clone(),
                             workspace: workspace.clone(),
                             handoff: None,
@@ -9403,6 +9449,10 @@ mod tests {
                 "0".repeat(64)
             )))
             .expect("digest"),
+            profile_digest: SubagentExecutionProfileDigest::from_committed_fact(format!(
+                "sha256:{}",
+                "1".repeat(64)
+            )),
             terminal: SubagentTerminalMode::Normal,
             workspace: WorkspaceSnapshot::shared(std::path::PathBuf::from("/workspace")),
             handoff: None,
@@ -9524,4 +9574,179 @@ mod tests {
     }
 
     use crate::context::SessionContextPolicy;
+
+    /// Issue #258 — the effective execution-profile identity is a **durable**
+    /// execution fact.
+    ///
+    /// A named role is only the child's *default* profile: an authorized
+    /// invocation override may replace its tools, Skills, or extensions for
+    /// exactly this child. `definition_digest` cannot express that, so the
+    /// ownership commit carries the effective profile identity too, and the
+    /// value the durable fact holds, the value the live projection reports,
+    /// and the value a terminal record still reports are one value.
+    #[tokio::test]
+    async fn sub258_ownership_commit_records_the_frozen_effective_profile_digest() {
+        let plane = plane(4);
+        let child = stage_exit0(&plane);
+
+        // A specialized child: the frozen contract differs from the role's
+        // defaults, so its profile identity differs from a default child's
+        // while its definition identity does not.
+        let mut spec = start_spec("inspect");
+        spec.resolved.extensions = crate::extensions::NativeAgentExtensions::none();
+        let expected = spec.resolved.profile_digest();
+        assert_ne!(
+            expected,
+            resolved("explore").profile_digest(),
+            "the specialization really did change the effective profile"
+        );
+
+        let accepted = start(&plane, &spec).await;
+        let committed = events(&plane)
+            .into_iter()
+            .find_map(|event| match event {
+                crate::events::types::RuntimeEvent::SubagentOwnershipCommitted {
+                    subagent_id,
+                    definition_digest,
+                    profile_digest,
+                    ..
+                } if subagent_id == accepted.subagent_id => {
+                    Some((definition_digest, profile_digest))
+                }
+                _ => None,
+            })
+            .expect("one durable ownership fact");
+        assert_eq!(
+            committed,
+            (
+                spec.resolved.definition_digest.as_str().to_owned(),
+                expected.as_str().to_owned()
+            ),
+            "the ownership fact commits both identities exactly as frozen"
+        );
+
+        let running = plane
+            .registry
+            .snapshot(&accepted.subagent_id)
+            .expect("running record");
+        assert_eq!(
+            running.profile_digest,
+            expected.as_str(),
+            "the live projection reports the committed identity"
+        );
+
+        // Terminal settlement is a lifecycle transition, not a re-derivation.
+        child
+            .complete(ChildResultStatus::Succeeded, Some("done"))
+            .await;
+        let settled = plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("terminal settlement");
+        assert_eq!(settled.state, SubagentState::Succeeded);
+        assert_eq!(
+            settled.profile_digest,
+            expected.as_str(),
+            "terminal settlement never alters the committed profile identity"
+        );
+    }
+
+    /// A Workflow-owned child preserves it identically: ownership kind
+    /// changes the terminal domain, never the committed identity.
+    #[tokio::test]
+    async fn sub258_a_workflow_owned_child_commits_the_same_profile_identity() {
+        let plane = plane(4);
+        let child = stage_exit0(&plane);
+        let spec = workflow_spec("inspect");
+        let expected = spec.resolved.profile_digest();
+
+        let accepted = start(&plane, &spec).await;
+        let committed = events(&plane)
+            .into_iter()
+            .find_map(|event| match event {
+                crate::events::types::RuntimeEvent::SubagentOwnershipCommitted {
+                    subagent_id,
+                    profile_digest,
+                    ownership,
+                    ..
+                } if subagent_id == accepted.subagent_id => Some((ownership, profile_digest)),
+                _ => None,
+            })
+            .expect("one durable ownership fact");
+        assert_eq!(
+            committed,
+            (
+                crate::events::types::SubagentOwnershipKind::Workflow,
+                expected.as_str().to_owned()
+            )
+        );
+        assert_eq!(
+            plane
+                .registry
+                .snapshot(&accepted.subagent_id)
+                .expect("running record")
+                .profile_digest,
+            expected.as_str()
+        );
+        drop(child);
+    }
+
+    /// Recovery restores the **committed** identity and derives nothing.
+    ///
+    /// The durable evidence deliberately names a definition and a profile no
+    /// live resolution in this process could produce, so a projection that
+    /// recomputed from the current role definition or the current resource
+    /// generation could not possibly reproduce them.
+    #[tokio::test]
+    async fn sub258_recovery_restores_the_committed_profile_identity_without_recomputing_it() {
+        let plane = plane(4);
+        let subagent_id = SubagentId::for_conversation(&plane.conversation_id, 7);
+        let committed_profile = format!("sha256:{}", "a".repeat(64));
+        let committed_definition = format!("sha256:{}", "b".repeat(64));
+        let worktree = plane.runtime_root.join("worktrees/recovered");
+        let recovered = crate::runtime::recovery::RecoveredSubagentHandoff {
+            evidence: crate::runtime::recovery::SubagentEvidence {
+                subagent_id: subagent_id.clone(),
+                child_agent_id: crate::runtime::identity::AgentId::new("agent-recovered"),
+                child_conversation_id: crate::runtime::identity::ConversationId::new(
+                    "conv-recovered-child",
+                ),
+                tool_call_id: ToolCallId::new("call-recovered"),
+                agent: "explore".to_owned(),
+                definition_digest: committed_definition.clone(),
+                profile_digest: committed_profile.clone(),
+                ownership: crate::events::types::SubagentOwnershipKind::Normal,
+                started_at: chrono::Utc::now(),
+                workspace: crate::runtime::workspace::WorkspaceSnapshot::shared(
+                    plane.dir.path().join("workspace"),
+                ),
+            },
+            state: SubagentTerminalState::Succeeded,
+            handoff: WorkspaceHandoff {
+                logical_workspace: plane.dir.path().join("workspace"),
+                physical_worktree_root: worktree,
+                branch: "rustx/recovered".to_owned(),
+                base_commit: "0".repeat(40),
+                head_commit: "1".repeat(40),
+                dirty: false,
+            },
+        };
+        plane.registry.restore_recovered_handoff(&recovered);
+
+        let restored = plane
+            .registry
+            .snapshot(&subagent_id)
+            .expect("the recovery-projected record");
+        assert_eq!(
+            restored.profile_digest, committed_profile,
+            "recovery restores exactly what ownership committed"
+        );
+        assert_eq!(restored.definition_digest, committed_definition);
+        assert_ne!(
+            restored.profile_digest,
+            resolved("explore").profile_digest().as_str(),
+            "the restored identity is emphatically not one this process could recompute"
+        );
+    }
 }

@@ -222,14 +222,28 @@ use super::inbox::{
 /// requester identity at all. Refusing the file states that honestly rather
 /// than decoding an old audit fact under invented semantics.
 ///
+/// Version 32 freezes Issue #258's effective child execution-profile identity
+/// into the durable subagent ownership fact. `SubagentOwnershipCommitted` now
+/// carries `profile_digest` beside `definition_digest`, because a named role
+/// is only a child's *default* profile once an authorized invocation override
+/// can replace its tools, Skills, or extensions: two children of one role can
+/// share a definition digest and execute materially different contracts.
+///
+/// A v31 journal records ownership facts with no profile identity at all, and
+/// there is nothing a v32 reader could honestly make of them — recomputing the
+/// value from the current role definition or the current resource generation
+/// is exactly the derivation the durable fact exists to prevent. So the file
+/// is refused at open rather than decoded with an invented or reconstructed
+/// identity.
+///
 /// The Runtime Client protocol version and the
 /// [`EVENT_SCHEMA_VERSION`](crate::events::EVENT_SCHEMA_VERSION) envelope
 /// framing are independent version domains and are unchanged by this: the
 /// envelope shape did not move, only the semantic vocabulary stored inside
 /// `events.event_json`.
-/// Version 32 requires rollback journaling for non-creating management reads
+/// Version 33 requires rollback journaling for non-creating management reads
 /// and the separated local product workspace allocation contract.
-pub const SQLITE_SCHEMA_VERSION: i64 = 32;
+pub const SQLITE_SCHEMA_VERSION: i64 = 33;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -9934,6 +9948,49 @@ mod tests {
         assert_eq!(reopened.agent_status_head_lookup_reads(), 1);
     }
 
+    #[test]
+    fn a_version_32_profile_store_is_refused_without_migration() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("profile-v32.sqlite");
+        let id = ConversationId::new("conv-v32");
+        {
+            let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+            store
+                .conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE rustx_store SET schema_version = 32 WHERE id = 1",
+                    [],
+                )
+                .unwrap();
+        }
+        for result in [
+            SqliteConversationStore::open(id.clone(), &path),
+            SqliteConversationStore::open_existing(id, &path),
+        ] {
+            assert!(matches!(
+                result,
+                Err(ConversationStoreError::SchemaVersionMismatch {
+                    stored: 32,
+                    expected: 33
+                })
+            ));
+        }
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        let stored: i64 = connection
+            .query_row(
+                "SELECT schema_version FROM rustx_store WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            stored, 32,
+            "neither runtime nor management opening migrates"
+        );
+    }
+
     /// Issue #12 (M9b): the request-scoped context, the Request Snapshot,
     /// and the `ModelRequestStarted` fact commit in one transaction; the
     /// snapshot's Surface revision is the head the context appends created.
@@ -10447,6 +10504,7 @@ mod tests {
                     tool_call_id: ToolCallId::new("call-sub"),
                     agent: "explore".to_owned(),
                     definition_digest: "sha256:definition".to_owned(),
+                    profile_digest: "sha256:profile".to_owned(),
                     ownership: crate::events::types::SubagentOwnershipKind::Normal,
                     workspace,
                 },
@@ -10716,6 +10774,7 @@ mod tests {
                 tool_call_id: ToolCallId::new("call-other"),
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
+                profile_digest: "sha256:profile".to_owned(),
                 ownership: crate::events::types::SubagentOwnershipKind::Normal,
                 workspace: crate::runtime::workspace::WorkspaceSnapshot::shared(
                     std::path::PathBuf::from("<shared-workspace>"),
@@ -11106,6 +11165,7 @@ mod tests {
                     tool_call_id: ToolCallId::new("workflow-call"),
                     agent: "reviewer".to_owned(),
                     definition_digest: "sha256:definition".to_owned(),
+                    profile_digest: "sha256:profile".to_owned(),
                     ownership: crate::events::types::SubagentOwnershipKind::Workflow,
                     workspace: crate::runtime::workspace::WorkspaceSnapshot::shared(
                         std::path::PathBuf::from("<shared-workspace>"),
@@ -11197,6 +11257,7 @@ mod tests {
                     tool_call_id: crate::runtime::identity::ToolCallId::new("call-sub"),
                     agent: "worker".to_owned(),
                     definition_digest: "sha256:definition".to_owned(),
+                    profile_digest: "sha256:profile".to_owned(),
                     ownership: crate::events::types::SubagentOwnershipKind::Normal,
                     workspace,
                 },
@@ -11780,6 +11841,7 @@ mod tests {
                 tool_call_id: crate::runtime::identity::ToolCallId::new("call-a"),
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
+                profile_digest: "sha256:profile".to_owned(),
                 ownership: crate::events::types::SubagentOwnershipKind::Normal,
                 workspace: crate::runtime::workspace::WorkspaceSnapshot::shared(
                     std::path::PathBuf::from("<shared-workspace>"),
@@ -11810,6 +11872,7 @@ mod tests {
                 tool_call_id: crate::runtime::identity::ToolCallId::new("call-a"),
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
+                profile_digest: "sha256:profile".to_owned(),
                 ownership: crate::events::types::SubagentOwnershipKind::Normal,
                 workspace: crate::runtime::workspace::WorkspaceSnapshot::shared(
                     std::path::PathBuf::from("<shared-workspace>"),
@@ -11847,6 +11910,7 @@ mod tests {
                 tool_call_id: crate::runtime::identity::ToolCallId::new("call-b"),
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
+                profile_digest: "sha256:profile".to_owned(),
                 ownership: crate::events::types::SubagentOwnershipKind::Normal,
                 workspace: crate::runtime::workspace::WorkspaceSnapshot::shared(
                     std::path::PathBuf::from("<shared-workspace>"),
@@ -12383,7 +12447,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 32);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 33);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -12398,6 +12462,75 @@ mod tests {
                 "the typed vocabulary cannot interpret a schema-30 Questionnaire payload: {payload}"
             );
         }
+    }
+
+    /// A schema-31 subagent ownership fact: `(agent, definition_digest)` and
+    /// no effective execution-profile identity at all.
+    const V31_SUBAGENT_OWNERSHIP: &str = r#"{"schema_version":1,"event_id":"subagent-committed-event:conv-v31-subagent-1","sequence":1,"conversation_id":"conv-v31","timestamp":"2026-01-01T00:00:00Z","event":{"type":"subagent_ownership_committed","subagent_id":"conv-v31-subagent-1","child_agent_id":"agent-child","child_conversation_id":"conv-v31-subagent-1","tool_call_id":"call-sub","agent":"explore","definition_digest":"sha256:d1","ownership":"normal","workspace":{"logical_workspace":"<shared-workspace>","isolation":{"mode":"shared"}}}}"#;
+
+    /// Issue #258 made the effective execution-profile identity a durable
+    /// execution fact, so the store version must gate open.
+    ///
+    /// A version-31 journal holds ownership facts with no `profile_digest`.
+    /// The one thing a v32 reader must never do is reconstruct it — the
+    /// current role definition and the current resource generation are both
+    /// mutable, and deriving identity from them is exactly what committing
+    /// the value durably exists to prevent. There is therefore nothing honest
+    /// to make of those rows, and the contract is the usual one:
+    ///
+    /// ```text
+    /// incompatible durable semantic format -> store-open rejection
+    /// ```
+    #[test]
+    fn a_version_31_subagent_ownership_journal_is_refused_at_open_never_decoded() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("ownership-v31.sqlite");
+        let conversation_id = ConversationId::new("conv-v31");
+        {
+            let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
+            let connection = store.conn.lock().unwrap();
+            connection
+                .execute(
+                    "INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json) VALUES(?1,?2,?3,?4,NULL,NULL,?5)",
+                    params![
+                        1i64,
+                        "subagent-committed-event:conv-v31-subagent-1",
+                        i64::from(EVENT_SCHEMA_VERSION),
+                        conversation_id.as_str(),
+                        V31_SUBAGENT_OWNERSHIP
+                    ],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "UPDATE rustx_store SET schema_version = 31, next_event_sequence = 1 WHERE id = 1",
+                    [],
+                )
+                .unwrap();
+        }
+
+        assert!(matches!(
+            SqliteConversationStore::open(conversation_id, &path),
+            Err(ConversationStoreError::SchemaVersionMismatch {
+                stored: 31,
+                expected: SQLITE_SCHEMA_VERSION
+            })
+        ));
+        assert_eq!(SQLITE_SCHEMA_VERSION, 33);
+
+        // And the refusal is not ceremony: the envelope framing is unchanged,
+        // and the row the gate refused really is undecodable under the current
+        // vocabulary — which is exactly why the *store* version had to move.
+        let framing: serde_json::Value = serde_json::from_str(V31_SUBAGENT_OWNERSHIP).unwrap();
+        assert_eq!(framing["schema_version"], i64::from(EVENT_SCHEMA_VERSION));
+        assert!(
+            framing["event"].get("profile_digest").is_none(),
+            "the schema-31 fact really does carry no effective profile identity"
+        );
+        assert!(
+            serde_json::from_str::<RuntimeEventEnvelope>(V31_SUBAGENT_OWNERSHIP).is_err(),
+            "the typed vocabulary cannot interpret a schema-31 ownership fact"
+        );
     }
 
     /// The other half of the gate: a store this runtime creates records the
@@ -12418,7 +12551,7 @@ mod tests {
                 )
                 .unwrap()
         };
-        assert_eq!(stored, 32);
+        assert_eq!(stored, 33);
         assert_eq!(stored, SQLITE_SCHEMA_VERSION);
         SqliteConversationStore::open(conversation_id, &path).expect("a current store reopens");
     }

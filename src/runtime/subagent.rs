@@ -4,8 +4,11 @@
 //! separate-OS-process child rustX runtime**. The child reuses the real
 //! rustX stack — `ConversationRuntime`, the Agent Loop, Context Assembly,
 //! the Tool Plane, and the ModelAdapter — headlessly, with the exact
-//! capability set frozen by its named definition and an isolated
-//! conversation.
+//! capability set its invoking attempt froze into `ResolvedSubagentSpec` and
+//! an isolated conversation. That set is the named definition's, or the
+//! definition's with the dimensions an authorized invocation override
+//! replaced (Issue #258); either way the child consumes one frozen contract
+//! and rediscovers nothing.
 //!
 //! # Ownership
 //!
@@ -16,10 +19,11 @@
 //!   never owns: live execution state of any kind
 //!
 //! SubagentResolver (resolver)
-//!   owns: definition + invoking RuntimeResourceSnapshot + invoking attempt
+//!   owns: definition + optional invocation override + caller delegation
+//!         authority + invoking RuntimeResourceSnapshot + invoking attempt
 //!         model authority -> frozen ResolvedSubagentSpec
-//!   never owns: the parent's active ToolRegistry, mutable runtime-current
-//!               resources, live child lifecycle
+//!   never owns: mutable runtime-current resources, live child lifecycle,
+//!               the decision of WHICH authority mode a caller gets
 //!
 //! SubagentRegistry (registry)
 //!   owns: SubagentId allocation/correlation, child identity correlation,
@@ -78,6 +82,7 @@
 
 pub mod activity;
 pub mod catalog;
+pub mod invocation;
 mod registry;
 pub mod resolver;
 
@@ -171,6 +176,9 @@ pub use catalog::{
     SubagentExecutionDeadline, SubagentExecutionDeadlineError, SubagentName, SubagentNameError,
     SubagentProjectInstructionPolicy,
 };
+pub use invocation::{
+    MAX_OVERRIDE_SKILLS, MAX_OVERRIDE_TOOLS, SubagentInvocationOverride, SubagentOverrideError,
+};
 pub use process::SubagentSpawnPlan;
 pub(crate) use registry::InteractionPublicationAuthority;
 #[cfg(test)]
@@ -183,8 +191,9 @@ pub use registry::{
     SubagentWorkspaceDisposalError, SubagentWorkspaceResourceState,
 };
 pub use resolver::{
-    ResolvedSubagentSkill, ResolvedSubagentSpec, ResolvedSubagentTool, SubagentDomain,
-    SubagentResolutionError, SubagentResolver,
+    InvokingAgentAuthority, ResolvedSubagentSkill, ResolvedSubagentSpec, ResolvedSubagentTool,
+    SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION, SubagentDomain, SubagentExecutionProfileDigest,
+    SubagentOverrideAuthority, SubagentResolution, SubagentResolutionError, SubagentResolver,
 };
 
 use std::sync::Arc;
@@ -250,6 +259,14 @@ struct AttemptSubagentContextInner {
     model: crate::model::session::SessionModelConfig,
     models: crate::model::invocation::ModelBindingRegistry,
     approval_mode: ApprovalMode,
+    /// The invoking Agent's frozen admitted execution profile (Issue #258).
+    ///
+    /// It is captured once, here, from the very snapshot and extension
+    /// composition this attempt was admitted with. It is the *only*
+    /// parent-side input to the dynamic delegation ceiling, and it is never
+    /// an inheritance source: nothing in it reaches a child except through an
+    /// explicit, authorized invocation override.
+    invoking: InvokingAgentAuthority,
 }
 
 impl core::fmt::Debug for AttemptSubagentContext {
@@ -276,7 +293,9 @@ impl AttemptSubagentContext {
         model: crate::model::session::SessionModelConfig,
         models: crate::model::invocation::ModelBindingRegistry,
         approval_mode: ApprovalMode,
+        extensions: crate::extensions::NativeAgentExtensions,
     ) -> Self {
+        let invoking = InvokingAgentAuthority::frozen(resources.capability(), extensions);
         Self {
             inner: Arc::new(AttemptSubagentContextInner {
                 attempt_id,
@@ -284,6 +303,7 @@ impl AttemptSubagentContext {
                 model,
                 models,
                 approval_mode,
+                invoking,
             }),
             native: None,
         }
@@ -311,7 +331,13 @@ impl AttemptSubagentContext {
         self.inner.approval_mode
     }
 
-    /// Resolves one named agent against exactly this attempt's generation.
+    /// Resolves one named agent, with an optional **model-generated**
+    /// invocation override, against exactly this attempt's generation.
+    ///
+    /// The authority mode is fixed here, by the launch site, and is not
+    /// reachable from the model's arguments: a `subagent` call is always
+    /// judged against the dynamic delegation ceiling, and always in the Main
+    /// admission domain.
     ///
     /// # Errors
     ///
@@ -319,18 +345,28 @@ impl AttemptSubagentContext {
     pub fn resolve(
         &self,
         agent: &SubagentName,
+        invocation: Option<&SubagentInvocationOverride>,
     ) -> Result<ResolvedSubagentSpec, SubagentResolutionError> {
-        SubagentResolver::resolve_in_domain(
-            &self.inner.resources,
+        SubagentResolver::resolve(&SubagentResolution {
+            resources: &self.inner.resources,
             agent,
-            &self.inner.model,
-            &self.inner.models,
-            SubagentDomain::Main,
-        )
+            attempt_model: &self.inner.model,
+            models: &self.inner.models,
+            domain: SubagentDomain::Main,
+            invocation,
+            authority: SubagentOverrideAuthority::DelegatedByModel,
+            invoking: &self.inner.invoking,
+        })
     }
 
-    /// Resolves one named profile for a Workflow `AgentRun` using the
-    /// independent Workflow admission set.
+    /// Resolves one named profile for a Workflow `AgentRun`, with the node's
+    /// optional **trusted static** invocation override, using the independent
+    /// Workflow admission set.
+    ///
+    /// A Workflow override is compiled program data validated against the
+    /// Workflow's own admitted generation, so it is not bounded by the
+    /// invoking main model's narrower active tool set. The authority mode is
+    /// again fixed by the launch site and unreachable from model output.
     ///
     /// # Errors
     ///
@@ -339,14 +375,18 @@ impl AttemptSubagentContext {
     pub fn resolve_workflow(
         &self,
         agent: &SubagentName,
+        invocation: Option<&SubagentInvocationOverride>,
     ) -> Result<ResolvedSubagentSpec, SubagentResolutionError> {
-        SubagentResolver::resolve_in_domain(
-            &self.inner.resources,
+        SubagentResolver::resolve(&SubagentResolution {
+            resources: &self.inner.resources,
             agent,
-            &self.inner.model,
-            &self.inner.models,
-            SubagentDomain::Workflow,
-        )
+            attempt_model: &self.inner.model,
+            models: &self.inner.models,
+            domain: SubagentDomain::Workflow,
+            invocation,
+            authority: SubagentOverrideAuthority::TrustedProgram,
+            invoking: &self.inner.invoking,
+        })
     }
 
     /// The bounded model-facing routing catalog of this generation.
@@ -443,15 +483,27 @@ pub(crate) fn subagent_ownership_event_id(subagent_id: &SubagentId) -> EventId {
 ///
 /// The fact carries exactly the identity a restart needs — the subagent,
 /// the child agent/conversation it owns, the delegating tool call, and the
-/// frozen `(agent, definition_digest)` identity — never the delegated task
-/// content, the process id, or any other process-local state. Its event
-/// identity is the canonical [`subagent_ownership_event_id`] of the
+/// frozen `(agent, definition_digest, profile_digest)` identity — never the
+/// delegated task content, the process id, or any other process-local state.
+/// Its event identity is the canonical [`subagent_ownership_event_id`] of the
 /// embedded `SubagentId`.
 ///
-/// The digest is what makes the fact self-describing across a reload: a
-/// later generation that redefines the same agent name cannot make an
-/// already-committed child appear to have the new definition, because the
-/// durable fact names the exact definition the child started with.
+/// The two digests are what make the fact self-describing across a reload,
+/// and they are separate identities:
+///
+/// ```text
+/// definition_digest  the SOURCE definition the child started with, so a
+///                    later generation that redefines the same agent name
+///                    cannot make an already-committed child appear to have
+///                    the new definition
+/// profile_digest     the EFFECTIVE execution profile the child started
+///                    with, so two children of one role that an authorized
+///                    invocation override specialized differently stay
+///                    distinguishable after a restart
+/// ```
+///
+/// Both are committed here, at the ownership boundary, from the frozen
+/// specification. Neither is ever reconstructed from current resources.
 #[allow(clippy::too_many_arguments)] // one durable fact, one construction boundary
 pub(crate) fn ownership_event(
     conversation_id: &ConversationId,
@@ -461,6 +513,7 @@ pub(crate) fn ownership_event(
     tool_call_id: &ToolCallId,
     agent: &SubagentName,
     definition_digest: &SubagentDefinitionDigest,
+    profile_digest: &resolver::SubagentExecutionProfileDigest,
     ownership: SubagentOwnershipKind,
     workspace: &WorkspaceSnapshot,
     timestamp: DateTime<Utc>,
@@ -480,6 +533,7 @@ pub(crate) fn ownership_event(
             tool_call_id: tool_call_id.clone(),
             agent: agent.as_str().to_owned(),
             definition_digest: definition_digest.as_str().to_owned(),
+            profile_digest: profile_digest.as_str().to_owned(),
             ownership,
             workspace: workspace.clone(),
         },

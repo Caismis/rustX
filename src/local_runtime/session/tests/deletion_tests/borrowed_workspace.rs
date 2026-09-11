@@ -75,6 +75,10 @@ impl Fixture {
     }
 
     fn borrow(&mut self, root: &std::path::Path, ordinal: u64) {
+        self.borrow_profile(root, ordinal, &format!("sha256:{}", "a".repeat(64)));
+    }
+
+    fn borrow_profile(&mut self, root: &std::path::Path, ordinal: u64, profile: &str) {
         let subagent = SubagentId::for_conversation(&self.run.conversation_id, ordinal);
         let child = ConversationId::new(subagent.as_str());
         let mut borrowed = self.workspace.clone();
@@ -88,6 +92,7 @@ impl Fixture {
                 &ToolCallId::new(format!("borrow-call-{ordinal}")),
                 &crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
                 &serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
+                &serde_json::from_value(serde_json::json!(profile)).unwrap(),
                 SubagentOwnershipKind::Workflow,
                 &borrowed,
                 Utc::now(),
@@ -370,5 +375,100 @@ fn deletion_borrowed_workspace_multiple_children_share_one_disposal_owner() {
         target.workspace_blockers()[0]
             .resource_id
             .starts_with("workflow:")
+    );
+}
+
+#[test]
+fn deletion_overridden_borrowers_keep_profile_identity_out_of_ownership_revision() {
+    use crate::runtime::subagent::{ResolvedSubagentSpec, SubagentInvocationOverride};
+    let root = tempfile::tempdir().unwrap();
+    let mut fixture = Fixture::create(root.path(), 0);
+    let mut spec = ResolvedSubagentSpec {
+        agent: crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
+        definition_digest: serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
+        execution_deadline: None,
+        workspace_policy: crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
+        instructions: "inspect".into(),
+        model: crate::model::frozen::test_frozen_model_spec(
+            serde_json::from_value(serde_json::json!("local/model")).unwrap(),
+        ),
+        tools: Vec::new(),
+        skills: Vec::new(),
+        project_instructions: Vec::new(),
+        materialization:
+            crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
+        extensions: crate::extensions::NativeAgentExtensions::none(),
+    };
+    let profiles: Vec<_> = [
+        serde_json::json!({"extensions": {}}),
+        serde_json::json!({"extensions": {"agentStatus": {"time": {"enabled": true}}}}),
+    ]
+    .into_iter()
+    .map(|value| {
+        let invocation: SubagentInvocationOverride = serde_json::from_value(value).unwrap();
+        spec.extensions = invocation.extensions.unwrap().resolve();
+        spec.profile_digest()
+    })
+    .collect();
+    assert_ne!(profiles[0], profiles[1]);
+    fixture.borrow_profile(root.path(), 1, profiles[0].as_str());
+    let first = revision(root.path(), &fixture.session);
+    fixture.borrow_profile(root.path(), 2, profiles[1].as_str());
+    let target = SessionDeletionPreflight::acquire(root.path(), &fixture.session).unwrap();
+    assert_ne!(
+        &first,
+        target.ownership_revision(),
+        "adding a child changes ownership"
+    );
+    assert_eq!(target.conversations().len(), 3);
+    for child in &fixture.children {
+        assert!(
+            target
+                .conversations()
+                .iter()
+                .any(|c| &c.conversation_id == child)
+        );
+    }
+    assert_eq!(target.workspace_blockers().len(), 1);
+    assert!(
+        target.workspace_blockers()[0]
+            .resource_id
+            .starts_with("workflow:")
+    );
+    let before = *target.ownership_revision();
+    drop(target);
+    let events = fixture.parent.read_events(None, 256).unwrap().events;
+    let mut children = 0;
+    for mut event in events {
+        if let RuntimeEvent::SubagentOwnershipCommitted {
+            definition_digest,
+            profile_digest,
+            workspace,
+            ..
+        } = &mut event.event
+        {
+            assert_eq!(definition_digest, spec.definition_digest.as_str());
+            assert_eq!(profile_digest, profiles[children].as_str());
+            assert_eq!(workspace.borrowed_from.as_ref(), Some(&fixture.run));
+            // Vary only valid capability metadata, retaining the exact resource graph.
+            *profile_digest = profiles[1 - children].as_str().to_owned();
+            children += 1;
+            let connection = rusqlite::Connection::open(&fixture.database).unwrap();
+            connection
+                .execute(
+                    "UPDATE events SET event_json=?1 WHERE event_id=?2",
+                    rusqlite::params![
+                        serde_json::to_string(&event).unwrap(),
+                        event.event_id.as_str()
+                    ],
+                )
+                .unwrap();
+        }
+    }
+    assert_eq!(children, 2);
+    assert_eq!(
+        revision(root.path(), &fixture.session),
+        before,
+        "capability metadata alone never changes the deletion target"
     );
 }

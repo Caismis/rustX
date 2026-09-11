@@ -100,7 +100,8 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 32. Version 32 establishes
+The SQLite schema is development schema version 33. Version 32 freezes Issue #258’s durable
+`profile_digest` for the effective admitted child execution profile. Version 33 establishes
 non-creating rollback-journal management reads and separated workspace storage.
 Version 31 froze Issue
 #242's provider-independent typed Questionnaire interaction audit: a requested
@@ -1255,14 +1256,23 @@ extension never adds a Tool to the model-facing registry by itself.
   new `RuntimeResourceSnapshot` without reaching the composed extension set.
   Restart/resume is a new launch: it resolves the current document through the
   same resolver and rewrites no canonical Session history.
-- **Child.** `SubagentResolver::resolve_in_domain` freezes
-  `definition.extensions()` into `ResolvedSubagentSpec::extensions`, before
-  process staging and durable ownership commit. Root and named-role
-  compositions are independently authored — the root's document is not an input
-  to child resolution — and role extension settings participate in
-  `SubagentDefinitionDigest`. `LocalConversationCore::compose_subagent_child`
-  materializes `spec.resolved.extensions` and rereads no configuration document,
-  role file, or later resource generation.
+- **Child.** `SubagentResolver::resolve` freezes the **effective** composition
+  into `ResolvedSubagentSpec::extensions`, before process staging and durable
+  ownership commit. That is the role's own `definition.extensions()`, or the
+  composition an authorized invocation override replaced it with (SUB-OVR /
+  Issue #258). Root and named-role compositions remain independently authored:
+  the root's composition is never *inherited*, and participates only as one
+  half of an explicit delegation ceiling — a child composes an extension
+  because a role authored it or because an entitled caller asked for it. That
+  ceiling is a union taken per behavior-affecting contributor, and timezone
+  authority is decided on the zone that will actually render (absent means
+  UTC), never on whether `time.timezone` was written. Role extension settings
+  participate in `SubagentDefinitionDigest` as authored; the effective
+  composition participates in `ResolvedSubagentSpec::profile_digest()` by its
+  effective semantics.
+  `LocalConversationCore::compose_subagent_child` materializes
+  `spec.resolved.extensions` and rereads no configuration document, role file,
+  or later resource generation.
 
 An absent member means the extension is not part of the composition, not that
 it is present and idle. `Option<AgentStatusEngine>` is the *whole*
@@ -6757,7 +6767,11 @@ re-derive any of it. Three representations carry that weight:
 `prepare` validates the bounded task/context and stages a real child through
 its typed Hello/Ready handshake. The one ownership commit freezes one start
 timestamp, durably writes `SubagentOwnershipCommitted`, and creates the
-logical Running record. Start-vs-cancel has exactly one arbitration
+logical Running record. That fact carries the frozen
+`(agent, definition_digest, profile_digest)` identity: the source definition
+the child started with *and* its effective execution profile (Issue #258) are
+both durable execution facts, so recovery restores them rather than recomputing
+either from the current catalog. Start-vs-cancel has exactly one arbitration
 boundary: the registry mutex covers the command-handle install, the
 lifecycle read, and the synchronous start-gate release in one critical
 section. Cancellation committed first resolves the gate cancelled — the
@@ -8262,10 +8276,12 @@ content; these are separate domains.
 
 The v1 program has only `Agent`, `Branch`, `Parallel`, and `Return`. Ordinary
 graph edges express sequential flow; there is no Sequence/Pipeline primitive.
-An Agent invokes one already admitted named profile with a fixed static task
-and a frozen output schema. It cannot override model, tools, capabilities,
-instructions, workspace policy, approval authority, execution mode, or retry
-policy. The root and every fixed Parallel branch contain the same compiled
+An Agent invokes one already admitted named profile with a fixed static task,
+a frozen output schema, and one optional trusted static `override` replacing
+that child's `tools`, `skills`, or `extensions` (SUB-OVR / Issue #258). It
+cannot override model, instructions, workspace policy, approval authority,
+execution mode, or retry policy, and its `override` is compiled program data
+rather than anything model output or node input values can reach. The root and every fixed Parallel branch contain the same compiled
 lexical block. Inputs and Returns use tagged reference, literal, object and
 array values, including `{type: reference, path: [review, blockers]}`.
 There is no interpolation or expression-string language.

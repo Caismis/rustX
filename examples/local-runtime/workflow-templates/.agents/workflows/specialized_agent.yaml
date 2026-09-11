@@ -1,0 +1,46 @@
+description: Run one named role twice, specialized differently per node.
+timeout_ms: 60000
+block:
+  input:
+    type: object
+    properties: {topic: {type: string}}
+    required: [topic]
+    additionalProperties: false
+  output: &assessment_contract
+    type: object
+    properties: {summary: {type: string}}
+    required: [summary]
+    additionalProperties: false
+  entry: describe
+  nodes:
+    # No `override`: this child runs the role's defaults exactly — the empty
+    # `tools` selection and the role's own extension composition.
+    describe:
+      type: agent
+      profile: reviewer
+      task: Describe the supplied topic in one short sentence.
+      input:
+        topic: {type: reference, path: [args, topic]}
+      output: *assessment_contract
+    # One `override`: this child is the same role specialized for this node.
+    # Each field REPLACES that whole dimension; omitted fields keep the role's
+    # default. `read` and `grep` are not added to the role's selection, they
+    # are the whole selection, and `extensions: {}` composes no extension at
+    # all rather than the role's authored default.
+    inspect:
+      type: agent
+      profile: reviewer
+      task: Using the described topic, report what the repository files show.
+      override:
+        tools:
+          builtin: [read, grep]
+        extensions: {}
+      input:
+        described: {type: reference, path: [describe]}
+      output: *assessment_contract
+    return_assessment:
+      type: return
+      output: {type: reference, path: [inspect]}
+  edges:
+  - {from: describe, to: inspect}
+  - {from: inspect, to: return_assessment}

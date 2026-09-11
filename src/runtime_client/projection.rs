@@ -2038,6 +2038,7 @@ pub(crate) fn subagent_view(
         child_conversation_id: snapshot.child_conversation_id.clone(),
         agent: snapshot.agent.clone(),
         definition_digest: snapshot.definition_digest.clone(),
+        profile_digest: snapshot.profile_digest.clone(),
         state: snapshot.state,
         detail: snapshot.detail.clone(),
         observation: snapshot.observation.clone(),
@@ -5520,6 +5521,7 @@ mod tests {
                 tool_call_id: ToolCallId::new("call-1"),
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:d1".to_owned(),
+                profile_digest: "sha256:p1".to_owned(),
                 workspace: WorkspaceSnapshot::shared(std::path::PathBuf::from(
                     "<shared-workspace>",
                 )),
