@@ -32,6 +32,33 @@ against applicable availability, so excluding an already unselected available
 identity is valid, while unknown/ineligible or ambiguous names fail.
 `--no-tools` selects zero ordinary tools, including generated dispatchers.
 
+### Ordinary selection is one of two planes
+
+Every filter above addresses the **ordinary capability plane**. A Native Agent
+Extension may also contribute a model-facing Tool, and that Tool belongs to
+`extensions`, not to any selector here:
+
+```text
+  ordinary selected Tool capabilities        every flag in this section
++ enabled extension-provided Tool surfaces   extensions.<name>.enabled
++ already-admitted domain terminal protocols Workflow output, ...
+```
+
+Neither plane filters the other. `--no-tools` selects zero *ordinary*
+capabilities and does not disable an independently composed extension, so a
+truly Tool-free model request needs no ordinary Tools **and** no Tool-providing
+extension. `--no-builtin-tools` removes ordinary built-ins, not every Tool that
+happens to be implemented in Rust: the classification is semantic, not
+incidental to where the implementation lives.
+
+Symmetrically, no selector can switch an extension on. `todo` is provided by
+the Todo Agent Extension and is rejected — with a diagnostic naming the
+extension — in `defaultTools`, `--tools`, `--exclude-tools`, a named
+Subagent's `tools.builtin`, and a Workflow's admitted capability set. It is not
+an ordinary available capability at all, so it never appears in the available
+catalog those selectors resolve against. See
+[Native Agent Extensions](launch-configuration.md#native-agent-extensions).
+
 `--no-tools` conflicts with `--tools`, `--exclude-tools`, and
 `--no-builtin-tools`; `--tools` conflicts with `--no-builtin-tools`.
 All explicit lists reject empty values/entries, duplicates, unknown or
@@ -63,8 +90,10 @@ ownership independently of concurrency and approval.
 Missing `nativeTools`, missing entries and missing axes all retain each
 tool's product default. For example, `"read": {"approval": "always"}`
 retains foreground/parallel, and a partial Bash override retains
-model-selectable execution. `execution`, `ask_user`, `todo` and Workflow
-terminal protocols retain their fixed domain owners.
+model-selectable execution. `execution`, `ask_user` and Workflow terminal
+protocols retain their fixed domain owners. The extension-provided `todo` Tool
+is outside this table for a stronger reason — it is not an ordinary native
+capability, and its policy belongs to its own extension.
 
 A lazy model-visible Skill catalog requires native Read in that domain's
 frozen Tool authority. Otherwise the catalog is omitted, without enabling
@@ -77,7 +106,9 @@ published in the capability generation and pinned at attempt lease acquisition.
 Request compilation and call preflight use that same immutable registry;
 model capability flags never silently remove its definitions. Existing request
 validation rejects Tools for a model without Tool-call support; select
-`--no-tools` to use such a model without ordinary Tools.
+`--no-tools` **and** disable every Tool-providing extension
+(`"extensions": { "todo": { "enabled": false } }`) to use such a model with no
+Tools at all.
 Preflight freezes mode, concurrency and approval in the prepared invocation.
 The approval rendezvous settles before the executor-start frontier. FullAccess
 bypasses only this Tool permission gate: it grants no tool, changes no

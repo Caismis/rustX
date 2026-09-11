@@ -92,7 +92,7 @@ schema is [subagent.schema.json](../schemas/subagent.schema.json).
 | `description` | Required nonempty string, at most 512 bytes; routing text only. |
 | `model` | Optional `provider/model` reference. Omission inherits the invoking attempt's frozen effective model, including reasoning and request contracts. Explicit references use the native model catalog. |
 | `timeoutMs` | Optional integer, 1–86,400,000; the whole-child lifecycle deadline. |
-| `tools.builtin` | Exact array of native Tool names; default empty. |
+| `tools.builtin` | Exact array of **ordinary** native Tool names; default empty. A Tool provided by an Agent Extension (`todo`) is rejected here by name: compose it under `extensions` instead. |
 | `tools.mcp` | Map of source identities to exact Tool-name arrays; default empty. Managed Python uses the existing `python:<package>` source identity. |
 | `skills` | Exact Skill-name array; default empty. |
 | `agentsMd.inherit` | Boolean, default true; include the parent's frozen project guidance. |
@@ -100,11 +100,31 @@ schema is [subagent.schema.json](../schemas/subagent.schema.json).
 | `worktree.enabled` | Boolean, default false. |
 | `worktree.requireCleanParent` | Boolean, default true; applies when Git isolation is enabled. |
 | `extensions.agentStatus` | This role's own closed [Native Agent Extension](launch-configuration.md#native-agent-extensions) composition: `enabled` (default true), `time.enabled`/`time.timezone`, `background.enabled`. Omission means this role's built-in defaults, never the invoking root Agent's configuration. |
+| `extensions.todo` | `enabled` (default true). Composes the child conversation's own task list, its model-facing `todo` Tool, and its bounded status presentation — or none of them. |
 
 Role extension composition is **independently authored**: root Agent extensions
 and named-Subagent extensions are separate compositions, and a child never
 implicitly inherits the root's set. A role that omits `extensions` composes the
 built-in defaults, not whatever the invoking runtime happens to run with.
+
+```yaml
+---
+description: Implement a bounded change.
+tools:
+  builtin: [read, write, edit, bash]
+extensions:
+  todo:
+    enabled: true
+---
+Implement the delegated task.
+```
+
+A Todo-enabled child owns **its own** list, over its own conversation and its
+own Ledger. It is never the parent's list, never merges into it, and two
+concurrently running Todo-enabled children never observe or mutate each other's.
+The child's final result remains the existing bounded Subagent report or
+Workflow structured output; its list is working state, and its internals do not
+enter parent canonical history.
 
 The invoking Agent's own frozen composition does reach the resolver, but only
 as **delegation authority** for an explicit invocation override — never as an
@@ -224,15 +244,21 @@ For the main model:
 
   ```text
   Agent Status composed at all  some source composes Agent Status
-                                (composing it composes the always-on Todo
-                                 contributor, so it is never a free wrapper)
   time.enabled = true           some source composes Agent Status with Time
                                 enabled AND the same EFFECTIVE timezone
   background.enabled = true     some source composes Agent Status with
                                 Background enabled
+  Todo composed at all          some source composes Todo
   a contributor set to false    narrowing; needs no authority at all
   extensions omitted entirely   narrowing; needs no authority at all
   ```
+
+  Todo has no contributor axis, so it needs no per-contributor union: the
+  extension is either composed or not. Note what is *not* being authorized —
+  access to anyone's task list. A child composes its own, so the question is
+  only whether this caller may ask for the capability at all. Todo gets no
+  widening rule of its own: a main-model override remains bounded by
+  role ∪ invoking Agent, and a Workflow override by the admitted generation.
 
   So a role holding UTC Time with Background off, and an invoking Agent holding
   Background with Time off, together authorize a child with both on — Time from

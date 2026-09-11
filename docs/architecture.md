@@ -1193,7 +1193,8 @@ Agent core
 
 Native Agent Extensions
   Agent Status        migrated (Issue #256)
-  Todo                later
+  Todo                migrated (Issue #259) — the first stateful,
+                      Tool-providing extension
   Goal                later
 ```
 
@@ -1214,6 +1215,53 @@ Todo or Goal. Time and Background stay bounded contributors with their existing
 eligibility policies and their existing optional-context failure semantics
 (a failing contributor is quarantined for the attempt; it never fails the
 request).
+
+Todo obeys the same invariant through *three* existing owners rather than one,
+which is what makes it the interesting second case:
+
+```text
+ConversationToolRuntime   composes the conversation-owned ConversationTodoList
+Tool Plane                receives the extension-provided `todo` registration
+Agent Status              consumes a bounded read-only TodoStatusPresentation
+Runtime Client            projects the composed/absent fact and the list
+```
+
+Composing Todo composes all of that at once; not composing it composes none of
+it. Two properties follow, and both are load-bearing:
+
+- **Todo state ownership is unchanged.** Task identity, the status machine, the
+  dependency graph, batch staging, and reconstruction from canonical evidence
+  stay in `ConversationTodoList`. The migration moved *composition and
+  activation*, not state, and deliberately introduced no Todo database, entity
+  framework, or event-sourcing layer;
+- **Agent Status does not own Todo.** It receives a value — the presentation
+  and its fingerprint are derived by the list — and decides only whether and
+  how often to show a reminder. With Todo composed and Agent Status not, the
+  Tool, the list, its ToolResults and its recovery all work unchanged; with
+  Agent Status composed and Todo not, no Todo section is fabricated.
+
+### Two Tool authority planes
+
+An extension may contribute a model-facing Tool, and that contribution is a
+second, independent plane:
+
+```text
+  ordinary selected Tool capabilities        defaultTools / --tools /
+                                             --exclude-tools / tools.builtin
++ enabled extension-provided Tool surfaces   NativeAgentExtensions::
+                                             tool_registrations()
++ already-admitted domain protocols          Workflow output, ...
+```
+
+`capabilities::select_tools` takes the two sets separately, so neither filters
+the other: `--no-tools` leaves an enabled Todo's Tool in place, and no
+selection surface can name an extension Tool at all — `todo` is refused with a
+diagnostic naming the extension, in root configuration, in the CLI activation
+policy, in a role's `tools.builtin`, and in a Workflow's admitted capability
+set. The extension Tool set is composed once at `CapabilityCoordinator`
+construction and stored **outside** `CapabilityResourceInputs`, which is the
+only value a reload replaces, so a resource reload structurally cannot
+hot-install or hot-remove a Tool-providing extension.
 
 ### Ownership: closed composition, not a plugin runtime
 
@@ -1466,14 +1514,18 @@ tools/todo.rs              ConversationTodoList: the conversation-owned task
                            graph validation), staged per ToolResult batch
                            and rebuilt at construction from the newest
                            snapshot the conversation's own canonical
-                           `todo` results committed
+                           `todo` results committed. It also owns the
+                           bounded read-only TodoStatusPresentation and its
+                           fingerprint — the whole interface the Todo
+                           extension offers another extension
 tools/runtime.rs           ConversationToolRuntime: the per-conversation
                            bundle of workspace, artifacts, environment,
-                           background registry, and task list handed to
+                           background registry, and — when the Todo Agent
+                           Extension is composed — task list, handed to
                            AgentExecution
 tools/native/             the native tool plane: one module per native
                            capability (read/, write/, edit/, glob/, grep/,
-                           bash/, execution/, todo/), each owning its name,
+                           bash/, execution/), each owning its name,
                            description, typed input contract, generated
                            schema, executor, and private helpers;
                            registration.rs owns the NativeToolRegistration
@@ -2109,7 +2161,9 @@ Key contracts:
   message is emitted. Overflow compact-and-retry reuses the accepted
   generation without a second Surface scan, clock sample, authoritative
   capture, or trigger evaluation.
-- Todo status reads only `ConversationTodoList::committed()`. It shows a
+- Todo status reads only the bounded presentation `ConversationTodoList`
+  derives from its own `committed()` snapshot, and only when the Todo
+  extension is composed at all. It shows a
   bounded deterministic view of actionable tasks and uses semantic key
   `active_actionable` plus a SHA-256 fingerprint of that bounded view. A
   durable latest-emission head suppresses an identical fingerprint while
@@ -2657,9 +2711,16 @@ Cancelling the steer ToolCall is deliberately not subagent cancellation:
 it never invokes `SubagentRegistry::cancel`, and the child subagent keeps
 running under its own lifecycle.
 
-The bundle also owns the conversation's `ConversationTodoList`: the task
-list the native `todo` tool mutates. It is deliberately *not* a second
-persistence path. Every settled `todo` call publishes the complete
+The bundle also owns the conversation's `ConversationTodoList` — when the
+frozen composition includes the **Todo Agent Extension** (Issue #259). That is
+the extension's state half: composing Todo composes the list here, the `todo`
+Tool in the Tool Plane, the bounded status presentation Agent Status may
+consume, and the Runtime Client projection, all together. A composition without
+it has no list at all, reads no Todo history, and publishes no `todo` Tool,
+while every canonical `todo` fact the conversation already holds stays exactly
+where it is.
+
+The list is deliberately *not* a second persistence path. Every settled `todo` call publishes the complete
 post-call snapshot as the structured content of its own canonical tool
 result, so the durable record of the list is ordinary conversation
 history; `ConversationToolRuntime` construction rebuilds the list by
@@ -2717,12 +2778,11 @@ transcript page it happens to hold, and without any client-side task
 state. The tool is fixed foreground-only, sequential,
 approval-never: one list cannot be mutated by a detached execution, two
 concurrent mutations would publish racing snapshots, and there is nothing
-in a task list for a human to approve. A subagent child composes exactly the
-Builtin capabilities its named definition resolved to, so a child without an
-explicit `todo` selection has no `todo` registration at all and session
-isolation of the list is structural rather than a check, and a child that
-does select `todo` gets the exact frozen definition its parent generation
-admitted.
+in a task list for a human to approve. A subagent child composes its own list
+over its own conversation and its own Ledger, when its frozen extension set
+includes Todo — so parent/child and child/child isolation is structural rather
+than a check, and a child that composes no Todo extension has neither a list
+nor a `todo` registration at all.
 
 The dispatch ownership commit is the background linearization point: the
 registry synchronization boundary is acquired first and the final

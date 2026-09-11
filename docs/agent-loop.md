@@ -552,9 +552,12 @@ pub enum InitialTurnTrigger {
 
 There is no legacy no-context execution path: Agent Status is optional
 enrichment inside the normal Context Assembly path. Time and Background are
-configurable; the closed Todo module remains enabled and produces no status
-message or structured status observation when its committed list is
-non-actionable or its semantic reminder is suppressed.
+configurable contributors of the Agent Status extension. The Todo module is a
+*consumer*, not an owner: it contributes only when the Todo Agent Extension is
+independently composed for this Agent, and it reads the bounded read-only
+presentation the conversation's own task list derives. It produces no status
+message or structured status observation when Todo is not composed, when its
+committed list is non-actionable, or when its semantic reminder is suppressed.
 
 The first successfully completed model invocation consumes the fresh
 trigger (including a successful `ToolCalls` response: the model has already
@@ -576,7 +579,10 @@ attempt-local and no recovery path reconstructs it. A foreground-tool-only
 continuation with no new drain and no settled batch
 carries no Agent Status. Time, Background, and Todo are compile-time-owned
 modules: each captures once into a finite immutable snapshot and evaluates
-only that snapshot. Module capture/evaluation/payload failures are
+only that snapshot. Todo's snapshot is the presentation its owner supplied, so
+Agent Status holds no Todo state, drives no Todo recovery, derives no Todo
+fingerprint of its own, and can never fabricate a Todo section for a
+composition that has no Todo extension. Module capture/evaluation/payload failures are
 attempt-scoped quarantine events; they omit that module and do not fail
 preparation, alter provider request count, or create a continuation.
 
@@ -1915,8 +1921,10 @@ Event Journal    = execution facts
   request reaches at most one Agent Status preparation. That preparation
   samples the clock once, freezes one finite Pre-Status Surface view through
   the Surface head and keyed Ledger hydration, and captures one authoritative
-  active-Background and committed Todo snapshot. Time, Background, and Todo
-  evaluate those same frozen inputs against one finite opportunity set. A
+  active-Background snapshot and, when the Todo extension is composed, the
+  bounded read-only presentation its owner derives from its committed list.
+  Time, Background, and Todo evaluate those same frozen inputs against one
+  finite opportunity set. A
   complete sibling-tool batch marks the independent attempt-local
   `PostToolBatch` member only after its canonical ToolResult batch commits;
   FreshInbound and PostToolBatch may therefore coexist in the next already-
@@ -1924,7 +1932,7 @@ Event Journal    = execution facts
   remains or the latest one is at least 30 minutes old; Background refreshes
   when active work exists and no visible typed Background generation remains
   or eight non-AgentStatus model-visible messages follow it. Todo emits only
-  for committed actionable work. Its stable key is `active_actionable`, its
+  when the Todo extension is composed and its committed work is actionable. Its stable key is `active_actionable`, its
   fingerprint is the SHA-256 of the bounded structured presentation, and an
   identical fingerprint is suppressed while fewer than four later newly
   committed first requests of logical primary model steps follow the
