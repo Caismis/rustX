@@ -35,9 +35,9 @@ pub enum RuntimeClientSessionDeletionResult {
     Deleted {
         session_id: String,
     },
+    /// Invalidates confirmation; only a fresh preview supplies a replacement token.
     Stale {
         session_id: String,
-        actual_revision: String,
     },
     Blocked {
         session_id: String,

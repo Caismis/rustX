@@ -134,6 +134,18 @@ Protocol **28** adds `session_delete_preview`, `session_delete`
 `RuntimeClientSessionDeletionResult`. The Session-control owner explicitly maps
 native outcomes in `supervisor::project_session_deletion`.
 
+The frozen deletion workset is recovery authority, not public control-plane data.
+Native deletion types and raw supervisor operations are crate-private. Public
+Session deletion control is provided by `RuntimeClientSessionControl`.
+
+Only a successful fresh preview supplies an externally usable `target_revision`.
+A stale execution response invalidates the old confirmation but never supplies
+the replacement execution token. It contains only `status: stale` and
+`session_id`. The caller must obtain a new `session_delete_preview`, present its
+updated scope summary for confirmation, and then execute with that revision.
+Repeated stale executions cannot obtain the replacement token. Internal execute
+still recomputes and compares the current semantic revision.
+
 Preview carries identity, target revision, display name (at most 256 Unicode scalar
 values), and node/Conversation/child counts. Workspace blockers expose a count;
 other blockers expose a discriminant. Pending and uncertain outcomes carry only
@@ -152,7 +164,8 @@ pre-commit failures use a bounded protocol error without private storage paths.
 | `deleted` | This finalization confirmed cleanup and durable record removal |
 | `not_found` | No live Session or pending record, including completed deletion |
 
-The TypeScript SDK and TUI mirror these external DTOs only. Shared Rust/TypeScript
+The existing TypeScript Runtime Client mirror in `tui/src/protocol/types.ts`
+mirrors these protocol-28 DTOs. There is no separate deletion SDK. Shared Rust/TypeScript
 fixtures validate the wire contract, not deletion persistence. Interactive deletion
 UX (#257) and retention/lifecycle policy remain outside this change.
 

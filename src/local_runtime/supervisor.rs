@@ -114,7 +114,7 @@ impl LocalSessionSupervisor {
     }
 
     /// Preview releases every guard before returning to the caller.
-    pub async fn delete_preview(
+    pub(crate) async fn delete_preview(
         &self,
         id: &SessionId,
     ) -> super::session::deletion::SessionDeleteResult {
@@ -125,7 +125,7 @@ impl LocalSessionSupervisor {
     /// catalog mutex. Cancellation leaves the committed work recoverable.
     /// # Errors
     /// Only failures before logical visibility are ordinary Session errors.
-    pub async fn delete_session(
+    pub(crate) async fn delete_session(
         &self,
         id: &SessionId,
         revision: &str,
@@ -141,7 +141,7 @@ impl LocalSessionSupervisor {
     }
 
     /// Explicit recovery boundary; retries the persisted record without discovery.
-    pub async fn recover_deletion(
+    pub(crate) async fn recover_deletion(
         &self,
         id: &SessionId,
     ) -> super::session::deletion::SessionDeleteResult {
@@ -1114,12 +1114,9 @@ pub(crate) fn project_session_deletion(
         Native::NotFound { session_id } => Wire::NotFound {
             session_id: session_id.to_string(),
         },
-        Native::Stale {
-            session_id,
-            actual_revision,
-        } => Wire::Stale {
+        // A stale execution invalidates confirmation, never mints its replacement.
+        Native::Stale { session_id, .. } => Wire::Stale {
             session_id: session_id.to_string(),
-            actual_revision,
         },
         Native::Blocked { session_id, reason } => Wire::Blocked {
             session_id: session_id.to_string(),

@@ -354,10 +354,10 @@ async fn deletion_recursive_worker_releases_supervisor_mutex_and_never_finishes_
 }
 
 #[test]
-fn deletion_rust_types_roundtrip_every_shared_sdk_result_and_reject_paths() {
+fn deletion_rust_types_roundtrip_every_shared_protocol_result_and_reject_paths() {
     let fixtures: Vec<serde_json::Value> = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/sdk/runtime-client/test/deletion-fixtures.json"
+        "/tui/test/deletion-fixtures.json"
     )))
     .unwrap();
     let mut statuses = BTreeSet::new();
@@ -943,4 +943,77 @@ fn deletion_allocator_watermarks_advance_past_skipped_orphan_ids() {
     let next = reopened.prepare_session(&state(), &[]).unwrap();
     assert_eq!(next.session_id.as_str(), "session-5");
     assert_eq!(next.node_id.as_str(), "node-5");
+}
+
+#[tokio::test]
+async fn deletion_stale_control_response_requires_a_new_preview_token() {
+    use crate::local_runtime::supervisor::LocalSessionSupervisor;
+    use crate::runtime_client::host::RuntimeClientSessionControl;
+    use crate::runtime_client::session_deletion::RuntimeClientSessionDeletionResult as Wire;
+    use crate::runtime_client::types::{
+        RuntimeClientResult, RuntimeClientSessionRequest as Request,
+    };
+    let (dir, catalog, initial) = fixture();
+    let view = catalog.clone();
+    let supervisor = LocalSessionSupervisor::new(catalog, state().model);
+    let RuntimeClientResult::SessionDeletion {
+        result: Wire::Preview { preview: first },
+    } = supervisor
+        .handle(Request::DeletePreview {
+            session_id: initial.session_id.to_string(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("preview A")
+    };
+    let source = view.snapshot(&initial.session_id).unwrap();
+    let store = store_for(&view, &source.id, &source.active_conversation_id);
+    child(dir.path(), &store, 2, false);
+    drop(store);
+    // Real public Session-control calls: repeated execute(A) never returns B.
+    for _ in 0..2 {
+        let RuntimeClientResult::SessionDeletion { result } = supervisor
+            .handle(Request::Delete {
+                session_id: source.id.to_string(),
+                expected_target_revision: first.target_revision.clone(),
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("deletion result")
+        };
+        let serialized = serde_json::to_value(result).unwrap();
+        assert_eq!(
+            serialized,
+            serde_json::json!({"status": "stale", "session_id": source.id.as_str()})
+        );
+        assert!(reopen_catalog(dir.path()).document.deletions.is_empty());
+    }
+    let RuntimeClientResult::SessionDeletion {
+        result: Wire::Preview { preview: fresh },
+    } = supervisor
+        .handle(Request::DeletePreview {
+            session_id: source.id.to_string(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("new preview B")
+    };
+    assert_ne!(fresh.target_revision, first.target_revision);
+    assert_eq!(fresh.owned_child_count, first.owned_child_count + 1);
+    assert!(matches!(
+        supervisor
+            .handle(Request::Delete {
+                session_id: source.id.to_string(),
+                expected_target_revision: fresh.target_revision,
+            })
+            .await
+            .unwrap(),
+        RuntimeClientResult::SessionDeletion {
+            result: Wire::Deleted { .. }
+        }
+    ));
+    assert_completed_absent(dir.path(), &source.id);
 }

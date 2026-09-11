@@ -16,8 +16,7 @@
   },
   {
     "status": "stale",
-    "session_id": "session-1",
-    "actual_revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    "session_id": "session-1"
   },
   {
     "status": "blocked",

@@ -466,7 +466,7 @@ fn active_lineage_of(
     Ok((session.id.clone(), node.clone(), session.state.clone()))
 }
 
-pub mod deletion;
+pub(crate) mod deletion;
 
 /// The native durable `SessionCatalog` and graph authority.
 #[derive(Debug, Clone)]
