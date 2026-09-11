@@ -93,6 +93,11 @@ impl SessionDeletionPreflight {
         }
         while let Some((owner, id, parent, database)) = pending.pop() {
             safe_identity(&id)?;
+            if catalog.conversation_is_deleted(&id) {
+                return Err(invalid(
+                    "live ownership references a deleted Conversation identity",
+                ));
+            }
             if all.contains_key(&id) {
                 return Err(invalid("duplicate or cyclic Conversation ownership"));
             }

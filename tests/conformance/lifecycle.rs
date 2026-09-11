@@ -423,6 +423,7 @@ async fn interactive_production_turn_still_builds_over_the_same_composition() {
 async fn active_session_a_executes_while_historical_b_preflight_retains_authority() {
     use rustx::durable::{ConversationStore, SqliteConversationStore};
     use rustx::local_runtime::composition::LocalSessionProduct;
+    use rustx::local_runtime::session::deletion::SessionDeleteResult;
     use rustx::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClientResult};
     let Some(emulator) = ProviderEmulator::start("openai_chat_streamed_turn").await else {
         return;
@@ -535,6 +536,46 @@ async fn active_session_a_executes_while_historical_b_preflight_retains_authorit
             .ownership_revision(),
         &revision,
         "A's user/model/assistant activity does not change B ownership"
+    );
+    let response = endpoint
+        .handle_request_async(RuntimeClientRequest::SessionDeletePreview {
+            id: RequestId::new(3),
+            session_id: b.id.as_str().into(),
+        })
+        .await;
+    let Some(RuntimeClientResult::SessionDeletion {
+        result: SessionDeleteResult::Preview { preview },
+    }) = response.result
+    else {
+        panic!("finite deletion preview");
+    };
+    let response = endpoint
+        .handle_request_async(RuntimeClientRequest::SessionDelete {
+            id: RequestId::new(4),
+            session_id: b.id.as_str().into(),
+            expected_target_revision: preview.target_revision,
+        })
+        .await;
+    assert!(matches!(
+        response.result,
+        Some(RuntimeClientResult::SessionDeletion {
+            result: SessionDeleteResult::Deleted { .. }
+        })
+    ));
+    assert!(!database.exists());
+    assert_eq!(
+        emulator.requests().await.len(),
+        1,
+        "deletion emits no model request"
+    );
+    assert_eq!(product.supervisor().current().await.unwrap().id, a.id);
+    assert!(product.runtime().is_activated());
+    assert!(
+        product
+            .supervisor()
+            .select(b.id.clone(), None)
+            .await
+            .is_err()
     );
     product.runtime().shutdown().await.unwrap();
     emulator.finish().await;

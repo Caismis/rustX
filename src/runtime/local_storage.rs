@@ -138,11 +138,16 @@ impl ConversationAccess {
     /// Missing/unsafe allocations or a destructive owner are rejected.
     pub fn existing(root: &ProductRoot, allocation: &Path) -> io::Result<Self> {
         let path = root.confined(allocation)?;
-        Ok(Self {
+        let access = Self {
             root: root.clone(),
             _lock: lock(directory(&path)?, FlockArg::LockSharedNonblock)?,
             controller: None,
-        })
+        };
+        // Acquire private access BEFORE consulting catalog visibility. A delete
+        // cannot pass fresh preflight while this shared allocation lock exists;
+        // if it committed first, the atomic catalog read rejects residue.
+        crate::local_runtime::session::SessionCatalog::check_allocation_live(root, &path)?;
+        Ok(access)
     }
     pub(crate) fn existing_for_controller(
         controller: Arc<ProductController>,
@@ -159,6 +164,7 @@ impl ConversationAccess {
     pub(crate) fn start(controller: Arc<ProductController>, allocation: &Path) -> io::Result<Self> {
         let path = controller.confined(allocation)?;
         let _mutation = controller.ownership_mutation()?;
+        crate::local_runtime::session::SessionCatalog::check_allocation_live(&controller, &path)?;
         std::fs::create_dir_all(&path)?;
         Self::existing_for_controller(controller, &path)
     }

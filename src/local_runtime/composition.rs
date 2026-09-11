@@ -1879,8 +1879,19 @@ impl LocalSessionProduct {
         } else {
             SessionCatalog::create_unpublished(lifecycle.root(), &state)?
         };
-        catalog.recover_storage(&lifecycle)?;
         catalog.retain_lifecycle(lifecycle.clone());
+        for id in catalog.pending_deletion_ids() {
+            let result = match catalog.recover_delete(&id) {
+                Ok(work) => {
+                    // No catalog borrow or global ownership guard spans removal.
+                    let cleanup = work.run();
+                    catalog.finish_delete(&work.record, cleanup)
+                }
+                Err(result) => result,
+            };
+            tracing::debug!(?result, "Session deletion recovery");
+        }
+        catalog.recover_storage(&lifecycle)?;
         // Startup is not a resume. A launch begins on an empty Session and
         // leaves every persisted Session as history reachable through
         // `/resume`; only an explicit request binds a persisted one. An

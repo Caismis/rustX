@@ -1,3 +1,4 @@
+import type { SessionDeletionRequest, SessionDeletionResponse } from "../../../sdk/runtime-client/src/index.ts";
 /**
  * Runtime Client protocol — the TypeScript mirror of the wire contract.
  *
@@ -73,7 +74,8 @@
 // authorized invocation override may replace a role's tools, Skills, or
 // extensions (Issue #258). It is always present, on live and recovery-projected
 // children alike. There is no v26 decoding and no optional form.
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 27;
+// Version 28: native crash-safe Session deletion control.
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 28;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -1903,6 +1905,7 @@ export interface RuntimeClientProtocolEvent {
 // ---------------------------------------------------------------------------
 
 export type RuntimeClientRequest =
+  | SessionDeletionRequest
   | { method: "initialize"; id: RequestId; protocol_version: number }
   | { method: "submit_inbound"; id: RequestId; content: UserContentBlock[] }
   | { method: "cancel_current_attempt"; id: RequestId }
@@ -2001,6 +2004,9 @@ export type RuntimeClientMethod = RuntimeClientRequest["method"];
 
 /** A request without its id: the connection is the sole id allocator. */
 export type RuntimeClientRequestBody =
+  | Omit<Extract<SessionDeletionRequest, { method: "session_delete_preview" }>, "id">
+  | Omit<Extract<SessionDeletionRequest, { method: "session_delete" }>, "id">
+  | Omit<Extract<SessionDeletionRequest, { method: "session_delete_recover" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "initialize" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "submit_inbound" }>, "id">
   | Omit<
@@ -2044,6 +2050,7 @@ export type RuntimeClientRequestBody =
   | Omit<Extract<RuntimeClientRequest, { method: "shutdown" }>, "id">;
 
 export type RuntimeClientResult =
+  | SessionDeletionResponse
   | {
       type: "initialized";
       attachment_id: string;

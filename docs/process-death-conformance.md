@@ -567,3 +567,10 @@ schema gate coverage.
 The envelope's own `EVENT_SCHEMA_VERSION` is unchanged: adding a
 `RuntimeEvent` variant changes what a journal may contain, not how an envelope
 is framed.
+
+Session deletion's `deletion_process_death_after_commit_and_mid_cleanup_converges_without_discovery`
+uses the real lib-test child process with flushed pipe gates at durable logical
+commit and after one durable cleanup item. Parent kill/reap establishes death;
+restart reads the frozen catalog record, tolerates removed residue and converges
+even when unrelated storage cannot be scanned. See
+[Session deletion lifecycle](session-deletion-lifecycle.md).

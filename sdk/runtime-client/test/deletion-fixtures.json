@@ -1,0 +1,84 @@
+[
+  {
+    "status": "preview",
+    "preview": {
+      "session_id": "session-1",
+      "target_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "scopes": [
+        {
+          "kind": "node",
+          "node_id": "node-1",
+          "conversation_id": "conversation-1"
+        },
+        {
+          "kind": "child",
+          "conversation_id": "child-1",
+          "parent_conversation": "conversation-1"
+        }
+      ],
+      "name": null
+    }
+  },
+  {
+    "status": "deleted",
+    "session_id": "session-1"
+  },
+  {
+    "status": "stale",
+    "session_id": "session-1",
+    "actual_revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  {
+    "status": "blocked",
+    "session_id": "session-1",
+    "reason": {
+      "kind": "in_use"
+    }
+  },
+  {
+    "status": "committed_cleanup_pending",
+    "record": {
+      "session_id": "session-1",
+      "target_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "scopes": [
+        {
+          "kind": "node",
+          "node_id": "node-1",
+          "conversation_id": "conversation-1"
+        },
+        {
+          "kind": "child",
+          "conversation_id": "child-1",
+          "parent_conversation": "conversation-1"
+        }
+      ],
+      "phase": "cleanup_pending"
+    },
+    "detail": null
+  },
+  {
+    "status": "committed_durability_uncertain",
+    "record": {
+      "session_id": "session-1",
+      "target_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "scopes": [
+        {
+          "kind": "node",
+          "node_id": "node-1",
+          "conversation_id": "conversation-1"
+        },
+        {
+          "kind": "child",
+          "conversation_id": "child-1",
+          "parent_conversation": "conversation-1"
+        }
+      ],
+      "phase": "cleanup_pending"
+    },
+    "detail": "directory barrier failed"
+  },
+  {
+    "status": "not_found",
+    "session_id": "unknown"
+  }
+]

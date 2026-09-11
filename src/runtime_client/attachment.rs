@@ -156,7 +156,10 @@ impl RuntimeAttachment {
             RuntimeClientRequest::ApprovalModeSet { mode, .. } => {
                 self.inner.approval_mode_set(mode)
             }
-            RuntimeClientRequest::SessionList { .. }
+            RuntimeClientRequest::SessionDeletePreview { .. }
+            | RuntimeClientRequest::SessionDelete { .. }
+            | RuntimeClientRequest::SessionDeleteRecover { .. }
+            | RuntimeClientRequest::SessionList { .. }
             | RuntimeClientRequest::SessionGet { .. }
             | RuntimeClientRequest::SessionTreeGet { .. }
             | RuntimeClientRequest::SessionName { .. }

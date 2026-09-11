@@ -280,3 +280,13 @@ jobs:
       - name: Test
         working-directory: tui
         run: pnpm test
+
+      - name: Install Runtime Client SDK contract dependencies
+        working-directory: sdk/runtime-client
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate Runtime Client SDK contract
+        working-directory: sdk/runtime-client
+        run: |
+          pnpm test -- --runInBand
+          pnpm exec tsc --noEmit
