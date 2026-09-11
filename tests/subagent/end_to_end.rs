@@ -1179,11 +1179,22 @@ fn normalized_parent_context(body: &str) -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn running_child_inspection_is_execution_independent() {
-    async fn run(mode: RunningChildInspection) -> ExecutionFingerprint {
+    async fn run(mode: RunningChildInspection, same_attempt: bool) -> ExecutionFingerprint {
         let gate = crate::common::HeaderGate::new();
         let gate_for_server = Arc::clone(&gate);
+        let continuation_gate = crate::common::HeaderGate::new();
+        let continuation_for_server = Arc::clone(&continuation_gate);
+        let final_gate = crate::common::HeaderGate::new();
+        let final_for_server = Arc::clone(&final_gate);
         let server = crate::common::FixtureServer::start_with_body(move |_attempt, _head, body| {
-            hard_parent_death_route(body, &gate_for_server)
+            let reply = hard_parent_death_route(body, &gate_for_server);
+            match request_kind(body) {
+                "parent-continuation" => {
+                    reply.with_header_gate(Arc::clone(&continuation_for_server))
+                }
+                "parent-final" => reply.with_header_gate(Arc::clone(&final_for_server)),
+                _ => reply,
+            }
         })
         .await;
         let root = tempfile::tempdir().expect("temp root");
@@ -1421,9 +1432,63 @@ async fn running_child_inspection_is_execution_independent() {
             .expect("the delegating parent attempt exists")
             .attempt_id
             .clone();
-        gate.release();
-        // A settled *previous* parent attempt is not proof that the new child
-        // inbound was processed. Await the new attempt's native terminal event.
+        // Force both legal mailbox frontiers. Provider-request arrival alone
+        // does not prove the delegating attempt has settled: a pending child
+        // answer can be adopted by its next safe-boundary drain.
+        if same_attempt {
+            gate.release();
+        } else {
+            continuation_gate.release();
+        }
+        tokio::time::timeout(LIVENESS, async {
+            loop {
+                let response = parent.request(|id| RuntimeClientRequest::SnapshotGet {
+                    id: rustx::runtime_client::RequestId::new(id),
+                }).await;
+                let Some(RuntimeClientResult::Snapshot { snapshot, .. }) = response.result else {
+                    panic!("snapshot at the controlled mailbox frontier: {response:?}");
+                };
+                let ready = if same_attempt {
+                    snapshot.subagents.iter().any(|child|
+                        child.child_conversation_id == child_conversation_id
+                        && child.state == rustx::runtime::subagent::SubagentState::Succeeded)
+                } else {
+                    snapshot.attempt.as_ref().is_some_and(|attempt|
+                        attempt.attempt_id == preceding_attempt && matches!(attempt.phase,
+                            rustx::runtime_client::snapshot::RuntimeClientAttemptPhase::Settled {
+                                outcome: rustx::runtime_client::event::RuntimeClientOutcome::Completed { .. }
+                            }))
+                };
+                if ready { break; }
+            }
+        }).await.expect("the controlled mailbox frontier is reached");
+        if same_attempt {
+            continuation_gate.release();
+        } else {
+            gate.release();
+        }
+        tokio::time::timeout(LIVENESS, final_gate.wait_entered())
+            .await
+            .expect("the child answer reaches the parent's final provider request");
+        // The final response is held, so this snapshot names the actual
+        // answering attempt before its terminal event can race the reader.
+        let response = parent
+            .request(|id| RuntimeClientRequest::SnapshotGet {
+                id: rustx::runtime_client::RequestId::new(id),
+            })
+            .await;
+        let Some(RuntimeClientResult::Snapshot { snapshot, .. }) = response.result else {
+            panic!("snapshot at final answer gate: {response:?}");
+        };
+        let final_attempt = snapshot.attempt.expect("answering attempt").attempt_id;
+        assert_eq!(
+            final_attempt == preceding_attempt,
+            same_attempt,
+            "the gates exercise both same-attempt drain and fresh-attempt admission"
+        );
+        final_gate.release();
+        // Neither an earlier settled attempt nor an assumed new identity is
+        // completion proof. Await this final request's native terminal event.
         tokio::time::timeout(LIVENESS, async {
             loop {
                 let mut record = String::new();
@@ -1433,7 +1498,7 @@ async fn running_child_inspection_is_execution_independent() {
                     rustx::runtime_client::event::RuntimeClientEvent::AttemptSettled {
                         attempt_id,
                         outcome: rustx::runtime_client::event::RuntimeClientOutcome::Completed { .. }
-                    } if attempt_id != preceding_attempt
+                    } if attempt_id == final_attempt
                 ) { break; }
             }
         }).await.expect("the child-answer attempt settles through its event channel");
@@ -1602,35 +1667,44 @@ async fn running_child_inspection_is_execution_independent() {
         fingerprint
     }
 
-    let without_inspector = Box::pin(run(RunningChildInspection::None)).await;
-    let inspector_attached = Box::pin(run(RunningChildInspection::KeepAttached)).await;
-    let attach_then_detach = Box::pin(run(RunningChildInspection::AttachThenDetach)).await;
-    let durable_after_settlement = Box::pin(run(RunningChildInspection::AfterSettlement)).await;
-    let endpoint_unavailable = Box::pin(run(RunningChildInspection::EndpointUnavailable)).await;
+    for same_attempt in [true, false] {
+        let without_inspector = Box::pin(run(RunningChildInspection::None, same_attempt)).await;
+        let inspector_attached =
+            Box::pin(run(RunningChildInspection::KeepAttached, same_attempt)).await;
+        let attach_then_detach =
+            Box::pin(run(RunningChildInspection::AttachThenDetach, same_attempt)).await;
+        let durable_after_settlement =
+            Box::pin(run(RunningChildInspection::AfterSettlement, same_attempt)).await;
+        let endpoint_unavailable = Box::pin(run(
+            RunningChildInspection::EndpointUnavailable,
+            same_attempt,
+        ))
+        .await;
 
-    assert_eq!(without_inspector, inspector_attached);
-    assert_eq!(without_inspector, attach_then_detach);
-    assert_eq!(without_inspector, durable_after_settlement);
-    assert_eq!(
-        without_inspector, endpoint_unavailable,
-        "an unavailable observation endpoint changes no semantic execution"
-    );
-    assert_eq!(without_inspector.provider_attempts, 4);
-    assert_eq!(
-        without_inspector.request_kinds,
-        vec![
-            "child-request",
-            "parent-continuation",
-            "parent-delegation",
-            "parent-final"
-        ]
-    );
-    assert_eq!(
-        without_inspector.child_state,
-        rustx::runtime::subagent::SubagentState::Succeeded
-    );
-    assert_eq!(without_inspector.child_answer_count, 1);
-    assert!(without_inspector.parent_attempt_completed);
+        assert_eq!(without_inspector, inspector_attached);
+        assert_eq!(without_inspector, attach_then_detach);
+        assert_eq!(without_inspector, durable_after_settlement);
+        assert_eq!(
+            without_inspector, endpoint_unavailable,
+            "an unavailable observation endpoint changes no semantic execution"
+        );
+        assert_eq!(without_inspector.provider_attempts, 4);
+        assert_eq!(
+            without_inspector.request_kinds,
+            vec![
+                "child-request",
+                "parent-continuation",
+                "parent-delegation",
+                "parent-final"
+            ]
+        );
+        assert_eq!(
+            without_inspector.child_state,
+            rustx::runtime::subagent::SubagentState::Succeeded
+        );
+        assert_eq!(without_inspector.child_answer_count, 1);
+        assert!(without_inspector.parent_attempt_completed);
+    }
 }
 
 /// A real parent process is killed with SIGKILL while its real child is
