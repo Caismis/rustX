@@ -1,4 +1,5 @@
 /** Attachment-owned observation of submitted native Session management requests. */
+import { ConnectionClosedError, RuntimeRequestError } from "../runtime/connection.ts";
 import type { RuntimeClientAttachment } from "../runtime/attachment.ts";
 import type { SessionDeletePreview, SessionDeleteResult, SessionSummaryView } from "../protocol/types.ts";
 
@@ -10,9 +11,10 @@ export type SessionListReconciliation =
   | { kind: "pending" }
   | { kind: "ready"; query: string; page: ReconciledSessions }
   | { kind: "failed" };
-export type DeletionOutcome = SessionDeleteResult | { status: "unknown" };
+export type DeletionOutcome = SessionDeleteResult | { status: "unknown" } | { status: "precommit_failure" };
 type State =
   | { kind: "idle" }
+  | { kind: "needs_fresh_preview"; sessionId: string }
   | { kind: "pending"; operation: "execute" | "recover"; sessionId: string }
   | { kind: "result"; outcome: DeletionOutcome; sessionId: string };
 
@@ -47,7 +49,7 @@ export class SessionDeletionWorkflow {
 
   /** Synchronous single-submit frontier; no popup or presentation lease survives here. */
   execute(preview: Readonly<SessionDeletePreview>, context: DeletionContext): void {
-    if (!this.#live() || this.#state.kind === "pending" || this.canRecover()) return;
+    if (!this.#live() || this.#state.kind === "pending" || this.#state.kind === "needs_fresh_preview" || this.canRecover()) return;
     this.#context = { ...context, ids: [...context.ids] };
     void this.#submit({ operation: "execute", sessionId: preview.session_id, revision: preview.target_revision });
   }
@@ -67,13 +69,11 @@ export class SessionDeletionWorkflow {
     this.#attention = false;
     if (!this.canRecover()) this.#state = { kind: "idle" };
   }
-  /** A stale result hands only a new preview obligation back to presentation. */
-  takeStale(): string | undefined {
-    if (this.#state.kind !== "result" || this.#state.outcome.status !== "stale") return;
-    const id = this.#state.sessionId;
+  /** A disposable preview attempt does not consume this attachment-owned obligation. */
+  adoptFreshPreview(sessionId: string): void {
+    if (!this.#live() || this.#state.kind !== "needs_fresh_preview" || this.#state.sessionId !== sessionId) return;
     this.#state = { kind: "idle" };
     this.#attention = false;
-    return id;
   }
   async #submit(request: { operation: "execute"; sessionId: string; revision: string } | { operation: "recover"; sessionId: string }): Promise<void> {
     const { operation, sessionId } = request;
@@ -86,13 +86,22 @@ export class SessionDeletionWorkflow {
       outcome = request.operation === "execute"
         ? await this.#client.deleteSession(sessionId, request.revision)
         : await this.#client.recoverSessionDeletion(sessionId);
-    } catch { outcome = { status: "unknown" }; }
+    } catch (error) {
+      if (error instanceof ConnectionClosedError) { this.terminate(); return; }
+      // Native execute maps ordinary deletion errors to this pre-commit category.
+      // Recovery has no such mapping; do not infer its commit status from text.
+      outcome = operation === "execute" && error instanceof RuntimeRequestError && error.error.type === "session_failure"
+        ? { status: "precommit_failure" }
+        : { status: "unknown" };
+    }
     // Only concrete attachment/transport termination ends observation. A popup
     // replacement or a same-attachment snapshot is deliberately irrelevant.
     if (!this.#live()) return;
     await this.#reconcile();
     if (!this.#live()) return;
-    this.#state = { kind: "result", outcome, sessionId };
+    this.#state = outcome.status === "stale"
+      ? { kind: "needs_fresh_preview", sessionId }
+      : { kind: "result", outcome, sessionId };
     this.#attention = outcome.status !== "deleted";
     if (outcome.status === "deleted") this.#feedback("Session permanently deleted.");
     if (outcome.status === "stale") this.#feedback("Session changed. Review a fresh preview and confirm again.");

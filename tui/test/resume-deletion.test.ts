@@ -1,3 +1,4 @@
+import { ConnectionClosedError, RuntimeRequestError } from "../src/runtime/connection.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SessionDeletionWorkflow, type DeletionClient } from "../src/ui/session-deletion-workflow.ts";
@@ -94,11 +95,11 @@ test("12–13,20: no optimistic removal; authoritative rebuild selects next, pre
     assert.match(h.feedback.join(), /permanently deleted/);
   }
 });
-test("12,16: rejected execute reconciles native rows and never calls execute again", async () => {
+test("16: unknown execute outcome reconciles native rows and never replays execute", async () => {
   for (const remains of [true, false]) {
     const h = harness(); await h.open(); confirm(h.view);
     if (!remains) h.rows([row("a"), row("c")]);
-    h.execution.reject(new Error("response lost or pre-commit error")); await turn();
+    h.execution.reject(new Error("response lost without a semantic result")); await turn();
     assert.match(h.text(), /outcome unknown/); assert.doesNotMatch(h.text(), /delete failed/);
     assert.equal(h.view.selector.visibleSessions().some((r) => r.id === "b"), remains);
     assert.equal(h.executes.length, 1); assert.deepEqual(h.lists, [["", 0]]);
@@ -416,4 +417,50 @@ test("recovery with unavailable visibility uses the current query without fabric
   assert.deepEqual(h.lists.slice(start), [["new", 0]]);
   assert.deepEqual(replacement.selector.visibleSessions().map((r) => r.id), ["new-A"]);
   replacement.dispose();
+});
+
+test("12: typed precommit failure reconciles the target without unknown or recovery authority", async () => {
+  const h = harness(); await h.open(); confirm(h.view);
+  h.execution.reject(new RuntimeRequestError({ type: "session_failure", message: "Session deletion failed before logical commit." })); await turn();
+  assert.deepEqual(h.workflow.state, { kind: "result", sessionId: "b", outcome: { status: "precommit_failure" } });
+  assert.deepEqual(h.lists, [["", 0]]); assert.equal(h.executes.length, 1);
+  assert.equal(h.workflow.canRecover(), false);
+  assert.match(h.text(), /failed before logical commit/);
+  assert.doesNotMatch(h.text(), /outcome unknown|durability is uncertain|has been removed|permanently deleted/);
+  assert.deepEqual(h.view.selector.visibleSessions().map((r) => r.id), ["a", "b", "c"]);
+  h.view.handleInput("r"); h.workflow.recover(h.view.reconciliationContext());
+  assert.deepEqual(h.recovers, []);
+  h.view.handleInput(esc); h.setPreview(); h.view.handleInput(del);
+  assert.deepEqual(h.previews, ["b", "b"]); assert.equal(h.executes.length, 1);
+  h.dispose();
+});
+
+test("stale obligation is acknowledged only by adopted confirmation or explicit cancellation", async () => {
+  const h = harness(); await h.open(); confirm(h.view); h.setPreview();
+  h.execution.resolve({ status: "stale", session_id: "b" }); await turn();
+  assert.deepEqual(h.workflow.state, { kind: "needs_fresh_preview", sessionId: "b" });
+  assert.equal(h.workflow.needsPresentation, true);
+  h.previewResponse.resolve(preview("b", "rev2")); await turn();
+  assert.match(h.text(), /❯ Cancel/); assert.deepEqual(h.workflow.state, { kind: "idle" });
+  assert.equal(h.executes.length, 1);
+  h.setExecution(); confirm(h.view); h.setPreview();
+  h.execution.resolve({ status: "stale", session_id: "b" }); await turn();
+  assert.equal(h.workflow.state.kind, "needs_fresh_preview");
+  h.view.handleInput(esc);
+  assert.deepEqual(h.workflow.state, { kind: "idle" }); assert.equal(h.workflow.needsPresentation, false);
+  h.previewResponse.resolve(preview("b", "rev3")); await turn();
+  assert.doesNotMatch(h.text(), /Permanently delete/); assert.equal(h.executes.length, 2);
+  h.dispose();
+});
+
+test("typed terminal rejection ends observation without unknown result or recovery replay", async () => {
+  const h = harness(); await h.open(); confirm(h.view);
+  h.execution.reject(new ConnectionClosedError("process_exit", "transport ended")); await turn();
+  assert.equal(h.workflow.needsPresentation, false);
+  assert.equal(h.workflow.canRecover(), false);
+  assert.notEqual(h.workflow.state.kind, "result");
+  assert.deepEqual(h.lists, []); assert.deepEqual(h.feedback, []);
+  h.workflow.recover(h.view.reconciliationContext());
+  assert.deepEqual(h.recovers, []); assert.equal(h.executes.length, 1);
+  h.dispose();
 });

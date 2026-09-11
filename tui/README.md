@@ -907,3 +907,14 @@ model and resources untouched and causes no model request.
 
 The TUI only confirms SessionId/revision; Rust owns scope, blockers, commit and
 cleanup. See [the native Session deletion lifecycle](../docs/session-deletion-lifecycle.md).
+
+A stale execution leaves an attachment-owned fresh-preview obligation. Replacing
+its pending preview with HITL or a snapshot discards that preview, but the next
+available deletion surface requests another. The obligation is consumed only
+when a live surface installs a new confirmation, or when the user explicitly
+cancels the stale workflow. Execution still requires a new explicit confirmation.
+
+A typed native Session failure from execute means deletion failed before logical
+commit. The TUI reloads native visibility and offers no cleanup recovery for that
+failure; another attempt starts with a new preview. This differs from an unknown
+client outcome. Terminal transport ends observation without replay or migration.

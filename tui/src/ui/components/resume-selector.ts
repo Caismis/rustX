@@ -33,6 +33,7 @@ export class ResumeSelector implements PopupContent {
   #nextOffset: number | undefined;
   // Search/reconciliation invalidates older query AND continuation responses.
   #requestSerial = 0;
+  #freshPreviewObligation: Extract<SessionDeletionWorkflow["state"], { kind: "needs_fresh_preview" }> | undefined;
   #workflowSerial = 0;
   #listBusy = false;
   #bodyHeight = 24;
@@ -157,11 +158,16 @@ export class ResumeSelector implements PopupContent {
     }
     const state = workflow.state;
     if (state.kind === "pending") this.#state = { kind: "pending", operation: state.operation };
-    else if (state.kind === "result") {
-      if (state.outcome.status === "stale") {
-        // A new preview belongs to this surface, and disappears with it.
-        const id = workflow.takeStale();
-        if (id) void this.#preview(id);
+    else if (state.kind === "needs_fresh_preview") {
+      // Each surface attempts an obligation once. Disposing it leaves the owner
+      // intact so the next surface can attempt a new authoritative preview.
+      if (this.#freshPreviewObligation !== state) {
+        this.#freshPreviewObligation = state;
+        void this.#preview(state.sessionId);
+      }
+    } else if (state.kind === "result") {
+      if (state.outcome.status === "precommit_failure") {
+        this.#state = { kind: "notice", text: "Session deletion failed before logical commit. Review a new preview to try again." };
       } else if (state.outcome.status === "unknown") {
         this.#state = { kind: "notice", recoveryId: state.sessionId, text: "Deletion outcome unknown. Rechecking native Session visibility; this is not proof of failure. Press R for native recovery." };
       } else void this.#result(state.outcome, state.sessionId);
@@ -196,6 +202,8 @@ export class ResumeSelector implements PopupContent {
           onConfirm: () => { this.#workflow.execute(preview, { ...this.#anchor, query: this.#query }); },
         });
         this.#state = { kind: "confirm", preview, view };
+        // This synchronous installation follows the live/serial check in #preview.
+        this.#workflow.adoptFreshPreview(preview.session_id);
         break;
       }
       case "stale":

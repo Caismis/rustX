@@ -1670,7 +1670,7 @@ async function deletionAppHarness(overlapInitial = false) {
   };
   let preview = deferred<SessionDeleteResult>();
   const previews: string[] = [];
-  const execution = deferred<SessionDeleteResult>();
+  let execution = deferred<SessionDeleteResult>();
   const recovery = deferred<SessionDeleteResult>();
   const lateList = deferred<{ sessions: SessionSummaryView[] }>();
   const lists: Array<[string | undefined, number | undefined]> = [];
@@ -1708,13 +1708,16 @@ async function deletionAppHarness(overlapInitial = false) {
   if (overlapInitial) await input("/resume\r");
   await input("\x04");
   return {
-    session, state, execution, recovery, lists, executes, recovers, responses, previews, lateList,
+    session, state, recovery, lists, executes, recovers, responses, previews, lateList,
     cancelled: () => cancelled,
     surface: () => surfaces.findLast((surface) => surface.visible),
     text: () => surfaces.findLast((surface) => surface.visible)?.content.render(120).map(plainText).join("\n") ?? "",
     absent: () => { rows = []; },
     setList: (response: typeof listResponse) => { listResponse = response; },
     input,
+    get execution() { return execution; },
+    get heldPreview() { return preview; },
+    resetExecution: () => { execution = deferred<SessionDeleteResult>(); },
     resetPreview: () => { preview = deferred<SessionDeleteResult>(); },
     resolvePreview: async (revision = "revision") => {
       preview.resolve({ status: "preview", preview: { session_id: "old", name: "historical-target", target_revision: revision, owned_node_count: 1, owned_conversation_count: 1, owned_child_count: 0 } });
@@ -1995,3 +1998,53 @@ it("reopening resume retains the current query while recovery retains the origin
     assert.doesNotMatch(h.text(), /old-A|historical-target/); assert.equal(h.cancelled(), 0);
   } finally { await h.finish(); }
 });
+
+for (const replacement of ["HITL", "snapshot"] as const) {
+  it(`stale obligation survives ${replacement} replacing an already-pending fresh preview`, async () => {
+    const h = await deletionAppHarness();
+    try {
+      await h.resolvePreview(); await h.input("\t\r"); h.resetPreview();
+      h.execution.resolve({ status: "stale", session_id: "old" }); await waitForApplicationContinuation();
+      assert.deepEqual(h.previews, ["old", "old"]);
+      assert.match(h.text(), /Waiting for native preview/);
+      const discardedPreview = h.heldPreview, discardedSurface = h.surface();
+      h.resetPreview(); h.resetExecution();
+      if (replacement === "HITL") h.takeover(approvalInteraction()); else h.resync();
+      assert.equal(discardedSurface?.visible, false);
+      discardedPreview.resolve({ status: "preview", preview: { session_id: "old", name: "discarded-preview", target_revision: "discarded-revision", owned_node_count: 1, owned_conversation_count: 1, owned_child_count: 0 } });
+      await waitForApplicationContinuation();
+      assert.doesNotMatch(h.text(), /discarded-preview|Permanently delete Session/);
+      assert.equal(h.executes.length, 1);
+      if (replacement === "HITL") {
+        assert.match(h.text(), /Deny/); assert.deepEqual(h.previews, ["old", "old"]);
+        await h.input("\x1b[27u");
+      }
+      assert.deepEqual(h.previews, ["old", "old", "old"]);
+      assert.match(h.text(), /Waiting for native preview/);
+      await h.resolvePreview("rev2");
+      assert.match(h.text(), /❯ Cancel/); assert.equal(h.executes.length, 1);
+      await h.input("\t\r\r\x04");
+      assert.deepEqual(h.executes, [["old", "revision"], ["old", "rev2"]]);
+      assert.equal(h.cancelled(), 0); assert.deepEqual(h.responses, []);
+    } finally { await h.finish(); }
+  });
+
+  it(`known precommit failure after ${replacement} stays non-recoverable`, async () => {
+    const h = await deletionAppHarness();
+    try {
+      await h.resolvePreview(); await h.input("\t\r");
+      if (replacement === "HITL") h.takeover(approvalInteraction()); else h.resync();
+      h.execution.reject(new RuntimeRequestError({ type: "session_failure", message: "Session deletion failed before logical commit." }));
+      await waitForApplicationContinuation();
+      assert.deepEqual(h.lists, [[undefined, 0], ["", 0]]);
+      if (replacement === "HITL") { assert.match(h.text(), /Deny/); await h.input("\x1b[27u"); }
+      assert.match(h.text(), /failed before logical commit/);
+      assert.doesNotMatch(h.text(), /outcome unknown|durability is uncertain|R retry/);
+      await h.input("rr"); assert.deepEqual(h.recovers, []);
+      await h.input("\x1b[27u"); assert.match(h.text(), /historical-target/);
+      h.resetPreview(); await h.input("\x04");
+      assert.deepEqual(h.previews, ["old", "old"]); assert.equal(h.executes.length, 1);
+      assert.equal(h.cancelled(), 0); assert.deepEqual(h.responses, []);
+    } finally { await h.finish(); }
+  });
+}
