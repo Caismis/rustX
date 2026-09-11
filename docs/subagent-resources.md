@@ -595,3 +595,10 @@ without a second absolute runtime-root authority or a new profile-digest field.
 A Workflow child borrowing a Workflow-owned workspace still owns its child
 Conversation but adds no independent physical workspace blocker. Session deletion
 revisions project resource ownership and exclude capability-profile metadata.
+
+Session deletion freezes child ownership into catalog scope identities before
+any cleanup. After durable logical commit, the same ConversationAccess admission
+rejects child inspection or restored private allocation even while files remain.
+Cleanup removes the exact child allocation and identity-derived root-level routing
+socket; retained workspace resources still block preflight and require explicit
+disposal. See [Session deletion lifecycle](session-deletion-lifecycle.md).

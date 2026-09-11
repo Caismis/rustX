@@ -9324,3 +9324,17 @@ future reconnect admission but preserves admitted leases and terminal ownership.
 Every admitted connection generation reaches the same service constructor,
 which disables rmcp response caching before semantic operations (PR #244).
 See [the complete source contract](source-activation.md).
+
+### Crash-safe Session deletion control
+
+Protocol 28 routes finite deletion preview, revision-bound execution and explicit
+recovery through LocalSessionSupervisor. Catalog schema 7 owns both live membership
+and pending frozen deletion records in one generation-checked atomic publication.
+Completed cleanup records are durably removed; native high-water marks prevent
+identity reuse independently. Runtime Client owns bounded deletion DTOs mapped
+explicitly by the supervisor. Confirmed parent-directory
+durability precedes blocking cleanup outside the catalog mutex; startup reconciles
+pending work before composing any live Conversation. ConversationAccess consults
+this same authority, so residual private files cannot revive deleted identities.
+See [Session deletion lifecycle](session-deletion-lifecycle.md) for the state machine,
+visibility/durability distinction and deterministic crash/concurrency evidence.

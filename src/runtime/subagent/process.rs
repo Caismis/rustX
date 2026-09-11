@@ -241,6 +241,13 @@ impl PhysicalChildRuntimeRoot {
                 });
             }
         }
+        crate::local_runtime::session::SessionCatalog::check_allocation_live(
+            product,
+            &semantic_root,
+        )
+        .map_err(|error| SpawnError::WorkspaceSetup {
+            detail: error.to_string(),
+        })?;
         std::fs::create_dir_all(&semantic_root).map_err(|error| SpawnError::WorkspaceSetup {
             detail: format!(
                 "create semantic child runtime grouping {}: {error}",

@@ -1022,6 +1022,7 @@ fn cfg235_all_example_layers_use_real_resolver_and_workflow_compiler() {
     }
 }
 
+#[cfg(feature = "mcp-fixture")]
 #[tokio::test]
 async fn cfg235_probe_verifies_mcp_without_business_calls_and_respects_inert_sources() {
     use super::probes::{ProbeState, execute, plan};
@@ -1110,6 +1111,7 @@ fn cfg235_diagnostics_keep_source_field_classification_and_correction() {
     assert!(report.diagnostics[0].column.is_some());
 }
 
+#[cfg(feature = "mcp-fixture")]
 #[tokio::test]
 async fn cfg235_probe_stdio_timeout_and_cancel_reap_owned_process() {
     use super::probes::{ProbeState, execute, plan};
@@ -1177,6 +1179,7 @@ async fn cfg235_probe_stdio_timeout_and_cancel_reap_owned_process() {
     }
 }
 
+#[cfg(feature = "mcp-fixture")]
 #[tokio::test]
 async fn cfg235_probe_close_is_awaited_and_failed_close_is_not_verified() {
     use super::probes::{ProbeState, execute, plan};
@@ -1357,6 +1360,7 @@ async fn cfg235_preparation_requires_authorization_and_uses_existing_python_owne
     }
 }
 
+#[cfg(feature = "mcp-fixture")]
 #[tokio::test]
 async fn cfg235_probe_credential_use_and_failures_never_leak_values() {
     use crate::tools::mcp::fixture::streamable_http::{HttpFixture, HttpFixtureControl};

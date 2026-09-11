@@ -335,3 +335,13 @@ A v32 database is rejected, without migration or compatibility decoding.
 Invocation overrides affect tools, skills, and extensions, never ProductRoot,
 workspace borrowing, or disposal ownership. Capability-profile metadata, including
 `definition_digest` and `profile_digest`, is excluded from deletion revisions.
+
+## SESSION-DELETE-02 lifecycle extension
+
+The ownership/preflight protocol above now feeds schema 7's atomic logical
+commit and frozen cleanup record. Preview releases all guards before confirmation;
+execute reacquires them. Conversation admission checks catalog deletion authority
+after acquiring its allocation lock. Cleanup begins only after file/parent-directory
+durability and runs outside the root freeze and supervisor catalog mutex.
+See [session-deletion-lifecycle.md](session-deletion-lifecycle.md) for commit points,
+uncertainty, recovery, allocator monotonicity, catalog generations, bounded public protocol 28 and test mapping.

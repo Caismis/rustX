@@ -113,6 +113,74 @@ impl LocalSessionSupervisor {
         self.state.lock().await.catalog.deletion_preflight(id)
     }
 
+    /// Preview releases every guard before returning to the caller.
+    pub(crate) async fn delete_preview(
+        &self,
+        id: &SessionId,
+    ) -> super::session::deletion::SessionDeleteResult {
+        self.state.lock().await.catalog.delete_preview(id)
+    }
+
+    /// Commit under fresh exclusion, then run blocking cleanup outside the
+    /// catalog mutex. Cancellation leaves the committed work recoverable.
+    /// # Errors
+    /// Only failures before logical visibility are ordinary Session errors.
+    pub(crate) async fn delete_session(
+        &self,
+        id: &SessionId,
+        revision: &str,
+    ) -> Result<super::session::deletion::SessionDeleteResult, SessionError> {
+        let work = {
+            let mut state = self.state.lock().await;
+            match state.catalog.commit_delete(id, revision)? {
+                Ok(work) => work,
+                Err(result) => return Ok(result),
+            }
+        };
+        Ok(self.clean_deletion(work).await)
+    }
+
+    /// Explicit recovery boundary; retries the persisted record without discovery.
+    pub(crate) async fn recover_deletion(
+        &self,
+        id: &SessionId,
+    ) -> super::session::deletion::SessionDeleteResult {
+        let work = {
+            let mut state = self.state.lock().await;
+            match state.catalog.recover_delete(id) {
+                Ok(work) => work,
+                Err(result) => return result,
+            }
+        };
+        self.clean_deletion(work).await
+    }
+
+    async fn clean_deletion(
+        &self,
+        work: super::session::deletion::CleanupWork,
+    ) -> super::session::deletion::SessionDeleteResult {
+        let fallback = work.record.clone();
+        match tokio::task::spawn_blocking(move || {
+            let result = work.run();
+            (work, result)
+        })
+        .await
+        {
+            Ok((work, result)) => self
+                .state
+                .lock()
+                .await
+                .catalog
+                .finish_delete(&work.record, result),
+            Err(error) => self
+                .state
+                .lock()
+                .await
+                .catalog
+                .finish_delete(&fallback, Err(std::io::Error::other(error))),
+        }
+    }
+
     /// Creates a supervisor under the product composition's retained OS writer
     /// guard. This is not a public unguarded storage-controller constructor.
     /// The active runtime
@@ -724,6 +792,35 @@ impl RuntimeClientSessionControl for LocalSessionSupervisor {
         let supervisor = self.clone();
         Box::pin(async move {
             let result = match request {
+                RuntimeClientSessionRequest::DeletePreview { session_id } => {
+                    RuntimeClientResult::SessionDeletion {
+                        result: project_session_deletion(
+                            supervisor.delete_preview(&SessionId::new(session_id)).await,
+                        ),
+                    }
+                }
+                RuntimeClientSessionRequest::Delete {
+                    session_id,
+                    expected_target_revision,
+                } => RuntimeClientResult::SessionDeletion {
+                    result: project_session_deletion(
+                        supervisor
+                            .delete_session(&SessionId::new(session_id), &expected_target_revision)
+                            .await
+                            .map_err(|_| RuntimeClientError::SessionFailure {
+                                message: "Session deletion failed before logical commit.".into(),
+                            })?,
+                    ),
+                },
+                RuntimeClientSessionRequest::DeleteRecover { session_id } => {
+                    RuntimeClientResult::SessionDeletion {
+                        result: project_session_deletion(
+                            supervisor
+                                .recover_deletion(&SessionId::new(session_id))
+                                .await,
+                        ),
+                    }
+                }
                 RuntimeClientSessionRequest::List {
                     query,
                     offset,
@@ -947,5 +1044,98 @@ fn session_error(error: &SessionSupervisorError) -> RuntimeClientError {
         _ => RuntimeClientError::SessionFailure {
             message: error.to_string(),
         },
+    }
+}
+
+#[cfg(test)]
+pub(crate) async fn assert_deletion_cleanup_releases_catalog(
+    catalog: SessionCatalog,
+    mut work: super::session::deletion::CleanupWork,
+    model: SessionModelConfig,
+) {
+    let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+    let release = gate.arm_scoped();
+    work.cleanup_gate = Some(gate.clone());
+    let supervisor = LocalSessionSupervisor::new(catalog, model);
+    let worker = supervisor.clone();
+    let task = tokio::spawn(async move { worker.clean_deletion(work).await });
+    tokio::task::spawn_blocking(move || gate.wait_entered())
+        .await
+        .unwrap();
+    assert!(!task.is_finished(), "Deleted cannot precede cleanup");
+    {
+        let state = supervisor
+            .state
+            .try_lock()
+            .expect("cleanup released catalog mutex");
+        assert!(state.catalog.active_snapshot().is_ok());
+    }
+    drop(release);
+    assert!(matches!(
+        task.await.unwrap(),
+        super::session::deletion::SessionDeleteResult::Deleted { .. }
+    ));
+}
+
+/// The Session control owner projects internal outcomes explicitly. Neither
+/// recovery capabilities nor storage error strings cross the protocol boundary.
+pub(crate) fn project_session_deletion(
+    result: super::session::deletion::SessionDeleteResult,
+) -> crate::runtime_client::session_deletion::RuntimeClientSessionDeletionResult {
+    use super::session::deletion::{
+        DeletionBlocker as Blocker, DeletionScope, SessionDeleteResult as Native,
+    };
+    use crate::runtime_client::session_deletion::{
+        RuntimeClientSessionDeletePreview, RuntimeClientSessionDeletionBlocker as Reason,
+        RuntimeClientSessionDeletionResult as Wire,
+    };
+    match result {
+        Native::Preview { preview } => {
+            let nodes = preview
+                .scopes
+                .iter()
+                .filter(|s| matches!(s, DeletionScope::Node { .. }))
+                .count() as u64;
+            let total = preview.scopes.len() as u64;
+            Wire::Preview {
+                preview: RuntimeClientSessionDeletePreview {
+                    session_id: preview.session_id.to_string(),
+                    name: preview.name.map(|name| name.chars().take(256).collect()),
+                    target_revision: preview.target_revision,
+                    owned_node_count: nodes,
+                    owned_conversation_count: total,
+                    owned_child_count: total - nodes,
+                },
+            }
+        }
+        Native::Deleted { session_id } => Wire::Deleted {
+            session_id: session_id.to_string(),
+        },
+        Native::NotFound { session_id } => Wire::NotFound {
+            session_id: session_id.to_string(),
+        },
+        // A stale execution invalidates confirmation, never mints its replacement.
+        Native::Stale { session_id, .. } => Wire::Stale {
+            session_id: session_id.to_string(),
+        },
+        Native::Blocked { session_id, reason } => Wire::Blocked {
+            session_id: session_id.to_string(),
+            reason: match reason {
+                Blocker::CurrentSession => Reason::CurrentSession,
+                Blocker::InUse => Reason::InUse,
+                Blocker::Workspace { resources } => Reason::Workspace {
+                    resource_count: resources.len() as u64,
+                },
+                Blocker::InvalidOwnership { .. } => Reason::InvalidOwnership,
+            },
+        },
+        Native::CommittedCleanupPending { record, .. } => Wire::CommittedCleanupPending {
+            session_id: record.session_id.to_string(),
+        },
+        Native::CommittedDurabilityUncertain { session_id, .. } => {
+            Wire::CommittedDurabilityUncertain {
+                session_id: session_id.to_string(),
+            }
+        }
     }
 }

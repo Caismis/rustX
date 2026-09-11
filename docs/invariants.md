@@ -8235,3 +8235,16 @@ An Agent compares native admitted and post-node candidate identities. A -> A emi
 
 The [source activation contract](source-activation.md) specifies configuration,
 ownership frontiers, diagnostics, and native-only startup.
+
+### Session deletion durability
+
+Session deletion atomically removes live catalog membership and records the frozen
+owned scopes. No source-of-truth cleanup starts before confirmed durable metadata
+publication. Rename visibility without a proven directory barrier returns typed
+uncertainty and admits no cleanup. Frozen records alone authorize restart cleanup;
+recovery never discovers a new ownership set or activates the deleted Conversation.
+Cleanup holds neither the root ownership freeze nor supervisor catalog mutex.
+Completed cleanup records are durably removed. Native allocator high-water marks
+prevent generated identity reuse; catalog generation compare-and-publish prevents
+stale writers from replacing newer state. Runtime Client receives bounded DTOs,
+never the internal frozen workset. See [Session deletion lifecycle](session-deletion-lifecycle.md).

@@ -1,4 +1,5 @@
 mod borrowed_workspace;
+mod lifecycle;
 mod workflow_disposal;
 
 use super::*;

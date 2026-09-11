@@ -161,6 +161,15 @@ pub struct SessionUserMessageBoundaryView {
 /// the Rust-owned `LocalSessionSupervisor`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeClientSessionRequest {
+    /// Finite native deletion preview.
+    DeletePreview { session_id: String },
+    /// Execute against a native semantic revision.
+    Delete {
+        session_id: String,
+        expected_target_revision: String,
+    },
+    /// Retry the existing frozen record only.
+    DeleteRecover { session_id: String },
     /// Read one bounded, searchable persisted-session page.
     List {
         /// Optional case-insensitive query over Session id/name.
@@ -315,7 +324,8 @@ pub enum RuntimeClientSessionRequest {
 /// durably with child ownership. No v26 decoding and no optional form: a
 /// child without an effective profile identity is not a state this runtime
 /// can produce.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 27;
+/// Version 28 adds crash-safe native Session deletion preview/execute/recovery.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 28;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -558,6 +568,16 @@ pub enum RuntimeClientRequest {
         /// The latest desired runtime approval mode.
         mode: ApprovalMode,
     },
+    /// Preview a historical deletion without retaining confirmation locks.
+    SessionDeletePreview { id: RequestId, session_id: String },
+    /// Commit deletion of exactly the confirmed semantic target.
+    SessionDelete {
+        id: RequestId,
+        session_id: String,
+        expected_target_revision: String,
+    },
+    /// Reconcile an existing deletion; never discovers a new workset.
+    SessionDeleteRecover { id: RequestId, session_id: String },
     /// List persisted native Sessions for `/resume`.
     SessionList {
         /// Attachment-scoped request id.
@@ -714,6 +734,9 @@ impl RuntimeClientRequest {
             | Self::DefaultsRead { id, .. }
             | Self::DefaultSave { id, .. }
             | Self::ApprovalModeSet { id, .. }
+            | Self::SessionDeletePreview { id, .. }
+            | Self::SessionDelete { id, .. }
+            | Self::SessionDeleteRecover { id, .. }
             | Self::SessionList { id, .. }
             | Self::SessionGet { id, .. }
             | Self::SessionTreeGet { id, .. }
@@ -753,6 +776,9 @@ impl RuntimeClientRequest {
             Self::DefaultsRead { .. } => "defaults_read",
             Self::DefaultSave { .. } => "default_save",
             Self::ApprovalModeSet { .. } => "approval_mode_set",
+            Self::SessionDeletePreview { .. } => "session_delete_preview",
+            Self::SessionDelete { .. } => "session_delete",
+            Self::SessionDeleteRecover { .. } => "session_delete_recover",
             Self::SessionList { .. } => "session_list",
             Self::SessionGet { .. } => "session_get",
             Self::SessionTreeGet { .. } => "session_tree_get",
@@ -778,7 +804,10 @@ impl RuntimeClientRequest {
     pub fn is_session_request(&self) -> bool {
         matches!(
             self,
-            Self::SessionList { .. }
+            Self::SessionDeletePreview { .. }
+                | Self::SessionDelete { .. }
+                | Self::SessionDeleteRecover { .. }
+                | Self::SessionList { .. }
                 | Self::SessionGet { .. }
                 | Self::SessionTreeGet { .. }
                 | Self::SessionName { .. }
@@ -820,6 +849,8 @@ impl RuntimeClientRequest {
                 | Self::ModelSet { .. }
                 | Self::DefaultSave { .. }
                 | Self::ApprovalModeSet { .. }
+                | Self::SessionDelete { .. }
+                | Self::SessionDeleteRecover { .. }
                 | Self::SessionName { .. }
                 | Self::SessionNew { .. }
                 | Self::SessionSelect { .. }
@@ -839,6 +870,24 @@ impl RuntimeClientRequest {
     #[must_use]
     pub fn session_request(&self) -> Option<RuntimeClientSessionRequest> {
         match self {
+            Self::SessionDeletePreview { session_id, .. } => {
+                Some(RuntimeClientSessionRequest::DeletePreview {
+                    session_id: session_id.clone(),
+                })
+            }
+            Self::SessionDelete {
+                session_id,
+                expected_target_revision,
+                ..
+            } => Some(RuntimeClientSessionRequest::Delete {
+                session_id: session_id.clone(),
+                expected_target_revision: expected_target_revision.clone(),
+            }),
+            Self::SessionDeleteRecover { session_id, .. } => {
+                Some(RuntimeClientSessionRequest::DeleteRecover {
+                    session_id: session_id.clone(),
+                })
+            }
             Self::SessionList {
                 query,
                 offset,
@@ -931,6 +980,10 @@ pub enum RuntimeClientSubagentWorkspaceDisposalOutcome {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeClientResult {
+    /// Native deletion control state, including post-commit uncertainty.
+    SessionDeletion {
+        result: super::session_deletion::RuntimeClientSessionDeletionResult,
+    },
     /// `initialize` succeeded: the attachment is admitted and the initial
     /// authoritative snapshot (linearized with its cursor) is returned.
     Initialized {
@@ -1302,7 +1355,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 27);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 28);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
