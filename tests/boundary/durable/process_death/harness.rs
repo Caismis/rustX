@@ -149,6 +149,17 @@ pub(crate) fn write_runtime_config_with_todo(root: &Path) {
     );
 }
 
+pub(crate) fn write_runtime_config_with_goal(root: &Path) {
+    let mut document: serde_json::Value =
+        serde_json::from_str(&runtime_json("never", false)).unwrap();
+    document["extensions"]["goal"] = serde_json::json!({"enabled": true});
+    crate::launch_fixture::write_documents(
+        &root.join("rustx.jsonc"),
+        &document.to_string(),
+        &["approvalMode", "nativeTools"],
+    );
+}
+
 /// One temporary lab: the complete on-disk world of one conformance case.
 pub(crate) struct Lab {
     dir: tempfile::TempDir,

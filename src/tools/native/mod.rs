@@ -56,6 +56,9 @@ mod bash;
 mod edit;
 pub(crate) mod execution;
 mod glob;
+mod goal;
+pub(crate) use goal::NAMES as GOAL_TOOL_NAMES;
+pub(crate) use goal::registrations as goal_tool_registrations;
 mod grep;
 mod input;
 mod read;
@@ -730,12 +733,12 @@ mod tests {
             crate::runtime::identity::ConversationId::new("conv-todo-plane"),
         );
         let mut composed = ToolRegistry::new();
-        crate::extensions::ExtensionToolPlane::of_materialized_owners(Some(&list))
+        crate::extensions::ExtensionToolPlane::of_materialized_owners(Some(&list), None)
             .register_into(&mut composed)
             .expect("the materialized extension registers its Tool");
         assert_eq!(composed.names(), vec![super::TODO_TOOL_NAME]);
         let mut absent = ToolRegistry::new();
-        crate::extensions::ExtensionToolPlane::of_materialized_owners(None)
+        crate::extensions::ExtensionToolPlane::of_materialized_owners(None, None)
             .register_into(&mut absent)
             .expect("an unmaterialized extension registers nothing");
         assert_eq!(absent.len(), 0);

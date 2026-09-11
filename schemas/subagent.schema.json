@@ -38,6 +38,17 @@
       },
       "type": "object"
     },
+    "GoalExtensionDocument": {
+      "additionalProperties": false,
+      "description": "Authored opt-in Goal composition.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "ModelRef": {
       "description": "A fully qualified catalog model reference: `provider-id/model-id`.\n\nThe first `/` separates the provider from the model. The model ID itself\nmay contain additional `/` characters, as is common for Hugging Face\nidentities such as `Qwen/Qwen3`, but no model-ID segment may be empty.\n\nThis is the explicit model-identity domain of the runtime. Concatenated\nstrings never travel through the runtime in its place: a reference either\nresolves to exactly one catalog model or it fails.",
       "type": "string"
@@ -58,6 +69,13 @@
             }
           },
           "description": "The Agent Status extension: optional provider-independent runtime\ncontext for an already-established model step."
+        },
+        "goal": {
+          "$ref": "#/$defs/GoalExtensionDocument",
+          "default": {
+            "enabled": false
+          },
+          "description": "Root-only persistent Goal pursuit, disabled by default."
         },
         "todo": {
           "$ref": "#/$defs/TodoExtensionDocument",
@@ -191,6 +209,9 @@
           "time": {
             "enabled": true
           }
+        },
+        "goal": {
+          "enabled": false
         },
         "todo": {
           "enabled": true

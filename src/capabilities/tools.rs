@@ -69,7 +69,13 @@ pub struct ToolActivationPolicy {
 /// what an enabled extension actually registers.
 #[must_use]
 pub fn extension_provided_tool(name: &str) -> Option<&'static str> {
-    (name == crate::tools::native::TODO_TOOL_NAME).then_some(crate::extensions::TODO_EXTENSION)
+    if name == crate::tools::native::TODO_TOOL_NAME {
+        Some(crate::extensions::TODO_EXTENSION)
+    } else if crate::tools::native::GOAL_TOOL_NAMES.contains(&name) {
+        Some("goal")
+    } else {
+        None
+    }
 }
 
 /// Rejects an ordinary selection entry that names an extension-provided Tool.

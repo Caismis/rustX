@@ -39,6 +39,7 @@
   },
   "effective_extensions": {
     "composed": {
+      "goal": null,
       "agent_status": {
         "time": {
           "enabled": true,
@@ -51,6 +52,7 @@
       "todo": {}
     },
     "contributors_disabled": {
+      "goal": null,
       "agent_status": {
         "time": {
           "enabled": false,
@@ -63,10 +65,12 @@
       "todo": {}
     },
     "not_composed": {
+      "goal": null,
       "agent_status": null,
       "todo": null
     },
     "todo_only": {
+      "goal": null,
       "agent_status": null,
       "todo": {}
     }

@@ -309,6 +309,7 @@ pub struct ConversationToolRuntime {
     /// construction — present exactly when this conversation composes the
     /// Todo Agent Extension (Issue #259).
     todos: Option<ConversationTodoList>,
+    goal: Option<crate::goal::GoalDomain>,
     /// The one frozen extension composition this runtime materialized.
     ///
     /// Retained so the composition can be *read back* rather than
@@ -413,6 +414,7 @@ impl ConversationToolRuntime {
     /// root and the workspace root overlap (directly, nested, or through a
     /// symlink), and [`ConversationRuntimeError::DurableConversationMismatch`]
     /// when a supplied durable binding belongs to another conversation.
+    #[allow(clippy::too_many_lines)]
     pub fn from_config(
         conversation_id: ConversationId,
         config: ConversationRuntimeConfig,
@@ -522,6 +524,10 @@ impl ConversationToolRuntime {
                 .map_err(ConversationRuntimeError::TodoList)?,
             ),
         };
+        let goal = config
+            .extensions
+            .goal()
+            .map(|_| crate::goal::GoalDomain::new(durable_binding.full_store(), mailbox.wake()));
         Ok(Self {
             _lifecycle: config.lifecycle,
             workflows: crate::runtime::workflow::read_model::WorkflowReadModel::new(
@@ -534,6 +540,7 @@ impl ConversationToolRuntime {
             environment,
             background,
             todos,
+            goal,
             extensions: config.extensions,
             durable_binding,
             runtime_client: Arc::new(RuntimeClientBinding {
@@ -561,6 +568,24 @@ impl ConversationToolRuntime {
     #[must_use]
     pub(crate) fn todos(&self) -> Option<&ConversationTodoList> {
         self.todos.as_ref()
+    }
+
+    /// Goal authority exists exactly when the extension is materialized.
+    pub(crate) fn goal(&self) -> Option<&crate::goal::GoalDomain> {
+        self.goal.as_ref()
+    }
+
+    pub(crate) fn goal_context(
+        &self,
+    ) -> Result<Option<Box<crate::goal::GoalSnapshot>>, crate::durable::ConversationStoreError>
+    {
+        Ok(self
+            .goal()
+            .map(crate::goal::GoalDomain::view)
+            .transpose()?
+            .and_then(|view| view.current)
+            .filter(|goal| goal.phase != crate::goal::GoalPhase::Complete)
+            .map(Box::new))
     }
 
     /// The conversation's committed task list, when Todo is composed.
@@ -623,7 +648,10 @@ impl ConversationToolRuntime {
     /// [`ExtensionToolPlane`]: crate::extensions::ExtensionToolPlane
     #[must_use]
     pub fn extension_tool_plane(&self) -> crate::extensions::ExtensionToolPlane {
-        crate::extensions::ExtensionToolPlane::of_materialized_owners(self.todos.as_ref())
+        crate::extensions::ExtensionToolPlane::of_materialized_owners(
+            self.todos.as_ref(),
+            self.goal.as_ref(),
+        )
     }
 
     /// This conversation's complete model Tool set: `ordinary` composed with

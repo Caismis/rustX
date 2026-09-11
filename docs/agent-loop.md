@@ -1,5 +1,12 @@
 # Agent Loop (M3 + Issue #22 + Issue #55 + Issue #56 + Issue #130 + Issue #136 + Issue #137 + Issue #201 + Issue #203)
 
+Goal rounds enter as `InboundKind::GoalContinuation(GoalRef)` through ordinary
+durable Pending Inbound. The existing coordinator selects/adopts them and admits
+the ordinary Agent Loop. At idle, its synchronous GoalRoundDriver may request one
+round only when armed, Active, under budget, and without pending inbound or owned
+background/Subagent work. [Goal extension](goal-extension.md) specifies the atomic
+acceptance/accounting transaction and recovery/cancellation/drain behavior.
+
 This document describes the runtime boundary implemented by the M3
 deterministic agent loop, mirroring the M2 model-plane documentation in
 `docs/architecture.md`, including the Issue #22 conversation inbound

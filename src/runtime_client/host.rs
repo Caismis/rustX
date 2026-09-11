@@ -584,7 +584,16 @@ impl ClientInner {
         } else {
             self.refresh_transcript_page(&mut state)?;
         }
-        let (snapshot, cursor) = state.projection.snapshot()?;
+        let (mut snapshot, cursor) = state.projection.snapshot()?;
+        snapshot.goal = self
+            .runtime
+            .as_ref()
+            .map(ConversationRuntime::goal_view)
+            .transpose()
+            .map_err(|error| RuntimeClientError::RuntimeFailure {
+                message: error.to_string(),
+            })?
+            .flatten();
         state.next_attachment_seq = state.next_attachment_seq.saturating_add(1);
         let attachment_id = AttachmentId::new(format!("attachment-{}", state.next_attachment_seq));
         let attachment_state = AttachmentState {
@@ -731,6 +740,9 @@ impl ClientInner {
     /// is currently cancellable.
     pub(crate) fn cancel_current_attempt(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.ensure_writable_runtime()?;
+        if let Some(runtime) = &self.runtime {
+            runtime.disarm_goal();
+        }
         let attempt_id = {
             let state = self.lock_state();
             let Some(attempt) = state.projection.snapshot_ref().attempt.as_ref() else {
@@ -889,7 +901,33 @@ impl ClientInner {
         } else {
             self.refresh_transcript_page(&mut state)?;
         }
-        state.projection.snapshot()
+        let (mut snapshot, cursor) = state.projection.snapshot()?;
+        snapshot.goal = self
+            .runtime
+            .as_ref()
+            .map(ConversationRuntime::goal_view)
+            .transpose()
+            .map_err(|error| RuntimeClientError::RuntimeFailure {
+                message: error.to_string(),
+            })?
+            .flatten();
+        Ok((snapshot, cursor))
+    }
+
+    pub(crate) fn goal_control(
+        &self,
+        control: crate::goal::GoalControl,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or_else(|| RuntimeClientError::InvalidState {
+                message: "No live Goal capability in historical inspection".to_owned(),
+            })?;
+        runtime
+            .control_goal(control)
+            .map(|view| RuntimeClientResult::Goal { view })
+            .map_err(|message| RuntimeClientError::InvalidRequest { message })
     }
 
     /// Reads one bounded durable transcript page. The transcript cursor is

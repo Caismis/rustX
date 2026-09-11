@@ -2931,6 +2931,19 @@ impl SubagentRegistry {
             .collect()
     }
 
+    /// A Goal cannot pass an already-owned child at its durable frontier.
+    /// The caller holds the background lock first; this nests only lifecycle/store.
+    pub(crate) fn with_goal_idle<T>(&self, operation: impl FnOnce() -> T) -> Option<T> {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.records.iter().any(|record| {
+            record.lifecycle.is_active()
+                || matches!(record.lifecycle, SubagentLifecycle::PublishingTerminal)
+        }) {
+            return None;
+        }
+        Some(operation())
+    }
+
     /// The subagents whose terminal publication was abandoned.
     #[must_use]
     pub fn abandoned_publications(&self) -> Vec<SubagentSnapshot> {
@@ -9482,6 +9495,45 @@ mod tests {
             .iter()
             .map(|snapshot| snapshot.subagent_id.to_string())
             .collect()
+    }
+
+    #[test]
+    fn goal84_owned_child_and_terminal_publication_prevent_goal_polling() {
+        for lifecycle in [
+            SubagentLifecycle::Running,
+            SubagentLifecycle::PublishingTerminal,
+        ] {
+            let plane = plane(1);
+            let domain = crate::goal::GoalDomain::new(
+                plane.store.clone(),
+                Arc::new(tokio::sync::Notify::new()),
+            );
+            let created = domain
+                .write(crate::goal::GoalWrite::Create {
+                    objective: "Await the owned child result".into(),
+                    budget: 2,
+                    origin: crate::goal::GoalOrigin::RuntimeControl,
+                })
+                .unwrap()
+                .unwrap();
+            seed_record(&plane.registry, "owned", lifecycle);
+            assert_eq!(
+                plane
+                    .registry
+                    .with_goal_idle(|| panic!("Goal must await the native result path")),
+                None::<()>
+            );
+            let view = domain.view().unwrap();
+            assert!(view.armed);
+            assert_eq!(
+                view.current,
+                Some(created),
+                "waiting neither consumes a round nor declares Blocked"
+            );
+        }
+        let plane = plane(1);
+        seed_record(&plane.registry, "settled", SubagentLifecycle::Succeeded);
+        assert_eq!(plane.registry.with_goal_idle(|| true), Some(true));
     }
 
     /// The registry's authoritative order is its own allocation order,

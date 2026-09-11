@@ -828,6 +828,7 @@ fn composed(
     background: bool,
 ) -> EffectiveNativeAgentExtensions {
     EffectiveNativeAgentExtensions {
+        goal: None,
         agent_status: Some(EffectiveAgentStatusExtension {
             time: EffectiveTimeStatus {
                 enabled: time,
@@ -847,6 +848,7 @@ fn composed(
 /// nothing about Todo, and this value is what proves it on the wire.
 fn agent_status_absent() -> EffectiveNativeAgentExtensions {
     EffectiveNativeAgentExtensions {
+        goal: None,
         agent_status: None,
         todo: Some(rustx::runtime_client::settings::EffectiveTodoExtension {}),
     }
@@ -855,6 +857,7 @@ fn agent_status_absent() -> EffectiveNativeAgentExtensions {
 /// The composition with no native Agent Extension at all.
 fn uncomposed() -> EffectiveNativeAgentExtensions {
     EffectiveNativeAgentExtensions {
+        goal: None,
         agent_status: None,
         todo: None,
     }

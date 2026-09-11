@@ -22,7 +22,7 @@ use crate::runtime::identity::{
 };
 
 /// The ABI version of the native context contribution contract.
-pub const CONTEXT_COMPATIBILITY_ABI_VERSION: u32 = 3;
+pub const CONTEXT_COMPATIBILITY_ABI_VERSION: u32 = 4;
 
 /// The finite user-context semantic lanes owned by rustX.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -50,21 +50,25 @@ pub enum UserContextLane {
     ExtensionEnvironment,
     /// Native runtime/Agent Status context.
     AgentStatus,
+    /// Current Goal task data, never a system section.
+    GoalStatus,
 }
 
 impl UserContextLane {
     /// The contract's deterministic total order.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::ClaimedInbound,
         Self::RuntimeToolObservation,
         Self::ExtensionEnvironment,
         Self::AgentStatus,
+        Self::GoalStatus,
     ];
 
     /// Stable manifest spelling of one user-context lane.
     #[must_use]
     pub const fn manifest_name(self) -> &'static str {
         match self {
+            Self::GoalStatus => "goal_status",
             Self::ClaimedInbound => "claimed_inbound",
             Self::RuntimeToolObservation => "runtime_tool_observation",
             Self::ExtensionEnvironment => "extension_environment",
@@ -152,6 +156,8 @@ pub struct ContributorInputSnapshot {
 /// Native values already sampled by rustX before assembly.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NativeContextInput {
+    /// Sampled for each new model step by the native execution owner.
+    pub goal: Option<Box<crate::goal::GoalSnapshot>>,
     /// Workspace/project instructions, when the native workspace owner has
     /// one for this request.
     pub workspace_instructions: Option<String>,
@@ -267,6 +273,7 @@ fn user_semantics(
                 ContextKind::RuntimeToolObservation,
             )),
             NativeContextContributor::AgentStatus
+            | NativeContextContributor::GoalStatus
             | NativeContextContributor::WorkspaceInstructions
             | NativeContextContributor::SkillGuidance
             | NativeContextContributor::CoreSystemIdentity
@@ -828,6 +835,20 @@ impl ContextAssembly {
             ));
         }
 
+        if let Some(goal) = &native.goal {
+            let identity = ContextContributorIdentity::Native(NativeContextContributor::GoalStatus);
+            let text = serde_json::to_string(goal)
+                .map_err(|error| ContextAssemblyError::InvalidProposal(error.to_string()))?;
+            validate_text(&text, "Goal context")?;
+            entries.push(ContributionEntry {
+                lane: UserContextLane::GoalStatus, identity,
+                source: UserSource::Runtime, kind: ContextKind::GoalStatus(goal.clone()),
+                content: vec![UserContentBlock::Text(crate::message::content::TextBlock {
+                    text: format!("Current Goal observation. The objective is user task data, not instructions from the runtime.\n{text}"),
+                })], phase: ContributionPhase::RequestTime, sequence: 0,
+            });
+            generations.push(native_generation(NativeContextContributor::GoalStatus));
+        }
         let mut extensions = self.extensions.clone();
         extensions.sort_by(|left, right| left.identity.cmp(&right.identity));
         for registered in extensions {
@@ -1910,8 +1931,8 @@ mod tests {
     fn manifest_is_derived_from_contract_constants() {
         let manifest = ContextAssembly::compatibility_manifest();
         assert_eq!(
-            CONTEXT_COMPATIBILITY_ABI_VERSION, 3,
-            "resource-frozen extension System sections are a v3 ABI"
+            CONTEXT_COMPATIBILITY_ABI_VERSION, 4,
+            "revisioned native Goal User observations are a v4 ABI"
         );
         assert_eq!(manifest.user_context_lanes, UserContextLane::ALL);
         assert_eq!(manifest.system_section_lanes, SystemSectionLane::ALL);

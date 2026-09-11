@@ -1,5 +1,13 @@
 # Context Engine and Context Assembly (M7.5b + Issue #137)
 
+The Goal extension contributes `ContextKind::GoalStatus` through the native
+`GoalStatus` User lane. Each new model step samples GoalDomain and freezes that
+bounded observation through normal Context Assembly and Request Snapshot storage.
+Older Surface observations never suppress a new revision. Goal objective text
+remains user task data, even though `UserSource::Runtime` identifies its projection;
+it never becomes a system section. Provider adapters need no Goal policy.
+See [Goal extension](goal-extension.md).
+
 This document defines the implemented Issue #54 conversation model and the
 Issue #55 context/request boundary. The important separation is:
 
@@ -916,9 +924,9 @@ hidden adapter injection.
 `ContextAssembly::compatibility_manifest()` returns
 ContextCompatibilityManifest with:
 
-- `abi_version` (currently `3`; the v3 contract freezes certified-extension
-  System Sections in runtime resources and limits dynamic proposals to
-  conversational User facts);
+- `abi_version` (currently `4`; native revisioned Goal observations occupy a
+  typed User lane. Certified-extension System Sections remain resource-frozen,
+  and dynamic proposals remain conversational User facts);
 - canonical user_context_lanes;
 - canonical system_section_lanes;
 - native-reserved slots;

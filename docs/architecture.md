@@ -1,5 +1,12 @@
 # Architecture
 
+Goal is the third closed Native Agent Extension. `GoalDomain` is the sole durable
+revisioned state authority; its commands and context are adapters. The synchronous
+`GoalRoundDriver` participates in the existing coordinator worker and submits
+ordinary typed Pending Inbound. It never owns model execution, canonical history,
+Tool execution, request assembly, or a separate queue. See the exact transaction
+and lock contract in [Goal extension](goal-extension.md).
+
 Canonical `ProductRoot` is the sole authority for rustX-owned product storage
 paths. Session, Conversation and child allocations are derived from that identity
 before any private path is authored. Equivalent root aliases converge; symlinks
@@ -1195,7 +1202,7 @@ Native Agent Extensions
   Agent Status        migrated (Issue #256)
   Todo                migrated (Issue #259) — the first stateful,
                       Tool-providing extension
-  Goal                later
+  Goal                revisioned durable root state and ordinary round admission (#84)
 ```
 
 The core invariant of the boundary:

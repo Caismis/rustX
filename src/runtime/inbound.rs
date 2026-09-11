@@ -503,7 +503,10 @@ impl FreshInboundTurn {
             let message = &history[position];
             match message {
                 MessageBlock::User(user) => {
-                    if user.kind != InboundKind::Message {
+                    if !matches!(
+                        user.kind,
+                        InboundKind::Message | InboundKind::GoalContinuation(_)
+                    ) {
                         return Err(FreshInboundError::NotInboundMessage(id.clone()));
                     }
                     if user.timestamp.is_none() {
@@ -912,6 +915,13 @@ impl ConversationInboundMailbox {
         &self,
         draft: InboundDraft,
     ) -> Result<AcceptedInbound, MailboxError> {
+        if matches!(draft.kind, InboundKind::GoalContinuation(_)) {
+            return Err(MailboxError::Durable(
+                crate::durable::ConversationStoreError::InvalidReference(
+                    "Goal continuation requires atomic Goal round acceptance".to_owned(),
+                ),
+            ));
+        }
         if draft.kind.is_compaction_summary() {
             return Err(MailboxError::CompactionSummaryNotEligible);
         }
@@ -934,6 +944,34 @@ impl ConversationInboundMailbox {
             Ok::<_, MailboxError>(accepted)
         })??;
         Ok(accepted)
+    }
+
+    /// Goal accounting and ordinary inbound cross one durable frontier.
+    pub(crate) fn accept_goal_round(
+        &self,
+        domain: &crate::goal::GoalDomain,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, MailboxError> {
+        self.with_running_commit(|| {
+            let accepted = domain.reserve_and_accept(|reference| InboundDraft {
+                message_id: None,
+                source: crate::message::UserSource::Runtime,
+                kind: InboundKind::GoalContinuation(reference),
+                content: vec![crate::message::types::UserContentBlock::Text(crate::message::content::TextBlock {
+                    text: "Continue pursuing the current Goal using its current revisioned state. Declare complete or blocked when appropriate.".to_owned(),
+                })],
+                timestamp,
+                correlation: None,
+            })?;
+            let Some(accepted) = accepted else { return Ok(false); };
+            let state = self.state.lock().expect("inbound mailbox lock poisoned");
+            if let Some(observer) = &state.observer {
+                observer.on_enqueued(&InboundItem { sequence: accepted.sequence,
+                    message: accepted.message, transcript_cursor: accepted.transcript_cursor });
+            }
+            self.wake.notify_one();
+            Ok(true)
+        })?
     }
 
     /// Accepts one inbound item and a dependent execution fact in the same

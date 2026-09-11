@@ -1,5 +1,12 @@
 # Runtime Invariants
 
+Goal mutations require an observed `GoalRef`; stale actions are rejected without
+retry. Autonomous accounting and ordinary Pending Inbound acceptance commit in
+one SQLite transaction. Process-local activation is never inferred from durable
+phase or Event Journal. Recovery starts disarmed; cancellation disarms without
+changing phase or refunding accepted rounds. [Goal invariants](goal-extension.md)
+also define Human priority, root-only scope, and the drain frontier.
+
 Canonical `ProductRoot` is the sole authority for rustX-owned product storage
 paths. Session, Conversation and child allocations are derived from that identity
 before any private path is authored. Equivalent root aliases converge; symlinks

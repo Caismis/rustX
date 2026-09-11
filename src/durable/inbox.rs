@@ -1203,6 +1203,34 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
 ///   been durably accepted the answer stays `true` forever.
 #[allow(clippy::missing_errors_doc)]
 pub trait ConversationStore: Send + Sync + 'static {
+    /// Current Goal state, independent of history and Event Journal.
+    fn load_goal(&self) -> Result<Option<crate::goal::GoalSnapshot>, ConversationStoreError> {
+        Err(ConversationStoreError::Storage(
+            "Goal state is unsupported by this store".to_owned(),
+        ))
+    }
+
+    /// One authoritative Goal mutation, validated and revisioned atomically.
+    fn write_goal(
+        &self,
+        _write: crate::goal::GoalWrite,
+    ) -> Result<crate::goal::GoalResult, ConversationStoreError> {
+        Err(ConversationStoreError::Storage(
+            "Goal state is unsupported by this store".to_owned(),
+        ))
+    }
+
+    /// Atomically CAS Goal accounting and accept ordinary pending inbound.
+    /// Pending inbound or stale state wins without consuming a round.
+    fn accept_goal_round(
+        &self,
+        _expected: &crate::goal::GoalRef,
+        _draft: InboundDraft,
+    ) -> Result<Option<AcceptedInbound>, ConversationStoreError> {
+        Err(ConversationStoreError::Storage(
+            "Goal admission is unsupported by this store".to_owned(),
+        ))
+    }
     /// The conversation this store is the durable inbound authority of.
     fn conversation_id(&self) -> &ConversationId;
 

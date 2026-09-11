@@ -1,5 +1,12 @@
 # `rustx-tui`
 
+`/goal` shows authoritative Goal state. `/goal create <objective>` creates and
+arms with the native default budget; `/goal pause`, `/goal resume`,
+`/goal edit <objective>`, and `/goal budget <rounds>` use typed Runtime Client
+controls with the observed GoalRef. Stale controls fail without retry. Disabled
+Goal gives a feature-disabled response. The TUI owns no timer, admission loop,
+state transition, or accounting. See [Goal extension](../docs/goal-extension.md).
+
 The rustX reference terminal client: a Pi-TUI presentation layer over the
 Runtime Client protocol.
 

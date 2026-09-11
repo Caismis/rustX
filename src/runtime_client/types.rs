@@ -345,7 +345,7 @@ pub enum RuntimeClientSessionRequest {
 /// compatibility layer; it does not mean two protocols may share a version.
 /// There is no v28 decoding and no compatibility shim: a v28 client is refused
 /// by ordinary strict version negotiation.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 29;
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 30;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -456,6 +456,11 @@ impl fmt::Display for RequestId {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeClientRequest {
+    /// Typed native Goal control; clients never own Goal state or admission.
+    Goal {
+        id: RequestId,
+        control: crate::goal::GoalControl,
+    },
     /// Negotiate protocol version and admit the attachment.
     Initialize {
         /// Attachment-scoped request id.
@@ -739,6 +744,7 @@ impl RuntimeClientRequest {
     pub fn id(&self) -> RequestId {
         match self {
             Self::Initialize { id, .. }
+            | Self::Goal { id, .. }
             | Self::SubmitInbound { id, .. }
             | Self::CancelCurrentAttempt { id, .. }
             | Self::CompactContext { id, .. }
@@ -783,6 +789,7 @@ impl RuntimeClientRequest {
             Self::Initialize { .. } => "initialize",
             Self::SubmitInbound { .. } => "submit_inbound",
             Self::CancelCurrentAttempt { .. } => "cancel_current_attempt",
+            Self::Goal { .. } => "goal",
             Self::CompactContext { .. } => "compact_context",
             Self::ReloadResources { .. } => "reload_resources",
             Self::InteractionRespond { .. } => "interaction_respond",
@@ -859,6 +866,9 @@ impl RuntimeClientRequest {
     /// requests before dispatch; protocol reads and `detach` remain allowed.
     #[must_use]
     pub fn is_mutating(&self) -> bool {
+        if let Self::Goal { control, .. } = self {
+            return !matches!(control, crate::goal::GoalControl::Show);
+        }
         matches!(
             self,
             Self::SubmitInbound { .. }
@@ -1000,6 +1010,8 @@ pub enum RuntimeClientSubagentWorkspaceDisposalOutcome {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeClientResult {
+    /// Current Goal state and process-local activation after an operation.
+    Goal { view: crate::goal::GoalView },
     /// Native deletion control state, including post-commit uncertainty.
     SessionDeletion {
         result: super::session_deletion::RuntimeClientSessionDeletionResult,
@@ -1404,7 +1416,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 29);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 30);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

@@ -38,6 +38,39 @@ use rustx::runtime::subagent::{
 
 const KEY_ENV: &str = "RUSTX_ISSUE258_KEY";
 
+#[tokio::test]
+async fn goal84_root_only_scope_is_enforced_for_definition_model_and_workflow_overrides() {
+    let lab = Lab::new();
+    lab.write_config(&serde_json::json!({
+        "goal_role": {"description": "Root-only extension in a named child", "tools": {"builtin": []}, "extensions": {"goal": {"enabled": true}}},
+        "plain": {"description": "Ordinary child", "tools": {"builtin": []}}
+    }), &["subagent"], &[]);
+    let product = lab.compose().await;
+    let resources = product.runtime().runtime_resources();
+    let parent = parent_with_extensions(&resources, NativeAgentExtensions::none().and_goal());
+    let invocation = parse_override(serde_json::json!({"extensions": {"goal": {"enabled": true}}}));
+    for result in [
+        delegate(&resources, "goal_role", None, &parent),
+        delegate(&resources, "plain", Some(&invocation), &parent),
+        workflow_resolve(&resources, "plain", Some(&invocation)),
+    ] {
+        assert!(
+            matches!(result, Err(SubagentResolutionError::ExtensionScopeUnsupported { extension, .. }) if extension == "goal")
+        );
+    }
+    // The resolver produces no child contract; disabling Goal explicitly is supported.
+    assert!(
+        delegate(
+            &resources,
+            "goal_role",
+            Some(&parse_override(serde_json::json!({"extensions": {}}))),
+            &parent
+        )
+        .is_ok()
+    );
+    product.runtime().shutdown().await.unwrap();
+}
+
 const MODELS: &str = r#"{
   "providers": {
     "local": {
@@ -888,6 +921,30 @@ block:
   edges:
   - {from: work, to: done}
 ";
+
+#[tokio::test]
+async fn goal84_workflow_program_cannot_enable_goal_for_an_agent_node() {
+    let lab = Lab::new();
+    lab.write_skill("review-guidance", "How to review", "guidance body");
+    lab.write_skill("security-review", "Security", "guidance body");
+    lab.write_workflow(
+        "goal-child",
+        &OVERRIDE_WORKFLOW.replace("agentStatus:", "goal:"),
+    );
+    lab.write_config(&reviewer_roles(), &["subagent"], &["goal-child"]);
+    let launch = lab.paths().try_resolve();
+    let error = match launch {
+        Err(error) => error,
+        Ok(launch) => match LocalSessionProduct::compose(&launch, &dependencies()).await {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("invalid Goal child program must fail before invocation"),
+        },
+    };
+    assert!(
+        error.contains("goal") && error.contains("one-shot"),
+        "{error}"
+    );
+}
 
 /// A trusted static override may legitimately exceed both the role's defaults
 /// and the invoking main model's active capabilities, because the Workflow's

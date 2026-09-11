@@ -254,6 +254,13 @@ export class RuntimeClientAttachment {
   }
 
   /** Atomically reloads resources for future admitted attempts. */
+  async goal(control: import("../protocol/types.ts").GoalControl): Promise<import("../protocol/types.ts").GoalView> {
+    const result = await this.#connection.request({ method: "goal", control });
+    if (result.type !== "goal") throw new Error(`goal returned ${result.type}`);
+    return result.view;
+  }
+
+  /** Atomically reloads resources for future admitted attempts. */
   async reloadResources(): Promise<{
     resourceRevision: number;
     capabilityRevision: number;

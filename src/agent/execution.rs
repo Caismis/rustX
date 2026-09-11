@@ -2319,6 +2319,12 @@ impl<'a> AgentExecution<'a> {
         // privileged committer role and cannot bypass the policy below.
         let deferred = core::mem::take(&mut self.deferred_context);
         let mut native = self.context_runtime.native_system.clone();
+        native.goal = self.tool_runtime.goal_context().map_err(|error| {
+            Self::context_failure_terminal(&ContextError::new(
+                ContextErrorKind::Internal,
+                error.to_string(),
+            ))
+        })?;
         native.agent_status = status_generation
             .as_ref()
             .map(|generation| render_agent_status(&generation.status));
@@ -4967,6 +4973,35 @@ impl<'a> AgentExecution<'a> {
             Some(requester) => context.with_questionnaire_requester(requester),
             None => context,
         };
+        let mut context = context;
+        if let Some(goal) = self.tool_runtime.goal() {
+            let origin = match &self.request.initial_turn_trigger {
+                InitialTurnTrigger::FreshInbound(fresh) => self
+                    .store
+                    .load_messages(fresh.message_ids())
+                    .ok()
+                    .and_then(|messages| {
+                        messages
+                            .into_iter()
+                            .rev()
+                            .find_map(|message| match message {
+                                MessageBlock::User(user)
+                                    if user.source == crate::message::types::UserSource::Human
+                                        && user.kind
+                                            == crate::message::types::InboundKind::Message =>
+                                {
+                                    Some(crate::goal::GoalOrigin::HumanAttempt {
+                                        message_id: user.id,
+                                        attempt_id: self.request.attempt_id.clone(),
+                                    })
+                                }
+                                _ => None,
+                            })
+                    }),
+                InitialTurnTrigger::Continuation => None,
+            };
+            context.goal = Some(Box::new((goal.clone(), origin)));
+        }
         // The task-list authority of *this* batch, named rather than
         // ambient: an invocation that is not part of a batch never receives
         // one, and therefore never writes provisional list state.

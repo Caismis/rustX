@@ -112,6 +112,17 @@
         }
       ]
     },
+    "GoalExtensionDocument": {
+      "additionalProperties": false,
+      "description": "Authored opt-in Goal composition.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "InvocationPolicyDocument": {
       "additionalProperties": false,
       "description": "One tool invocation policy document.",
@@ -250,6 +261,13 @@
             }
           },
           "description": "The Agent Status extension: optional provider-independent runtime\ncontext for an already-established model step."
+        },
+        "goal": {
+          "$ref": "#/$defs/GoalExtensionDocument",
+          "default": {
+            "enabled": false
+          },
+          "description": "Root-only persistent Goal pursuit, disabled by default."
         },
         "todo": {
           "$ref": "#/$defs/TodoExtensionDocument",

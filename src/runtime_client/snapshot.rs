@@ -233,6 +233,8 @@ pub struct RuntimeClientSnapshot {
     /// [`ConversationTodoList`]: crate::tools::todo::ConversationTodoList
     #[serde(default)]
     pub todos: Option<TodoSnapshot>,
+    /// Revisioned Goal read domain; absent when disabled, never reconstructed from events.
+    pub goal: Option<crate::goal::GoalView>,
 }
 
 /// One bounded newest-or-older page of derived transcript history.

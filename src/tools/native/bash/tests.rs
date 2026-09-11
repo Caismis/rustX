@@ -103,6 +103,7 @@ async fn run_with_control(
     let tool = BashTool::with_test_control(control);
     let reporter = NoopProgress;
     let context = ToolExecutionContext {
+        goal: None,
         conversation_id: &ConversationId::new("conv-1"),
         execution_id: None,
         cancellation: crate::runtime::cancellation::ExecutionCancellation::detached(

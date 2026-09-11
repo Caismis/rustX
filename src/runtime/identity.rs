@@ -385,6 +385,8 @@ pub enum ContextContributorIdentity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeContextContributor {
+    /// The current revisioned Goal observation owner.
+    GoalStatus,
     /// Workspace/project instructions.
     WorkspaceInstructions,
     /// The native capability/Skill guidance system-section owner.
@@ -411,7 +413,8 @@ impl NativeContextContributor {
     /// Every native semantic owner, in contract order. This is the source
     /// used by the compatibility manifest and reserved-identity validation;
     /// callers must not maintain a second list of native slots.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
+        Self::GoalStatus,
         Self::WorkspaceInstructions,
         Self::SkillGuidance,
         Self::AgentStatus,
@@ -424,6 +427,7 @@ impl NativeContextContributor {
     #[must_use]
     pub const fn logical_key(self) -> &'static str {
         match self {
+            Self::GoalStatus => "goal-status",
             Self::WorkspaceInstructions => "workspace-instructions",
             Self::SkillGuidance => "skill-guidance",
             Self::AgentStatus => "agent-status",
@@ -437,6 +441,7 @@ impl NativeContextContributor {
     #[must_use]
     pub const fn manifest_name(self) -> &'static str {
         match self {
+            Self::GoalStatus => "goal_status",
             Self::WorkspaceInstructions => "workspace_instructions",
             Self::SkillGuidance => "skill_guidance",
             Self::AgentStatus => "agent_status",

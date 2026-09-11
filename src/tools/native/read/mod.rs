@@ -427,6 +427,7 @@ mod tests {
                     arguments: serde_json::json!({ "path": path }),
                 },
                 ToolExecutionContext {
+                    goal: None,
                     conversation_id: &conversation_id,
                     execution_id: None,
                     cancellation: crate::runtime::ExecutionCancellation::detached(
@@ -616,6 +617,7 @@ mod tests {
                 arguments,
             };
             let context = ToolExecutionContext {
+                goal: None,
                 conversation_id: &self.conversation_id,
                 execution_id: None,
                 cancellation: crate::runtime::ExecutionCancellation::detached(

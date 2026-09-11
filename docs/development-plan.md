@@ -1,5 +1,10 @@
 # Development Plan
 
+M9.6 (#84) composes the root-only Goal extension over revisioned durable state,
+following #256/#258/#259. Its [admission contract](goal-extension.md) uses ordinary
+ConversationRuntime ownership and keeps Scheduler #85's future WHEN semantics
+out of Goal. Workflow and one-shot Subagent terminal semantics remain independent.
+
 This plan prioritizes proving the execution kernel locally before integrating rustX into production infrastructure.
 
 ## Milestone 0 — Repository foundation
@@ -1540,10 +1545,11 @@ foreground invocation tests to the owning lower-layer contracts.
 Workflow = HOW one finite fixed program executes. Goal #84 = WHAT objective persists
 across ordinary rounds. Scheduler #85 = WHEN a target becomes eligible.
 `Workflow completed != business checks passed != Goal complete`.
-Workflow requires neither Goal nor Scheduler. A future Goal-driven normal Agent round
+Workflow requires neither Goal nor Scheduler. A Goal-driven normal Agent round
 may call a registered Workflow Tool. Loop exhaustion does not start another round;
 Goal-level accounting and manual continuation belong to #84. Pausing/disarming future
 rounds is separate from cancelling current admitted execution. A pending Review or
 question is not automatically Goal Blocked. Recovering Goal state never recovers an
 old Workflow continuation or old human authority. Scheduler owns temporal triggering,
-not graph execution. This slice implements neither future domain.
+not graph execution. Goal is implemented independently as the root Native Agent
+Extension described in [Goal extension admission](goal-extension.md).

@@ -182,7 +182,7 @@ async fn finish_execution<'a>(
     let mut execution = execution;
     execution.observe(publication);
     common::durable_agent_result_with_publication(
-        execution.run().await,
+        Box::pin(execution.run()).await,
         tool_runtime.durable_store().as_ref(),
         publication,
     )

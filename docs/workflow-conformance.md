@@ -101,13 +101,13 @@ across ordinary rounds. Scheduler #85 = WHEN a target becomes eligible.
 
 `Workflow completed != business checks passed != Goal complete`.
 
-Workflow requires neither future domain. A Goal-driven normal Agent round may call a
+Workflow requires neither Goal nor Scheduler. A Goal-driven normal Agent round may call a
 registered Workflow Tool. Loop exhaustion never automatically admits another round;
 Goal-level accounting/manual continuation belongs to #84. Pausing/disarming future
 rounds differs from cancelling current work. A pending Review/question is not
 implicitly Goal Blocked. Recovering Goal state cannot recover old Workflow continuation
 or human authority. Scheduler owns time eligibility, never graph execution. This change
-adds no Goal/Scheduler types or protocol placeholders.
+keeps Workflow independent of Goal authority and adds no Scheduler placeholders.
 
 ## Interactive TUI smoke (Linux, local emulator)
 

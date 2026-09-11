@@ -1711,6 +1711,20 @@ impl ConversationBackgroundRegistry {
             .collect()
     }
 
+    /// Holds the existing ownership lock across a Goal's idle frontier.
+    /// Lock order remains registry -> lifecycle commit -> durable store.
+    pub(crate) fn with_goal_idle<T>(&self, operation: impl FnOnce() -> T) -> Option<T> {
+        let state = self.state();
+        if state
+            .records
+            .iter()
+            .any(|record| record.lifecycle.is_active())
+        {
+            return None;
+        }
+        Some(operation())
+    }
+
     /// The executions whose durable terminal publication was abandoned, in
     /// allocation order. Each one is settlement evidence that prevents the
     /// owning runtime from claiming successful quiescence.
@@ -1923,6 +1937,7 @@ impl ConversationBackgroundRegistry {
                 execution_id: execution_id.clone(),
             });
             let context = ToolExecutionContext {
+                goal: None,
                 conversation_id: &registry.conversation_id,
                 execution_id: Some(&execution_id),
                 cancellation: ExecutionCancellation::new(cancellation.clone(), cause),
@@ -4151,6 +4166,7 @@ mod tests {
             .start(
                 read_invocation,
                 ToolExecutionContext {
+                    goal: None,
                     conversation_id: fixture.registry.conversation_id(),
                     execution_id: None,
                     cancellation: crate::runtime::cancellation::ExecutionCancellation::detached(
@@ -4197,6 +4213,7 @@ mod tests {
             .start(
                 grep_invocation,
                 ToolExecutionContext {
+                    goal: None,
                     conversation_id: fixture.registry.conversation_id(),
                     execution_id: None,
                     cancellation: crate::runtime::cancellation::ExecutionCancellation::detached(

@@ -53,6 +53,7 @@ use super::harness::{CONVERSATION, MODEL};
 
 /// One inbound message answered by one plain streaming text turn.
 pub(crate) const TEXT_TURN: &str = "text_turn";
+pub(crate) const GOAL_ROUND: &str = "goal_round";
 /// [`TEXT_TURN`] composed with **no** observation bridge installed, so no
 /// client-facing consumer exists at the moment of death.
 pub(crate) const TEXT_TURN_NO_CLIENT: &str = "text_turn_no_client";
@@ -797,6 +798,18 @@ pub(crate) fn run(scenario: &str) -> ! {
 #[allow(clippy::too_many_lines)] // one linear script per scenario, by design
 async fn scenario_body(root: &Path, scenario: &str) {
     match scenario {
+        GOAL_ROUND => {
+            let child =
+                Child::require(root, vec![vec![FakeStep::ParkUntilCancelled]], false, true).await;
+            child
+                .runtime()
+                .control_goal(crate::goal::GoalControl::Create {
+                    objective: "Deliver after the durable round frontier".to_owned(),
+                    budget: 2,
+                })
+                .unwrap();
+            park_owning(child).await;
+        }
         TEXT_TURN | TEXT_TURN_NO_CLIENT | TERMINAL_ONLY_TURN | STRUCTURAL_FAILURE => {
             let script = match scenario {
                 TERMINAL_ONLY_TURN => short_text_turn(),

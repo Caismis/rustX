@@ -263,6 +263,7 @@ impl RuntimeClientProjection {
                 resources: super::snapshot::RuntimeClientResourcesView::default(),
                 model: initial_model,
                 todos: None,
+                goal: None,
             },
             replay: VecDeque::new(),
             replay_sizes: VecDeque::new(),

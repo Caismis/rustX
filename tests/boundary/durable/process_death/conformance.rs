@@ -55,6 +55,7 @@ fn shapes(messages: &[MessageBlock]) -> Vec<&'static str> {
                 InboundKind::CompactionSummary(_) => "summary",
                 InboundKind::Context(_) => "context",
                 InboundKind::Message => "user",
+                InboundKind::GoalContinuation(_) => "goal_continuation",
             },
             MessageBlock::Assistant(assistant) => {
                 if assistant
@@ -417,6 +418,37 @@ fn inbound_acceptance_is_atomic() {
     assert_eq!(report.attempt_class(), &AttemptRecoveryClass::NotStarted);
     assert_eq!(report.pending_inbound(), 0);
     assert_eq!(report.resume(), ResumeDisposition::PendingInboundOnly);
+}
+
+#[test]
+fn goal84_process_death_cannot_split_round_accounting_from_ordinary_pending_work() {
+    for (gate, consumed) in [
+        ("before:accept_goal_round", 0),
+        ("after:accept_goal_round", 1),
+    ] {
+        let lab = Lab::new();
+        super::harness::write_runtime_config_with_goal(lab.root());
+        let mut process = lab.spawn(child::GOAL_ROUND, Some(gate));
+        process.wait_reached(gate);
+        process.sigkill();
+        // Repeated recovery observes the same accepted ordinary work, never a Goal replay.
+        for _ in 0..2 {
+            let durable = lab.durable();
+            let goal = durable.store().load_goal().unwrap().unwrap();
+            assert_eq!(goal.autonomous_rounds_consumed, consumed);
+            assert_eq!(goal.reference.revision, u64::from(consumed) + 1);
+            assert_eq!(goal.phase, crate::goal::GoalPhase::Active);
+            let pending = durable.store().load_pending().unwrap();
+            assert_eq!(pending.len(), consumed as usize);
+            assert_eq!(durable.recover().pending_inbound(), consumed as usize);
+            if let Some(pending) = pending.first() {
+                assert_eq!(
+                    goal.last_round_message_id.as_ref(),
+                    Some(&pending.message_id)
+                );
+            }
+        }
+    }
 }
 
 /// Once the acceptance transaction committed, the message is durably pending
