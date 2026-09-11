@@ -377,7 +377,7 @@ async fn ext256_an_empty_extension_composition_changes_nothing_but_agent_status(
             ),
             success_result("worker"),
         );
-        let mut tools = fixture.registry.clone();
+        let mut tools = fixture.ordinary_registry.clone();
         tool.register(&mut tools);
         let model = fake_model(script.clone());
         let (result, recorder) = run(&extensions, &fixture.runtime, tools, model.clone()).await;
@@ -444,7 +444,7 @@ async fn ext256_a_disabled_agent_status_extension_emits_nothing_anywhere() {
         ),
         success_result("worker"),
     );
-    let mut tools = fixture.registry.clone();
+    let mut tools = fixture.ordinary_registry.clone();
     tool.register(&mut tools);
     let model = fake_model(vec![tool_turn(std::slice::from_ref(&call)), stop_turn()]);
     let (result, recorder) = run(&extensions, &fixture.runtime, tools, model.clone()).await;
@@ -515,7 +515,7 @@ async fn ext256_a_composed_agent_status_extension_preserves_time_and_background_
         let (result, recorder) = run(
             &extensions,
             &fixture.runtime,
-            fixture.registry.clone(),
+            fixture.ordinary_registry.clone(),
             model,
         )
         .await;
@@ -687,8 +687,7 @@ async fn published_tools(
         rustx::tools::NativeToolPolicies::default(),
     )
     .expect("ordinary native registration");
-    let capability =
-        common::capability_lease_with(ordinary, &fixture.runtime, extensions, policy).await;
+    let capability = common::capability_lease_with(ordinary, &fixture.runtime, policy).await;
     let snapshot = capability.snapshot().clone();
     let active = snapshot
         .tool_registry()
@@ -894,7 +893,6 @@ async fn ext259_the_todo_tool_schema_is_stable_across_list_mutations() {
     let capability = common::capability_lease_with(
         rustx::tools::executor::ToolRegistry::new(),
         &fixture.runtime,
-        &NativeAgentExtensions::with_todo(),
         rustx::capabilities::ToolActivationPolicy::default(),
     )
     .await;
@@ -1044,7 +1042,7 @@ async fn ext259_todo_and_agent_status_are_independent_and_change_no_loop_semanti
             ),
             success_result("worker"),
         );
-        let mut tools = fixture.registry.clone();
+        let mut tools = fixture.ordinary_registry.clone();
         tool.register(&mut tools);
         let model = fake_model(script.clone());
         let (result, recorder) = run(&extensions, &fixture.runtime, tools, model.clone()).await;
@@ -1176,7 +1174,11 @@ async fn ext259_disabling_todo_preserves_history_and_re_enabling_reconstructs_it
                     dir.path().join("artifacts"),
                 )
             }
-            .with_todo(todo.then_some(rustx::extensions::TodoExtensionConfig {})),
+            .with_extensions(if todo {
+                NativeAgentExtensions::with_todo()
+            } else {
+                NativeAgentExtensions::none()
+            }),
         )
         .expect("tool runtime")
     };
@@ -1211,9 +1213,10 @@ async fn ext259_disabling_todo_preserves_history_and_re_enabling_reconstructs_it
         "a Todo-disabled launch composes no current list at all"
     );
     let mut extension_registry = rustx::tools::executor::ToolRegistry::new();
-    NativeAgentExtensions::none()
-        .register_tools(&mut extension_registry)
-        .expect("an absent extension registers nothing");
+    second
+        .extension_tool_plane()
+        .register_into(&mut extension_registry)
+        .expect("an unmaterialized extension registers nothing");
     assert!(
         extension_registry.names().is_empty(),
         "and publishes no current todo Tool"
@@ -1305,7 +1308,6 @@ async fn ext259_a_resource_reload_cannot_install_or_remove_the_todo_extension() 
         let capability = common::capability_lease_with(
             ordinary_base(),
             &fixture.runtime,
-            &extensions,
             rustx::capabilities::ToolActivationPolicy::default(),
         )
         .await;
@@ -1383,6 +1385,355 @@ async fn ext259_a_resource_reload_cannot_install_or_remove_the_todo_extension() 
             restored.contains(&"todo".to_owned()),
             composed,
             "and cannot hot-install one either"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Issue #259 — one frozen composition, four facets.
+//
+// The contract these prove is the one the whole migration rests on:
+//
+// ```text
+// NativeAgentExtensions          one frozen value, stored by the conversation
+//   |                            tool runtime that materializes it
+//   |-- ConversationTodoList     Todo state authority
+//   |-- ExtensionToolPlane       the model Tool surface, DERIVED from that
+//   |                            authority — the only constructor reads the
+//   |                            owners, never a configuration value
+//   |-- AgentStatusEngine        the status materialization
+//   `-- native_extensions()      the Runtime Client effective projection,
+//                                read straight off the stored value
+// ```
+//
+// So the invalid states #259 is about are not "rejected at runtime"; the
+// non-empty Tool plane has no constructor that does not take the state owner,
+// and the `ConversationRuntime` ownership-transfer boundary refuses the one
+// remaining way to build an incoherent runtime — pairing facets materialized
+// for two different compositions.
+// ---------------------------------------------------------------------------
+
+/// Composes one `ConversationRuntime` over an explicit conversation tool
+/// runtime and an explicit extension Tool plane (Issue #259).
+///
+/// This is the **real** ownership-transfer boundary — the place a
+/// conversation's Todo state owner, its extension Tool plane, and its Agent
+/// Status engine become one runtime — so it is where the single-composition
+/// invariant is proved, rather than at `LocalConversationCore`. Passing the
+/// plane separately is what lets a test hand this boundary two facets
+/// materialized for two different compositions; production never can, because
+/// both real composition sites derive the plane from the tool runtime they
+/// just built.
+///
+/// The Agent Status engine is derived from the tool runtime's own frozen
+/// composition, for the same reason: it is a facet of one decision, not a
+/// second input.
+///
+/// # Errors
+///
+/// Returns the construction failure, including
+/// `ConversationRuntimeError::ExtensionCompositionMismatch` when the facets
+/// do not follow from one frozen composition.
+async fn conversation_runtime_with_extension_plane(
+    tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
+    extension_tools: rustx::extensions::ExtensionToolPlane,
+) -> Result<ComposedRuntime, rustx::runtime::ConversationRuntimeError> {
+    let dir = tempfile::tempdir().expect("capability temp dir");
+    let coordinator = rustx::capabilities::CapabilityCoordinator::new(
+        rustx::capabilities::CapabilityCoordinatorConfig {
+            python_sources: std::collections::BTreeMap::new(),
+            conversation_id: tool_runtime.conversation_id().clone(),
+            workspace: tool_runtime.workspace().clone(),
+            base_tool_registry: std::sync::Arc::new(rustx::tools::executor::ToolRegistry::new()),
+            extension_tools,
+            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
+            mcp_servers: std::collections::BTreeMap::new(),
+            base_environment: tool_runtime.environment().clone(),
+            environment_store_root: dir.path().join("skill-env"),
+        },
+    )
+    .expect("capability coordinator");
+    let candidate = coordinator
+        .prepare_candidate()
+        .await
+        .expect("candidate preparation");
+    coordinator.commit(candidate).expect("candidate commit");
+    let estimator: std::sync::Arc<dyn rustx::context::TokenEstimator> =
+        std::sync::Arc::new(rustx::context::DefaultTokenEstimator);
+    let runtime =
+        rustx::runtime::ConversationRuntime::new(rustx::runtime::RuntimeConversationConfig {
+            agent_id: rustx::runtime::identity::AgentId::new("agent-extension-composition"),
+            model: support::model::scripted_session_model(support::fake::fake_model(Vec::new())),
+            approval_mode: rustx::runtime::ApprovalMode::Policy,
+            model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
+            tool_deadline_policy: rustx::tools::deadline::ToolExecutionDeadlinePolicy::default(),
+            context: rustx::runtime::ConversationContextConfig {
+                policy: rustx::context::SessionContextPolicy {
+                    reserve_tokens: 0,
+                    keep_recent_tokens: 0,
+                    summary_output_cap: None,
+                },
+                estimator,
+                // The status facet of the same frozen decision.
+                status_engine: tool_runtime
+                    .extensions()
+                    .agent_status_engine(std::sync::Arc::new(rustx::context::SystemClock)),
+            },
+            tool_runtime: tool_runtime.clone(),
+            resources: std::sync::Arc::new(rustx::runtime::RuntimeResourceSnapshot::new(
+                rustx::runtime::RuntimeResourceRevision::new(1),
+                Vec::new(),
+                None,
+                rustx::context::ContextAssembly::new(),
+                coordinator.current_snapshot(),
+            )),
+            resource_loader: std::sync::Arc::new(
+                rustx::runtime::FilesystemRuntimeResourceLoader::new(
+                    coordinator.current_snapshot().workspace_root(),
+                ),
+            ),
+            capability: coordinator,
+            clock: None,
+            initial_messages: Vec::new(),
+            subagents: None,
+            workflow_output: None,
+        })?;
+    Ok(ComposedRuntime { runtime, _dir: dir })
+}
+
+/// One composed runtime and the environment-store root it outlives.
+///
+/// The directory is declared **last**: struct fields drop in declaration
+/// order, so the runtime and every handle taken from it are released before
+/// the directory is removed.
+struct ComposedRuntime {
+    runtime: rustx::runtime::ConversationRuntime,
+    _dir: tempfile::TempDir,
+}
+
+/// One conversation tool runtime frozen on an explicit composition.
+fn todo_tool_runtime(
+    label: &str,
+    extensions: &NativeAgentExtensions,
+) -> (
+    tempfile::TempDir,
+    rustx::tools::runtime::ConversationToolRuntime,
+) {
+    let dir = tempfile::tempdir().expect("lab");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let runtime = rustx::tools::runtime::ConversationToolRuntime::from_config(
+        rustx::runtime::identity::ConversationId::new(label),
+        rustx::tools::runtime::ConversationRuntimeConfig::new(
+            &workspace,
+            dir.path().join("artifacts"),
+        )
+        .with_extensions(extensions.clone()),
+    )
+    .expect("tool runtime");
+    (dir, runtime)
+}
+
+/// Issue #259 regressions 1 and 4: one frozen composition decides Todo
+/// state, the Todo Tool, and the effective projection together.
+///
+/// The three facets are read back from one materialization, across both
+/// authored spellings of the public document. Nothing here configures the
+/// Tool surface: it is derived from the state owner, which is why the two
+/// columns cannot come apart.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ext259_one_frozen_composition_decides_todo_state_tool_and_projection() {
+    for composed in [true, false] {
+        let extensions = composition(serde_json::json!({"todo": {"enabled": composed}}));
+        let (_dir, runtime) = todo_tool_runtime("conv-ext259-one-decision", &extensions);
+
+        // Facet 1: the conversation-owned Todo state authority.
+        assert_eq!(runtime.todos().is_some(), composed);
+        assert_eq!(runtime.todo_snapshot().is_some(), composed);
+
+        // Facet 2: the extension Tool plane, derived from facet 1.
+        let plane = runtime.extension_tool_plane();
+        assert_eq!(
+            plane.tool_names(),
+            if composed {
+                vec!["todo".to_owned()]
+            } else {
+                Vec::new()
+            },
+            "the published extension Tool set follows the materialized owner"
+        );
+
+        // Facet 3: the stored composition the effective projection reads.
+        assert_eq!(runtime.extensions(), &extensions);
+        assert_eq!(runtime.extensions().todo().is_some(), composed);
+
+        // And the capability plane a coordinator composes from that plane
+        // agrees with both, under an ordinary activation policy that selects
+        // every ordinary capability.
+        let capability =
+            common::capability_lease(rustx::tools::executor::ToolRegistry::new(), &runtime).await;
+        assert_eq!(
+            capability
+                .snapshot()
+                .tool_registry()
+                .names()
+                .contains(&"todo"),
+            composed,
+            "the model's Tool set cannot disagree with the conversation's Todo state"
+        );
+    }
+}
+
+/// Issue #259 regressions 2 and 3: neither mismatched runtime is
+/// constructible.
+///
+/// "Todo Tool on / Todo state off" is proved *unrepresentable* rather than
+/// rejected: [`ExtensionToolPlane`] has exactly two constructors, and the one
+/// that can publish `todo` takes the materialized `ConversationTodoList`. The
+/// public one produces the empty plane and nothing else, so there is no value
+/// in the process that offers `todo` without a list behind it.
+///
+/// "Todo state on / Todo Tool off" is what remains representable — a
+/// coordinator composed from *another* conversation's materialization — and
+/// it is refused at the `ConversationRuntime` ownership-transfer boundary,
+/// which is the real construction seam rather than `LocalConversationCore`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ext259_neither_mismatched_todo_runtime_can_be_constructed() {
+    use rustx::extensions::ExtensionToolPlane;
+
+    // ---- Todo Tool without Todo state: unrepresentable ----
+    //
+    // The only publicly constructible plane is the empty one. A plane that
+    // publishes `todo` can be obtained from nowhere but a tool runtime that
+    // materialized the list, so the deterministic `tool_runtime.todos()`
+    // failure this blocker is about has no reachable precondition.
+    assert!(
+        ExtensionToolPlane::none().tool_names().is_empty(),
+        "the one public plane constructor cannot publish an extension Tool"
+    );
+    let (_absent_dir, absent) =
+        todo_tool_runtime("conv-ext259-absent", &NativeAgentExtensions::none());
+    assert!(absent.todos().is_none() && absent.extension_tool_plane().tool_names().is_empty());
+
+    // ---- Todo state without the Todo Tool: refused at construction ----
+    //
+    // Both runtimes are real and individually coherent; the coordinator is
+    // composed from the *wrong* one's materialization. That is the only way
+    // left to spell the mismatch, and it fails closed.
+    let (_owning_dir, owning) =
+        todo_tool_runtime("conv-ext259-owning", &NativeAgentExtensions::with_todo());
+    assert!(owning.todos().is_some());
+    let mismatched =
+        conversation_runtime_with_extension_plane(&owning, absent.extension_tool_plane()).await;
+    assert!(
+        matches!(
+            mismatched,
+            Err(
+                rustx::runtime::ConversationRuntimeError::ExtensionCompositionMismatch {
+                    composed_todo: true,
+                    materialized_todo_state: true,
+                    published_todo_tool: false,
+                    ..
+                }
+            )
+        ),
+        "a Todo-owning conversation may not be served a Tool plane without its Tool: {:?}",
+        mismatched.err()
+    );
+
+    // The symmetric pairing is refused for the symmetric reason: a
+    // conversation that owns no list may not be served a plane that offers
+    // the Tool.
+    let (_second_owner_dir, second_owner) = todo_tool_runtime(
+        "conv-ext259-second-owner",
+        &NativeAgentExtensions::with_todo(),
+    );
+    let reversed =
+        conversation_runtime_with_extension_plane(&absent, second_owner.extension_tool_plane())
+            .await;
+    assert!(
+        matches!(
+            reversed,
+            Err(
+                rustx::runtime::ConversationRuntimeError::ExtensionCompositionMismatch {
+                    composed_todo: false,
+                    materialized_todo_state: false,
+                    published_todo_tool: true,
+                    ..
+                }
+            )
+        ),
+        "a conversation with no list may not be offered the todo Tool: {:?}",
+        reversed.err()
+    );
+
+    // And the coherent pairing of the same two facets constructs normally,
+    // so the two refusals above are about the mismatch and not about the
+    // fixture.
+    let coherent =
+        conversation_runtime_with_extension_plane(&owning, owning.extension_tool_plane()).await;
+    assert!(
+        coherent.is_ok(),
+        "the coherent composition constructs: {:?}",
+        coherent.err()
+    );
+}
+
+/// Issue #259 regression 4: the Runtime Client effective Todo projection is
+/// the same stored decision the Tool Plane was proved against.
+///
+/// `native_extensions()` no longer reconstructs the composition from
+/// materialized parts — it returns the one value the conversation tool
+/// runtime stored — and construction already proved every facet followed from
+/// it. So "projection says Todo composed, Tool Plane says otherwise" is not a
+/// disagreement the runtime can reach.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ext259_the_effective_projection_cannot_disagree_with_the_tool_plane() {
+    for composed in [true, false] {
+        let extensions = composition(serde_json::json!({
+            "todo": {"enabled": composed},
+            "agentStatus": {"enabled": false},
+        }));
+        let (_dir, tool_runtime) = todo_tool_runtime("conv-ext259-projection", &extensions);
+        let composed_runtime = conversation_runtime_with_extension_plane(
+            &tool_runtime,
+            tool_runtime.extension_tool_plane(),
+        )
+        .await
+        .expect("the coherent composition constructs");
+        let runtime = &composed_runtime.runtime;
+
+        let projected = runtime.native_extensions();
+        assert_eq!(
+            projected, extensions,
+            "the projection is the frozen decision"
+        );
+        assert_eq!(
+            projected.todo().is_some(),
+            composed,
+            "and it is the authoritative Todo answer"
+        );
+        assert_eq!(
+            rustx::runtime_client::settings::EffectiveNativeAgentExtensions::project(&projected)
+                .todo
+                .is_some(),
+            composed,
+            "the wire projection carries exactly that fact"
+        );
+        assert_eq!(
+            runtime.tool_runtime().todos().is_some(),
+            composed,
+            "beside the Todo state the same decision materialized"
+        );
+        assert_eq!(
+            runtime
+                .tool_runtime()
+                .extension_tool_plane()
+                .tool_names()
+                .contains(&"todo".to_owned()),
+            composed,
+            "and the Tool Plane the same decision published"
         );
     }
 }

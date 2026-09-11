@@ -104,7 +104,7 @@ async fn recovery_capability(
         conversation_id: tool_runtime.conversation_id().clone(),
         workspace: tool_runtime.workspace().clone(),
         base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
-        extensions: rustx::extensions::NativeAgentExtensions::none(),
+        extension_tools: tool_runtime.extension_tool_plane(),
         tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
         skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
         mcp_servers: std::collections::BTreeMap::from([(
@@ -737,7 +737,7 @@ async fn an_unanswered_mcp_call_is_bounded_by_the_generic_hard_deadline() {
     if recovery::serve_if_recovery_fixture_mode().await {
         return;
     }
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let control = recovery::RecoveryControl::new(fixture.dir().path());
     let capability = recovery_capability(
         &fixture.runtime,
@@ -860,7 +860,7 @@ async fn mcp_progress_refreshes_idle_liveness_and_never_extends_the_hard_deadlin
     if recovery::serve_if_recovery_fixture_mode().await {
         return;
     }
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let control = recovery::RecoveryControl::new(fixture.dir().path());
     let capability = recovery_capability(
         &fixture.runtime,
@@ -961,7 +961,7 @@ async fn transport_loss_after_dispatch_is_unknown_and_reconnect_never_replays_it
     if recovery::serve_if_recovery_fixture_mode().await {
         return;
     }
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let control = recovery::RecoveryControl::new(fixture.dir().path());
     // Only generation 1 dies with the request in flight; generation 2 serves
     // normally.
@@ -1077,7 +1077,7 @@ async fn a_failed_reconnect_is_a_pre_frontier_failure_and_never_replays_the_ambi
     if recovery::serve_if_recovery_fixture_mode().await {
         return;
     }
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let control = recovery::RecoveryControl::new(fixture.dir().path());
     let capability = recovery_capability(
         &fixture.runtime,
@@ -1165,7 +1165,7 @@ async fn cancellation_without_a_remote_response_is_exactly_one_outcome_unknown()
     if recovery::serve_if_recovery_fixture_mode().await {
         return;
     }
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let control = recovery::RecoveryControl::new(fixture.dir().path());
     let capability = recovery_capability(
         &fixture.runtime,
@@ -1266,7 +1266,7 @@ async fn a_remote_response_that_won_arbitration_survives_a_later_cancellation() 
     if recovery::serve_if_recovery_fixture_mode().await {
         return;
     }
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let control = recovery::RecoveryControl::new(fixture.dir().path());
     let capability = recovery_capability(
         &fixture.runtime,
@@ -1343,7 +1343,7 @@ async fn drain_closes_every_connection_generation_and_refuses_reconnection() {
     if recovery::serve_if_recovery_fixture_mode().await {
         return;
     }
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let control = recovery::RecoveryControl::new(fixture.dir().path());
     let capability = recovery_capability(
         &fixture.runtime,
@@ -1432,7 +1432,7 @@ async fn a_failed_capability_refresh_keeps_the_last_known_good_generation() {
     if recovery::serve_if_recovery_fixture_mode().await {
         return;
     }
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let control = recovery::RecoveryControl::new(fixture.dir().path());
     // Generation 2 — the one a refresh would establish — refuses to
     // handshake, so the refresh cannot produce a validated generation.
@@ -1536,7 +1536,7 @@ async fn a_successful_refresh_atomically_replaces_the_previous_generation() {
     if recovery::serve_if_recovery_fixture_mode().await {
         return;
     }
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let control = recovery::RecoveryControl::new(fixture.dir().path());
     let capability = recovery_capability(
         &fixture.runtime,
@@ -1628,7 +1628,7 @@ async fn tool_admission_never_observes_a_candidate_under_construction() {
     if recovery::serve_if_recovery_fixture_mode().await {
         return;
     }
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let control = recovery::RecoveryControl::new(fixture.dir().path());
     let capability = recovery_capability(
         &fixture.runtime,
@@ -1717,7 +1717,7 @@ async fn a_poisoned_generation_fails_closed_and_is_replaced_without_replay() {
     if recovery::serve_if_recovery_fixture_mode().await {
         return;
     }
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let control = recovery::RecoveryControl::new(fixture.dir().path());
     let capability = recovery_capability(
         &fixture.runtime,
@@ -1827,7 +1827,7 @@ async fn remote_progress_delivered_just_before_the_response_is_never_discarded()
     if recovery::serve_if_recovery_fixture_mode().await {
         return;
     }
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let control = recovery::RecoveryControl::new(fixture.dir().path());
     let capability = recovery_capability(
         &fixture.runtime,
@@ -1900,7 +1900,7 @@ async fn http_capability(
         conversation_id: tool_runtime.conversation_id().clone(),
         workspace: tool_runtime.workspace().clone(),
         base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
-        extensions: rustx::extensions::NativeAgentExtensions::none(),
+        extension_tools: tool_runtime.extension_tool_plane(),
         tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
         skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
         mcp_servers: std::collections::BTreeMap::from([(server_id.clone(), binding)]),
@@ -1956,7 +1956,7 @@ async fn http_capability(
 /// wall clock in this test is `run_mcp_call`'s outer anti-hang guard.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_silent_streamable_http_call_settles_inside_the_mcp_settlement_plane() {
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let server =
         streamable_http::HttpFixture::start(streamable_http::HttpFixtureControl::new()).await;
     let capability = http_capability(
@@ -2046,7 +2046,7 @@ async fn a_silent_streamable_http_call_settles_inside_the_mcp_settlement_plane()
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn repeated_ambiguous_http_calls_release_progress_on_one_live_generation() {
     const CALLS: u32 = 64;
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let server =
         streamable_http::HttpFixture::start(streamable_http::HttpFixtureControl::new()).await;
     let server_id = McpServerId::new("http-progress-boundedness");
@@ -2157,7 +2157,7 @@ async fn repeated_ambiguous_http_calls_release_progress_on_one_live_generation()
 /// disconnect for it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_streamable_http_response_that_won_arbitration_survives_a_later_cancellation() {
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let server =
         streamable_http::HttpFixture::start(streamable_http::HttpFixtureControl::new()).await;
     let capability = http_capability(
@@ -2278,7 +2278,7 @@ async fn same_binding_carry_forward_keeps_the_published_binding_identity() {
     if recovery::serve_if_recovery_fixture_mode().await {
         return;
     }
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let control = recovery::RecoveryControl::new(fixture.dir().path());
     let script = recovery::RecoveryScript {
         refuse_generations: vec![2],
@@ -2394,7 +2394,7 @@ async fn a_changed_binding_never_publishes_the_previous_bindings_executors() {
         return;
     }
     let test_name = "boundary_suites::mcp_recovery::a_changed_binding_never_publishes_the_previous_bindings_executors";
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let first = recovery::RecoveryControl::new(&fixture.dir().path().join("b1"));
     let script = recovery::RecoveryScript::default();
     let capability = recovery_capability(&fixture.runtime, test_name, &first, &script).await;
@@ -2485,7 +2485,7 @@ async fn a_policy_only_binding_change_also_forfeits_carry_forward() {
     }
     let test_name =
         "boundary_suites::mcp_recovery::a_policy_only_binding_change_also_forfeits_carry_forward";
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let control = recovery::RecoveryControl::new(fixture.dir().path());
     let script = recovery::RecoveryScript {
         refuse_generations: vec![2],
@@ -2578,7 +2578,7 @@ const PROGRESS_CONCURRENCY: usize = 20;
 /// hard deadline and never by a false idle timeout.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_mcp_progress_refreshes_every_idle_watchdog_above_the_old_router_bound() {
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let server =
         streamable_http::HttpFixture::start(streamable_http::HttpFixtureControl::new()).await;
     // The batch must actually run in parallel, so the binding's own
@@ -2741,7 +2741,7 @@ async fn concurrent_mcp_progress_refreshes_every_idle_watchdog_above_the_old_rou
 /// inference.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_correlated_response_never_deletes_progress_the_caller_has_not_claimed() {
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let server =
         streamable_http::HttpFixture::start(streamable_http::HttpFixtureControl::new()).await;
     let capability = http_capability(
@@ -2870,7 +2870,7 @@ async fn drain_terminates_every_streamable_http_request_the_generation_still_own
         fn report(&self, _progress: rustx::tools::types::ToolProgress) {}
     }
 
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let server =
         streamable_http::HttpFixture::start(streamable_http::HttpFixtureControl::new()).await;
     // A directly connected runtime: its connection is *fixed*, so this test
@@ -3006,7 +3006,7 @@ const PRE_SUBSCRIPTION_CONCURRENCY: usize = 64;
 /// claim it, and would have fired a false idle deadline at t=1100.
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn progress_that_beats_every_subscription_still_refreshes_every_idle_watchdog() {
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let server =
         streamable_http::HttpFixture::start(streamable_http::HttpFixtureControl::new()).await;
     let mut binding = server.binding();
@@ -3150,7 +3150,7 @@ async fn progress_that_beats_every_subscription_still_refreshes_every_idle_watch
 /// not allowed to be the thing that cleans up.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn successful_streamable_http_requests_leave_no_request_lifecycle_state() {
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let server =
         streamable_http::HttpFixture::start(streamable_http::HttpFixtureControl::new()).await;
     let runtime = rustx::tools::mcp::McpServerRuntime::connect(
@@ -3287,7 +3287,7 @@ async fn direct_executor_call(
 /// The only wall clock is the outer anti-hang guard.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_streamable_http_request_cancelled_before_dispatch_never_reaches_the_server() {
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let server =
         streamable_http::HttpFixture::start(streamable_http::HttpFixtureControl::new()).await;
     let capability = http_capability(
@@ -3430,7 +3430,7 @@ async fn a_terminal_tool_call_never_dispatches_from_its_stale_outbound_send() {
         fn report(&self, _progress: rustx::tools::types::ToolProgress) {}
     }
 
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let server =
         streamable_http::HttpFixture::start(streamable_http::HttpFixtureControl::new()).await;
     // A directly connected runtime: this test owns the operation future, so
@@ -3656,7 +3656,7 @@ async fn a_replacement_connection_generation_keeps_the_sdk_response_cache_disabl
     if recovery::serve_if_recovery_fixture_mode().await {
         return;
     }
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let control = recovery::RecoveryControl::new(fixture.dir().path());
     let capability = recovery_capability(
         &fixture.runtime,

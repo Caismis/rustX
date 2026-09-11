@@ -656,7 +656,7 @@ async fn selected_capabilities(
             conversation_id: fixture.runtime.conversation_id().clone(),
             workspace: fixture.runtime.workspace().clone(),
             base_tool_registry: Arc::new(selection_registry(fixture)),
-            extensions: rustx::extensions::NativeAgentExtensions::none(),
+            extension_tools: fixture.runtime.extension_tool_plane(),
             tool_activation: policy,
             skill_discovery: rustx::skills::SkillDiscoveryConfig {
                 automatic_roots: vec![fixture.runtime.workspace().root().join(".agents/skills")],
@@ -766,7 +766,7 @@ async fn exact_selection_reaches_provider_requests_and_domain_skill_projection()
                 vec!["python_echo"],
             ),
         ] {
-            let fixture = common::native_fixture();
+            let fixture = common::native_fixture_without_extensions();
             let skill_root = fixture
                 .runtime
                 .workspace()
@@ -976,7 +976,7 @@ async fn filtered_calls_cannot_recover_available_native_or_generated_dispatchers
         ("python_echo", "tool-python_echo"),
         ("workflow_output", "runtime-workflow-output"),
     ] {
-        let fixture = common::native_fixture();
+        let fixture = common::native_fixture_without_extensions();
         let coordinator = selected_capabilities(
             &fixture,
             rustx::capabilities::ToolActivationPolicy {
@@ -1038,7 +1038,7 @@ async fn main_no_tools_coexists_with_independent_workflow_terminal_authority() {
     use rustx::runtime::workflow::{
         WorkflowOutputLatch, WorkflowOutputSubmission, WorkflowOutputTerminal,
     };
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let main = selected_capabilities(
         &fixture,
         rustx::capabilities::ToolActivationPolicy {
@@ -1125,7 +1125,7 @@ async fn main_no_tools_coexists_with_independent_workflow_terminal_authority() {
 #[tokio::test]
 async fn native_admission_pins_policy_axes_and_exposure_across_candidate_changes() {
     use rustx::tools::types::ToolApprovalPolicy::{Always, Never};
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_without_extensions();
     let coordinator = selected_capabilities(
         &fixture,
         rustx::capabilities::ToolActivationPolicy {
@@ -1306,7 +1306,8 @@ async fn read_search_product_defaults_run_adjacent_calls_with_independent_state(
                 }),
             ],
         ]);
-        let capability = common::capability_lease(fixture.registry.clone(), &fixture.runtime).await;
+        let capability =
+            common::capability_lease(fixture.ordinary_registry.clone(), &fixture.runtime).await;
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let execution = AgentExecution::new(
             native_request(&model, fixture.runtime.conversation_id()),
@@ -1356,7 +1357,8 @@ async fn run_native_script(
     call: support::fake::ScriptedCall,
 ) -> common::DurableExecutionAudit {
     let model = support::fake::fake_model(native_tool_turn(&call));
-    let capability = common::capability_lease(fixture.registry.clone(), &fixture.runtime).await;
+    let capability =
+        common::capability_lease(fixture.ordinary_registry.clone(), &fixture.runtime).await;
     let (lease, coordinator) = capability.into_lease_and_coordinator();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = AgentExecution::new(

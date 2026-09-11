@@ -287,13 +287,24 @@ impl RuntimeClientFixtureBuilder {
             rustx::durable::ConversationStore::initialize(&store, &self.durable_history)
                 .expect("seed the durable lineage");
         }
+        // One frozen composition for this fixture's runtime (Issue #259). The
+        // Agent Status member is derived from the engine template the fixture
+        // materializes below rather than configured beside it, for the same
+        // reason the Todo member decides the list and the Tool together: every
+        // facet of the composition must follow from one decision, and
+        // `ConversationRuntime` construction refuses a runtime where they do
+        // not.
+        let extensions = self
+            .extensions
+            .clone()
+            .and_agent_status(self.status_engine.config().clone());
         let tool_runtime = rustx::tools::runtime::ConversationToolRuntime::from_config(
             ConversationId::new(&self.conversation),
             rustx::tools::runtime::ConversationRuntimeConfig::new(
                 &workspace_root,
                 workspace.path().join("artifacts"),
             )
-            .with_todo(self.extensions.todo().copied()),
+            .with_extensions(extensions.clone()),
         )
         .expect("tool runtime");
         let mut base_tools = self.base_tools;
@@ -320,7 +331,7 @@ impl RuntimeClientFixtureBuilder {
                 conversation_id: tool_runtime.conversation_id().clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(base_tools),
-                extensions: self.extensions.clone(),
+                extension_tools: tool_runtime.extension_tool_plane(),
                 tool_activation: self.tool_activation,
                 skill_discovery: rustx::skills::SkillDiscoveryConfig {
                     automatic_roots: vec![tool_runtime.workspace().root().join(".agents/skills")],

@@ -109,7 +109,8 @@ async fn run(
     calls: &[support::fake::ScriptedCall],
 ) -> common::DurableExecutionAudit {
     let model = support::fake::fake_model(turn(calls));
-    let capability = common::capability_lease(fixture.registry.clone(), &fixture.runtime).await;
+    let capability =
+        common::capability_lease(fixture.ordinary_registry.clone(), &fixture.runtime).await;
     let (lease, coordinator) = capability.into_lease_and_coordinator();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = AgentExecution::new(

@@ -330,7 +330,7 @@ async fn one_settled_tool_batch_creates_one_post_tool_opportunity() {
         "conv-m5",
         "attempt-post-only",
         model.clone(),
-        fixture.registry.clone(),
+        fixture.ordinary_registry.clone(),
         vec![MessageBlock::User(inbound("bootstrap", "work"))],
         InitialTurnTrigger::Continuation,
         &fixture.runtime,
@@ -458,7 +458,7 @@ async fn sibling_completion_order_cannot_split_post_tool_opportunity() {
     let mut started_b = tool_b.started();
     let mut completed_b = tool_b.completed();
     let fixture = common::native_fixture();
-    let mut tools = fixture.registry.clone();
+    let mut tools = fixture.ordinary_registry.clone();
     tool_a.register(&mut tools);
     tool_b.register(&mut tools);
 
@@ -590,7 +590,7 @@ async fn committed_todo_state_emits_one_bounded_post_tool_reminder() {
         "conv-m5",
         "attempt-todo-status",
         model.clone(),
-        fixture.registry.clone(),
+        fixture.ordinary_registry.clone(),
         vec![MessageBlock::User(inbound("bootstrap", "plan the work"))],
         InitialTurnTrigger::Continuation,
         &fixture.runtime,
@@ -661,7 +661,7 @@ async fn todo_cooldown_uses_later_primary_starts_and_repeats_at_four() {
         ),
         success_result("noop"),
     );
-    let mut tools = fixture.registry.clone();
+    let mut tools = fixture.ordinary_registry.clone();
     noop.register(&mut tools);
 
     let (result, recorder) = run_attempt(
