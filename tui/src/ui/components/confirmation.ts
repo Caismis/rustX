@@ -3,9 +3,11 @@
 import {
   matchesKey,
   truncateToWidth,
+  wrapTextWithAnsi,
   type Focusable,
 } from "@earendil-works/pi-tui";
 
+import { sanitizeField } from "../../sanitize.ts";
 import { role } from "../theme.ts";
 import type { PopupContent } from "./popup-frame.ts";
 
@@ -13,6 +15,7 @@ export interface ConfirmationViewOptions {
   title: string;
   subject: string;
   warning: string;
+  confirmLabel: string;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -34,8 +37,11 @@ export class ConfirmationView implements PopupContent, Focusable {
   readonly #onCancel: () => void;
   #bodyHeight = 8;
   #acted = false;
+  #confirmSelected = false;
+  readonly #confirmLabel: string;
 
   constructor(options: ConfirmationViewOptions) {
+    this.#confirmLabel = options.confirmLabel;
     this.#title = options.title;
     this.#subject = options.subject;
     this.#warning = options.warning;
@@ -48,7 +54,7 @@ export class ConfirmationView implements PopupContent, Focusable {
   }
 
   popupFooter(): string[] {
-    return ["Enter/Y confirm · Esc/N cancel"];
+    return ["←→/Tab choose · Enter activate · Esc cancel"];
   }
 
   setBodyHeight(height: number): void {
@@ -59,9 +65,14 @@ export class ConfirmationView implements PopupContent, Focusable {
 
   handleInput(data: string): void {
     if (this.#acted) return;
-    if (matchesKey(data, "enter") || data === "y" || data === "Y") {
+    if (matchesKey(data, "left") || matchesKey(data, "right") || matchesKey(data, "tab")) {
+      this.#confirmSelected = !this.#confirmSelected;
+      return;
+    }
+    if (matchesKey(data, "enter")) {
       this.#acted = true;
-      this.#onConfirm();
+      if (this.#confirmSelected) this.#onConfirm();
+      else this.#onCancel();
       return;
     }
     if (matchesKey(data, "escape") || data === "n" || data === "N") {
@@ -71,12 +82,15 @@ export class ConfirmationView implements PopupContent, Focusable {
   }
 
   render(width: number): string[] {
+    const choices = [
+      `${this.#confirmSelected ? " " : "❯"} Cancel`,
+      `${this.#confirmSelected ? "❯" : " "} ${this.#confirmLabel}`,
+    ];
     const lines = [
-      role.strong(this.#subject),
-      "",
-      role.warning(this.#warning),
-      "",
-      "This cannot be undone by the runtime.",
+      ...(this.#bodyHeight === 1 ? [choices[this.#confirmSelected ? 1 : 0]!] : choices),
+      role.strong(sanitizeField(this.#subject)),
+      "Permanent: this cannot be undone through rustX.",
+      ...wrapTextWithAnsi(role.warning(sanitizeField(this.#warning)), Math.max(1, width)),
     ];
     return lines
       .slice(0, this.#bodyHeight)

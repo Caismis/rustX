@@ -186,3 +186,11 @@ worker test acquires the supervisor mutex with `try_lock` before releasing the
 worker. No sleeps establish these synchronization facts. Existing #254 blockers,
 stale preview, fork/clone survivors and provider-backed active-A/deleted-B
 conformance remain part of validation.
+
+## TUI entry point
+
+`/resume` exposes Ctrl+D for preview-first confirmed historical deletion. Cancel
+is the default focused action. The TUI submits only the captured SessionId and
+native target revision, then reconciles paginated visibility from the native
+boundary. Cleanup retry uses `session_delete_recover`; no client storage or
+model-visible operation participates. See [TUI deletion help](../tui/README.md#delete-historical-sessions-inside-resume).

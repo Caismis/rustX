@@ -83,7 +83,6 @@ import type {
 } from "../protocol/types.ts";
 import {
   BoundarySelector,
-  SessionSelector,
 } from "./components/session-selector.ts";
 import { TreeSelector, type TreeSelection } from "./components/tree-selector.ts";
 import {
@@ -98,6 +97,8 @@ import {
 } from "./subagent-navigation.ts";
 import { ModelSelector } from "./components/model-selector.ts";
 import { InspectionView } from "./components/inspection-view.ts";
+import { SessionDeletionWorkflow } from "./session-deletion-workflow.ts";
+import { ResumeSelector } from "./components/resume-selector.ts";
 import { ConfirmationView } from "./components/confirmation.ts";
 import { PopupFrame, type PopupContent } from "./components/popup-frame.ts";
 import { TransientFeedbackSurface } from "./components/transient-feedback.ts";
@@ -177,6 +178,7 @@ export interface RuntimeAttachmentHandle {
  */
 interface PresentationLease {
   epoch: number;
+  sessionListGeneration: number;
   session: RuntimeClientAttachment;
 }
 
@@ -250,6 +252,9 @@ export class RustxTuiApp {
   #subagentListFocused = false;
   #selectedSubagentId: string | undefined;
   #presentationEpoch = 0;
+  #deletion!: SessionDeletionWorkflow;
+  #resumePresentation: ResumeSelector | undefined;
+  #resumeQuery: string | undefined;
   #terminalFinishStarted = false;
   #removeStateListener: (() => void) | undefined;
   #removeSnapshotListener: (() => void) | undefined;
@@ -300,6 +305,7 @@ export class RustxTuiApp {
   ): void {
     // Binding a new attachment invalidates every local surface and every
     // continuation that was started against the previous one.
+    this.#deletion?.terminate();
     this.#invalidatePresentation();
     this.#removeStateListener?.();
     this.#removeSnapshotListener?.();
@@ -308,6 +314,17 @@ export class RustxTuiApp {
     this.#connection = connection;
     this.#child = child;
     this.#dispatcher.setSession(session);
+    const deletion = new SessionDeletionWorkflow(session,
+      () => this.#session === session && this.#connection === connection &&
+        connection.closed === undefined && !this.#finished && !this.#terminalFinishStarted,
+      (text) => this.#showTransient("info", text));
+    this.#deletion = deletion;
+    this.#resumeQuery = undefined;
+    deletion.subscribe(() => {
+      if (this.#deletion !== deletion) return;
+      this.#syncDeletionPresentation();
+      this.#tui.requestRender();
+    });
     this.#removeSnapshotListener = session.onSnapshot(() => {
       // A resync is an authoritative replacement within this attachment. It
       // invalidates local inspection, picker, and transient ownership, while
@@ -325,6 +342,7 @@ export class RustxTuiApp {
     const boundSession = session;
     this.#removeCloseListener = connection.onClose((error) => {
       if (this.#connection !== connection || this.#session !== boundSession) return;
+      deletion.terminate();
       if (this.#restarting || this.#quitting || this.#terminalFinishStarted) return;
       if (this.#navigating) return;
       if (this.#navigationStack.length > 0) {
@@ -498,6 +516,8 @@ export class RustxTuiApp {
           return { consume: true };
         }
         if (matchesKey(data, "escape")) {
+          // Focused popup components own cancellation and nested presentation state.
+          if (this.#overlay !== undefined && this.#hitlOverlay === undefined) return undefined;
           const state = this.#session.state;
           const attempt = state?.attempt;
           const acted = this.#overlay !== undefined || (
@@ -536,7 +556,12 @@ export class RustxTuiApp {
     this.#editor.setText("");
 
     try {
-      const outcome = await this.#dispatcher.submit(text);
+      // Reopening a retained deletion workflow queries its actual native search,
+      // rather than relabeling an unfiltered page with the preserved query.
+      const query = this.#resumeQuery ?? this.#deletion.context.query;
+      const outcome = line === "/resume" && this.#deletion.state.kind !== "idle"
+        ? { kind: "choose_session" as const, ...await lease.session.listSessions(query, 0), query }
+        : await this.#dispatcher.submit(text);
       if (!this.#isCurrentPresentationLease(lease)) return;
       await this.#handleOutcome(outcome, lease);
     } catch (error: unknown) {
@@ -665,6 +690,7 @@ export class RustxTuiApp {
     const lease = this.#presentationLease();
     const confirmation = new ConfirmationView({
       title: "Dispose retained workspace",
+      confirmLabel: "Dispose workspace",
       subject: `Subagent ${subagentId}`,
       warning: resourceState === "preserved_unresolved"
         ? "This workspace was preserved because physical settlement could not be proven. rustX will re-check ownership before attempting disposal."
@@ -987,7 +1013,7 @@ export class RustxTuiApp {
     content: PopupContent,
     options: { width: SizeValue; heightPercent: number; minWidth?: number },
   ): OverlayHandle {
-    this.#closeOverlay();
+    this.#closeOverlay(true);
     const frame = new PopupFrame(content);
     const handle = this.#tui.showOverlay(frame, {
       width: options.width,
@@ -1051,56 +1077,32 @@ export class RustxTuiApp {
   }
 
   #showSessionSelector(
-    sessions: SessionSummaryView[],
+    sessions: SessionSummaryView[] | undefined,
     nextOffset: number | undefined,
     query: string,
     lease: PresentationLease,
   ): void {
     if (!this.#isCurrentPresentationLease(lease)) return;
-    if (sessions.length === 0) {
+    if (this.#hitlOverlay !== undefined) return;
+    const workflow = this.#deletion;
+    // Initial /resume command responses obey the same mutation boundary as pages.
+    if (lease.sessionListGeneration !== workflow.generation) return;
+    if (sessions?.length === 0 && workflow.state.kind === "idle") {
       this.#showTransient("info", "no persisted sessions are available");
       return;
     }
-    let currentQuery = query;
-    let currentNextOffset = nextOffset;
-    let requestSerial = 0;
-    const selector = new SessionSelector({ sessions, nextOffset, query });
+    const selector = new ResumeSelector({
+      initialPage: sessions === undefined ? undefined : { sessions, nextOffset }, query, client: lease.session, workflow,
+      alive: () => this.#isCurrentPresentationLease(lease) && this.#overlay === handle,
+      feedback: (text) => this.#showTransient("info", text),
+    });
     const handle = this.#showPopup(selector, { width: "80%", heightPercent: 70 });
+    this.#resumePresentation = selector;
     selector.onChange = () => {
       if (this.#isCurrentPresentationLease(lease)) this.#tui.requestRender();
     };
     selector.onCancel = () => {
-      if (this.#isCurrentPresentationLease(lease) && this.#overlay === handle) {
-        this.#closeOverlay();
-      }
-    };
-    selector.onQueryChange = (nextQuery) => {
-      currentQuery = nextQuery;
-      currentNextOffset = undefined;
-      const serial = ++requestSerial;
-      void lease.session.listSessions(nextQuery, 0).then((page) => {
-        if (!this.#isCurrentPresentationLease(lease) || serial !== requestSerial) return;
-        currentNextOffset = page.nextOffset;
-        selector.replacePage(page.sessions, page.nextOffset);
-      }).catch((error: unknown) => {
-        if (!this.#isCurrentPresentationLease(lease) || serial !== requestSerial) return;
-        this.#showTransient("error", `session search failed: ${compactDiagnostic(error)}`);
-        selector.replacePage([], undefined);
-      });
-    };
-    selector.onLoadMore = () => {
-      const offset = currentNextOffset;
-      if (offset === undefined) return;
-      const serial = requestSerial;
-      void lease.session.listSessions(currentQuery, offset).then((page) => {
-        if (!this.#isCurrentPresentationLease(lease) || serial !== requestSerial) return;
-        currentNextOffset = page.nextOffset;
-        selector.appendPage(page.sessions, page.nextOffset);
-      }).catch((error: unknown) => {
-        if (!this.#isCurrentPresentationLease(lease) || serial !== requestSerial) return;
-        this.#showTransient("error", `session page failed: ${compactDiagnostic(error)}`);
-        selector.appendPage([], currentNextOffset);
-      });
+      if (this.#isCurrentPresentationLease(lease) && this.#overlay === handle) this.#closeOverlay();
     };
     selector.onSelect = (session) => {
       if (!this.#isCurrentPresentationLease(lease)) return;
@@ -1113,6 +1115,21 @@ export class RustxTuiApp {
           }
         });
     };
+  }
+
+  /** HITL and any current popup keep focus; unresolved native outcomes wait here. */
+  #syncDeletionPresentation(): void {
+    const workflow = this.#deletion;
+    if (workflow?.state.kind === "result" && workflow.state.outcome.status === "deleted" && !this.#resumePresentation) {
+      workflow.dismiss();
+      return;
+    }
+    if (!workflow?.needsPresentation || this.#overlay !== undefined || this.#finished || this.#terminalFinishStarted) return;
+    const reconciliation = workflow.reconciliation;
+    const query = this.#resumeQuery ?? workflow.context.query;
+    const page = reconciliation.kind === "ready" && reconciliation.query === query ? reconciliation.page : undefined;
+    this.#showSessionSelector(page?.sessions, page?.nextOffset,
+      query, this.#presentationLease());
   }
 
   #showBoundarySelector(
@@ -1228,13 +1245,17 @@ export class RustxTuiApp {
     };
   }
 
-  #closeOverlay(): void {
+  #closeOverlay(replacing = false): void {
     const handle = this.#overlay;
     if (handle === undefined) return;
+    if (this.#resumePresentation) this.#resumeQuery = this.#resumePresentation.reconciliationContext().query;
+    this.#resumePresentation?.dispose();
+    this.#resumePresentation = undefined;
     handle.hide();
     this.#overlay = undefined;
     this.#hitlOverlay = undefined;
     this.#tui.setFocus(this.#editor);
+    if (!replacing) this.#syncDeletionPresentation();
     this.#tui.requestRender();
   }
 
@@ -1501,6 +1522,7 @@ export class RustxTuiApp {
   #presentationLease(): PresentationLease {
     return {
       epoch: this.#presentationEpoch,
+      sessionListGeneration: this.#deletion.generation,
       session: this.#session,
     };
   }
@@ -1565,7 +1587,7 @@ export class RustxTuiApp {
   }
 
   #resetLocalSurfaces(): void {
-    this.#closeOverlay();
+    this.#closeOverlay(true);
     // An authoritative replacement re-derives presentation focus from the
     // new projection: no stale overlay or dismissed marker may submit
     // against, or hide, an interaction the runtime owns now.
@@ -1684,6 +1706,7 @@ export class RustxTuiApp {
       ),
     );
     this.#syncHitlOverlay(state);
+    this.#syncDeletionPresentation();
     this.#tui.requestRender();
   }
 
@@ -1770,7 +1793,9 @@ export class RustxTuiApp {
             ),
           ),
         };
-        if (this.#hitlOverlay === overlay) this.#closeOverlay();
+        if (this.#hitlOverlay === overlay) {
+          this.#closeOverlay();
+        }
       },
       onInterrupt: () => void this.#onInterrupt(),
       onNavigate: (interaction) => {
@@ -1854,6 +1879,7 @@ export class RustxTuiApp {
   }
 
   #finish(code: number): void {
+    this.#deletion.terminate();
     if (this.#finished) {
       return;
     }

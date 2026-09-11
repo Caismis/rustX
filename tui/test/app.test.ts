@@ -9,8 +9,9 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { TUI } from "@earendil-works/pi-tui";
+import { TUI, Editor } from "@earendil-works/pi-tui";
 
+import { plainText } from "../src/ui/theme.ts";
 import { RustxTuiApp } from "../src/ui/app.ts";
 import { ConnectionClosedError, RuntimeRequestError } from "../src/runtime/connection.ts";
 import { emptyPresentationState } from "../src/presentation/projection.ts";
@@ -18,7 +19,7 @@ import { TransientFeedbackSurface } from "../src/ui/components/transient-feedbac
 import type { ChildRuntimeProcess } from "../src/runtime/child-process.ts";
 import type { RuntimeClientConnection } from "../src/runtime/connection.ts";
 import type { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
-import type { SessionSummaryView } from "../src/protocol/types.ts";
+import type { SessionDeleteResult, SessionSummaryView } from "../src/protocol/types.ts";
 import {
   attemptView,
   approvalInteraction,
@@ -435,6 +436,81 @@ describe("RustxTuiApp lifecycle", () => {
 
     await app.quit();
     await running;
+  });
+
+  it("Session deletion overlay preserves editor, attachment and active projection and owns Esc", async () => {
+    const state = emptyPresentationState(sessionModel("alpha/model-a"));
+    const session = fakeSession(async () => {}, state);
+    const log: string[] = [];
+    const api = session as RuntimeClientAttachment;
+    let previews = 0, executes = 0, cancelled = 0;
+    api.listSessions = async () => ({ sessions: [{ id: "old", name: "history", updated_at: "today", active_node: "node-2", active: false }] });
+    api.previewSessionDeletion = async () => { previews++; return { status: "preview", preview: { session_id: "old", name: "history", target_revision: "revision", owned_node_count: 1, owned_conversation_count: 1, owned_child_count: 0 } }; };
+    api.deleteSession = async (id, revision) => { assert.equal(id, "old"); assert.equal(revision, "revision"); executes++; api.listSessions = async () => ({ sessions: [] }); return { status: "deleted", session_id: id }; };
+    api.cancelCurrentAttempt = async () => { cancelled++; return "attempt"; };
+    const app = new RustxTuiApp({ session, connection: fakeConnection(), child: fakeChild(log) });
+    const originalSetText = Editor.prototype.setText;
+    let editorWrites = 0;
+    Editor.prototype.setText = function(text: string): void { editorWrites++; originalSetText.call(this, text); };
+    const running = app.run();
+    try {
+      process.stdin.emit("data", "/resume\r"); await waitForApplicationContinuation();
+      const writesBeforeDeletion = editorWrites;
+      process.stdin.emit("data", "\x04"); await waitForApplicationContinuation();
+      process.stdin.emit("data", "\x1b"); await waitForPiEscapeDisambiguation();
+      assert.equal(cancelled, 0); assert.equal(executes, 0);
+      process.stdin.emit("data", "\x04"); await waitForApplicationContinuation();
+      process.stdin.emit("data", "\t\r"); await waitForApplicationContinuation();
+      assert.equal(previews, 2); assert.equal(executes, 1);
+      assert.equal(session.state, state); assert.deepEqual(log, []);
+      assert.equal(editorWrites, writesBeforeDeletion, "deletion never resets the editor");
+    } finally { Editor.prototype.setText = originalSetText; await app.quit(); await running; }
+  });
+
+  it("pending Session execute and recovery own Esc without cancelling the active attempt", async () => {
+    const state = {
+      ...emptyPresentationState(sessionModel("alpha/model-a")),
+      attempt: { ...attemptView(), phase: { type: "running" as const } },
+    };
+    const session = fakeSession(async () => {}, state);
+    const execution = deferred<SessionDeleteResult>();
+    const recovery = deferred<SessionDeleteResult>();
+    let executes = 0, recovers = 0, cancelled = 0, lists = 0;
+    session.listSessions = async () => {
+      lists++;
+      return { sessions: lists === 1 ? [{ id: "old", name: "history", updated_at: "today", active_node: "node-2", active: false }] : [] };
+    };
+    session.previewSessionDeletion = async () => ({ status: "preview", preview: { session_id: "old", name: "history", target_revision: "revision", owned_node_count: 1, owned_conversation_count: 1, owned_child_count: 0 } });
+    session.deleteSession = () => { executes++; return execution.promise; };
+    session.recoverSessionDeletion = () => { recovers++; return recovery.promise; };
+    session.cancelCurrentAttempt = async () => { cancelled++; return "attempt"; };
+    const app = new RustxTuiApp({ session, connection: fakeConnection(), child: fakeChild([]) });
+    const running = app.run();
+    try {
+      process.stdin.emit("data", "/resume\r"); await waitForApplicationContinuation();
+      process.stdin.emit("data", "\x04"); await waitForApplicationContinuation();
+      process.stdin.emit("data", "\t\r"); await waitForApplicationContinuation();
+      assert.equal(executes, 1);
+      // Kitty's complete Escape sequence avoids the bare-ESC disambiguation timer.
+      process.stdin.emit("data", "\x1b[27u\x1b[27u"); await waitForApplicationContinuation();
+      assert.equal(cancelled, 0);
+      execution.resolve({ status: "committed_cleanup_pending", session_id: "old" });
+      await waitForApplicationContinuation();
+      assert.equal(lists, 2, "the focused workflow observed execute settlement");
+      process.stdin.emit("data", "rr"); await waitForApplicationContinuation();
+      assert.equal(recovers, 1, "cleanup action remains focused and single-submit");
+      process.stdin.emit("data", "\x1b[27u\x1b[27u"); await waitForApplicationContinuation();
+      assert.equal(cancelled, 0);
+      recovery.resolve({ status: "deleted", session_id: "old" });
+      await waitForApplicationContinuation();
+      assert.equal(lists, 3, "recovery settlement still rebuilds the list");
+      assert.equal(executes, 1); assert.equal(recovers, 1);
+      // First Escape now closes the reconciled selector; only the next reaches the attempt.
+      process.stdin.emit("data", "\x1b[27u"); await waitForApplicationContinuation();
+      assert.equal(cancelled, 0);
+      process.stdin.emit("data", "\x1b[27u"); await waitForApplicationContinuation();
+      assert.equal(cancelled, 1, "Escape input was actually delivered through app routing");
+    } finally { await app.quit(); await running; }
   });
 
   it("opens a questionnaire overlay and submits one typed response", async () => {
@@ -1584,3 +1660,391 @@ describe("RustxTuiApp lifecycle", () => {
     await running;
   });
 });
+
+/** Real app routing with native operations held at explicit submission gates. */
+async function deletionAppHarness(overlapInitial = false) {
+  const state = { ...emptyPresentationState(sessionModel("alpha/model-a")), attempt: { ...attemptView(), phase: { type: "running" as const } } };
+  const session = fakeSession(async () => {}, state) as RuntimeClientAttachment & {
+    publishState(next: typeof state): void;
+    publishSnapshot(): void;
+  };
+  let preview = deferred<SessionDeleteResult>();
+  const previews: string[] = [];
+  let execution = deferred<SessionDeleteResult>();
+  const recovery = deferred<SessionDeleteResult>();
+  const lateList = deferred<{ sessions: SessionSummaryView[] }>();
+  const lists: Array<[string | undefined, number | undefined]> = [];
+  const executes: string[][] = [], recovers: string[] = [], responses: unknown[] = [];
+  let cancelled = 0;
+  let rows: SessionSummaryView[] = [{ id: "old", name: "historical-target", updated_at: "today", active_node: "node-2", active: false }];
+  let listResponse: ((query?: string, offset?: number) => Promise<{ sessions: SessionSummaryView[]; nextOffset?: number }>) | undefined;
+  session.listSessions = async (query, offset = 0) => {
+    lists.push([query, offset]);
+    if (overlapInitial && lists.length === 1) return lateList.promise;
+    return listResponse ? listResponse(query, offset) : { sessions: [...rows] };
+  };
+  session.previewSessionDeletion = (id) => { previews.push(id); return preview.promise; };
+  session.deleteSession = (id, revision) => { executes.push([id, revision]); return execution.promise; };
+  session.recoverSessionDeletion = (id) => { recovers.push(id); return recovery.promise; };
+  session.cancelCurrentAttempt = async () => { cancelled++; return "attempt-1"; };
+  session.respondInteraction = async (interaction, response) => { responses.push({ interaction, response }); };
+  session.submitInbound = async () => { assert.fail("deletion must not submit model-visible input"); };
+  let close!: (error: ConnectionClosedError) => void;
+  const connection = fakeConnection((listener) => { close = listener; });
+  const original = TUI.prototype.showOverlay;
+  const surfaces: Array<{ content: Parameters<TUI["showOverlay"]>[0]; visible: boolean }> = [];
+  TUI.prototype.showOverlay = function(content, options) {
+    const surface = { content, visible: true };
+    surfaces.push(surface);
+    const handle = original.call(this, content, options);
+    const hide = handle.hide;
+    handle.hide = () => { surface.visible = false; hide(); };
+    return handle;
+  };
+  const app = new RustxTuiApp({ session, connection, child: fakeChild([]) });
+  const running = app.run();
+  const input = async (data: string) => { process.stdin.emit("data", data); await waitForApplicationContinuation(); };
+  await input("/resume\r");
+  if (overlapInitial) await input("/resume\r");
+  await input("\x04");
+  return {
+    session, state, recovery, lists, executes, recovers, responses, previews, lateList,
+    cancelled: () => cancelled,
+    surface: () => surfaces.findLast((surface) => surface.visible),
+    text: () => surfaces.findLast((surface) => surface.visible)?.content.render(120).map(plainText).join("\n") ?? "",
+    absent: () => { rows = []; },
+    setList: (response: typeof listResponse) => { listResponse = response; },
+    input,
+    get execution() { return execution; },
+    get heldPreview() { return preview; },
+    resetExecution: () => { execution = deferred<SessionDeleteResult>(); },
+    resetPreview: () => { preview = deferred<SessionDeleteResult>(); },
+    resolvePreview: async (revision = "revision") => {
+      preview.resolve({ status: "preview", preview: { session_id: "old", name: "historical-target", target_revision: revision, owned_node_count: 1, owned_conversation_count: 1, owned_child_count: 0 } });
+      await waitForApplicationContinuation();
+    },
+    takeover: (interaction: typeof state.pendingInteractions[number]) => {
+      session.publishState({ ...state, pendingInteractions: [interaction] });
+    },
+    resync: () => { session.publishSnapshot(); session.publishState(state); },
+    terminal: () => close(new ConnectionClosedError("process_exit", "transport ended")),
+    finish: async () => { await app.quit(); await running; TUI.prototype.showOverlay = original; },
+  };
+}
+
+it("execute settlement survives approval takeover and retains exact cleanup recovery", async () => {
+  const h = await deletionAppHarness();
+  try {
+    await h.resolvePreview(); await h.input("\t\r");
+    assert.deepEqual(h.executes, [["old", "revision"]]);
+    const deletionSurface = h.surface();
+    h.takeover(approvalInteraction());
+    const approvalSurface = h.surface();
+    assert.notEqual(approvalSurface, deletionSurface);
+    assert.equal(deletionSurface?.visible, false);
+    assert.match(h.text(), /Deny/);
+    h.absent(); h.execution.resolve({ status: "committed_cleanup_pending", session_id: "old" });
+    await waitForApplicationContinuation();
+    assert.equal(h.surface(), approvalSurface, "cleanup cannot steal HITL focus");
+    assert.deepEqual(h.lists, [[undefined, 0], ["", 0]]);
+    assert.deepEqual(h.responses, []); assert.equal(h.cancelled(), 0);
+    await h.input("\x1b[27u"); // ordinary approval dismissal, not an answer
+    assert.match(h.text(), /removed and cannot be resumed/);
+    assert.match(h.text(), /R retry native cleanup/);
+    assert.doesNotMatch(h.text(), /historical-target/);
+    await h.input("rr\r\x04\x1b[27u");
+    assert.deepEqual(h.recovers, ["old"]); assert.equal(h.executes.length, 1);
+    assert.equal(h.cancelled(), 0); assert.deepEqual(h.responses, []);
+  } finally { await h.finish(); }
+});
+
+it("deleted settlement reconciles during questionnaire takeover without stealing focus", async () => {
+  const h = await deletionAppHarness();
+  try {
+    await h.resolvePreview(); await h.input("\t\r");
+    const question = questionnaireInteraction(); h.takeover(question);
+    const surface = h.surface();
+    h.absent(); h.execution.resolve({ status: "deleted", session_id: "old" });
+    await waitForApplicationContinuation();
+    assert.deepEqual(h.lists, [[undefined, 0], ["", 0]]);
+    assert.equal(h.surface(), surface); assert.equal(h.executes.length, 1);
+    assert.equal(h.cancelled(), 0); assert.deepEqual(h.responses, []);
+    await h.input("\x1b[27u");
+    assert.deepEqual(h.responses, [{ interaction: question.interaction, response: { type: "questionnaire", response: { type: "declined" } } }]);
+    h.session.publishState(h.state);
+    assert.equal(h.surface(), undefined, "success does not reopen the deleted popup");
+    await h.input("/resume\r");
+    assert.doesNotMatch(h.text(), /historical-target/);
+  } finally { await h.finish(); }
+});
+
+for (const takeover of ["HITL", "snapshot"] as const) {
+  it(`recovery settlement survives ${takeover} replacement and reconciles fresh native visibility`, async () => {
+    const h = await deletionAppHarness();
+    try {
+      await h.resolvePreview(); await h.input("\t\r"); h.absent();
+      h.execution.resolve({ status: "committed_cleanup_pending", session_id: "old" });
+      await waitForApplicationContinuation(); await h.input("rr");
+      assert.deepEqual(h.recovers, ["old"]);
+      const old = h.surface();
+      if (takeover === "HITL") h.takeover(approvalInteraction()); else h.resync();
+      assert.equal(old?.visible, false, "disposable popup really was invalidated");
+      const replacement = h.surface();
+      h.recovery.resolve({ status: "deleted", session_id: "old" });
+      await waitForApplicationContinuation();
+      assert.deepEqual(h.lists, [[undefined, 0], ["", 0], ["", 0]]);
+      assert.equal(h.executes.length, 1); assert.deepEqual(h.recovers, ["old"]);
+      assert.equal(h.cancelled(), 0); assert.deepEqual(h.responses, []);
+      if (takeover === "HITL") assert.equal(h.surface(), replacement);
+      else assert.doesNotMatch(h.text(), /historical-target/);
+    } finally { await h.finish(); }
+  });
+}
+
+for (const status of ["committed_cleanup_pending", "committed_durability_uncertain", "unknown"] as const) {
+  it(`execute ${status} remains recoverable across same-attachment snapshot invalidation`, async () => {
+    const h = await deletionAppHarness();
+    try {
+      await h.resolvePreview(); await h.input("\t\r");
+      const old = h.surface(); h.resync(); assert.equal(old?.visible, false);
+      h.absent();
+      if (status === "unknown") h.execution.reject(new Error("response rejected on live transport"));
+      else h.execution.resolve({ status, session_id: "old" });
+      await waitForApplicationContinuation();
+      assert.deepEqual(h.lists, [[undefined, 0], ["", 0]]);
+      assert.match(h.text(), status === "unknown" ? /outcome unknown/ : status === "committed_cleanup_pending" ? /removed and cannot be resumed/ : /durability is uncertain/);
+      assert.doesNotMatch(h.text(), /delete failed|historical-target/);
+      await h.input("rr"); assert.deepEqual(h.recovers, ["old"]);
+      assert.equal(h.executes.length, 1); assert.equal(h.cancelled(), 0);
+    } finally { await h.finish(); }
+  });
+}
+
+for (const takeover of ["HITL", "snapshot"] as const) {
+  it(`preview remains disposable across ${takeover} replacement`, async () => {
+    const h = await deletionAppHarness();
+    try {
+      const old = h.surface();
+      if (takeover === "HITL") h.takeover(approvalInteraction()); else h.resync();
+      assert.equal(old?.visible, false);
+      const replacement = h.surface();
+      await h.resolvePreview();
+      assert.equal(h.surface(), replacement);
+      assert.doesNotMatch(h.text(), /Permanently delete/);
+      assert.deepEqual(h.executes, []); assert.deepEqual(h.recovers, []);
+      assert.equal(h.cancelled(), 0);
+    } finally { await h.finish(); }
+  });
+}
+
+it("terminal transport ends deletion observation without execute replay or fabricated failure", async () => {
+  const h = await deletionAppHarness();
+  try {
+    await h.resolvePreview(); await h.input("\t\r");
+    h.terminal(); await waitForApplicationContinuation();
+    h.execution.reject(new Error("transport ended")); await waitForApplicationContinuation();
+    assert.equal(h.surface(), undefined);
+    assert.deepEqual(h.executes, [["old", "revision"]]);
+    assert.deepEqual(h.recovers, []); assert.deepEqual(h.lists, [[undefined, 0]]);
+    assert.equal(h.cancelled(), 0);
+  } finally { await h.finish(); }
+});
+
+it("stale settlement waits through HITL for fresh preview and a second explicit confirmation", async () => {
+  const h = await deletionAppHarness();
+  try {
+    await h.resolvePreview(); await h.input("\t\r"); h.resetPreview();
+    h.takeover(approvalInteraction()); const approval = h.surface();
+    h.execution.resolve({ status: "stale", session_id: "old" });
+    await waitForApplicationContinuation();
+    assert.equal(h.surface(), approval); assert.deepEqual(h.previews, ["old"]);
+    await h.input("\x1b[27u");
+    assert.deepEqual(h.previews, ["old", "old"]);
+    assert.match(h.text(), /Waiting for native preview/);
+    await h.resolvePreview("new-revision");
+    assert.match(h.text(), /❯ Cancel/); assert.equal(h.executes.length, 1);
+    await h.input("\t\r");
+    assert.deepEqual(h.executes, [["old", "revision"], ["old", "new-revision"]]);
+  } finally { await h.finish(); }
+});
+
+for (const outcome of [
+  { status: "blocked", session_id: "old", reason: { kind: "in_use" } },
+  { status: "committed_durability_uncertain", session_id: "old" },
+  { status: "not_found", session_id: "old" },
+] as const) it(`${outcome.status} settlement survives HITL and presents the native result afterward`, async () => {
+  const h = await deletionAppHarness();
+  try {
+    await h.resolvePreview(); await h.input("\t\r");
+    h.takeover(approvalInteraction()); const approval = h.surface();
+    h.execution.resolve(outcome); await waitForApplicationContinuation();
+    assert.equal(h.surface(), approval);
+    assert.deepEqual(h.lists, [[undefined, 0], ["", 0]]);
+    await h.input("\x1b[27u");
+    assert.match(h.text(), outcome.status === "blocked" ? /currently in use/ : outcome.status === "not_found" ? /absent from native authority/ : /durability is uncertain/);
+    assert.doesNotMatch(h.text(), /delete failed/);
+    if (outcome.status === "committed_durability_uncertain") {
+      await h.input("rr"); assert.deepEqual(h.recovers, ["old"]);
+    }
+    assert.equal(h.executes.length, 1); assert.equal(h.cancelled(), 0);
+  } finally { await h.finish(); }
+});
+
+
+it("a delayed initial resume response cannot resurrect a row after deletion reconciliation", async () => {
+  const h = await deletionAppHarness(true);
+  try {
+    await h.resolvePreview(); await h.input("\t\r"); h.absent();
+    h.execution.resolve({ status: "deleted", session_id: "old" });
+    await waitForApplicationContinuation();
+    const reconciled = h.surface();
+    assert.doesNotMatch(h.text(), /historical-target/);
+    h.lateList.resolve({ sessions: [{ id: "old", name: "historical-target", updated_at: "today", active_node: "node-2", active: false }] });
+    await waitForApplicationContinuation();
+    assert.equal(h.surface(), reconciled, "pre-mutation initial query cannot reopen a stale selector");
+    assert.doesNotMatch(h.text(), /historical-target/);
+    assert.deepEqual(h.lists, [[undefined, 0], [undefined, 0], ["", 0]]);
+    assert.equal(h.executes.length, 1);
+  } finally { await h.finish(); }
+});
+
+
+for (const outcome of ["committed_cleanup_pending", "committed_durability_uncertain", "unknown"] as const) {
+  for (const empty of [false, true]) it(`${outcome}: reopening after failed reconciliation honors fresh ${empty ? "empty" : "matching"} authority and retains recovery`, async () => {
+    const h = await deletionAppHarness();
+    try {
+      await h.input("\x1b[27u"); // cancel the initial disposable preview
+      await h.input("histor");
+      await h.input("\x04"); await h.resolvePreview(); await h.input("\t\r");
+      const refresh = deferred<{ sessions: SessionSummaryView[] }>();
+      h.setList(() => refresh.promise);
+      if (outcome === "unknown") h.execution.reject(new Error("healthy request rejection"));
+      else h.execution.resolve({ status: outcome, session_id: "old" });
+      await waitForApplicationContinuation();
+      refresh.reject(new Error("list rejected on live transport")); await waitForApplicationContinuation();
+      assert.equal(h.executes.length, 1);
+      assert.match(h.text(), outcome === "unknown" ? /outcome unknown/ : outcome === "committed_durability_uncertain" ? /durability is uncertain/ : /removed and cannot be resumed/);
+      assert.doesNotMatch(h.text(), /delete failed/);
+      await h.input("\x1b[27u"); assert.match(h.text(), /visibility unavailable/);
+      await h.input("\x1b[27u"); assert.equal(h.surface(), undefined);
+      h.setList(async () => ({ sessions: empty ? [] : ["A", "C"].map((id) => ({ id, name: `histor-${id}`, updated_at: "today", active_node: id, active: false })) }));
+      await h.input("/resume\r");
+      assert.deepEqual(h.lists.at(-1), ["histor", 0]);
+      assert.match(h.text(), /R retry native cleanup/);
+      await h.input("\x1b[27u");
+      assert.doesNotMatch(h.text(), /visibility unavailable|historical-target/);
+      if (empty) {
+        assert.doesNotMatch(h.text(), /histor-A|histor-C/);
+        assert.match(h.text(), /no persisted session matches/);
+      }
+      else { assert.match(h.text(), /histor-A/); assert.match(h.text(), /histor-C/); }
+      // The retained action remains available on reopening even with no rows.
+      await h.input("\x1b[27u"); await h.input("/resume\r"); await h.input("rr");
+      assert.deepEqual(h.recovers, ["old"]); assert.equal(h.executes.length, 1);
+      assert.equal(h.cancelled(), 0);
+    } finally { await h.finish(); }
+  });
+}
+
+it("failed reconciliation cannot revive a pre-mutation initial response after a fresh reopen", async () => {
+  const h = await deletionAppHarness(true);
+  try {
+    await h.resolvePreview(); await h.input("\t\r");
+    h.setList(async () => { throw new Error("list refresh rejected"); });
+    h.execution.resolve({ status: "committed_cleanup_pending", session_id: "old" });
+    await waitForApplicationContinuation();
+    await h.input("\x1b[27u\x1b[27u");
+    h.setList(async () => ({ sessions: [{ id: "A", name: "fresh-A", updated_at: "today", active_node: "A", active: false }] }));
+    await h.input("/resume\r"); await h.input("\x1b[27u");
+    const fresh = h.surface(); assert.match(h.text(), /fresh-A/);
+    h.lateList.resolve({ sessions: [{ id: "old", name: "historical-target", updated_at: "today", active_node: "old", active: false }] });
+    await waitForApplicationContinuation();
+    assert.equal(h.surface(), fresh); assert.match(h.text(), /fresh-A/);
+    assert.doesNotMatch(h.text(), /historical-target/); assert.equal(h.executes.length, 1);
+  } finally { await h.finish(); }
+});
+
+it("reopening resume retains the current query while recovery retains the original target", async () => {
+  const h = await deletionAppHarness();
+  const row = (id: string): SessionSummaryView => ({ id, name: id, active_node: id, active: false, updated_at: "today" });
+  try {
+    await h.input("\x1b[27u"); await h.input("old"); await h.input("\x04");
+    await h.resolvePreview(); await h.input("\t\r");
+    h.setList(async () => ({ sessions: [row("old-A")], nextOffset: 101 }));
+    h.execution.resolve({ status: "committed_cleanup_pending", session_id: "old" }); await waitForApplicationContinuation();
+    await h.input("\x1b[27u");
+    h.setList(async () => ({ sessions: [row("new-A"), row("new-C")], nextOffset: 202 }));
+    await h.input("\x7f\x7f\x7fnew");
+    assert.match(h.text(), /Search: new/); assert.match(h.text(), /new-C/);
+    await h.input("\x1b[27u"); assert.equal(h.surface(), undefined);
+    const reopened = h.lists.length;
+    await h.input("/resume\r");
+    assert.deepEqual(h.lists.slice(reopened), [["new", 0]]);
+    assert.match(h.text(), /R retry native cleanup/);
+    await h.input("\x1b[27u");
+    assert.match(h.text(), /new-A/); assert.match(h.text(), /new-C/); assert.doesNotMatch(h.text(), /old-A/);
+    await h.input("\x1b[B\x04");
+    const recoveryStart = h.lists.length;
+    h.setList(async (query, offset) => {
+      assert.equal(query, "new");
+      if (offset === 0) return { sessions: [row("new-A")], nextOffset: 202 };
+      assert.equal(offset, 202); return { sessions: [row("new-C")] };
+    });
+    await h.input("rr\r\x04\x1b[A\x1b[B\x1b[27u");
+    assert.deepEqual(h.recovers, ["old"]); assert.equal(h.executes.length, 1);
+    h.recovery.resolve({ status: "deleted", session_id: "old" }); await waitForApplicationContinuation();
+    assert.deepEqual(h.lists.slice(recoveryStart), [["new", 0], ["new", 202]]);
+    assert.match(h.text(), /Search: new/); assert.match(h.text(), /new-A/); assert.match(h.text(), /new-C/);
+    assert.doesNotMatch(h.text(), /old-A|historical-target/); assert.equal(h.cancelled(), 0);
+  } finally { await h.finish(); }
+});
+
+for (const replacement of ["HITL", "snapshot"] as const) {
+  it(`stale obligation survives ${replacement} replacing an already-pending fresh preview`, async () => {
+    const h = await deletionAppHarness();
+    try {
+      await h.resolvePreview(); await h.input("\t\r"); h.resetPreview();
+      h.execution.resolve({ status: "stale", session_id: "old" }); await waitForApplicationContinuation();
+      assert.deepEqual(h.previews, ["old", "old"]);
+      assert.match(h.text(), /Waiting for native preview/);
+      const discardedPreview = h.heldPreview, discardedSurface = h.surface();
+      h.resetPreview(); h.resetExecution();
+      if (replacement === "HITL") h.takeover(approvalInteraction()); else h.resync();
+      assert.equal(discardedSurface?.visible, false);
+      discardedPreview.resolve({ status: "preview", preview: { session_id: "old", name: "discarded-preview", target_revision: "discarded-revision", owned_node_count: 1, owned_conversation_count: 1, owned_child_count: 0 } });
+      await waitForApplicationContinuation();
+      assert.doesNotMatch(h.text(), /discarded-preview|Permanently delete Session/);
+      assert.equal(h.executes.length, 1);
+      if (replacement === "HITL") {
+        assert.match(h.text(), /Deny/); assert.deepEqual(h.previews, ["old", "old"]);
+        await h.input("\x1b[27u");
+      }
+      assert.deepEqual(h.previews, ["old", "old", "old"]);
+      assert.match(h.text(), /Waiting for native preview/);
+      await h.resolvePreview("rev2");
+      assert.match(h.text(), /❯ Cancel/); assert.equal(h.executes.length, 1);
+      await h.input("\t\r\r\x04");
+      assert.deepEqual(h.executes, [["old", "revision"], ["old", "rev2"]]);
+      assert.equal(h.cancelled(), 0); assert.deepEqual(h.responses, []);
+    } finally { await h.finish(); }
+  });
+
+  it(`known precommit failure after ${replacement} stays non-recoverable`, async () => {
+    const h = await deletionAppHarness();
+    try {
+      await h.resolvePreview(); await h.input("\t\r");
+      if (replacement === "HITL") h.takeover(approvalInteraction()); else h.resync();
+      h.execution.reject(new RuntimeRequestError({ type: "session_failure", message: "Session deletion failed before logical commit." }));
+      await waitForApplicationContinuation();
+      assert.deepEqual(h.lists, [[undefined, 0], ["", 0]]);
+      if (replacement === "HITL") { assert.match(h.text(), /Deny/); await h.input("\x1b[27u"); }
+      assert.match(h.text(), /failed before logical commit/);
+      assert.doesNotMatch(h.text(), /outcome unknown|durability is uncertain|R retry/);
+      await h.input("rr"); assert.deepEqual(h.recovers, []);
+      await h.input("\x1b[27u"); assert.match(h.text(), /historical-target/);
+      h.resetPreview(); await h.input("\x04");
+      assert.deepEqual(h.previews, ["old", "old"]); assert.equal(h.executes.length, 1);
+      assert.equal(h.cancelled(), 0); assert.deepEqual(h.responses, []);
+    } finally { await h.finish(); }
+  });
+}

@@ -38,7 +38,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: "/new", description: "Create a new independent local session." },
   {
     name: "/resume",
-    description: "Search persisted sessions and activate one.",
+    description: "Search persisted sessions; Enter resumes, Ctrl+D previews permanent deletion.",
     argumentHint: "[session-id]",
   },
   {

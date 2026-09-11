@@ -583,9 +583,21 @@ async fn startup_begins_on_an_empty_session_unless_continue_is_requested() {
 /// `/resume` visibility is a durable lifecycle classification: a restart
 /// preserves it exactly, and a Session crosses it at durable acceptance of
 /// user work — never at launch, naming, or model choice.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[test]
 #[allow(clippy::too_many_lines)]
-async fn restart_preserves_resume_visibility_until_a_shell_owns_work() {
+fn restart_preserves_resume_visibility_until_a_shell_owns_work() {
+    fn launch_executor() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .enable_all()
+            .build()
+            .expect("launch executor")
+    }
+
+    // Semantic shutdown can wake its caller before the completing task drops its
+    // last storage-owner Arc. A restart must also destroy the old executor: its
+    // drop joins task teardown before the next launch acquires the controller lock.
+    let executor = launch_executor();
     let root = tempfile::tempdir().expect("temp root");
     let paths = paths(root.path());
     let dependencies = dependencies();
@@ -593,8 +605,11 @@ async fn restart_preserves_resume_visibility_until_a_shell_owns_work() {
 
     // A first launch with no user work publishes the internal root shell and
     // lists nothing.
-    let first = LocalSessionProduct::compose(&(paths).resolve(), &dependencies)
-        .await
+    let first = executor
+        .block_on(LocalSessionProduct::compose(
+            &(paths).resolve(),
+            &dependencies,
+        ))
         .expect("first launch");
     let first_conversation = first.runtime().conversation_id().clone();
     let first_endpoint = first.endpoint();
@@ -610,7 +625,7 @@ async fn restart_preserves_resume_visibility_until_a_shell_owns_work() {
 
     // Durable acceptance of user work makes the Session used: resume-visible
     // from that transaction on, not from model start or assistant output.
-    let submitted = session_request(
+    let submitted = executor.block_on(session_request(
         &first_endpoint,
         RuntimeClientRequest::SubmitInbound {
             id: request_id(2),
@@ -618,8 +633,7 @@ async fn restart_preserves_resume_visibility_until_a_shell_owns_work() {
                 text: "first session work".to_owned(),
             })],
         },
-    )
-    .await;
+    ));
     assert!(matches!(
         submitted.result,
         Some(RuntimeClientResult::InboundAccepted { .. })
@@ -629,14 +643,19 @@ async fn restart_preserves_resume_visibility_until_a_shell_owns_work() {
         visible_session_ids(&runtime_root),
         vec![first_session.clone()]
     );
-    first.runtime().shutdown().await.unwrap();
+    executor.block_on(first.runtime().shutdown()).unwrap();
     drop(first_endpoint);
     drop(first);
+    drop(executor);
+    let executor = launch_executor();
 
     // An ordinary relaunch begins on a new internal shell: the used Session
     // stays the only resume-visible row, and restart changed nothing.
-    let second = LocalSessionProduct::compose(&(paths).resolve(), &dependencies)
-        .await
+    let second = executor
+        .block_on(LocalSessionProduct::compose(
+            &(paths).resolve(),
+            &dependencies,
+        ))
         .expect("ordinary relaunch");
     let shell_conversation = second.runtime().conversation_id().clone();
     assert_ne!(shell_conversation, first_conversation);
@@ -656,11 +675,10 @@ async fn restart_preserves_resume_visibility_until_a_shell_owns_work() {
         initialized.result,
         Some(RuntimeClientResult::Initialized { .. })
     ));
-    let noop = session_request(
+    let noop = executor.block_on(session_request(
         &second_endpoint,
         RuntimeClientRequest::SessionNew { id: request_id(3) },
-    )
-    .await;
+    ));
     assert!(
         matches!(
             noop.result,
@@ -674,7 +692,7 @@ async fn restart_preserves_resume_visibility_until_a_shell_owns_work() {
     assert_eq!(persisted_ids(&runtime_root).len(), 2);
 
     // Once the shell durably accepts work, both Sessions are resume-visible.
-    let submitted = session_request(
+    let submitted = executor.block_on(session_request(
         &second_endpoint,
         RuntimeClientRequest::SubmitInbound {
             id: request_id(4),
@@ -682,8 +700,7 @@ async fn restart_preserves_resume_visibility_until_a_shell_owns_work() {
                 text: "second session work".to_owned(),
             })],
         },
-    )
-    .await;
+    ));
     assert!(matches!(
         submitted.result,
         Some(RuntimeClientResult::InboundAccepted { .. })
@@ -694,14 +711,19 @@ async fn restart_preserves_resume_visibility_until_a_shell_owns_work() {
         visible_session_ids(&runtime_root),
         vec![first_session.clone(), second_session.clone()]
     );
-    second.runtime().shutdown().await.unwrap();
+    executor.block_on(second.runtime().shutdown()).unwrap();
     drop(second_endpoint);
     drop(second);
+    drop(executor);
+    let executor = launch_executor();
 
     // One more ordinary restart: both used Sessions remain visible, the new
     // active shell is hidden, and nothing about the classification moved.
-    let third = LocalSessionProduct::compose(&(paths).resolve(), &dependencies)
-        .await
+    let third = executor
+        .block_on(LocalSessionProduct::compose(
+            &(paths).resolve(),
+            &dependencies,
+        ))
         .expect("second relaunch");
     assert_ne!(third.runtime().conversation_id(), &shell_conversation);
     assert_eq!(
@@ -711,6 +733,7 @@ async fn restart_preserves_resume_visibility_until_a_shell_owns_work() {
     );
     assert_eq!(persisted_ids(&runtime_root).len(), 3);
     drop(third);
+    drop(executor);
 }
 
 /// `SubmitInbound` reports success strictly after the durable acceptance
