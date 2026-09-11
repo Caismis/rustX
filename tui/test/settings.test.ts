@@ -8,9 +8,13 @@ import { agentStatus, attemptModel, attemptView, runtimeCursor, sessionModel, sn
 
 it("CFG238 shares the native protocol fixture and explicit lifetimes", () => {
   const fixture: { request: RuntimeClientRequest; result: RuntimeClientResult; lifetimes: SettingsLifetimes } = JSON.parse(readFileSync(new URL("../../tests/fixtures/runtime-client/settings-v26.json", import.meta.url), "utf8"));
-  // The fixture is named for the version that introduced its shape; v27 added
-  // the subagent `profile_digest` and left the settings contract untouched.
-  assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 28);
+  // The fixture is named for the version that introduced its shape. v27 added
+  // the subagent `profile_digest` and v28 crash-safe Session deletion, both
+  // leaving the settings contract untouched; v29 (Issue #259) added the
+  // `effective_extensions.todo` member the fixture now carries in every state,
+  // including the `todo_only` combination that proves the two extensions
+  // project on independent axes.
+  assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 29);
   assert.equal(fixture.request.method, "default_save");
   if (fixture.request.method === "default_save") {
     assert.equal(fixture.request.scope, "user");

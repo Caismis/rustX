@@ -3280,7 +3280,7 @@ mod tests {
     async fn a_later_inbound_cannot_relocate_a_prepared_post_tool_batch_status() {
         let fixture = crate::scripted_suites::common::native_fixture();
         let capability = crate::scripted_suites::common::capability_lease(
-            fixture.registry.clone(),
+            fixture.ordinary_registry.clone(),
             &fixture.runtime,
         )
         .await;

@@ -74,7 +74,16 @@
 // extensions (Issue #258). It is always present, on live and recovery-projected
 // children alike. There is no v26 decoding and no optional form.
 // Version 28: bounded Runtime Client-owned Session deletion DTOs; no cleanup plan.
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 28;
+// Version 29: the Todo Agent Extension projection (Issue #259).
+// `effective_extensions` gains `todo` — the authoritative answer to whether the
+// attached runtime owns a current task list, publishes the `todo` Tool, and
+// offers a Todo panel — and `RuntimeClientSnapshot.todos` becomes nullable, so
+// "no Todo extension composed" (`null`: no current Todo surface at all, however
+// many historical `todo` results the transcript carries) is no longer spelled
+// the same way as "Todo composed over an empty task list" (an empty snapshot).
+// Both follow from one frozen composition and cannot disagree. There is no v28
+// decoding and no compatibility shim.
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 29;
 
 // ---------------------------------------------------------------------------
 // Identities
