@@ -850,7 +850,10 @@ See [the complete source/lifetime matrix and write guarantee](../docs/effective-
 Select a Session and press **Ctrl+D**. Rust first returns an authoritative preview
 for that exact Session identity. Review the target and native ownership counts.
 **Cancel is selected initially**: Enter cancels; use Tab or Left/Right to choose
-**Permanently delete**, then Enter. Esc cancels the focused surface. The same safe
+**Permanently delete**, then Enter. Esc cancels a pending preview or confirmation.
+Once deletion or cleanup recovery is submitted, Esc is consumed and the surface
+keeps focus until native settlement (or global transport termination); no cancel
+hint is shown while these requests are pending. The same safe confirmation
 choice behavior applies to retained-workspace disposal.
 
 Deletion is permanent from rustX's perspective, including owned internal lineages

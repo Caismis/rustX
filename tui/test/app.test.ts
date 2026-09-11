@@ -18,7 +18,7 @@ import { TransientFeedbackSurface } from "../src/ui/components/transient-feedbac
 import type { ChildRuntimeProcess } from "../src/runtime/child-process.ts";
 import type { RuntimeClientConnection } from "../src/runtime/connection.ts";
 import type { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
-import type { SessionSummaryView } from "../src/protocol/types.ts";
+import type { SessionDeleteResult, SessionSummaryView } from "../src/protocol/types.ts";
 import {
   attemptView,
   approvalInteraction,
@@ -464,6 +464,52 @@ describe("RustxTuiApp lifecycle", () => {
       assert.equal(session.state, state); assert.deepEqual(log, []);
       assert.equal(editorWrites, writesBeforeDeletion, "deletion never resets the editor");
     } finally { Editor.prototype.setText = originalSetText; await app.quit(); await running; }
+  });
+
+  it("pending Session execute and recovery own Esc without cancelling the active attempt", async () => {
+    const state = {
+      ...emptyPresentationState(sessionModel("alpha/model-a")),
+      attempt: { ...attemptView(), phase: { type: "running" as const } },
+    };
+    const session = fakeSession(async () => {}, state);
+    const execution = deferred<SessionDeleteResult>();
+    const recovery = deferred<SessionDeleteResult>();
+    let executes = 0, recovers = 0, cancelled = 0, lists = 0;
+    session.listSessions = async () => {
+      lists++;
+      return { sessions: lists === 1 ? [{ id: "old", name: "history", updated_at: "today", active_node: "node-2", active: false }] : [] };
+    };
+    session.previewSessionDeletion = async () => ({ status: "preview", preview: { session_id: "old", name: "history", target_revision: "revision", owned_node_count: 1, owned_conversation_count: 1, owned_child_count: 0 } });
+    session.deleteSession = () => { executes++; return execution.promise; };
+    session.recoverSessionDeletion = () => { recovers++; return recovery.promise; };
+    session.cancelCurrentAttempt = async () => { cancelled++; return "attempt"; };
+    const app = new RustxTuiApp({ session, connection: fakeConnection(), child: fakeChild([]) });
+    const running = app.run();
+    try {
+      process.stdin.emit("data", "/resume\r"); await waitForApplicationContinuation();
+      process.stdin.emit("data", "\x04"); await waitForApplicationContinuation();
+      process.stdin.emit("data", "\t\r"); await waitForApplicationContinuation();
+      assert.equal(executes, 1);
+      // Kitty's complete Escape sequence avoids the bare-ESC disambiguation timer.
+      process.stdin.emit("data", "\x1b[27u\x1b[27u"); await waitForApplicationContinuation();
+      assert.equal(cancelled, 0);
+      execution.resolve({ status: "committed_cleanup_pending", session_id: "old" });
+      await waitForApplicationContinuation();
+      assert.equal(lists, 2, "the focused workflow observed execute settlement");
+      process.stdin.emit("data", "rr"); await waitForApplicationContinuation();
+      assert.equal(recovers, 1, "cleanup action remains focused and single-submit");
+      process.stdin.emit("data", "\x1b[27u\x1b[27u"); await waitForApplicationContinuation();
+      assert.equal(cancelled, 0);
+      recovery.resolve({ status: "deleted", session_id: "old" });
+      await waitForApplicationContinuation();
+      assert.equal(lists, 3, "recovery settlement still rebuilds the list");
+      assert.equal(executes, 1); assert.equal(recovers, 1);
+      // First Escape now closes the reconciled selector; only the next reaches the attempt.
+      process.stdin.emit("data", "\x1b[27u"); await waitForApplicationContinuation();
+      assert.equal(cancelled, 0);
+      process.stdin.emit("data", "\x1b[27u"); await waitForApplicationContinuation();
+      assert.equal(cancelled, 1, "Escape input was actually delivered through app routing");
+    } finally { await app.quit(); await running; }
   });
 
   it("opens a questionnaire overlay and submits one typed response", async () => {

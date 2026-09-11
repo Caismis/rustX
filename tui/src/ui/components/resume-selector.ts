@@ -60,6 +60,7 @@ export class ResumeSelector implements PopupContent {
   popupFooter(): string[] {
     if (this.#state.kind === "selector") return this.selector.popupFooter();
     if (this.#state.kind === "confirm") return this.#state.view.popupFooter();
+    if (this.#state.kind === "pending") return this.#state.operation === "preview" ? ["Esc cancel"] : [];
     return [this.#state.kind === "notice" && this.#state.recoveryId ? "R retry native cleanup · Esc close" : "Esc close"];
   }
   invalidate(): void {}
@@ -69,8 +70,9 @@ export class ResumeSelector implements PopupContent {
     const state = this.#state;
     if (state.kind === "selector") { this.selector.handleInput(data); return; }
     if (matchesKey(data, "escape")) {
-      // Closing a submitted mutation closes the popup, preventing a new workflow.
-      if (state.kind === "pending" && state.operation !== "preview") { this.onCancel?.(); return; }
+      // Execute/recovery may already have committed. Keep focus and the request
+      // serial until native settlement; local Esc cannot abandon that outcome.
+      if (state.kind === "pending" && state.operation !== "preview") return;
       ++this.#workflowSerial;
       this.#state = { kind: "selector" };
     } else if (state.kind === "confirm") state.view.handleInput(data);
@@ -90,7 +92,9 @@ export class ResumeSelector implements PopupContent {
       state.view.setBodyHeight(this.#bodyHeight);
       return state.view.render(width);
     }
-    const text = state.kind === "pending" ? `Waiting for native ${state.operation}…` : state.text;
+    const text = state.kind === "pending"
+      ? `Waiting for native ${state.operation === "execute" ? "deletion" : state.operation === "recover" ? "cleanup" : "preview"}…`
+      : state.text;
     return wrapTextWithAnsi(sanitizeField(text), Math.max(1, width)).slice(0, this.#bodyHeight);
   }
   async #request(request: Operation): Promise<void> {

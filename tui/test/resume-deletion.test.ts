@@ -17,18 +17,21 @@ const down = "\x1b[B", del = "\x04", esc = "\x1b";
 const confirm = (view: ResumeSelector) => { view.handleInput("\t"); view.handleInput("\r"); };
 function harness(options: { rows?: SessionSummaryView[]; query?: string; nextOffset?: number } = {}) {
   const previews: string[] = [], executes: string[][] = [], recovers: string[] = [], lists: Array<[string | undefined, number | undefined]> = [], feedback: string[] = [];
+  let closed = false;
   let nativeRows = options.rows ?? [row("a"), row("b"), row("c")];
   let previewResponse = deferred<SessionDeleteResult>();
   let execution = deferred<SessionDeleteResult>();
   let recovery = deferred<SessionDeleteResult>();
   let list = async (_query?: string, _offset?: number): Promise<{ sessions: SessionSummaryView[]; nextOffset?: number }> => ({ sessions: nativeRows });
-  const view = new ResumeSelector({ sessions: nativeRows, query: options.query, nextOffset: options.nextOffset, alive: () => true, feedback: (text) => feedback.push(text), client: {
+  const view = new ResumeSelector({ sessions: nativeRows, query: options.query, nextOffset: options.nextOffset, alive: () => !closed, feedback: (text) => feedback.push(text), client: {
     previewSessionDeletion: (id) => { previews.push(id); return previewResponse.promise; },
     deleteSession: (id, revision) => { executes.push([id, revision]); return execution.promise; },
     recoverSessionDeletion: (id) => { recovers.push(id); return recovery.promise; },
     listSessions: (query, offset) => { lists.push([query, offset]); return list(query, offset); },
   } });
+  view.onCancel = () => { closed = true; };
   return { view, previews, executes, recovers, lists, feedback,
+    get closed() { return closed; },
     get previewResponse() { return previewResponse; }, get execution() { return execution; }, get recovery() { return recovery; },
     setPreview: () => { previewResponse = deferred(); }, setExecution: () => { execution = deferred(); },
     rows: (rows: SessionSummaryView[]) => { nativeRows = rows; }, setList: (fn: typeof list) => { list = fn; },
@@ -147,4 +150,72 @@ test("22: presentation deletion path has no filesystem/process/provider authorit
   const attachment = await readFile(new URL("../src/runtime/attachment.ts", import.meta.url), "utf8");
   const deletion = attachment.slice(attachment.indexOf("  previewSessionDeletion("), attachment.indexOf("  /** Lists bounded persisted Sessions"));
   assert.doesNotMatch(deletion, /node:|unlink|spawn|submitInbound|#state\s*=/);
+});
+
+
+test("execute pending retains settlement across Esc and presents native CleanupPending", async () => {
+  const h = harness(); await h.open(); confirm(h.view);
+  for (const input of [esc, "\r", del, "r", down, "x", esc]) h.view.handleInput(input);
+  assert.equal(h.closed, false, "Esc must not close the outer popup");
+  assert.match(h.text(), /Waiting for native deletion/);
+  assert.deepEqual(h.view.popupFooter(), []);
+  assert.deepEqual(h.executes, [["b", "revision-1"]]);
+  assert.deepEqual(h.previews, ["b"]);
+  assert.deepEqual(h.recovers, []);
+  assert.deepEqual(h.lists, [], "search input cannot escape the pending surface");
+  assert.equal(h.view.selector.selectedSession()?.id, "b");
+  h.rows([row("a"), row("c")]);
+  h.execution.resolve({ status: "committed_cleanup_pending", session_id: "b" }); await turn();
+  assert.match(h.text(), /removed and cannot be resumed.*needs cleanup/);
+  assert.deepEqual(h.lists, [["", 0]]);
+  assert.deepEqual(h.view.selector.visibleSessions().map((r) => r.id), ["a", "c"]);
+  assert.match(h.view.popupFooter().join(), /R retry native cleanup/);
+  h.view.handleInput("r"); h.view.handleInput("r");
+  assert.deepEqual(h.recovers, ["b"]);
+});
+
+test("execute pending retains durability uncertainty and reconciliation after Esc", async () => {
+  const h = harness(); await h.open(); confirm(h.view);
+  h.view.handleInput(esc);
+  assert.equal(h.closed, false);
+  assert.match(h.text(), /Waiting for native deletion/);
+  h.rows([]);
+  h.execution.resolve({ status: "committed_durability_uncertain", session_id: "b" }); await turn();
+  assert.match(h.text(), /durability is uncertain/);
+  assert.doesNotMatch(h.text() + h.feedback.join(), /delete failed|permanently deleted/);
+  assert.deepEqual(h.lists, [["", 0]]);
+  assert.deepEqual(h.view.selector.visibleSessions(), []);
+  assert.equal(h.executes.length, 1);
+});
+
+test("recover pending retains settlement across Esc and reconciles native Deleted", async () => {
+  const h = harness(); await h.open(); confirm(h.view); h.rows([row("a")]);
+  h.execution.resolve({ status: "committed_cleanup_pending", session_id: "b" }); await turn();
+  h.view.handleInput("r");
+  for (const input of [esc, "r", "\r", del, down, "x", esc]) h.view.handleInput(input);
+  assert.equal(h.closed, false, "recovery must retain the outer popup");
+  assert.match(h.text(), /Waiting for native cleanup/);
+  assert.deepEqual(h.view.popupFooter(), []);
+  assert.deepEqual(h.recovers, ["b"]);
+  assert.deepEqual(h.previews, ["b"]);
+  assert.equal(h.executes.length, 1);
+  assert.deepEqual(h.lists, [["", 0]]);
+  h.recovery.resolve({ status: "deleted", session_id: "b" }); await turn();
+  assert.match(h.feedback.join(), /Session permanently deleted/);
+  assert.equal(h.view.popupTitle(), "Resume session");
+  assert.deepEqual(h.lists, [["", 0], ["", 0]]);
+  assert.deepEqual(h.view.selector.visibleSessions().map((r) => r.id), ["a"]);
+});
+
+test("preview pending remains cancellable and its late response cannot reopen confirmation", async () => {
+  const h = harness(); h.view.handleInput(down); h.view.handleInput(del);
+  assert.match(h.text(), /Waiting for native preview/);
+  assert.deepEqual(h.view.popupFooter(), ["Esc cancel"]);
+  h.view.handleInput(esc);
+  assert.equal(h.closed, false);
+  assert.equal(h.view.popupTitle(), "Resume session");
+  h.previewResponse.resolve(preview()); await turn();
+  assert.equal(h.view.popupTitle(), "Resume session");
+  assert.doesNotMatch(h.text(), /Permanently delete/);
+  assert.deepEqual(h.executes, []);
 });
