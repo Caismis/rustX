@@ -109,6 +109,22 @@ impl ToolSelectionDocument {
                     "tools must name nonempty source-qualified capability identities".to_owned(),
                 );
             }
+            // An extension-provided Tool is not an ordinary Builtin identity,
+            // so it is refused at the authoring boundary on every surface
+            // that shares this vocabulary — role `tools.builtin`, a Workflow
+            // Agent node's override, and the model-facing `subagent` Tool's
+            // override alike (Issue #259). The diagnostic names the plane the
+            // capability actually lives in, instead of leaving the author to
+            // read "unknown capability" about a Tool they can see working.
+            if let ToolSelector::Builtin { name } = &selector
+                && let Some(extension) = super::extension_provided_tool(name)
+            {
+                return Err(format!(
+                    "builtin:{name} is provided by the {extension:?} Agent Extension, \
+                     not by ordinary Tool selection; compose it with \
+                     extensions.{extension}.enabled instead"
+                ));
+            }
         }
         Ok(())
     }

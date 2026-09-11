@@ -23,8 +23,9 @@ rustX currently supports:
   streams;
 - native Read, Write, Edit, Grep, Glob, and Bash tools, plus Skills, MCP tools,
   and custom Python tools;
-- a native `todo` task list the model keeps as it works, drawn as a live panel
-  above the editor and printed in full by `/todos`;
+- a `todo` task list the model keeps as it works — an optional Native Agent
+  Extension, enabled by default — drawn as a live panel above the editor and
+  printed in full by `/todos`;
 - cancellation, recovery, runtime supervision, and background tool
   execution;
 - runtime-owned model selection and switching;

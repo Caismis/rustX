@@ -21,6 +21,7 @@ import {
   TODO_TOOL_ID,
   type TodoSnapshot,
   type TodoTask,
+  isTodoComposed,
   progress,
   selectTodos,
 } from "../src/presentation/todos.ts";
@@ -66,11 +67,29 @@ function todoResult(snapshot: TodoSnapshot, summary = "Updated #1"): ToolExecuti
 
 /** The state a client holds after attaching to `todos`, with `messages` loaded. */
 function attached(
-  todos: TodoSnapshot | undefined,
+  todos: TodoSnapshot | undefined | null,
   messages: MessageBlock[] = [],
 ): PresentationState {
   return replaceFromSnapshot(
     clientSnapshot({ messages, todos }),
+    runtimeCursor(1),
+  );
+}
+
+/** An attached runtime that composes no Todo extension (Issue #259). */
+function todoDisabled(messages: MessageBlock[] = []): PresentationState {
+  return replaceFromSnapshot(
+    clientSnapshot({
+      messages,
+      todos: null,
+      effective_extensions: {
+        agent_status: {
+          time: { enabled: true, timezone: null },
+          background: { enabled: true },
+        },
+        todo: null,
+      },
+    }),
     runtimeCursor(1),
   );
 }
@@ -190,10 +209,72 @@ describe("the derived task list", () => {
       "an undrawable payload is ignored, never promoted over a good list",
     );
     assert.deepEqual(
-      selectTodos(attached(undefined)),
+      selectTodos(attached({ next_id: 1 } as unknown as TodoSnapshot)),
       { tasks: [], next_id: 1 },
-      "a snapshot that carries no list at all is the empty list, not a guess",
+      "a snapshot whose list omits its tasks is the empty list, not a guess",
     );
+  });
+
+  /**
+   * Issue #259 regression 12/14 (client half): a runtime that composes no
+   * Todo extension presents no current list, and canonical history it
+   * inherited cannot manufacture one.
+   *
+   * Both directions are proven, because only the pair is the contract: the
+   * historical `todo` result still folds into the transcript and still
+   * renders as a tool message, and it still leaves the panel absent.
+   */
+  it("shows no current list for a runtime that composes no Todo extension", () => {
+    const historical = snapshotOf([task(1, "Write the parser")]);
+    let state = todoDisabled([
+      toolMessage(
+        "m1",
+        "c1",
+        TODO_TOOL_ID,
+        toolResult({ content: [{ type: "json", value: historical }] }),
+      ),
+    ]);
+    assert.equal(
+      selectTodos(state),
+      undefined,
+      "a Todo-disabled runtime has no current list, empty or otherwise",
+    );
+    assert.equal(isTodoComposed(state), false);
+    assert.equal(renderTodoPanel(selectTodos(state), { columns: 80 }), "");
+    assert.match(
+      renderTodoInspection(selectTodos(state), isTodoComposed(state)),
+      /Todo extension is not composed/,
+    );
+    assert.ok(
+      state.transcript.some(
+        (entry) =>
+          entry.kind === "committed" &&
+          entry.message.role === "tool" &&
+          entry.message.tool_id === TODO_TOOL_ID,
+      ),
+      "the historical todo result is still a renderable transcript fact",
+    );
+
+    // A newly committed `todo` result cannot install a current list either.
+    state = committed(
+      state,
+      toolMessage(
+        "m2",
+        "c2",
+        TODO_TOOL_ID,
+        toolResult({ content: [{ type: "json", value: historical }] }),
+      ),
+      2,
+    );
+    assert.equal(
+      selectTodos(state),
+      undefined,
+      "no canonical fact can install a list into a composition that has none",
+    );
+
+    // And the same client, attached to a Todo-enabled runtime, does show it.
+    assert.deepEqual(selectTodos(attached(historical)), historical);
+    assert.equal(isTodoComposed(attached(historical)), true);
   });
 
   it("is empty, not absent, when the conversation never used the tool", () => {

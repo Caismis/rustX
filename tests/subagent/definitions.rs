@@ -697,11 +697,6 @@ async fn a_child_may_select_a_capability_that_is_available_but_inactive_for_the_
         .map(str::to_owned)
         .collect::<Vec<_>>();
     active.sort();
-    assert_eq!(
-        active,
-        vec!["read".to_owned(), "subagent".to_owned()],
-        "the parent's active projection is deliberately narrow"
-    );
     let available = resources
         .capability()
         .available_tools()
@@ -709,6 +704,18 @@ async fn a_child_may_select_a_capability_that_is_available_but_inactive_for_the_
         .into_iter()
         .map(|definition| definition.name)
         .collect::<Vec<_>>();
+    assert_eq!(
+        active,
+        // `todo` is the parent's extension-provided Tool, which ordinary
+        // `defaultTools` narrowing does not reach (Issue #259).
+        vec!["read".to_owned(), "subagent".to_owned(), "todo".to_owned()],
+        "the parent's active ordinary projection is deliberately narrow"
+    );
+    assert!(
+        !available.iter().any(|name| name == "todo"),
+        "and the extension Tool is not an ordinary available capability, which is why \
+         no selection surface can name it"
+    );
     assert!(available.contains(&"grep".to_owned()) && available.contains(&"glob".to_owned()));
 
     let resolved = resolve(
@@ -2003,7 +2010,7 @@ async fn ext256_extension_settings_are_part_of_a_role_identity() {
         "research": {
             "description": "Same in every respect but its extensions.",
             "tools": {"builtin": ["read"]},
-            "extensions": {"agentStatus": {"enabled": false}},
+            "extensions": {"agentStatus": {"enabled": false}, "todo": {"enabled": false}},
         },
         "pinned": {
             "description": "Same in every respect but its extensions.",
@@ -2030,6 +2037,10 @@ async fn ext256_extension_settings_are_part_of_a_role_identity() {
         absent.is_empty(),
         "a role may compose no native Agent Extension at all"
     );
+    // Issue #259: a role that composes only Todo is a fourth distinct
+    // identity, so the extension vocabulary as a whole — not just Agent
+    // Status — participates in a role's semantic identity.
+    assert!(shanghai.todo().is_some() && new_york.todo().is_some());
     assert_eq!(
         new_york
             .agent_status()
@@ -2073,11 +2084,16 @@ async fn ext256_a_child_frozen_on_r1_keeps_r1_extensions_after_r2_publishes() {
     lab.write_config(&serde_json::json!({"roles": {"explore": {
         "description": "R1",
         "tools": {"builtin": ["read"]},
-        "extensions": {"agentStatus": {
-            "enabled": true,
-            "time": {"enabled": true, "timezone": "Asia/Shanghai"},
-            "background": {"enabled": true}
-        }},
+        "extensions": {
+            "agentStatus": {
+                "enabled": true,
+                "time": {"enabled": true, "timezone": "Asia/Shanghai"},
+                "background": {"enabled": true}
+            },
+            // Issue #259 regression 11: the Todo extension crosses the same
+            // freeze boundary, and R2 flips it the other way below.
+            "todo": {"enabled": true}
+        },
     }}}));
     let product = lab.compose().await;
     let r1 = product.runtime().runtime_resources();
@@ -2108,7 +2124,7 @@ async fn ext256_a_child_frozen_on_r1_keeps_r1_extensions_after_r2_publishes() {
     lab.write_config(&serde_json::json!({"roles": {"explore": {
         "description": "R1",
         "tools": {"builtin": ["read"]},
-        "extensions": {"agentStatus": {"enabled": false}},
+        "extensions": {"agentStatus": {"enabled": false}, "todo": {"enabled": false}},
     }}}));
     product
         .runtime()
@@ -2138,6 +2154,14 @@ async fn ext256_a_child_frozen_on_r1_keeps_r1_extensions_after_r2_publishes() {
         "the R1-resolved child keeps its R1 extension semantics"
     );
     assert!(agent_status.background.enabled);
+    assert!(
+        retained.extensions.todo().is_some(),
+        "the R1-resolved child keeps its R1 Todo composition after R2 removed it"
+    );
+    assert!(
+        next.extensions.todo().is_none(),
+        "and a child resolved after R2 composes no Todo"
+    );
     assert_eq!(
         retained.definition_digest, r1_digest,
         "the committed child keeps the R1 semantic identity it started with"
@@ -2165,7 +2189,10 @@ async fn ext256_a_child_frozen_on_r1_keeps_r1_extensions_after_r2_publishes() {
     );
     assert_eq!(
         EffectiveNativeAgentExtensions::project(&next.extensions),
-        EffectiveNativeAgentExtensions { agent_status: None },
+        EffectiveNativeAgentExtensions {
+            agent_status: None,
+            todo: None,
+        },
         "and a child frozen on R2 projects R2's composition, not R1's"
     );
     assert_ne!(

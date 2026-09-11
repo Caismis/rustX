@@ -87,7 +87,14 @@ async fn issue204_bash_hard_deadline_settles_proven_timed_out() {
     // deterministic coverage and must not park this execution fixture.
     let mut policies = rustx::tools::NativeToolPolicies::default();
     policies.bash.approval = rustx::tools::ToolApprovalPolicy::Never;
-    let fixture = common::native_fixture_with(Vec::new(), policies);
+    // This fixture's subject is bash deadline settlement, so it composes no
+    // native Agent Extension: no task list, and no `todo` in either Tool
+    // plane (Issue #259).
+    let fixture = common::native_fixture_with_extensions(
+        Vec::new(),
+        policies,
+        &rustx::extensions::NativeAgentExtensions::none(),
+    );
     let registry = fixture.registry;
     let bash_id = registry
         .definitions()

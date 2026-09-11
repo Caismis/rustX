@@ -8,9 +8,13 @@ import { agentStatus, attemptModel, attemptView, runtimeCursor, sessionModel, sn
 
 it("CFG238 shares the native protocol fixture and explicit lifetimes", () => {
   const fixture: { request: RuntimeClientRequest; result: RuntimeClientResult; lifetimes: SettingsLifetimes } = JSON.parse(readFileSync(new URL("../../tests/fixtures/runtime-client/settings-v26.json", import.meta.url), "utf8"));
-  // The fixture is named for the version that introduced its shape; v27 added
-  // the subagent `profile_digest` and left the settings contract untouched.
-  assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 28);
+  // The fixture is named for the version that introduced its shape. v27 added
+  // the subagent `profile_digest` and v28 crash-safe Session deletion, both
+  // leaving the settings contract untouched; v29 (Issue #259) added the
+  // `effective_extensions.todo` member the fixture now carries in every state,
+  // including the `todo_only` combination that proves the two extensions
+  // project on independent axes.
+  assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 29);
   assert.equal(fixture.request.method, "default_save");
   if (fixture.request.method === "default_save") {
     assert.equal(fixture.request.scope, "user");
@@ -97,7 +101,7 @@ it("EXT256 shares the native effective-extension protocol fixture exactly", () =
  */
 it("EXT256 /settings distinguishes absent, composed, and timezone-configured Agent Status", () => {
   const composed = renderSettings(replaceFromSnapshot(snapshot({
-    effective_extensions: { agent_status: { time: { enabled: true, timezone: "Asia/Shanghai" }, background: { enabled: true } } },
+    effective_extensions: { agent_status: { time: { enabled: true, timezone: "Asia/Shanghai" }, background: { enabled: true } }, todo: {} },
   }), runtimeCursor(1)));
   assert.match(composed, /### Native Agent Extensions \(launch capture\)/);
   assert.match(composed, /- Agent Status: enabled/);
@@ -109,7 +113,7 @@ it("EXT256 /settings distinguishes absent, composed, and timezone-configured Age
 
   // Composed, but with both contributors off. This is not "disabled".
   const idle = renderSettings(replaceFromSnapshot(snapshot({
-    effective_extensions: { agent_status: { time: { enabled: false, timezone: null }, background: { enabled: false } } },
+    effective_extensions: { agent_status: { time: { enabled: false, timezone: null }, background: { enabled: false } }, todo: {} },
   }), runtimeCursor(1)));
   assert.match(idle, /- Agent Status: enabled/);
   assert.match(idle, /  - Time: disabled/);
@@ -118,7 +122,7 @@ it("EXT256 /settings distinguishes absent, composed, and timezone-configured Age
 
   // Not part of the composition at all: no contributor lines exist to read.
   const absent = renderSettings(replaceFromSnapshot(snapshot({
-    effective_extensions: { agent_status: null },
+    effective_extensions: { agent_status: null, todo: null },
   }), runtimeCursor(1)));
   assert.match(absent, /- Agent Status: disabled \(not composed for this Agent\)/);
   assert.ok(!absent.includes("- Time:"));
@@ -129,7 +133,7 @@ it("EXT256 /settings distinguishes absent, composed, and timezone-configured Age
   const child = renderSettings(replaceFromSnapshot(snapshot({
     settings_evidence: "frozen_child",
     settings_lifetimes: { ...snapshot().settings_lifetimes, model: "frozen_admission", extensions: "frozen_admission" },
-    effective_extensions: { agent_status: { time: { enabled: true, timezone: "America/New_York" }, background: { enabled: false } } },
+    effective_extensions: { agent_status: { time: { enabled: true, timezone: "America/New_York" }, background: { enabled: false } }, todo: {} },
   }), runtimeCursor(1)));
   assert.match(child, /### Native Agent Extensions \(frozen at admission\)/);
   assert.match(child, /  - timezone: America\/New_York/);
@@ -149,14 +153,14 @@ it("EXT256 /settings distinguishes absent, composed, and timezone-configured Age
  */
 it("EXT256 /settings never infers extension enablement from Agent Status observations", () => {
   const enabledWithoutObservation = replaceFromSnapshot(snapshot({
-    effective_extensions: { agent_status: { time: { enabled: true, timezone: "UTC" }, background: { enabled: true } } },
+    effective_extensions: { agent_status: { time: { enabled: true, timezone: "UTC" }, background: { enabled: true } }, todo: {} },
     statuses: [],
   }), runtimeCursor(1));
   assert.deepEqual(enabledWithoutObservation.statuses, []);
   assert.match(renderSettings(enabledWithoutObservation), /- Agent Status: enabled/);
 
   const absentWithObservation = replaceFromSnapshot(snapshot({
-    effective_extensions: { agent_status: null },
+    effective_extensions: { agent_status: null, todo: null },
     statuses: [agentStatus({ status_message_id: "m1", sections: [temporalSection()] })],
   }), runtimeCursor(1));
   assert.equal(absentWithObservation.statuses.length, 1);
@@ -171,7 +175,7 @@ it("EXT256 /settings never infers extension enablement from Agent Status observa
  */
 it("EXT256 reconnect reconstructs the same effective-extension view", () => {
   const native = snapshot({
-    effective_extensions: { agent_status: { time: { enabled: true, timezone: "Asia/Shanghai" }, background: { enabled: false } } },
+    effective_extensions: { agent_status: { time: { enabled: true, timezone: "Asia/Shanghai" }, background: { enabled: false } }, todo: {} },
   });
   const live = replaceFromSnapshot(native, runtimeCursor(9));
   const reconnect = replaceFromSnapshot(structuredClone(native), runtimeCursor(9));

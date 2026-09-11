@@ -255,8 +255,8 @@ export function snapshot(
     launch_settings: null,
     // The runtime always projects its own composition for a live or frozen
     // Agent; the default fixture is the ordinary composed Agent Status
-    // extension with no explicit timezone.
-    effective_extensions: { agent_status: { time: { enabled: true, timezone: null }, background: { enabled: true } } },
+    // extension with no explicit timezone, plus the composed Todo extension.
+    effective_extensions: { agent_status: { time: { enabled: true, timezone: null }, background: { enabled: true } }, todo: {} },
     settings_evidence: "live_session",
     settings_lifetimes: { launch: "launch_capture", model: "next_admission", approval: "safe_boundary", resources: "resource_publication", attempt: "frozen_admission", presentation: "client_local", saved_defaults: "next_launch", extensions: "launch_capture" },
     workflows: { revision: 0, runs: [], omitted_runs: 0 },

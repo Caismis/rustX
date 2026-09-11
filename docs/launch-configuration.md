@@ -225,7 +225,7 @@ domain defaults remain authoritative: schema 8, approval `policy`, model
 summary policy `session`, model-declared reasoning/output defaults, no request
 parameter overrides, native policies from `NativeToolPoliciesDocument`, the
 native default tool list (`execution`, `ask_user`, `read`, `write`, `edit`,
-`glob`, `grep`, `bash`, `subagent`, `todo`), empty Skills/MCP/environment and
+`glob`, `grep`, `bash`, `subagent`), empty Skills/MCP/environment and
 Subagent/Workflow admission, and Subagent capacity 4. Read is an ordinary
 default-enabled Tool and all main selection filters are exact; see
 [selection and native defaults](runtime-resources.md#exact-tool-authority-and-native-defaults).
@@ -236,7 +236,9 @@ Model response-start/stream-idle deadlines remain 30,000/15,000 ms. Foreground
 tool execution retains its 120,000 ms hard deadline and no idle-liveness window.
 The default native Agent Extension composition contains the Agent Status
 extension with its Time and Background contributors enabled and no configured
-timezone.
+timezone, and the Todo extension. Todo is deliberately absent from the native
+default *tool* list above: it is composed by `extensions.todo`, and naming it
+in `defaultTools` is a validation error.
 
 ## Native Agent Extensions
 
@@ -250,23 +252,25 @@ optional Agent augmentation:
       "enabled": true,
       "time": { "enabled": true, "timezone": "Asia/Shanghai" },
       "background": { "enabled": true }
-    }
+    },
+    "todo": { "enabled": true }
   }
 }
 ```
 
 A Native Agent Extension is optional Agent behavior or context that belongs to
-one concrete Agent/Conversation composition. Agent Status is the first
-extension migrated under this boundary; Todo and Goal are later, separate
-issues and are **not** part of it today. The obsolete top-level `agentStatus`
+one concrete Agent/Conversation composition. Agent Status was the first
+extension migrated under this boundary; **Todo** is the second, and the first
+that is stateful and contributes a model-facing Tool. Goal is a later, separate
+issue and is **not** part of it today. The obsolete top-level `agentStatus`
 field is removed outright: there is no alias, no fallback parse, no
 deprecation warning, and no compatibility mode — an obsolete document fails the
 ordinary strict-field boundary, naming the offending field.
 
 The record is *closed*, not an open registry. Its members are typed Rust fields,
-so an unknown extension name (`extensions.todo`) and an unknown knob inside a
-known extension (`extensions.agentStatus.future`) both fail at launch exactly
-like any other unknown field. rustX deliberately provides no generic plugin or
+so an unknown extension name (`extensions.goal`) and an unknown knob inside a
+known extension (`extensions.agentStatus.future`, `extensions.todo.future`) both
+fail at launch exactly like any other unknown field. rustX deliberately provides no generic plugin or
 runtime-hook system: there is no dynamic registration, no lifecycle trait, no
 event-hook registry, no arbitrary model-request mutation, and no
 JavaScript/TypeScript/WASM or third-party extension loading. An extension may
@@ -275,10 +279,78 @@ tools, Context Assembly for request-time context, `ConversationRuntime` for
 runtime coordination, the Runtime Client for projection. Adding one means adding
 a typed member and wiring it through its real owner.
 
-Extensions and ordinary tools are separate concepts. `extensions` never selects,
-enables, or filters execution capabilities; `defaultTools`, `--tools`, and
-`--exclude-tools` remain the only tool-selection authority, and enabling an
-extension never adds a Tool to the model-facing registry by itself.
+### Tool selection and extension composition are separate authority planes
+
+Extensions and ordinary tools are separate concepts, and since the Todo
+migration an extension may also contribute a model-facing Tool. The model's
+Tool set is therefore a composition of distinct owners:
+
+```text
+  ordinary selected Tool capabilities          defaultTools / --tools /
+                                               --exclude-tools / tools.builtin
++ enabled extension-provided Tool surfaces     extensions.<name>.enabled
++ already-admitted domain terminal protocols   Workflow output, ...
+```
+
+Neither plane filters the other:
+
+- `extensions` never selects, enables, or filters an *ordinary* execution
+  capability. Composing Todo adds no `read`, `bash`, or MCP tool;
+- ordinary Tool selection never adds or removes an *extension-provided* Tool.
+  `--no-tools` selects zero ordinary capabilities and leaves an enabled Todo's
+  `todo` Tool in place, and `--no-builtin-tools` removes ordinary built-ins
+  rather than every Tool that happens to be implemented in Rust. The
+  classification is semantic, not incidental to where the code lives.
+
+A truly Tool-free model request therefore requires **both** no ordinary Tools
+**and** no Tool-providing extension:
+
+```jsonc
+// Nothing at all reaches the model.
+{ "extensions": { "todo": { "enabled": false } } }   // plus --no-tools
+```
+
+Symmetrically, an extension can never be switched on by naming its Tool.
+`todo` is rejected — deterministically, with a diagnostic naming the extension
+— in `defaultTools`, `--tools`, `--exclude-tools`, a named Subagent's
+`tools.builtin`, a Workflow's admitted capability set, and every invocation
+override that shares that vocabulary. There is no alias and no compatibility
+parse.
+
+### The Todo extension
+
+```jsonc
+{ "extensions": { "todo": { "enabled": true } } }
+```
+
+`enabled` composes one coherent capability, or none of it:
+
+| composed | not composed |
+| --- | --- |
+| the conversation-owned `ConversationTodoList` | no current list authority at all |
+| the model-facing `todo` Tool | no current `todo` Tool |
+| the bounded read-only Todo status presentation | no Todo contribution to Agent Status |
+| the Runtime Client / TUI Todo projection | no active Todo panel for this runtime |
+
+It is enabled by default, which preserves the product behavior `defaultTools`
+used to express — but the default now belongs to extension composition.
+
+Todo carries no contributor configuration. The list's bounds, transitions, and
+dependency rules belong to the list itself, not to launch configuration.
+
+Disabling Todo is a statement about *this runtime*, never about history. A
+Todo-disabled launch composes no list and reads no Todo history, while every
+`todo` ToolCall and ToolResult the conversation already committed stays exactly
+where it is and stays renderable as transcript history. Re-enabling Todo later
+reconstructs the latest accepted authoritative snapshot from that same
+canonical evidence — by reading the newest committed result, never by replaying
+mutations — so it produces no duplicate ToolResults and no duplicate events.
+
+Todo and Agent Status are independent axes. All four combinations are
+intentional: with Todo on and Agent Status off the `todo` Tool, the list, its
+ToolResults and its recovery all work exactly as before and there is simply no
+reminder; with Agent Status on and Todo off, Time and Background continue
+normally and no Todo section is fabricated.
 
 ### Launch-scoped lifetime
 
@@ -332,7 +404,18 @@ Disabling an extension composes an ordinary runtime with that behavior absent.
 tool admission and selection, tool execution, cancellation, attempt settlement,
 terminal events, canonical history, and provider-independent messages exactly
 as they are with the extension present; the only difference is that no Agent
-Status is composed or emitted.
+Status is composed or emitted. The same holds for `"todo": { "enabled": false }`:
+the only differences are that the `todo` Tool is absent from the model's Tool
+set and the conversation composes no task list.
+
+A Todo-enabled child owns **its own** list. It belongs to the child
+conversation and is rebuilt from that conversation's own canonical history,
+which is empty at birth — so a child's list never aliases its parent's, two
+concurrently running Todo-enabled children never observe or mutate each other's,
+and no child snapshot merges upward. The child's final result remains the
+existing bounded Subagent report or Workflow structured output; its list is
+working state, not part of that result, and its internals do not enter parent
+canonical history.
 
 ### Inspecting what an Agent is actually running with
 

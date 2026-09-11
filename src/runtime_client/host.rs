@@ -2794,10 +2794,25 @@ mod tests {
         let conversation_id = ConversationId::new("conv-host");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
             conversation_id.clone(),
-            &workspace,
-            dir.path().join("artifacts"),
+            crate::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace,
+                dir.path().join("artifacts"),
+            )
+            // These Runtime Client fixtures compose Agent Status and nothing
+            // else: the composition must match the status engine below and
+            // the extension Tool plane the coordinator is given, because
+            // `ConversationRuntime` construction now proves all three follow
+            // from one frozen decision (Issue #259). The Todo extension has
+            // its own suites; composing it here would only add an unrelated
+            // Tool and an unrelated conversation-owned resource to every
+            // host contract.
+            .with_extensions(
+                crate::extensions::NativeAgentExtensions::with_agent_status(
+                    crate::context::AgentStatusConfig::default(),
+                ),
+            ),
         )
         .expect("tool runtime");
         if include_native_tools {
@@ -2818,6 +2833,7 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(tools),
+                extension_tools: tool_runtime.extension_tool_plane(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig {
                     automatic_roots: vec![workspace.join(".agents/skills")],
@@ -2890,10 +2906,25 @@ mod tests {
         let conversation_id = ConversationId::new("conv-host");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
             conversation_id.clone(),
-            &workspace,
-            dir.path().join("artifacts"),
+            crate::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace,
+                dir.path().join("artifacts"),
+            )
+            // These Runtime Client fixtures compose Agent Status and nothing
+            // else: the composition must match the status engine below and
+            // the extension Tool plane the coordinator is given, because
+            // `ConversationRuntime` construction now proves all three follow
+            // from one frozen decision (Issue #259). The Todo extension has
+            // its own suites; composing it here would only add an unrelated
+            // Tool and an unrelated conversation-owned resource to every
+            // host contract.
+            .with_extensions(
+                crate::extensions::NativeAgentExtensions::with_agent_status(
+                    crate::context::AgentStatusConfig::default(),
+                ),
+            ),
         )
         .expect("tool runtime");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
@@ -2902,6 +2933,7 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(ToolRegistry::new()),
+                extension_tools: tool_runtime.extension_tool_plane(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig {
                     automatic_roots: vec![workspace.join(".agents/skills")],
@@ -6814,10 +6846,25 @@ mod tests {
         let conversation_id = ConversationId::new("conv-host");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
             conversation_id.clone(),
-            &workspace,
-            dir.path().join("artifacts"),
+            crate::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace,
+                dir.path().join("artifacts"),
+            )
+            // These Runtime Client fixtures compose Agent Status and nothing
+            // else: the composition must match the status engine below and
+            // the extension Tool plane the coordinator is given, because
+            // `ConversationRuntime` construction now proves all three follow
+            // from one frozen decision (Issue #259). The Todo extension has
+            // its own suites; composing it here would only add an unrelated
+            // Tool and an unrelated conversation-owned resource to every
+            // host contract.
+            .with_extensions(
+                crate::extensions::NativeAgentExtensions::with_agent_status(
+                    crate::context::AgentStatusConfig::default(),
+                ),
+            ),
         )
         .expect("tool runtime");
         let mut tools = ToolRegistry::new();
@@ -6839,6 +6886,7 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(tools),
+                extension_tools: tool_runtime.extension_tool_plane(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig {
                     automatic_roots: vec![workspace.join(".agents/skills")],
@@ -6910,10 +6958,25 @@ mod tests {
         let conversation_id = ConversationId::new("conv-host");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
             conversation_id.clone(),
-            &workspace,
-            dir.path().join("artifacts"),
+            crate::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace,
+                dir.path().join("artifacts"),
+            )
+            // These Runtime Client fixtures compose Agent Status and nothing
+            // else: the composition must match the status engine below and
+            // the extension Tool plane the coordinator is given, because
+            // `ConversationRuntime` construction now proves all three follow
+            // from one frozen decision (Issue #259). The Todo extension has
+            // its own suites; composing it here would only add an unrelated
+            // Tool and an unrelated conversation-owned resource to every
+            // host contract.
+            .with_extensions(
+                crate::extensions::NativeAgentExtensions::with_agent_status(
+                    crate::context::AgentStatusConfig::default(),
+                ),
+            ),
         )
         .expect("tool runtime");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
@@ -6922,6 +6985,7 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(ToolRegistry::new()),
+                extension_tools: tool_runtime.extension_tool_plane(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig {
                     automatic_roots: vec![workspace.join(".agents/skills")],
@@ -7026,10 +7090,25 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
             conversation_id.clone(),
-            &workspace,
-            dir.path().join("artifacts"),
+            crate::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace,
+                dir.path().join("artifacts"),
+            )
+            // These Runtime Client fixtures compose Agent Status and nothing
+            // else: the composition must match the status engine below and
+            // the extension Tool plane the coordinator is given, because
+            // `ConversationRuntime` construction now proves all three follow
+            // from one frozen decision (Issue #259). The Todo extension has
+            // its own suites; composing it here would only add an unrelated
+            // Tool and an unrelated conversation-owned resource to every
+            // host contract.
+            .with_extensions(
+                crate::extensions::NativeAgentExtensions::with_agent_status(
+                    crate::context::AgentStatusConfig::default(),
+                ),
+            ),
         )
         .expect("tool runtime");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
@@ -7038,6 +7117,7 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(tools),
+                extension_tools: tool_runtime.extension_tool_plane(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig {
                     automatic_roots: vec![workspace.join(".agents/skills")],
@@ -8246,10 +8326,25 @@ mod tests {
         let conversation_id = ConversationId::new("conv-claim");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
             conversation_id.clone(),
-            &workspace,
-            dir.path().join("artifacts"),
+            crate::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace,
+                dir.path().join("artifacts"),
+            )
+            // These Runtime Client fixtures compose Agent Status and nothing
+            // else: the composition must match the status engine below and
+            // the extension Tool plane the coordinator is given, because
+            // `ConversationRuntime` construction now proves all three follow
+            // from one frozen decision (Issue #259). The Todo extension has
+            // its own suites; composing it here would only add an unrelated
+            // Tool and an unrelated conversation-owned resource to every
+            // host contract.
+            .with_extensions(
+                crate::extensions::NativeAgentExtensions::with_agent_status(
+                    crate::context::AgentStatusConfig::default(),
+                ),
+            ),
         )
         .expect("tool runtime");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
@@ -8258,6 +8353,7 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(tools),
+                extension_tools: tool_runtime.extension_tool_plane(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig {
                     automatic_roots: vec![workspace.join(".agents/skills")],

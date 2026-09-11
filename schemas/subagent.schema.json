@@ -58,6 +58,13 @@
             }
           },
           "description": "The Agent Status extension: optional provider-independent runtime\ncontext for an already-established model step."
+        },
+        "todo": {
+          "$ref": "#/$defs/TodoExtensionDocument",
+          "default": {
+            "enabled": true
+          },
+          "description": "The Todo extension: the conversation-owned task list, its\nmodel-facing `todo` Tool, and its bounded status presentation\n(Issue #259)."
         }
       },
       "type": "object"
@@ -118,6 +125,18 @@
       },
       "type": "object"
     },
+    "TodoExtensionDocument": {
+      "additionalProperties": false,
+      "description": "The authored Todo extension (Issue #259).\n\nTodo is *one* capability with several faces, and `enabled` composes all\nof them together or none of them:\n\n```text\nenabled = true    conversation-owned ConversationTodoList authority\n                  the model-facing `todo` Tool\n                  the bounded read-only Todo status presentation\n                  the Runtime Client / TUI Todo projection\n\nenabled = false   none of the above for this runtime; canonical history\n                  keeps every Todo ToolCall/ToolResult it already holds\n```\n\nIt carries no contributor settings today. That is a statement about the\nextension, not a placeholder: the list's bounds, transitions, and\ndependency rules are owned by\n[`ConversationTodoList`](crate::tools::todo::ConversationTodoList) and are\nnot launch configuration.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Whether this composition includes the Todo extension at all.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "ToolSelectionDocument": {
       "additionalProperties": false,
       "description": "The authored map form of an exact, source-qualified capability selection.\n\nThis is the one selection vocabulary shared by every trusted authoring\nsurface: named-role frontmatter (`tools:`), a Workflow Agent node's\ninvocation override, and the model-facing `subagent` Tool's `override`.\nOrigins are named explicitly rather than collapsed into bare strings, so a\nBuiltin `read` and an MCP server's `read` are never interchangeable.\nWildcards are deliberately absent: a selection is an exact list. Managed\nPython tool packages are selected through `mcp` under their synthesized\nserver identity (`python:<folder>`, Issue #174).\n\nThe `python:` namespace is reserved for those synthesized identities:\n`mcpServers` configuration may never declare a server under it (rejected\nduring validation), so a selection naming `python:<folder>` always resolves\nto the managed package, never to a configured server.",
@@ -172,6 +191,9 @@
           "time": {
             "enabled": true
           }
+        },
+        "todo": {
+          "enabled": true
         }
       },
       "description": "The closed **Native Agent Extension** composition of this named role\n(Issue #256).\n\nIndependently authored: a role never inherits the root Agent's\nextension set, and an omitted value means this role's own built-in\ndefaults, never the invoking runtime's configuration."

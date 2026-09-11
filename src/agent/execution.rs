@@ -2659,7 +2659,11 @@ impl<'a> AgentExecution<'a> {
                 &opportunities,
                 &surface,
                 self.tool_runtime.background(),
-                self.tool_runtime.todos(),
+                // The Todo owner's own bounded derivation, captured here —
+                // outside the Agent Status engine — so the engine receives a
+                // finite immutable presentation rather than the list
+                // authority (Issue #259).
+                self.tool_runtime.todo_status_presentation(),
                 &emission_lookup,
             )
             .map(|prepared| AgentStatusGeneration {
@@ -4295,7 +4299,16 @@ impl<'a> AgentExecution<'a> {
         calls: &[ToolCall],
         preflight: Vec<PreflightOutcome>,
     ) -> Result<Vec<SettledCall>, CanonicalCommitError> {
-        let batch = self.tool_runtime.todos().open_batch();
+        // `None` is either "this composition has no Todo extension" or "the
+        // list already has an open batch". Both mean the same thing to this
+        // batch: it runs without a Todo writer, so a `todo` call (which a
+        // Todo-free composition cannot even make — the Tool is not
+        // registered) settles as an ordinary rejected result and no list is
+        // touched.
+        let batch = self
+            .tool_runtime
+            .todos()
+            .and_then(crate::tools::todo::ConversationTodoList::open_batch);
         self.execute_tools_staged(calls, preflight, batch).await
     }
 
@@ -7337,6 +7350,7 @@ mod tests {
                 conversation_id: tool_runtime.conversation_id().clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: tools,
+                extension_tools: tool_runtime.extension_tool_plane(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),

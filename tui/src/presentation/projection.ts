@@ -171,7 +171,14 @@ export function replaceFromSnapshot(
     // one repair path for it too: an attach, a resume, and a reload after
     // compaction all open on exactly the list canonical history holds,
     // however far back the last `todo` result now sits.
-    todos: parseSnapshot(snapshot.todos) ?? { tasks: [], next_id: 1 },
+    //
+    // `null` is the composition fact and is kept as `undefined`: a runtime
+    // that composes no Todo extension has no current list, which is not the
+    // same as an empty one (Issue #259).
+    todos:
+      snapshot.todos === null || snapshot.todos === undefined
+        ? undefined
+        : (parseSnapshot(snapshot.todos) ?? { tasks: [], next_id: 1 }),
     sessionModel: snapshot.model,
     launchSettings: snapshot.launch_settings,
     effectiveExtensions: snapshot.effective_extensions,
@@ -527,9 +534,17 @@ export function reduce(
       // A committed `todo` result *is* the list moving, so the panel follows
       // it live without waiting for the next snapshot — the same derivation
       // the runtime runs over the same fact.
-      const todos = publishedTodos(event.message);
-      if (todos !== undefined) {
-        next.todos = todos;
+      //
+      // The fold is guarded on the composition fact the snapshot carried, not
+      // on the message: a runtime that composes no Todo extension must show
+      // no current list, and canonical history it inherited — which still
+      // legitimately contains `todo` results, and still renders as transcript
+      // history — must never manufacture one (Issue #259).
+      if (next.todos !== undefined) {
+        const todos = publishedTodos(event.message);
+        if (todos !== undefined) {
+          next.todos = todos;
+        }
       }
       // A canonical ToolMessage is also the authoritative repair path for a
       // foreground slot whose live execution settlement was not published

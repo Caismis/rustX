@@ -49,6 +49,10 @@
         "agentStatus": {
           "$ref": "#/$defs/AgentStatusExtensionDocument",
           "description": "The requested Agent Status extension, when this selection composes it.\n\n`null` is not accepted: the field is either absent (not composed) or a\ncomplete authored configuration. Collapsing an explicit `null` into\n\"absent\" would give one wire spelling two meanings."
+        },
+        "todo": {
+          "$ref": "#/$defs/TodoExtensionDocument",
+          "description": "The requested Todo extension, when this selection composes it\n(Issue #259).\n\nAbsent means the child composes no Todo at all — no list authority, no\n`todo` Tool, no status contribution — never \"whatever the role\nauthored\". `null` is refused for the same reason `agentStatus` refuses\nit: one wire spelling may not carry two meanings."
         }
       },
       "type": "object"
@@ -94,6 +98,18 @@
             "string",
             "null"
           ]
+        }
+      },
+      "type": "object"
+    },
+    "TodoExtensionDocument": {
+      "additionalProperties": false,
+      "description": "The authored Todo extension (Issue #259).\n\nTodo is *one* capability with several faces, and `enabled` composes all\nof them together or none of them:\n\n```text\nenabled = true    conversation-owned ConversationTodoList authority\n                  the model-facing `todo` Tool\n                  the bounded read-only Todo status presentation\n                  the Runtime Client / TUI Todo projection\n\nenabled = false   none of the above for this runtime; canonical history\n                  keeps every Todo ToolCall/ToolResult it already holds\n```\n\nIt carries no contributor settings today. That is a statement about the\nextension, not a placeholder: the list's bounds, transitions, and\ndependency rules are owned by\n[`ConversationTodoList`](crate::tools::todo::ConversationTodoList) and are\nnot launch configuration.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Whether this composition includes the Todo extension at all.",
+          "type": "boolean"
         }
       },
       "type": "object"

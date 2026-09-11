@@ -486,7 +486,9 @@ async fn a_new_tool_runtime_rebuilds_the_list_from_conversation_history() {
     .expect("tool runtime");
 
     assert_eq!(
-        resumed.todo_snapshot(),
+        resumed
+            .todo_snapshot()
+            .expect("the fixture composes the Todo extension"),
         published(&committed),
         "the resumed conversation opens on the list its history last committed"
     );

@@ -86,7 +86,10 @@ capability registrations, **not** its model-visible registry. Source availabilit
 invalid selectors, changed identity, missing explicit admission and ineligible
 leaves fail closed. Available-but-inactive capabilities remain invisible to the
 parent model. Admission rejects background-only capabilities, composites,
-Workflow dispatch, subagents, execution control and todo. Ordinary ask_user is eligible.
+Workflow dispatch, subagents and execution control. Ordinary ask_user is eligible.
+An extension-provided Tool such as `todo` is not an ordinary capability at all
+and is refused at compile time, naming the extension that owns it; a Workflow
+Agent node composes Todo through `override.extensions`, never as a capability.
 No rediscovery or current-file lookup can replace a frozen registration.
 Without a run `workspace` binding, Tools use the ordinary invoking context.
 With a binding, every Tool consumes the exact native-authorized candidate as

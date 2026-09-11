@@ -124,7 +124,27 @@ pub struct EffectiveNativeAgentExtensions {
     /// The composed Agent Status extension, or `None` when this Agent
     /// composes no Agent Status at all.
     pub agent_status: Option<EffectiveAgentStatusExtension>,
+    /// The composed Todo extension, or `None` when this Agent composes no
+    /// Todo at all (Issue #259).
+    ///
+    /// This is the authoritative answer to "does this runtime have a current
+    /// task list, a `todo` Tool, and a Todo panel?" — and it is the only
+    /// authoritative answer. A client must not infer it from the presence of
+    /// `todo` results in the transcript, which are historical facts of the
+    /// conversation rather than facts about the runtime attached to it.
+    pub todo: Option<EffectiveTodoExtension>,
 }
+
+/// The frozen Todo extension of a composition that includes it.
+///
+/// It carries no field: Todo has no contributor configuration, so being
+/// composed is the whole fact. It is a struct rather than a bare `bool`
+/// because the vocabulary is closed and typed, and because a later
+/// contributor would be added here rather than by changing the shape of the
+/// value clients already parse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectiveTodoExtension {}
 
 /// The frozen contributor configuration of a composed Agent Status extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -175,6 +195,7 @@ impl EffectiveNativeAgentExtensions {
                         enabled: config.background.enabled,
                     },
                 }),
+            todo: frozen.todo().map(|_| EffectiveTodoExtension {}),
         }
     }
 }
@@ -294,9 +315,11 @@ mod tests {
     /// the Rust types encode and decode it byte-exactly. The TypeScript half
     /// reads the same file (`tui/test/settings.test.ts`).
     ///
-    /// The fixture carries all three semantically distinct states on
-    /// purpose: composed with an explicit timezone, composed with both
-    /// contributors off and no timezone, and not composed at all.
+    /// The fixture carries every semantically distinct state on purpose:
+    /// composed with an explicit timezone, composed with both contributors
+    /// off and no timezone, not composed at all, and — since Issue #259 —
+    /// Todo composed while Agent Status is not, which is the combination that
+    /// proves the two extensions project independently.
     #[test]
     fn ext256_effective_extension_protocol_fixture_round_trips_exactly() {
         let fixture: serde_json::Value = serde_json::from_str(include_str!(
@@ -304,7 +327,12 @@ mod tests {
         ))
         .unwrap();
         let extensions = &fixture["effective_extensions"];
-        for state in ["composed", "contributors_disabled", "not_composed"] {
+        for state in [
+            "composed",
+            "contributors_disabled",
+            "not_composed",
+            "todo_only",
+        ] {
             let wire = extensions[state].clone();
             let decoded: EffectiveNativeAgentExtensions =
                 serde_json::from_value(wire.clone()).expect(state);
@@ -319,19 +347,36 @@ mod tests {
             serde_json::from_value(extensions["contributors_disabled"].clone()).unwrap();
         let absent: EffectiveNativeAgentExtensions =
             serde_json::from_value(extensions["not_composed"].clone()).unwrap();
+        let todo_only: EffectiveNativeAgentExtensions =
+            serde_json::from_value(extensions["todo_only"].clone()).unwrap();
         assert_ne!(composed, disabled);
         assert_ne!(disabled, absent);
+        assert_ne!(absent, todo_only);
         assert!(absent.agent_status.is_none());
         assert!(disabled.agent_status.is_some());
+
+        // Issue #259: the two members are independent axes, not one switch.
+        assert!(todo_only.agent_status.is_none() && todo_only.todo.is_some());
+        assert!(absent.todo.is_none());
+        assert!(composed.todo.is_some());
+        assert_eq!(
+            EffectiveNativeAgentExtensions::project(
+                &crate::extensions::NativeAgentExtensions::with_todo()
+            ),
+            todo_only
+        );
 
         // The projection is a total translation of the frozen composition,
         // and the frozen composition is the only input it has.
         let frozen = serde_json::from_value::<crate::extensions::NativeAgentExtensionsDocument>(
-            serde_json::json!({"agentStatus": {
-                "enabled": true,
-                "time": {"enabled": true, "timezone": "Asia/Shanghai"},
-                "background": {"enabled": true}
-            }}),
+            serde_json::json!({
+                "agentStatus": {
+                    "enabled": true,
+                    "time": {"enabled": true, "timezone": "Asia/Shanghai"},
+                    "background": {"enabled": true}
+                },
+                "todo": {"enabled": true}
+            }),
         )
         .unwrap()
         .resolve();
@@ -361,11 +406,14 @@ mod tests {
         // The closed record rejects an unknown extension name and an
         // unknown contributor field: the vocabulary grows only in Rust.
         for invalid in [
+            serde_json::json!({"agent_status": null, "todo": null, "goal": {}}),
+            // The Todo member carries no contributor at all: the closed
+            // record refuses an invented one rather than ignoring it.
             serde_json::json!({"agent_status": null, "todo": {"enabled": true}}),
             serde_json::json!({"agent_status": {
                 "time": {"enabled": true, "timezone": null, "future": true},
                 "background": {"enabled": true}
-            }}),
+            }, "todo": null}),
         ] {
             assert!(
                 serde_json::from_value::<EffectiveNativeAgentExtensions>(invalid.clone()).is_err(),

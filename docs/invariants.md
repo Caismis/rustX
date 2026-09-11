@@ -1449,8 +1449,55 @@ RemoteTaskActive
 
 ### The conversation task list and `todo`
 
-`todo` is one ordinary foreground, sequential, approval-never Tool over the
-conversation-owned `ConversationTodoList`. Task ids are allocated in creation
+> Enabling Todo composes one coherent Todo capability for one concrete
+> Agent/Conversation: conversation-owned Todo state, its model-facing `todo`
+> Tool, bounded Todo status presentation, and Runtime Client/TUI projection.
+> Ordinary Tool selection does not independently add or remove the
+> extension-provided `todo` Tool.
+
+Todo is an optional **Native Agent Extension** (Issue #259), not an ordinary
+execution capability like Read or Bash. `extensions.todo.enabled` is its one
+switch, and it composes all four faces above or none of them. It is enabled by
+default; `defaultTools`, `--tools`, `--exclude-tools`, a role's
+`tools.builtin`, and a Workflow's admitted capability set all reject the name
+`todo` outright, because they address the ordinary capability plane and Todo is
+not in it. `--no-tools` therefore leaves an enabled Todo's Tool in place: a
+Tool-free model request needs no ordinary Tools **and** no Tool-providing
+extension.
+
+The coherence is **structural, not conventional**. One frozen
+`NativeAgentExtensions` is stored by the `ConversationToolRuntime` that
+materializes it, and every other face is derived from or proved against that
+one value: the conversation's `ConversationTodoList` is materialized from it,
+the extension Tool plane is derived from *that list* rather than configured
+beside it (`ExtensionToolPlane`'s only Tool-publishing constructor takes the
+materialized owner, and the one public constructor yields the empty plane), the
+Agent Status engine is materialized from it, and the Runtime Client effective
+projection returns it. So "the model is offered `todo` while the runtime owns
+no list" is not a state the types can represent. Pairing facets materialized
+for two *different* compositions is refused at the ownership-transfer boundary:
+`ConversationRuntime` construction fails closed with
+`ExtensionCompositionMismatch` unless the Todo state owner, the coordinator's
+configured Tool plane, its **currently active** `CapabilitySnapshot` Tool
+authority, and the status engine all follow from the conversation's one stored
+composition. The active generation is checked separately from the configured
+plane because a coordinator holds its configured plane from construction but
+publishes nothing until a prepared candidate is committed — so "configured to
+publish `todo`" is not "the currently executable generation carries `todo`",
+and the active comparison is by exact canonical `ToolDefinition` rather than by
+model-facing name.
+
+Composition is launch-frozen exactly like every other extension. A resource
+reload cannot install or remove Todo in a running composition — the extension
+Tool set is composed once, outside the reloadable capability inputs — and
+restart/resume is a new composition resolved through the ordinary resolver.
+The `todo` Tool definition is therefore stable for the lifetime of one
+composition: list contents, emptiness, actionability, and mutations never add
+or remove it, and never republish a capability generation.
+
+Within a composition that includes it, `todo` is one ordinary foreground,
+sequential, approval-never Tool over the conversation-owned
+`ConversationTodoList`. Task ids are allocated in creation
 order from `next_id` and are unique within the current list generation;
 `clear` resets the allocator, so an id names one task for as long as the list
 it belongs to lives, not for as long as the conversation does. A rejected call
@@ -1513,9 +1560,23 @@ snapshot. That published snapshot is the only durable record of the list:
 `ConversationToolRuntime` construction rebuilds the list from the **newest**
 such snapshot in canonical history, so a restart, a Session resume, and a
 compaction preserve exactly what the conversation still carries. There is no
-sidecar file, no separate durability path, and no migration. A subagent child
-registers no `todo` tool, so a child can neither read nor overwrite its
-parent's list.
+sidecar file, no separate durability path, and no migration.
+
+A composition **without** the Todo extension composes no list and reads no Todo
+history at all — not even read-only. Reconstruction exists to serve a current
+Todo authority, and such a runtime has none. The canonical `todo` ToolCalls and
+ToolResults the conversation already holds are untouched: nothing deletes,
+rewrites, or hides them, they stay renderable as transcript history, and a
+later launch that composes Todo again rebuilds the same latest accepted
+snapshot from them. That rebuild *reads* the newest committed result rather
+than replaying mutations, so re-enabling produces no duplicate ToolResults and
+no duplicate events.
+
+A child conversation composes its own list, over its own Ledger, which is empty
+at birth. So a child's list never aliases its parent's, two concurrently
+running Todo-enabled children never observe or mutate each other's, and no
+child snapshot merges upward. A child that does not compose the extension has
+no list and registers no `todo` tool at all.
 
 That equivalence requires the in-memory list never to run ahead of the Ledger,
 so a `todo` call mutates *staged* state owned by the batch the Agent Loop opens
@@ -1585,7 +1646,14 @@ text field or metadata entry carries a control character.
 
 The runtime derives the same list over the whole Ledger and carries it in
 `RuntimeClientSnapshot.todos`; a client renders that projection and folds each
-newly committed `todo` result into it. A client must not scan its own
+newly committed `todo` result into it. `todos: null` is a different fact from
+the empty list and must render differently: the attached runtime composes no
+Todo extension, so there is no current task list to show at all, and the fold
+is guarded on that fact rather than on the message — canonical history a
+Todo-disabled runtime inherited still renders as transcript history and may
+never manufacture a current panel from it. The composed/absent fact itself is
+authoritative only in `effective_extensions.todo`, never inferred from the
+transcript. A client must not scan its own
 transcript for the list, because it holds only a bounded newest page: a
 conversation that committed a page or more of messages since its last `todo`
 result would otherwise appear to have no list at all. The TUI keys the fold on

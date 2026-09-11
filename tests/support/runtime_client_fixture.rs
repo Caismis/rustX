@@ -64,6 +64,7 @@ impl RuntimeClientFixture {
             workspace_fixtures: Vec::new(),
             mcp_servers: std::collections::BTreeMap::new(),
             native_tools: false,
+            extensions: rustx::extensions::NativeAgentExtensions::none(),
             tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
             session_model: None,
             context_policy: SessionContextPolicy {
@@ -117,6 +118,16 @@ pub struct RuntimeClientFixtureBuilder {
     mcp_servers: rustx::tools::mcp::McpServerBindings,
     /// Whether to register the real native tool plane in the base registry.
     native_tools: bool,
+    /// The frozen native Agent Extension composition of the runtime under
+    /// test (Issue #259).
+    ///
+    /// It composes both halves of every Tool-providing extension at once —
+    /// the conversation-owned state in `ConversationToolRuntime` and the
+    /// extension-provided Tool in the capability plane — so a fixture can
+    /// never end up with a `todo` Tool and no list, or a list and no Tool.
+    /// It defaults to the empty composition, which is what most Runtime
+    /// Client fixtures want.
+    extensions: rustx::extensions::NativeAgentExtensions,
     /// The startup activation policy applied to the available tool set.
     tool_activation: rustx::capabilities::ToolActivationPolicy,
     /// An explicit session model authority, when the test needs a specific
@@ -215,6 +226,22 @@ impl RuntimeClientFixtureBuilder {
         self
     }
 
+    /// Composes the frozen native Agent Extension set of the runtime under
+    /// test (Issue #259).
+    #[must_use]
+    pub fn extensions(mut self, extensions: rustx::extensions::NativeAgentExtensions) -> Self {
+        self.extensions = extensions;
+        self
+    }
+
+    /// Composes the Todo Agent Extension: the conversation-owned task list
+    /// and the model-facing `todo` Tool, together.
+    #[must_use]
+    pub fn todo_extension(self) -> Self {
+        let composed = self.extensions.clone().and_todo();
+        self.extensions(composed)
+    }
+
     /// Replaces the startup tool activation policy.
     #[must_use]
     pub fn tool_activation(mut self, policy: rustx::capabilities::ToolActivationPolicy) -> Self {
@@ -260,10 +287,24 @@ impl RuntimeClientFixtureBuilder {
             rustx::durable::ConversationStore::initialize(&store, &self.durable_history)
                 .expect("seed the durable lineage");
         }
-        let tool_runtime = rustx::tools::runtime::ConversationToolRuntime::new(
+        // One frozen composition for this fixture's runtime (Issue #259). The
+        // Agent Status member is derived from the engine template the fixture
+        // materializes below rather than configured beside it, for the same
+        // reason the Todo member decides the list and the Tool together: every
+        // facet of the composition must follow from one decision, and
+        // `ConversationRuntime` construction refuses a runtime where they do
+        // not.
+        let extensions = self
+            .extensions
+            .clone()
+            .and_agent_status(self.status_engine.config().clone());
+        let tool_runtime = rustx::tools::runtime::ConversationToolRuntime::from_config(
             ConversationId::new(&self.conversation),
-            &workspace_root,
-            workspace.path().join("artifacts"),
+            rustx::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace_root,
+                workspace.path().join("artifacts"),
+            )
+            .with_extensions(extensions.clone()),
         )
         .expect("tool runtime");
         let mut base_tools = self.base_tools;
@@ -290,6 +331,7 @@ impl RuntimeClientFixtureBuilder {
                 conversation_id: tool_runtime.conversation_id().clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(base_tools),
+                extension_tools: tool_runtime.extension_tool_plane(),
                 tool_activation: self.tool_activation,
                 skill_discovery: rustx::skills::SkillDiscoveryConfig {
                     automatic_roots: vec![tool_runtime.workspace().root().join(".agents/skills")],

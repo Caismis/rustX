@@ -24,13 +24,12 @@
 //! quarantined in the attempt-local engine and the surviving modules continue;
 //! the failure never becomes a Context Assembly or model-turn failure.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::conversation::ConversationSurfaceSnapshot;
 use crate::durable::{AgentStatusEmissionLookup, AgentStatusEmissionRecord};
@@ -40,7 +39,16 @@ use crate::message::types::{
 use crate::runtime::identity::MessageId;
 use crate::tools::background::{BackgroundExecutionSnapshot, ConversationBackgroundRegistry};
 use crate::tools::execution::ExecutionKind;
-use crate::tools::todo::{ConversationTodoList, TodoSnapshot, TodoStatus};
+use crate::tools::todo::{TodoStatus, TodoStatusPresentation, TodoStatusTask};
+
+// Agent Status is a *consumer* of the Todo extension, never an owner of it
+// (Issue #259). Production code in this module names no Todo state owner at
+// all — no list, no snapshot authority, no writer, no canonical history — and
+// sees nothing but the bounded immutable presentation value. The module's own
+// test suite imports the owner separately, to build the presentations it
+// feeds in.
+#[cfg(test)]
+use crate::tools::todo::{MAX_TODO_STATUS_TASKS, MAX_TODO_STATUS_TEXT_BYTES};
 use crate::tools::types::ToolProgress;
 
 /// The maximum number of active executions the Background module presents.
@@ -51,13 +59,6 @@ pub const MAX_BACKGROUND_STATUS_EXECUTIONS: usize = 8;
 /// This limit is applied to source fields before rendering. It is not a
 /// substitute for the final Agent Status cap.
 pub const MAX_BACKGROUND_STATUS_TEXT_BYTES: usize = 256;
-
-/// The maximum number of Todo tasks included in one bounded status
-/// contribution. The current in-progress task, when any, uses one slot.
-pub const MAX_TODO_STATUS_TASKS: usize = 6;
-
-/// The maximum byte length of one Todo task label included in Agent Status.
-pub const MAX_TODO_STATUS_TEXT_BYTES: usize = 256;
 
 /// The stable semantic identity of the active Todo reminder.
 pub const TODO_STATUS_EMISSION_KEY: &str = "active_actionable";
@@ -238,50 +239,6 @@ pub struct AgentStatusOpportunitySet {
     /// The complete settled tool-batch opportunity, when one is pending for
     /// this attempt's next primary step.
     pub post_tool_batch: Option<PostToolBatchStatusOpportunity>,
-}
-
-/// One bounded Todo task shown by Agent Status.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TodoStatusTask {
-    /// The conversation-owned task id.
-    pub id: u64,
-    /// The bounded task subject.
-    pub subject: String,
-    /// The bounded in-progress label, when present.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub active_form: Option<String>,
-    /// The authoritative committed lifecycle status.
-    pub status: TodoStatus,
-    /// Whether an active dependency still blocks this task.
-    pub blocked: bool,
-}
-
-/// The bounded semantic Todo presentation and fingerprint input.
-///
-/// Tasks are in conversation creation order. `current` is the first committed
-/// `InProgress` task, when any; `tasks` contains the remaining committed active
-/// tasks up to the explicit module bound. Counts cover the complete committed
-/// snapshot, while `omitted_count` is the number of active tasks not shown.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TodoStatusPresentation {
-    /// The first committed `InProgress` task, when any.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub current: Option<TodoStatusTask>,
-    /// Remaining active tasks in deterministic creation order.
-    #[serde(default)]
-    pub tasks: Vec<TodoStatusTask>,
-    /// Number of committed Pending or `InProgress` tasks.
-    pub active_count: usize,
-    /// Number of active tasks with an unresolved active dependency.
-    pub blocked_count: usize,
-    /// Number of committed Completed tasks.
-    pub completed_count: usize,
-    /// Number of committed Deleted tasks.
-    pub deleted_count: usize,
-    /// Number of active tasks omitted by the bounded presentation.
-    pub omitted_count: usize,
 }
 
 /// The structured data of one accepted Agent Status section.
@@ -853,11 +810,23 @@ impl BackgroundStatusModule {
     }
 }
 
-/// The code-owned Todo status module.
+/// The Agent Status **consumer** of the Todo extension (Issue #259).
 ///
-/// Todo state remains owned by [`ConversationTodoList`]. This module only
-/// builds a bounded view of its committed snapshot and applies the one
-/// concrete reminder policy documented on [`Self::evaluate`].
+/// The module owns no Todo state, no Todo recovery, no Todo fingerprint
+/// derivation, and no mutation path. Its whole input is the bounded read-only
+/// [`TodoStatusPresentation`] the Todo owner produced from its own committed
+/// snapshot, and its whole job is the one concrete reminder cadence documented
+/// on [`Self::evaluate`]: *whether and how often* to show what Todo already
+/// decided the list is.
+///
+/// Consequently the two extensions are independent in both directions. With
+/// Todo composed and Agent Status not, the `todo` Tool, the list, its
+/// `ToolResult`s and its recovery all work exactly as before — there is simply
+/// no reminder. With Agent Status composed and Todo not, `presentation` is
+/// absent and no Todo section is fabricated, while Time and Background
+/// continue untouched.
+///
+/// [`TodoStatusPresentation`]: crate::tools::todo::TodoStatusPresentation
 struct TodoStatusModule;
 
 impl TodoStatusModule {
@@ -873,7 +842,7 @@ impl TodoStatusModule {
             .current_todo_progress()
             .map_err(|_| ModuleFailurePhase::SuppressionLookup)?;
         Ok(TodoStatusSnapshot {
-            committed: frozen.committed_todos.clone(),
+            presentation: frozen.todo.clone(),
             latest_emission,
             todo_progress,
         })
@@ -885,12 +854,15 @@ impl TodoStatusModule {
     /// reminder for the stable Todo key. `FreshInbound` and `PostToolBatch`
     /// use this same policy; the opportunity set is eligibility, not a second
     /// trigger state machine.
+    ///
+    /// An absent presentation means this composition has no Todo extension at
+    /// all, so there is nothing to remind about and nothing to fabricate.
     fn evaluate(snapshot: &TodoStatusSnapshot) -> Option<AgentStatusPayload> {
-        let presentation = todo_presentation(&snapshot.committed);
-        if presentation.active_count == 0 {
+        let presentation = snapshot.presentation.clone()?;
+        if !presentation.is_actionable() {
             return None;
         }
-        let fingerprint = todo_fingerprint(&presentation);
+        let fingerprint = presentation.fingerprint();
         let eligible = match snapshot.latest_emission.as_ref() {
             None => true,
             Some(latest) => {
@@ -917,7 +889,9 @@ impl TodoStatusModule {
 
 #[derive(Debug, Clone)]
 struct TodoStatusSnapshot {
-    committed: TodoSnapshot,
+    /// The Todo owner's bounded read-only view, or `None` when this
+    /// composition includes no Todo extension.
+    presentation: Option<TodoStatusPresentation>,
     latest_emission: Option<AgentStatusEmissionRecord>,
     todo_progress: u64,
 }
@@ -951,7 +925,10 @@ struct AgentStatusEvaluationSnapshot<'a> {
     now: DateTime<Utc>,
     surface: &'a AgentStatusSurfaceView,
     active_background: Arc<[BackgroundExecutionSnapshot]>,
-    committed_todos: TodoSnapshot,
+    /// The bounded read-only Todo presentation supplied by the Todo
+    /// extension owner, or `None` when this composition has no Todo
+    /// extension (Issue #259).
+    todo: Option<TodoStatusPresentation>,
     emission_lookup: &'a dyn AgentStatusEmissionLookup,
 }
 
@@ -1080,16 +1057,36 @@ impl AgentStatusEngine {
     /// Captures, evaluates, validates, and bounds one Agent Status generation.
     /// The engine's module array is traversed exactly in source order: Time,
     /// Background, then Todo. The caller supplies the one immutable Pre-Status
-    /// Surface view and the conversation-owned committed Todo authority. Every
+    /// Surface view and — when this composition includes the Todo extension —
+    /// the bounded Todo presentation the Todo owner already derived. Every
     /// module sees one finite opportunity set, even when both members are
     /// present.
+    ///
+    /// The strongest Todo value this engine can receive is
+    /// [`TodoStatusPresentation`]: a finite, immutable, Todo-owned view
+    /// carrying its own fingerprint. Agent Status has no access to
+    /// `ConversationTodoList`, `TodoSnapshot` authority, `TodoWriter`, or
+    /// canonical Todo history, so it cannot read, derive, or influence Todo
+    /// state — it decides only *whether and how often* to present what Todo
+    /// already decided (Issue #259).
+    ///
+    /// ```text
+    /// ConversationTodoList::committed()      the Todo owner, at the runtime
+    ///   -> TodoSnapshot::status_presentation()   capture boundary
+    ///     -> Option<TodoStatusPresentation>  -> THIS engine
+    /// ```
+    ///
+    /// `todo` is `None` for a composition without the Todo extension. The
+    /// Todo module then contributes nothing, and Time and Background are
+    /// unaffected — Agent Status never reconstructs a Todo fact from anything
+    /// else.
     #[must_use]
     pub(crate) fn prepare_with_inputs(
         &mut self,
         opportunities: &AgentStatusOpportunitySet,
         surface: &AgentStatusSurfaceView,
         background: &ConversationBackgroundRegistry,
-        todos: &ConversationTodoList,
+        todo: Option<TodoStatusPresentation>,
         emission_lookup: &dyn AgentStatusEmissionLookup,
     ) -> Option<PreparedAgentStatus> {
         if opportunities.is_empty() {
@@ -1099,7 +1096,8 @@ impl AgentStatusEngine {
             now: self.clock.now(),
             surface,
             active_background: Arc::from(background.active_snapshot().into_boxed_slice()),
-            committed_todos: todos.committed(),
+            // Already derived, by the Todo owner, before reaching here.
+            todo,
             emission_lookup,
         };
         #[cfg(test)]
@@ -1147,11 +1145,13 @@ impl AgentStatusEngine {
         surface: &AgentStatusSurfaceView,
         background: &ConversationBackgroundRegistry,
     ) -> Option<AgentStatus> {
-        let todos = ConversationTodoList::new(crate::runtime::identity::ConversationId::new(
-            "agent-status-test",
-        ));
         let lookup = EmptyEmissionLookup;
-        self.prepare_with_inputs(opportunities, surface, background, &todos, &lookup)
+        // The pre-Todo module suite composes no Todo presentation at all,
+        // which is exactly what an empty list used to yield here: an empty
+        // presentation is not actionable, so the Todo module contributed
+        // nothing either way. Spelling it `None` keeps the concrete Todo
+        // owner out of production Agent Status entirely (Issue #259).
+        self.prepare_with_inputs(opportunities, surface, background, None, &lookup)
             .map(|prepared| prepared.status)
     }
 
@@ -1327,101 +1327,6 @@ fn bound_status_text_to(text: String, max_bytes: usize) -> String {
     let mut bounded = text[..end].to_owned();
     bounded.push_str(marker);
     bounded
-}
-
-fn todo_presentation(snapshot: &TodoSnapshot) -> TodoStatusPresentation {
-    let states = snapshot
-        .tasks
-        .iter()
-        .map(|task| (task.id, task.status))
-        .collect::<BTreeMap<_, _>>();
-    let active = snapshot
-        .tasks
-        .iter()
-        .filter(|task| matches!(task.status, TodoStatus::Pending | TodoStatus::InProgress));
-    let active_count = active.clone().count();
-    let blocked_count = active
-        .clone()
-        .filter(|task| {
-            task.blocked_by.iter().any(|blocker| {
-                states.get(blocker).is_some_and(|status| {
-                    matches!(status, TodoStatus::Pending | TodoStatus::InProgress)
-                })
-            })
-        })
-        .count();
-    let completed_count = snapshot
-        .tasks
-        .iter()
-        .filter(|task| task.status == TodoStatus::Completed)
-        .count();
-    let deleted_count = snapshot
-        .tasks
-        .iter()
-        .filter(|task| task.status == TodoStatus::Deleted)
-        .count();
-
-    let current_id = snapshot
-        .tasks
-        .iter()
-        .find(|task| task.status == TodoStatus::InProgress)
-        .map(|task| task.id);
-    let mut current = None;
-    let mut tasks = Vec::new();
-    let task_limit = if current_id.is_some() {
-        MAX_TODO_STATUS_TASKS.saturating_sub(1)
-    } else {
-        MAX_TODO_STATUS_TASKS
-    };
-    for task in snapshot
-        .tasks
-        .iter()
-        .filter(|task| matches!(task.status, TodoStatus::Pending | TodoStatus::InProgress))
-    {
-        let bounded = todo_status_task(task, &states);
-        if Some(task.id) == current_id {
-            current = Some(bounded);
-        } else if tasks.len() < task_limit {
-            tasks.push(bounded);
-        }
-    }
-    let displayed = usize::from(current.is_some()) + tasks.len();
-    TodoStatusPresentation {
-        current,
-        tasks,
-        active_count,
-        blocked_count,
-        completed_count,
-        deleted_count,
-        omitted_count: active_count.saturating_sub(displayed),
-    }
-}
-
-fn todo_status_task(
-    task: &crate::tools::todo::TodoTask,
-    states: &BTreeMap<u64, TodoStatus>,
-) -> TodoStatusTask {
-    TodoStatusTask {
-        id: task.id,
-        subject: bound_status_text_to(task.subject.clone(), MAX_TODO_STATUS_TEXT_BYTES),
-        active_form: task
-            .active_form
-            .clone()
-            .map(|value| bound_status_text_to(value, MAX_TODO_STATUS_TEXT_BYTES)),
-        status: task.status,
-        blocked: task.blocked_by.iter().any(|blocker| {
-            states.get(blocker).is_some_and(|status| {
-                matches!(status, TodoStatus::Pending | TodoStatus::InProgress)
-            })
-        }),
-    }
-}
-
-fn todo_fingerprint(presentation: &TodoStatusPresentation) -> String {
-    let encoded =
-        serde_json::to_vec(presentation).expect("Todo status presentation is serializable");
-    let digest = Sha256::digest(encoded);
-    format!("{digest:x}")
 }
 
 fn render_instant(instant: DateTime<Utc>, timezone: Option<Tz>) -> String {
@@ -1774,7 +1679,9 @@ mod tests {
     };
     use crate::runtime::identity::{RequestId, ToolCallId, ToolExecutionId, ToolId};
     use crate::tools::background::BackgroundLifecycle;
-    use crate::tools::todo::{TODO_TOOL_ID, TodoCreate, TodoWriter};
+    use crate::tools::todo::{
+        ConversationTodoList, TODO_TOOL_ID, TodoCreate, TodoSnapshot, TodoWriter,
+    };
     use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus, ToolResultContent};
 
     fn opportunity() -> AgentStatusOpportunitySet {
@@ -1783,6 +1690,63 @@ mod tests {
                 target_message_id: MessageId::new("inbound"),
             }),
             post_tool_batch: None,
+        }
+    }
+
+    /// Issue #259 blocker 2: the strongest Todo value Agent Status can
+    /// receive is the bounded immutable presentation.
+    ///
+    /// The proof is the *type*, not a behaviour. Binding the engine's one
+    /// production entry point to an explicit function-pointer signature makes
+    /// the Todo parameter a compile-time obligation: widening it back to
+    /// `&ConversationTodoList`, `&TodoSnapshot`, `&TodoWriter`, or anything
+    /// else carrying list authority stops compiling here, so the ownership
+    /// boundary cannot regress silently.
+    ///
+    /// A presentation carries no authority at all: it is an owned value with
+    /// no handle back to the list, no writer, no batch, no canonical history,
+    /// and its fingerprint is computed by the Todo owner rather than by any
+    /// consumer. Agent Status is therefore left with exactly its own
+    /// question — whether and how often to show it.
+    #[test]
+    fn ext259_agent_status_receives_only_the_bounded_todo_presentation() {
+        // The explicit signature is the whole point of the binding, so the
+        // complexity lint does not apply: factoring it into an alias would
+        // hide the obligation this test exists to state.
+        #[allow(clippy::type_complexity)]
+        let production_entry_point: fn(
+            &mut AgentStatusEngine,
+            &AgentStatusOpportunitySet,
+            &AgentStatusSurfaceView,
+            &ConversationBackgroundRegistry,
+            Option<TodoStatusPresentation>,
+            &dyn AgentStatusEmissionLookup,
+        ) -> Option<PreparedAgentStatus> = AgentStatusEngine::prepare_with_inputs;
+        let _ = production_entry_point;
+
+        // And production Agent Status source never names the Todo state
+        // owner outside this test suite. The concrete list, its snapshot
+        // authority, and its writer are all reachable only from the
+        // `#[cfg(test)]` import below, so no production path in this module
+        // can read or derive Todo state (Issue #259).
+        let source = include_str!("status.rs");
+        let (production, suite) = source
+            .split_once("\nmod tests {")
+            .expect("this module has a test suite");
+        assert!(
+            !suite.is_empty(),
+            "the split must keep the suite, or the scan below proves nothing"
+        );
+        for owner in ["ConversationTodoList", "TodoWriter", "TodoSnapshot"] {
+            for (number, line) in production.lines().enumerate() {
+                // Prose may name the owner; code may not.
+                let code = line.split("//").next().unwrap_or(line);
+                assert!(
+                    !code.contains(owner),
+                    "production Agent Status names the Todo owner {owner} at line {}: {line}",
+                    number + 1
+                );
+            }
         }
     }
 
@@ -2121,7 +2085,7 @@ mod tests {
                 &combined_opportunity(),
                 &empty_surface(),
                 &registry,
-                &todos,
+                Some(todos.committed().status_presentation()),
                 &FixedEmissionLookup {
                     fingerprint: None,
                     todo_progress: 0,
@@ -2973,7 +2937,7 @@ mod tests {
                     &opportunities,
                     &surface,
                     &registry,
-                    &todos,
+                    Some(todos.committed().status_presentation()),
                     &FixedEmissionLookup {
                         fingerprint: None,
                         todo_progress: 0,
@@ -3016,7 +2980,7 @@ mod tests {
                     &post_tool_opportunity(),
                     &empty_surface(),
                     &registry,
-                    &list,
+                    Some(list.committed().status_presentation()),
                     &lookup,
                 )
                 .is_none()
@@ -3032,7 +2996,7 @@ mod tests {
                 &post_tool_opportunity(),
                 &empty_surface(),
                 &registry,
-                &list,
+                Some(list.committed().status_presentation()),
                 &lookup,
             )
             .expect("committed Todo work is visible");
@@ -3077,7 +3041,7 @@ mod tests {
                         &post_tool_opportunity(),
                         &empty_surface(),
                         &registry,
-                        &todos,
+                        Some(todos.committed().status_presentation()),
                         &lookup,
                     )
                     .is_none()
@@ -3101,7 +3065,7 @@ mod tests {
                 &post_tool_opportunity(),
                 &empty_surface(),
                 &registry,
-                &todos,
+                Some(todos.committed().status_presentation()),
                 &FixedEmissionLookup {
                     fingerprint: None,
                     todo_progress: 0,
@@ -3122,7 +3086,7 @@ mod tests {
                     &post_tool_opportunity(),
                     &empty_surface(),
                     &registry,
-                    &todos,
+                    Some(todos.committed().status_presentation()),
                     &lookup,
                 )
                 .is_none(),
@@ -3140,7 +3104,7 @@ mod tests {
                     &post_tool_opportunity(),
                     &empty_surface(),
                     &registry,
-                    &todos,
+                    Some(todos.committed().status_presentation()),
                     &before_threshold,
                 )
                 .is_none(),
@@ -3157,7 +3121,7 @@ mod tests {
                 &post_tool_opportunity(),
                 &empty_surface(),
                 &registry,
-                &todos,
+                Some(todos.committed().status_presentation()),
                 &at_threshold,
             )
             .expect("the identical fingerprint is eligible at the inclusive threshold");
@@ -3173,7 +3137,7 @@ mod tests {
                 &post_tool_opportunity(),
                 &empty_surface(),
                 &registry,
-                &todos,
+                Some(todos.committed().status_presentation()),
                 &changed,
             )
             .expect("a changed fingerprint bypasses the cooldown");
@@ -3204,7 +3168,7 @@ mod tests {
                 &post_tool_opportunity(),
                 &empty_surface(),
                 &registry,
-                &todos,
+                Some(todos.committed().status_presentation()),
                 &first_lookup,
             )
             .expect("bounded Todo status");
@@ -3239,7 +3203,7 @@ mod tests {
                     &post_tool_opportunity(),
                     &empty_surface(),
                     &registry,
-                    &todos,
+                    Some(todos.committed().status_presentation()),
                     &duplicate_lookup,
                 )
                 .is_none()
@@ -3259,7 +3223,7 @@ mod tests {
                 &post_tool_opportunity(),
                 &empty_surface(),
                 &registry,
-                &changed_todos,
+                Some(changed_todos.committed().status_presentation()),
                 &duplicate_lookup,
             )
             .expect("changed Todo state is eligible");

@@ -676,7 +676,7 @@ async fn large_write_progress_crosses_idle_timeout_without_retry_or_duplicate_ex
         tool_runtime: &fixture.runtime,
         policy,
         clock: clock.clone(),
-        tools: fixture.registry.clone(),
+        tools: fixture.ordinary_registry.clone(),
     })
     .await;
     execution.install_model_stream_item_pause(pause);

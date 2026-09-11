@@ -237,12 +237,14 @@ until you pick a fixed policy for it. Managed Python tool packages are exempt
 from this decision: each package is served under the default
 `foreground_only`/`sequential` policy, so its FastMCP-generated tool schemas
 are never decorated. The runtime intrinsics `execution` and
-`ask_user`, and the `todo` task list, are not configured in this table: all
-three are fixed foreground, sequential, approval-never tools. `execution` is
+`ask_user` are not configured in this table: both are fixed foreground,
+sequential, approval-never tools. `execution` is
 the single model-facing control plane for conversation-owned asynchronous
 executions (detached background tool executions and asynchronous subagent
 children): call it with the typed execution handle (`kind` + `id`) a creation
-result returned. `todo` keeps the
+result returned. The `todo` task list is absent from this table for a stronger
+reason: it is not an ordinary native capability at all, but the Tool half of
+the **Todo Agent Extension** composed under `extensions` above. It keeps the
 conversation's own task list — one call per change, and every settled call
 returns the complete list, which is also what a restarted or resumed runtime
 rebuilds the list from. `ask_user` accepts one structured
@@ -268,6 +270,13 @@ built-ins, including generated dispatchers, from default selection.
 `--no-tools` exposes zero ordinary main-model tools, including Read,
 Subagent and Workflow tools. It conflicts with the other three selection
 flags; `--tools` also conflicts with `--no-builtin-tools`.
+
+Every control in this paragraph addresses the *ordinary* capability plane.
+A Tool contributed by a Native Agent Extension — `todo` — is composed under
+`extensions` and is unnameable here: listing it in `defaultTools`, `--tools`
+or `--exclude-tools` is a validation error, and `--no-tools` does not remove
+it. A model request with no Tools at all therefore needs `--no-tools` *and*
+`"extensions": { "todo": { "enabled": false } }`.
 Allowlist plus exclusions and default selection plus exclusions are supported.
 Explicit lists reject empty entries/lists, duplicates, unknown/unavailable
 names and ambiguous origins. Exclusions must resolve against applicable

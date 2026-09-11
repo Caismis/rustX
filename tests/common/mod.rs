@@ -897,8 +897,19 @@ pub fn tool_policies(
 pub struct NativeFixture {
     /// The conversation tool runtime.
     pub runtime: rustx::tools::runtime::ConversationToolRuntime,
-    /// The registry with every native tool registered.
+    /// The complete model Tool set: the ordinary native plane plus this
+    /// composition's extension-provided Tools. This is what a model sees, and
+    /// what direct executor-level tests dispatch through.
     pub registry: rustx::tools::executor::ToolRegistry,
+    /// The **ordinary** native plane alone, without the extension-provided
+    /// Tools (Issue #259).
+    ///
+    /// This is the registry to hand a capability coordinator as its
+    /// `base_tool_registry`: the coordinator composes the extension plane
+    /// itself, from the tool runtime's materialized owners, so passing it
+    /// [`Self::registry`] would ask it to publish `todo` twice and fail the
+    /// identity-collision check that keeps the two planes honest.
+    pub ordinary_registry: rustx::tools::executor::ToolRegistry,
     /// The conversation inbound mailbox shared by the runtime and tests.
     pub mailbox: rustx::runtime::inbound::ConversationInboundMailbox,
     /// The full conversation authority used by direct Agent Loop tests.
@@ -961,6 +972,45 @@ pub fn native_fixture_with(
     environment: Vec<(String, String)>,
     policies: rustx::tools::native::NativeToolPolicies,
 ) -> NativeFixture {
+    native_fixture_with_extensions(
+        environment,
+        policies,
+        &rustx::extensions::NativeAgentExtensionsDocument::default().resolve(),
+    )
+}
+
+/// A native tool fixture composed against **no** native Agent Extension
+/// (Issue #259).
+///
+/// Its runtime owns no task list and its Tool planes publish no `todo`, so a
+/// suite whose subject is the *ordinary* selection plane observes that plane
+/// alone. This is a coherent composition, not a fixture trick: it is exactly
+/// what a launch with `extensions.todo.enabled = false` runs.
+#[must_use]
+pub fn native_fixture_without_extensions() -> NativeFixture {
+    native_fixture_with_extensions(
+        Vec::new(),
+        rustx::tools::native::NativeToolPolicies::default(),
+        &rustx::extensions::NativeAgentExtensions::none(),
+    )
+}
+
+/// A native tool fixture composed against an explicit native Agent Extension
+/// set (Issue #259).
+///
+/// The two planes are composed the way production composes them: ordinary
+/// native tools through `register_native_tools` under `policies`, and the
+/// extension-provided Tools through the `ExtensionToolPlane` the composed
+/// tool runtime derives from its own materialized extension owners. Passing
+/// [`NativeAgentExtensions::none`](rustx::extensions::NativeAgentExtensions::none)
+/// therefore yields a fixture with no `todo` Tool *and* no task list, which
+/// is exactly what a Todo-disabled runtime is.
+#[must_use]
+pub fn native_fixture_with_extensions(
+    environment: Vec<(String, String)>,
+    policies: rustx::tools::native::NativeToolPolicies,
+    extensions: &rustx::extensions::NativeAgentExtensions,
+) -> NativeFixture {
     use rustx::tools::runtime::ConversationRuntimeConfig;
     let dir = tempfile::tempdir().expect("temporary workspace");
     let workspace_root = dir.path().join("workspace");
@@ -983,6 +1033,7 @@ pub fn native_fixture_with(
             durable_binding: Some(rustx::durable::ConversationStoreBinding::new(store.clone())),
             environment: Some(environment),
             ..ConversationRuntimeConfig::new(&workspace_root, &artifacts)
+                .with_extensions(extensions.clone())
         },
     )
     .expect("tool runtime");
@@ -997,14 +1048,54 @@ pub fn native_fixture_with(
         policies,
     )
     .expect("native tool registration");
+    let ordinary_registry = registry.clone();
+    // The complete model Tool set, composed by the conversation whose state
+    // backs it: the extension half is derived from the owners the tool runtime
+    // just materialized, never registered from the composition a second time
+    // (Issue #259).
+    let registry = runtime
+        .compose_model_tools(registry)
+        .expect("extension Tool registration");
     let mailbox = runtime.mailbox();
     NativeFixture {
         _dir: dir,
         runtime,
         registry,
+        ordinary_registry,
         mailbox,
         store,
     }
+}
+
+/// One canonical `todo` result message, exactly as the Agent Loop commits
+/// one: the settled result whose structured content is the complete post-call
+/// snapshot (Issue #259).
+///
+/// This is what makes a `TodoBatch` settlement truthful in a test — settling
+/// asserts that canonical history already carries the list being installed —
+/// and it is the same fact a restart rebuilds the list from.
+#[must_use]
+pub fn todo_result_message(
+    id: &str,
+    snapshot: &rustx::tools::todo::TodoSnapshot,
+) -> rustx::message::types::MessageBlock {
+    rustx::message::types::MessageBlock::Tool(rustx::message::types::ToolMessageBlock {
+        id: rustx::runtime::identity::MessageId::new(format!("message-{id}")),
+        tool_call_id: rustx::runtime::identity::ToolCallId::new(format!("call-{id}")),
+        tool_id: rustx::runtime::identity::ToolId::new(rustx::tools::todo::TODO_TOOL_ID),
+        result: rustx::tools::types::ToolExecutionResult {
+            status: rustx::tools::types::ToolExecutionStatus::Success,
+            content: vec![rustx::tools::types::ToolResultContent::Json {
+                value: serde_json::to_value(snapshot).expect("a Todo snapshot serializes"),
+            }],
+            duration_ms: 0,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+            workflow: None,
+            managed_output: None,
+        },
+    })
 }
 
 /// A no-op progress reporter for direct tool invocations.
@@ -1263,6 +1354,12 @@ pub struct CapabilityFixture {
 }
 
 impl CapabilityFixture {
+    /// The immutable capability snapshot this lease pinned.
+    #[must_use]
+    pub fn snapshot(&self) -> &std::sync::Arc<rustx::capabilities::CapabilitySnapshot> {
+        self.lease.snapshot()
+    }
+
     /// Moves the pinned attempt capability lease out of the fixture.
     #[must_use]
     pub fn into_lease(self) -> rustx::capabilities::AttemptCapabilityLease {
@@ -1291,6 +1388,28 @@ pub async fn capability_lease(
     tools: rustx::tools::executor::ToolRegistry,
     tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
 ) -> CapabilityFixture {
+    capability_lease_with(
+        tools,
+        tool_runtime,
+        rustx::capabilities::ToolActivationPolicy::default(),
+    )
+    .await
+}
+
+/// The same lease, composed against an explicit ordinary activation policy
+/// (Issue #259).
+///
+/// There is deliberately no extension parameter beside it. The two planes
+/// remain separate authorities — the policy decides the ordinary capability
+/// plane, the composition decides the extension-provided Tool surfaces — but
+/// the extension half is not a second input a caller supplies here: it is
+/// derived from the extension owners `tool_runtime` materialized, exactly as
+/// production derives it.
+pub async fn capability_lease_with(
+    tools: rustx::tools::executor::ToolRegistry,
+    tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
+    tool_activation: rustx::capabilities::ToolActivationPolicy,
+) -> CapabilityFixture {
     let dir = tempfile::tempdir().expect("capability temp dir");
     let coordinator = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
@@ -1298,7 +1417,8 @@ pub async fn capability_lease(
             conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: std::sync::Arc::new(tools),
-            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            extension_tools: tool_runtime.extension_tool_plane(),
+            tool_activation,
             skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: tool_runtime.environment().clone(),

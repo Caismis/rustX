@@ -1499,3 +1499,217 @@ async fn sub258_a_child_override_never_mutates_the_parent() {
         "the caller's frozen authority is a value, not mutable state"
     );
 }
+
+// =====================================================================
+// Issue #259 — Todo through the shared #258 override machinery.
+// =====================================================================
+
+/// Issue #259 regression 9: a named role's own Todo default, and a
+/// per-invocation override of it, resolve to the exact frozen child extension
+/// set — through #258's shared resolver, with no Todo-specific override path.
+///
+/// The four cases below are the whole contract of a present-vs-absent
+/// dimension applied to a second extension:
+///
+/// ```text
+/// no override                   -> the role's own composition
+/// override without `extensions` -> the role's own composition
+/// `extensions: {todo: {...}}`   -> replaces the dimension entirely
+/// `extensions: {}`              -> composes nothing at all
+/// ```
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ext259_a_role_todo_default_and_its_invocation_override_freeze_exactly() {
+    let lab = Lab::new();
+    lab.write_skill("review-guidance", "How to review", "guidance body");
+    lab.write_config(
+        &serde_json::json!({
+            "reviewer": {
+                "description": "Review one bounded change.",
+                "tools": {"builtin": ["read"]},
+                "skills": ["review-guidance"],
+                // The role declares its own Todo default, and switches Agent
+                // Status off — proving the two dimensions are independent in
+                // role authoring as well.
+                "extensions": {
+                    "todo": {"enabled": true},
+                    "agentStatus": {"enabled": false},
+                },
+            }
+        }),
+        &["read", "subagent"],
+        &[],
+    );
+    let product = lab.compose().await;
+    let resources = product.runtime().runtime_resources();
+    // The invoking Agent composes Todo, which is what entitles it to ask for
+    // Todo at all under the delegation ceiling.
+    let parent = parent_with_extensions(&resources, NativeAgentExtensions::with_todo());
+
+    let role_default = delegate(&resources, "reviewer", None, &parent).expect("resolution");
+    assert_eq!(
+        role_default.extensions,
+        NativeAgentExtensions::with_todo(),
+        "the role's authored composition is the frozen child default, exactly"
+    );
+
+    // A present override on another dimension leaves extensions alone.
+    let tools_only = delegate(
+        &resources,
+        "reviewer",
+        Some(&parse_override(serde_json::json!({"tools": {}}))),
+        &parent,
+    )
+    .expect("resolution");
+    assert_eq!(
+        tools_only.extensions, role_default.extensions,
+        "a missing extension dimension uses the role definition default"
+    );
+
+    // A present `extensions` dimension replaces it entirely.
+    let disabled = delegate(
+        &resources,
+        "reviewer",
+        Some(&parse_override(
+            serde_json::json!({"extensions": {"todo": {"enabled": false}}}),
+        )),
+        &parent,
+    )
+    .expect("narrowing needs no authority");
+    assert!(
+        disabled.extensions.todo().is_none() && disabled.extensions.is_empty(),
+        "a present dimension replaces the role's composition rather than merging into it"
+    );
+    assert_eq!(
+        delegate(
+            &resources,
+            "reviewer",
+            Some(&parse_override(serde_json::json!({"extensions": {}}))),
+            &parent,
+        )
+        .expect("resolution")
+        .extensions,
+        NativeAgentExtensions::none(),
+        "an explicitly empty dimension composes nothing at all"
+    );
+
+    // The frozen set is part of the child's execution identity, and survives
+    // the serialization contract that actually carries it to a child process.
+    assert_ne!(role_default.profile_digest(), disabled.profile_digest());
+    let crossed: ResolvedSubagentSpec =
+        serde_json::from_slice(&serde_json::to_vec(&role_default).expect("encode"))
+            .expect("decode");
+    assert_eq!(crossed.extensions, role_default.extensions);
+    assert_eq!(crossed.profile_digest(), role_default.profile_digest());
+
+    // And an override restating the role's own composition is the same
+    // effective profile, not merely a similar-looking one.
+    let restated = delegate(
+        &resources,
+        "reviewer",
+        Some(&parse_override(serde_json::json!({
+            "extensions": serde_json::to_value(NativeAgentExtensionSelection::of(
+                &role_default.extensions
+            ))
+            .expect("the selection serializes"),
+        }))),
+        &parent,
+    )
+    .expect("restating a held composition is authorized");
+    assert_eq!(restated.profile_digest(), role_default.profile_digest());
+}
+
+/// Issue #259 regression 9 (authority half) and 10: Todo obeys #258's
+/// authority distinction, with no widening rule of its own.
+///
+/// ```text
+/// main-model override   bounded by role ∪ invoking Agent composition
+/// Workflow override     bounded by the admitted/frozen generation authority
+/// ```
+///
+/// A main-model caller that composes no Todo, delegating to a role that
+/// composes no Todo, cannot manufacture one; the same request from a trusted
+/// Workflow program resolves, because a Workflow's authority is the admitted
+/// generation rather than the invoking model's narrower profile. Both are
+/// decided before child ownership commits: the refusal is a typed resolution
+/// error, so no process, worktree, or Session is created.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ext259_todo_obeys_the_shared_override_authority_distinction() {
+    let lab = Lab::new();
+    lab.write_skill("review-guidance", "How to review", "guidance body");
+    lab.write_config(
+        &serde_json::json!({
+            "reviewer": {
+                "description": "Review one bounded change.",
+                "tools": {"builtin": ["read"]},
+                "skills": ["review-guidance"],
+                "extensions": {"todo": {"enabled": false}, "agentStatus": {"enabled": false}},
+            }
+        }),
+        &["read", "subagent"],
+        &[],
+    );
+    let product = lab.compose().await;
+    let resources = product.runtime().runtime_resources();
+    let enable_todo =
+        parse_override(serde_json::json!({"extensions": {"todo": {"enabled": true}}}));
+
+    // Neither authority source composes Todo, so the request is refused by
+    // name — with the vocabulary's own diagnostic, not assembled prose.
+    let refusal = delegate(
+        &resources,
+        "reviewer",
+        Some(&enable_todo),
+        &parent_with_extensions(&resources, NativeAgentExtensions::none()),
+    )
+    .expect_err("Todo cannot be manufactured from neither source");
+    match &refusal {
+        SubagentResolutionError::UnauthorizedExtension { extension, detail } => {
+            assert_eq!(extension, "todo");
+            assert!(detail.contains("Todo"), "{detail}");
+        }
+        other => panic!("unexpected refusal class: {other:?}"),
+    }
+
+    // The invoking Agent's own composition is a legitimate authority source.
+    assert_eq!(
+        delegate(
+            &resources,
+            "reviewer",
+            Some(&enable_todo),
+            &parent_with_extensions(&resources, NativeAgentExtensions::with_todo()),
+        )
+        .expect("an entitled caller may compose Todo for its child")
+        .extensions,
+        NativeAgentExtensions::with_todo()
+    );
+
+    // A trusted Workflow override is bounded by the admitted generation, not
+    // by any invoking model profile, so it composes Todo without one.
+    let from_workflow = workflow_resolve(&resources, "reviewer", Some(&enable_todo))
+        .expect("a trusted static override carries the generation's authority");
+    assert_eq!(from_workflow.extensions, NativeAgentExtensions::with_todo());
+
+    // And a Workflow override can disable it just as ordinarily, without
+    // touching what the Workflow itself owns: the child's capability set and
+    // its terminal contract are unchanged either way.
+    let disabled = workflow_resolve(
+        &resources,
+        "reviewer",
+        Some(&parse_override(
+            serde_json::json!({"extensions": {"todo": {"enabled": false}}}),
+        )),
+    )
+    .expect("narrowing is always authorized");
+    assert!(disabled.extensions.todo().is_none());
+    assert_eq!(
+        tool_names(&from_workflow),
+        tool_names(&disabled),
+        "composing or not composing Todo changes no ordinary capability"
+    );
+    assert_eq!(skill_names(&from_workflow), skill_names(&disabled));
+    assert_eq!(
+        from_workflow.model, disabled.model,
+        "nor the child's model, terminal contract, or any other frozen dimension"
+    );
+    assert_ne!(from_workflow.profile_digest(), disabled.profile_digest());
+}

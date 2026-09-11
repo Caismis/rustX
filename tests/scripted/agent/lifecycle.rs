@@ -2605,7 +2605,8 @@ async fn native_read_is_distinguished_from_a_non_native_tool_named_read() {
                 .expect("utf8"),
         }),
     }]));
-    let capability = common::capability_lease(fixture.registry.clone(), &fixture.runtime).await;
+    let capability =
+        common::capability_lease(fixture.ordinary_registry.clone(), &fixture.runtime).await;
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let native_result = AgentExecution::new(
         request(fixture.runtime.conversation_id().clone(), &model),
@@ -3252,7 +3253,8 @@ async fn observer_reads_the_native_read_target_from_validated_arguments() {
                 .expect("utf8"),
         }),
     }]));
-    let capability = common::capability_lease(fixture.registry.clone(), &fixture.runtime).await;
+    let capability =
+        common::capability_lease(fixture.ordinary_registry.clone(), &fixture.runtime).await;
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = AgentExecution::new(
         request(fixture.runtime.conversation_id().clone(), &model),
@@ -3327,7 +3329,8 @@ async fn a_preflight_rejected_call_exposes_no_invocation_arguments() {
         name: "read",
         arguments: serde_json::json!({}),
     }]));
-    let capability = common::capability_lease(fixture.registry.clone(), &fixture.runtime).await;
+    let capability =
+        common::capability_lease(fixture.ordinary_registry.clone(), &fixture.runtime).await;
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = AgentExecution::new(
         request(fixture.runtime.conversation_id().clone(), &model),
