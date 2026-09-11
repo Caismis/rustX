@@ -1248,8 +1248,7 @@ second, independent plane:
 ```text
   ordinary selected Tool capabilities        defaultTools / --tools /
                                              --exclude-tools / tools.builtin
-+ enabled extension-provided Tool surfaces   NativeAgentExtensions::
-                                             tool_registrations()
++ enabled extension-provided Tool surfaces   ExtensionToolPlane
 + already-admitted domain protocols          Workflow output, ...
 ```
 
@@ -1262,6 +1261,39 @@ set. The extension Tool set is composed once at `CapabilityCoordinator`
 construction and stored **outside** `CapabilityResourceInputs`, which is the
 only value a reload replaces, so a resource reload structurally cannot
 hot-install or hot-remove a Tool-providing extension.
+
+### One composition, not two agreeing inputs
+
+The extension Tool plane is **not** a second composition decision taken beside
+the one that composes extension state. `ExtensionToolPlane` has exactly one
+constructor that can publish a Tool, and it takes the materialized state
+owners:
+
+```text
+NativeAgentExtensions              one frozen value, stored by the
+        |                          ConversationToolRuntime that materializes it
+        |-- ConversationTodoList   the Todo state authority
+        |-- ExtensionToolPlane     DERIVED from that authority, by
+        |                          ConversationToolRuntime::extension_tool_plane
+        |-- AgentStatusEngine      the status materialization
+        `-- native_extensions()    the Runtime Client effective projection,
+                                   read straight off the stored value
+```
+
+So a plane offering `todo` exists only where a `ConversationTodoList` exists to
+serve it — "the model is offered a Tool the runtime owns no state for" is not a
+state the types can hold, and the deterministic Tool failure it would cause has
+no reachable precondition. The only publicly constructible plane,
+`ExtensionToolPlane::none()`, is empty, which is safe from anywhere.
+
+The one remaining way to build an incoherent runtime is to pair facets
+materialized for two *different* compositions, and that is refused at the
+ownership-transfer boundary: `ConversationRuntime::new` proves the Todo state
+owner, the coordinator's Tool plane, and the Agent Status engine all follow
+from the conversation's one stored composition, and fails closed with
+`ConversationRuntimeError::ExtensionCompositionMismatch` otherwise. The
+effective-extension projection then cannot disagree with the Tool Plane,
+because it returns that same proved value rather than reconstructing one.
 
 ### Ownership: closed composition, not a plugin runtime
 
@@ -1362,7 +1394,8 @@ The invariant:
 
 `ConversationRuntime::native_extensions()` is the one source. It reads the
 composition straight back off the extension owners that composition
-materialized (`NativeAgentExtensions::from_materialized`), so the projected
+materialized and proved coherent at construction
+(`NativeAgentExtensions::from_materialized`), so the projected
 value and the executed value are the same value by construction — there is no
 second stored field that could drift, and no path from the projection to a
 configuration document, a `ProspectiveLaunch`, a `RuntimeResourceSnapshot`, an
@@ -1400,7 +1433,9 @@ vocabulary rather than inventing a configuration epoch: `launch_capture` for a
 root Agent (launch-frozen — reload cannot recompose it, restart may compose a
 different one) and `frozen_admission` for a `frozen_child` snapshot (the child
 execution profile its invoking generation resolved and froze). The Runtime
-Client protocol version carrying this is **26**.
+Client protocol version that introduced this is **26**; **28** adds the `todo`
+member beside `agent_status` and makes `RuntimeClientSnapshot.todos` nullable
+(Issue #259).
 
 ## 2. Layer model
 
@@ -2163,7 +2198,14 @@ Key contracts:
   capture, or trigger evaluation.
 - Todo status reads only the bounded presentation `ConversationTodoList`
   derives from its own `committed()` snapshot, and only when the Todo
-  extension is composed at all. It shows a
+  extension is composed at all. The derivation happens at the runtime capture
+  boundary — `ConversationToolRuntime::todo_status_presentation`, beside the
+  owner — so the strongest Todo value the Agent Status engine can receive is
+  `Option<TodoStatusPresentation>`: a finite immutable value carrying its own
+  Todo-owned fingerprint. Production `context/status.rs` names no
+  `ConversationTodoList`, `TodoSnapshot`, or `TodoWriter` at all, so Agent
+  Status cannot read, derive, or influence Todo state; it decides only whether
+  and how often to show what Todo already decided. It shows a
   bounded deterministic view of actionable tasks and uses semantic key
   `active_actionable` plus a SHA-256 fingerprint of that bounded view. A
   durable latest-emission head suppresses an identical fingerprint while

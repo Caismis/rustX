@@ -1465,6 +1465,22 @@ not in it. `--no-tools` therefore leaves an enabled Todo's Tool in place: a
 Tool-free model request needs no ordinary Tools **and** no Tool-providing
 extension.
 
+The coherence is **structural, not conventional**. One frozen
+`NativeAgentExtensions` is stored by the `ConversationToolRuntime` that
+materializes it, and every other face is derived from or proved against that
+one value: the conversation's `ConversationTodoList` is materialized from it,
+the extension Tool plane is derived from *that list* rather than configured
+beside it (`ExtensionToolPlane`'s only Tool-publishing constructor takes the
+materialized owner, and the one public constructor yields the empty plane), the
+Agent Status engine is materialized from it, and the Runtime Client effective
+projection returns it. So "the model is offered `todo` while the runtime owns
+no list" is not a state the types can represent. Pairing facets materialized
+for two *different* compositions is refused at the ownership-transfer boundary:
+`ConversationRuntime` construction fails closed with
+`ExtensionCompositionMismatch` unless the Todo state owner, the coordinator's
+Tool plane, and the status engine all follow from the conversation's one stored
+composition.
+
 Composition is launch-frozen exactly like every other extension. A resource
 reload cannot install or remove Todo in a running composition — the extension
 Tool set is composed once, outside the reloadable capability inputs — and

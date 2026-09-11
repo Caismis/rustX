@@ -166,7 +166,17 @@ distinction governs `RuntimeClientSnapshot.todos`, where `null` means "no Todo
 extension composed" and the empty list means "composed, and this conversation
 has no tasks".
 
-Protocol 26 adds `effective_extensions` and `settings_lifetimes.extensions`.
+Protocol 28 adds the `effective_extensions.todo` member and makes
+`RuntimeClientSnapshot.todos` nullable, so "no Todo extension composed" and
+"composed over an empty task list" stop sharing one wire spelling (Issue #259).
+Both follow from one frozen composition and therefore cannot disagree. The
+change is breaking and deliberately carries a new version number: protocol 27
+is Issue #258's effective Subagent profile digest, whose `effective_extensions`
+has no `todo` member. rustX is pre-1.0, so the protocol may break without a
+compatibility layer — that is not licence for two protocols to share a version.
+There is no v27 decoding: a v27 client is refused by strict version
+negotiation. Protocol 27 adds the subagent `profile_digest`. Protocol 26 adds
+`effective_extensions` and `settings_lifetimes.extensions`.
 Protocol 25 extends the existing snapshot with `launch_settings`,
 `settings_lifetimes`, and `settings_evidence`. Canonical model, policy and resource
 sections remain the only live value projections. Attempt `model` and
