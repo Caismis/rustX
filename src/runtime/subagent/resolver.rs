@@ -72,7 +72,7 @@
 //! defaults are not bounded by the invoking model's registry — while an
 //! override's *additions* are bounded by exactly that frozen registry. A
 //! trusted Workflow program carries its own typed authority and is bounded by
-//! the generation catalog instead; see [`SubagentDelegationAuthority`].
+//! the generation catalog instead; see [`SubagentOverrideAuthority`].
 //!
 //! # Optionality
 //!
