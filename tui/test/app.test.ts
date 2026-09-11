@@ -1662,7 +1662,7 @@ describe("RustxTuiApp lifecycle", () => {
 });
 
 /** Real app routing with native operations held at explicit submission gates. */
-async function deletionAppHarness() {
+async function deletionAppHarness(overlapInitial = false) {
   const state = { ...emptyPresentationState(sessionModel("alpha/model-a")), attempt: { ...attemptView(), phase: { type: "running" as const } } };
   const session = fakeSession(async () => {}, state) as RuntimeClientAttachment & {
     publishState(next: typeof state): void;
@@ -1672,11 +1672,16 @@ async function deletionAppHarness() {
   const previews: string[] = [];
   const execution = deferred<SessionDeleteResult>();
   const recovery = deferred<SessionDeleteResult>();
+  const lateList = deferred<{ sessions: SessionSummaryView[] }>();
   const lists: Array<[string | undefined, number | undefined]> = [];
   const executes: string[][] = [], recovers: string[] = [], responses: unknown[] = [];
   let cancelled = 0;
   let rows: SessionSummaryView[] = [{ id: "old", name: "historical-target", updated_at: "today", active_node: "node-2", active: false }];
-  session.listSessions = async (query, offset = 0) => { lists.push([query, offset]); return { sessions: [...rows] }; };
+  session.listSessions = async (query, offset = 0) => {
+    lists.push([query, offset]);
+    if (overlapInitial && lists.length === 1) return lateList.promise;
+    return { sessions: [...rows] };
+  };
   session.previewSessionDeletion = (id) => { previews.push(id); return preview.promise; };
   session.deleteSession = (id, revision) => { executes.push([id, revision]); return execution.promise; };
   session.recoverSessionDeletion = (id) => { recovers.push(id); return recovery.promise; };
@@ -1699,9 +1704,10 @@ async function deletionAppHarness() {
   const running = app.run();
   const input = async (data: string) => { process.stdin.emit("data", data); await waitForApplicationContinuation(); };
   await input("/resume\r");
+  if (overlapInitial) await input("/resume\r");
   await input("\x04");
   return {
-    session, state, execution, recovery, lists, executes, recovers, responses, previews,
+    session, state, execution, recovery, lists, executes, recovers, responses, previews, lateList,
     cancelled: () => cancelled,
     surface: () => surfaces.findLast((surface) => surface.visible),
     text: () => surfaces.findLast((surface) => surface.visible)?.content.render(120).map(plainText).join("\n") ?? "",
@@ -1876,5 +1882,23 @@ for (const outcome of [
       await h.input("rr"); assert.deepEqual(h.recovers, ["old"]);
     }
     assert.equal(h.executes.length, 1); assert.equal(h.cancelled(), 0);
+  } finally { await h.finish(); }
+});
+
+
+it("a delayed initial resume response cannot resurrect a row after deletion reconciliation", async () => {
+  const h = await deletionAppHarness(true);
+  try {
+    await h.resolvePreview(); await h.input("\t\r"); h.absent();
+    h.execution.resolve({ status: "deleted", session_id: "old" });
+    await waitForApplicationContinuation();
+    const reconciled = h.surface();
+    assert.doesNotMatch(h.text(), /historical-target/);
+    h.lateList.resolve({ sessions: [{ id: "old", name: "historical-target", updated_at: "today", active_node: "node-2", active: false }] });
+    await waitForApplicationContinuation();
+    assert.equal(h.surface(), reconciled, "pre-mutation initial query cannot reopen a stale selector");
+    assert.doesNotMatch(h.text(), /historical-target/);
+    assert.deepEqual(h.lists, [[undefined, 0], [undefined, 0], ["", 0]]);
+    assert.equal(h.executes.length, 1);
   } finally { await h.finish(); }
 });

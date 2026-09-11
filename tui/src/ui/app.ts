@@ -178,6 +178,7 @@ export interface RuntimeAttachmentHandle {
  */
 interface PresentationLease {
   epoch: number;
+  sessionListGeneration: number;
   session: RuntimeClientAttachment;
 }
 
@@ -1077,6 +1078,8 @@ export class RustxTuiApp {
     if (!this.#isCurrentPresentationLease(lease)) return;
     if (this.#hitlOverlay !== undefined) return;
     const workflow = this.#deletion;
+    // Initial /resume command responses obey the same mutation boundary as pages.
+    if (lease.sessionListGeneration !== workflow.generation) return;
     if (workflow.state.kind !== "idle") query = workflow.context.query;
     if (sessions.length === 0 && workflow.state.kind === "idle") {
       this.#showTransient("info", "no persisted sessions are available");
@@ -1509,6 +1512,7 @@ export class RustxTuiApp {
   #presentationLease(): PresentationLease {
     return {
       epoch: this.#presentationEpoch,
+      sessionListGeneration: this.#deletion.generation,
       session: this.#session,
     };
   }
