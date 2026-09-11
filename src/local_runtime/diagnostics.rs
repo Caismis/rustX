@@ -554,6 +554,16 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
         tool_selection: json!({"selected": launch.selected_tools, "noTools":launch.no_tools, "noBuiltinTools":launch.no_builtin_tools,
             "allowlist":launch.tools, "exclusions":launch.exclude_tools, "defaults":launch.config.default_tools,
             "exclusionReason": if launch.no_tools { "--no-tools removes every ordinary main-model Tool" } else { "exact allowlist/default selection followed by final exclusions; no mandatory Read insertion" },
+            // The second authority plane (Issue #259). Everything above
+            // describes ordinary execution capabilities; a Tool contributed by
+            // a composed Agent Extension is not selectable through any of it,
+            // and `--no-tools` does not remove one. Reporting the two together
+            // is what keeps this projection an honest account of the Tool set
+            // a next launch would publish.
+            "extensionTools": crate::extensions::composed_extension_tool_names(
+                &launch.config.extension_composition(),
+            ),
+            "extensionToolsReason":"provided by composed Native Agent Extensions; not selectable through defaultTools/--tools/--exclude-tools, and not removed by --no-tools",
             "onlineIdentities":"unresolved until source discovery"}),
         registered_workflows: launch
             .config

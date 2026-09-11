@@ -418,6 +418,21 @@ pub fn composed_extension_names(composition: &NativeAgentExtensions) -> Vec<&'st
     names
 }
 
+/// The canonical model-facing names of the Tools one composition contributes
+/// (Issue #259).
+///
+/// Derived from the composition's own Tool registrations rather than written
+/// out separately, so a prospective diagnostic can never advertise a Tool the
+/// composition would not actually publish.
+#[must_use]
+pub fn composed_extension_tool_names(composition: &NativeAgentExtensions) -> Vec<String> {
+    composition
+        .tool_registrations()
+        .into_iter()
+        .map(|registration| registration.definition.name)
+        .collect()
+}
+
 /// One recognized extension that a one-shot child cannot own.
 ///
 /// This is a scope fact, never an authority fact: the caller may have been
