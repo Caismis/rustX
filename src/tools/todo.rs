@@ -26,13 +26,14 @@
 //! Tool selection cannot add or remove the `todo` Tool, Agent Status cannot
 //! turn the list on or off, and list contents never change which Tools exist.
 //!
-//! A composition without Todo still keeps every `todo` ToolCall and ToolResult
+//! A composition without Todo still keeps every `todo` `ToolCall` and
+//! `ToolResult`
 //! its canonical history holds. Those are facts of the conversation, not of the
 //! current runtime: nothing deletes, rewrites, or hides them, and a later
 //! launch that composes Todo again rebuilds the latest accepted snapshot from
 //! them — see [`ConversationTodoList::rebuilt`], which reads the newest
 //! committed result rather than replaying mutations, so re-enabling produces
-//! no new ToolResults and no duplicate events.
+//! no new `ToolResult`s and no duplicate events.
 //!
 //! # Why the list is not a file
 //!
@@ -192,6 +193,11 @@ impl TodoStatusPresentation {
     /// Owned here because the presentation is owned here: a consumer that
     /// computed its own fingerprint over its own rendering would be deciding
     /// when two Todo states are "the same", which is the list's question.
+    ///
+    /// # Panics
+    ///
+    /// Only if this value stops being serializable, which its own derive
+    /// makes a compile-time property rather than a runtime one.
     #[must_use]
     pub fn fingerprint(&self) -> String {
         let encoded = serde_json::to_vec(self).expect("Todo status presentation is serializable");

@@ -535,7 +535,9 @@ impl CurrentRuntimeConfig {
             if let Some(extension) = crate::capabilities::extension_provided_tool(name) {
                 return Err(CurrentRuntimeConfigError::Invalid {
                     detail: format!(
-                        "defaultTools entry {name:?} is provided by the {extension:?} Agent                          Extension, not by ordinary Tool selection; compose it with                          extensions.{extension}.enabled instead"
+                        "defaultTools entry {name:?} is provided by the \
+                         {extension:?} Agent Extension, not by ordinary Tool \
+                         selection; compose it with extensions.{extension}.enabled instead"
                     ),
                 });
             }

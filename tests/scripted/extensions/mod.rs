@@ -639,3 +639,750 @@ async fn wait_for_running(registry: &ConversationBackgroundRegistry, id: &ToolEx
     }
     panic!("the detached execution never reached the authoritative Running state");
 }
+
+// ===========================================================================
+// Issue #259 — Todo as a stateful, Tool-providing Native Agent Extension.
+//
+// These regressions own the *composition* contracts the migration
+// introduced: that composing Todo composes one coherent capability, that
+// ordinary Tool selection is a separate authority plane which can neither
+// add nor remove the extension's Tool, that Agent Status consumes Todo
+// without owning it, and that neither extension changes anything the Agent
+// Loop owns.
+//
+// The Todo state machine, its batch transaction semantics, and its recovery
+// from canonical evidence are owned by `super::tools::todo_plane` and
+// `super::tools::todo_transaction` and are deliberately not re-proven here.
+// ===========================================================================
+
+/// Both extension axes, spelled as the public authored document.
+fn todo_and_status(todo: bool, agent_status: bool) -> NativeAgentExtensions {
+    composition(serde_json::json!({
+        "todo": {"enabled": todo},
+        "agentStatus": {"enabled": agent_status},
+    }))
+}
+
+/// The model-facing Tool names one composition publishes under one ordinary
+/// activation policy, and the ordinary *available* catalog beside them.
+async fn published_tools(
+    extensions: &NativeAgentExtensions,
+    policy: rustx::capabilities::ToolActivationPolicy,
+) -> (Vec<String>, Vec<String>) {
+    let fixture = common::native_fixture_with_extensions(
+        Vec::new(),
+        rustx::tools::native::NativeToolPolicies::default(),
+        extensions,
+    );
+    // The base registry is the *ordinary* native plane only; the extension
+    // plane is composed by the coordinator from the frozen composition.
+    let mut ordinary = rustx::tools::executor::ToolRegistry::new();
+    rustx::tools::native::register_native_tools(
+        &mut ordinary,
+        rustx::tools::NativeToolResources {
+            subagent_catalog: rustx::runtime::subagent::SubagentCatalog::empty(),
+            background: fixture.runtime.background().clone(),
+            subagents: None,
+        },
+        rustx::tools::NativeToolPolicies::default(),
+    )
+    .expect("ordinary native registration");
+    let capability =
+        common::capability_lease_with(ordinary, &fixture.runtime, extensions, policy).await;
+    let snapshot = capability.snapshot().clone();
+    let active = snapshot
+        .tool_registry()
+        .names()
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    let available = snapshot
+        .available_tools()
+        .definitions()
+        .into_iter()
+        .map(|definition| definition.name)
+        .collect();
+    (active, available)
+}
+
+/// Issue #259 regressions 1, 2 and 4.
+///
+/// The extension-provided `todo` Tool is composed by `extensions.todo`, and
+/// by nothing else:
+///
+/// ```text
+/// Todo on,  every ordinary default        -> todo present
+/// Todo on,  defaultTools naming only read -> todo present
+/// Todo on,  --tools read (exact)          -> todo present
+/// Todo on,  --no-tools                    -> todo present
+/// Todo off, every ordinary default        -> todo absent
+/// Todo off, --no-tools                    -> no Tool at all
+/// ```
+///
+/// The last two rows are the documented refinement of #234's exact-selection
+/// contract: exact ordinary selection stays exact *within the ordinary
+/// plane*, and a truly Tool-free model request needs no ordinary Tools and no
+/// Tool-providing extension.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ext259_ordinary_tool_selection_neither_adds_nor_removes_the_extension_tool() {
+    use rustx::capabilities::ToolActivationPolicy as Selection;
+
+    let enabled = todo_and_status(true, true);
+    let disabled = todo_and_status(false, true);
+
+    for policy in [
+        Selection::default(),
+        Selection {
+            default_tools: Some(vec!["read".to_owned()]),
+            ..Selection::default()
+        },
+        Selection {
+            tools: Some(vec!["read".to_owned()]),
+            ..Selection::default()
+        },
+        Selection {
+            no_tools: true,
+            ..Selection::default()
+        },
+        Selection {
+            no_builtin_tools: true,
+            ..Selection::default()
+        },
+    ] {
+        let (active, available) = published_tools(&enabled, policy.clone()).await;
+        assert!(
+            active.contains(&"todo".to_owned()),
+            "an enabled Todo extension publishes its Tool under {policy:?}"
+        );
+        assert!(
+            !available.contains(&"todo".to_owned()),
+            "and it is never an ordinary available capability, which is what makes it \
+             unnameable on every selection surface: {policy:?}"
+        );
+
+        let (active, _) = published_tools(&disabled, policy.clone()).await;
+        assert!(
+            !active.contains(&"todo".to_owned()),
+            "a composition without the Todo extension publishes no todo Tool under {policy:?}"
+        );
+    }
+
+    // The exact shape of the two ends of the range.
+    let (no_tools_with_todo, _) = published_tools(
+        &enabled,
+        Selection {
+            no_tools: true,
+            ..Selection::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        no_tools_with_todo,
+        vec!["todo".to_owned()],
+        "--no-tools selects zero ordinary capabilities and says nothing about an extension"
+    );
+    let (nothing, _) = published_tools(
+        &todo_and_status(false, true),
+        Selection {
+            no_tools: true,
+            ..Selection::default()
+        },
+    )
+    .await;
+    assert!(
+        nothing.is_empty(),
+        "a truly Tool-free request needs no ordinary Tools AND no Tool-providing extension"
+    );
+}
+
+/// Issue #259 regression 3: `todo` is refused on every ordinary Tool
+/// selection surface, with a diagnostic that names the plane it belongs to.
+///
+/// The surfaces are enumerated from the authoring side, because that is where
+/// an author actually meets them: root configuration, the CLI-facing
+/// activation policy, and the shared source-qualified selection vocabulary
+/// that named-role frontmatter, a Workflow Agent node's override, and the
+/// model-facing `subagent` Tool's override all use.
+#[test]
+fn ext259_todo_is_rejected_on_every_ordinary_selection_surface() {
+    use rustx::capabilities::ToolActivationPolicy as Selection;
+
+    // Root configuration.
+    let config = serde_json::json!({
+        "schemaVersion": 8,
+        "agentId": "agent-ext259",
+        "model": {"model": "local/model-a"},
+        "context": {"reserveTokens": 0, "keepRecentTokens": 0},
+        "defaultTools": ["read", "todo"],
+    })
+    .to_string();
+    let error = rustx::local_runtime::CurrentRuntimeConfig::from_jsonc_slice(config.as_bytes())
+        .expect_err("defaultTools may not name an extension Tool");
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("Agent Extension") && rendered.contains("extensions.todo"),
+        "the refusal names the owning plane and the way to compose it: {rendered}"
+    );
+
+    // The CLI-facing ordinary activation policy, on all three of its lists.
+    for policy in [
+        Selection {
+            default_tools: Some(vec!["todo".to_owned()]),
+            ..Selection::default()
+        },
+        Selection {
+            tools: Some(vec!["todo".to_owned()]),
+            ..Selection::default()
+        },
+        Selection {
+            exclude_tools: vec!["todo".to_owned()],
+            ..Selection::default()
+        },
+    ] {
+        let rendered = policy
+            .validate()
+            .expect_err("an extension Tool is not an ordinary selector");
+        assert!(
+            rendered.contains("Agent Extension"),
+            "{policy:?} must be refused by name: {rendered}"
+        );
+    }
+
+    // The one shared trusted selection vocabulary.
+    let document: rustx::capabilities::selection::ToolSelectionDocument =
+        serde_json::from_value(serde_json::json!({"builtin": ["read", "todo"]}))
+            .expect("the selection document parses");
+    let rendered = document
+        .validate_spelling()
+        .expect_err("tools.builtin may not name an extension Tool");
+    assert!(
+        rendered.contains("Agent Extension") && rendered.contains("extensions.todo"),
+        "the shared vocabulary refuses it too: {rendered}"
+    );
+
+    // And an ordinary Builtin name remains perfectly ordinary.
+    let ordinary: rustx::capabilities::selection::ToolSelectionDocument =
+        serde_json::from_value(serde_json::json!({"builtin": ["read"]})).expect("parses");
+    assert!(ordinary.validate_spelling().is_ok());
+    assert!(
+        Selection {
+            tools: Some(vec!["read".to_owned()]),
+            ..Selection::default()
+        }
+        .validate()
+        .is_ok()
+    );
+}
+
+/// Issue #259 regression 16: the `todo` Tool definition is stable for the
+/// lifetime of a composition.
+///
+/// Todo list contents are conversation state, not capability state, so
+/// creating, completing, and clearing tasks must leave the published Tool
+/// definition and the capability revision exactly where they were. A schema
+/// that appeared only once the list was non-empty would make the model's
+/// capability set a function of its own working state.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ext259_the_todo_tool_schema_is_stable_across_list_mutations() {
+    use rustx::tools::todo::TodoCreate;
+
+    let fixture = common::native_fixture_with_extensions(
+        Vec::new(),
+        rustx::tools::native::NativeToolPolicies::default(),
+        &NativeAgentExtensions::with_todo(),
+    );
+    let capability = common::capability_lease_with(
+        rustx::tools::executor::ToolRegistry::new(),
+        &fixture.runtime,
+        &NativeAgentExtensions::with_todo(),
+        rustx::capabilities::ToolActivationPolicy::default(),
+    )
+    .await;
+    let (lease, coordinator) = capability.into_lease_and_coordinator();
+    let definition_of = |snapshot: &rustx::capabilities::CapabilitySnapshot| {
+        snapshot
+            .tool_registry()
+            .definitions()
+            .into_iter()
+            .find(|definition| definition.name == "todo")
+            .expect("an enabled Todo extension publishes its Tool")
+            .clone()
+    };
+
+    let before = definition_of(lease.snapshot());
+    let revision_before = lease.revision();
+    assert!(
+        fixture
+            .runtime
+            .todo_snapshot()
+            .expect("Todo is composed")
+            .tasks
+            .is_empty(),
+        "the Tool exists over an empty list, which is the whole point"
+    );
+
+    // Drive the list through its real authority: create, complete, clear.
+    let todos = fixture.runtime.todos().expect("Todo is composed");
+    for step in 0..3u8 {
+        let batch = todos.open_batch().expect("one batch at a time");
+        let writer = batch.writer();
+        let snapshot = match step {
+            0 => {
+                writer
+                    .create(TodoCreate {
+                        subject: "Write the parser".to_owned(),
+                        ..TodoCreate::default()
+                    })
+                    .expect("create")
+                    .1
+            }
+            1 => {
+                writer
+                    .update(
+                        1,
+                        rustx::tools::todo::TodoChange {
+                            status: Some(rustx::tools::todo::TodoStatus::Completed),
+                            ..rustx::tools::todo::TodoChange::default()
+                        },
+                    )
+                    .expect("complete")
+                    .1
+            }
+            _ => writer.clear().expect("clear").1,
+        };
+        batch.settle(&[common::todo_result_message(
+            &format!("mutation-{step}"),
+            &snapshot,
+        )]);
+
+        assert_eq!(
+            definition_of(lease.snapshot()),
+            before,
+            "a Todo mutation never republishes the Tool definition"
+        );
+        assert_eq!(
+            lease.revision(),
+            revision_before,
+            "nor does it advance the capability revision"
+        );
+        assert_eq!(
+            coordinator.current_snapshot().revision(),
+            revision_before,
+            "the coordinator publishes nothing on a Todo state change either"
+        );
+    }
+}
+
+/// Issue #259 regressions 5, 6 and 15: Todo and Agent Status are independent
+/// axes, and neither changes anything the Agent Loop owns.
+///
+/// All four combinations run the *same* scripted attempt — a fresh inbound
+/// turn, a settled foreground tool batch, a stop — against a conversation
+/// whose committed list already holds actionable work, which is precisely the
+/// state a Todo reminder is about. What differs is only what each composition
+/// is supposed to produce:
+///
+/// ```text
+/// Todo on,  Status on   the Todo Tool is published, and a Todo section is
+///                       admitted into Agent Status
+/// Todo on,  Status off  the Todo Tool is published; no Agent Status at all
+/// Todo off, Status on   Agent Status runs, with NO Todo section fabricated
+/// Todo off, Status on   Time/Background are unaffected by Todo's absence
+/// Todo off, Status off  neither
+/// ```
+///
+/// Everything else — admission, request count, canonical history, tool call
+/// identities and statuses, the durable Event Journal's ordering, terminal
+/// settlement — is compared across all four and must be identical.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
+async fn ext259_todo_and_agent_status_are_independent_and_change_no_loop_semantics() {
+    use rustx::tools::todo::TodoCreate;
+
+    let call = scripted("ext259-call", "ext259-tool", "worker");
+    let script = vec![tool_turn(std::slice::from_ref(&call)), stop_turn()];
+
+    let mut ordinary = Vec::new();
+    let mut observed = Vec::new();
+    for (todo, agent_status) in [(true, true), (true, false), (false, true), (false, false)] {
+        let extensions = todo_and_status(todo, agent_status);
+        let fixture = common::native_fixture_with_extensions(
+            Vec::new(),
+            rustx::tools::native::NativeToolPolicies::default(),
+            &extensions,
+        );
+
+        // Seed actionable committed work wherever a list exists, through the
+        // list's real batch authority and its real canonical evidence.
+        if let Some(todos) = fixture.runtime.todos() {
+            let batch = todos.open_batch().expect("a fresh list opens one batch");
+            let (_, snapshot) = batch
+                .writer()
+                .create(TodoCreate {
+                    subject: "Write the parser".to_owned(),
+                    ..TodoCreate::default()
+                })
+                .expect("create");
+            batch.settle(&[common::todo_result_message("seed", &snapshot)]);
+            assert_eq!(
+                fixture
+                    .runtime
+                    .todo_snapshot()
+                    .expect("Todo is composed")
+                    .tasks
+                    .len(),
+                1
+            );
+        }
+
+        let tool = FakeTool::new(
+            common::tool_policies(
+                "worker",
+                "ext259-tool",
+                ToolExecutionPolicy::ForegroundOnly,
+                ToolConcurrencyPolicy::Sequential,
+            ),
+            success_result("worker"),
+        );
+        let mut tools = fixture.registry.clone();
+        tool.register(&mut tools);
+        let model = fake_model(script.clone());
+        let (result, recorder) = run(&extensions, &fixture.runtime, tools, model.clone()).await;
+
+        assert!(
+            matches!(result.outcome, AttemptOutcome::Completed { .. }),
+            "every combination settles the attempt normally: {:?}",
+            result.outcome
+        );
+
+        // The Tool half of the composition, read off the registry the attempt
+        // actually ran against.
+        let todo_tool_published = fixture
+            .registry
+            .definitions()
+            .iter()
+            .any(|definition| definition.name == "todo");
+        // The status half: the sections Agent Status actually admitted.
+        let sections: Vec<String> = recorder
+            .observations()
+            .iter()
+            .flat_map(|observation| observation.status.sections.iter())
+            .map(|section| section.id.to_string())
+            .collect();
+
+        let mut semantics = ordinary_semantics(&result, fixture.store.as_ref());
+        semantics.request_count = model.requests().len();
+        ordinary.push(semantics);
+        observed.push((todo_tool_published, sections));
+
+        // The list survives the attempt untouched in every composition: this
+        // attempt calls `worker`, not `todo`.
+        assert_eq!(
+            fixture.runtime.todo_snapshot().map(|list| list.tasks.len()),
+            todo.then_some(1),
+            "a composition composes its list, or does not have one at all"
+        );
+    }
+
+    let [both, todo_only, status_only, neither] = <[_; 4]>::try_from(observed).expect("four runs");
+
+    // Todo on, Agent Status on: both halves present.
+    assert!(both.0, "an enabled Todo extension publishes its Tool");
+    assert!(
+        both.1.iter().any(|id| id == "todo"),
+        "and Agent Status admits the Todo section it was offered: {:?}",
+        both.1
+    );
+
+    // Todo on, Agent Status off: the Tool and the list are fully composed,
+    // and there is simply no reminder.
+    assert!(
+        todo_only.0,
+        "Todo does not need Agent Status to publish its Tool"
+    );
+    assert!(
+        todo_only.1.is_empty(),
+        "with no Agent Status composed there is no status of any kind: {:?}",
+        todo_only.1
+    );
+
+    // Todo off, Agent Status on: Time and Background continue, and no Todo
+    // section is fabricated from anywhere.
+    assert!(!status_only.0, "a disabled Todo publishes no Tool");
+    assert!(
+        !status_only.1.iter().any(|id| id == "todo"),
+        "no Todo section is fabricated without the Todo extension: {:?}",
+        status_only.1
+    );
+    assert!(
+        status_only.1.iter().any(|id| id == "temporal"),
+        "and the other contributors are entirely unaffected: {:?}",
+        status_only.1
+    );
+
+    assert!(!neither.0 && neither.1.is_empty());
+
+    // And the Agent Loop's own semantics are identical across all four.
+    for (index, semantics) in ordinary.iter().enumerate().skip(1) {
+        assert_eq!(
+            *semantics, ordinary[0],
+            "combination {index} changed admission, request count, canonical history, tool \
+             identities/statuses, terminal ordering, or durable event ordering"
+        );
+    }
+}
+
+/// Issue #259 regressions 12 and 13: extension state and canonical history
+/// are different facts, and a launch decides only the former.
+///
+/// One conversation is driven through three consecutive compositions over the
+/// *same* durable store, which is exactly what restart/resume is:
+///
+/// ```text
+/// launch 1  Todo composed    commits a real todo result
+/// launch 2  Todo absent      no current list, no Tool; history untouched
+/// launch 3  Todo composed    rebuilds launch 1's accepted snapshot exactly
+/// ```
+///
+/// The third launch is the reconstruction contract: it must recover the
+/// latest accepted authoritative snapshot from canonical evidence, and it
+/// must do so by *reading* the newest result rather than replaying
+/// mutations — so it commits no new `ToolResult` and emits no new event.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ext259_disabling_todo_preserves_history_and_re_enabling_reconstructs_it() {
+    use rustx::durable::ConversationStore;
+    use rustx::tools::todo::TodoCreate;
+
+    let dir = tempfile::tempdir().expect("lab");
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let conversation = rustx::runtime::identity::ConversationId::new("conv-ext259-recovery");
+    let store: Arc<dyn ConversationStore> = Arc::new(
+        rustx::durable::SqliteConversationStore::open(
+            conversation.clone(),
+            &dir.path().join("conversation.sqlite"),
+        )
+        .expect("durable store"),
+    );
+    let launch = |todo: bool| {
+        rustx::tools::runtime::ConversationToolRuntime::from_config(
+            conversation.clone(),
+            rustx::tools::runtime::ConversationRuntimeConfig {
+                durable_binding: Some(rustx::durable::ConversationStoreBinding::new(Arc::clone(
+                    &store,
+                ))),
+                ..rustx::tools::runtime::ConversationRuntimeConfig::new(
+                    &workspace,
+                    dir.path().join("artifacts"),
+                )
+            }
+            .with_todo(todo.then_some(rustx::extensions::TodoExtensionConfig {})),
+        )
+        .expect("tool runtime")
+    };
+
+    // ---- Launch 1: Todo composed, one accepted mutation ----
+    let first = launch(true);
+    let todos = first.todos().expect("launch 1 composes Todo");
+    let batch = todos.open_batch().expect("one batch");
+    let (_, accepted) = batch
+        .writer()
+        .create(TodoCreate {
+            subject: "Write the parser".to_owned(),
+            ..TodoCreate::default()
+        })
+        .expect("create");
+    let evidence = common::todo_result_message("accepted", &accepted);
+    // The canonical evidence is what makes the settlement truthful, so it is
+    // committed to the Ledger, not merely handed to the batch.
+    store
+        .initialize(std::slice::from_ref(&evidence))
+        .expect("commit the canonical todo result");
+    batch.settle(std::slice::from_ref(&evidence));
+    assert_eq!(first.todo_snapshot().expect("composed"), accepted);
+    let canonical_before = store.load_canonical().expect("canonical history");
+    let events_before = store.read_events(None, 256).expect("events").events.len();
+    drop(first);
+
+    // ---- Launch 2: Todo absent ----
+    let second = launch(false);
+    assert!(
+        second.todos().is_none() && second.todo_snapshot().is_none(),
+        "a Todo-disabled launch composes no current list at all"
+    );
+    let mut extension_registry = rustx::tools::executor::ToolRegistry::new();
+    NativeAgentExtensions::none()
+        .register_tools(&mut extension_registry)
+        .expect("an absent extension registers nothing");
+    assert!(
+        extension_registry.names().is_empty(),
+        "and publishes no current todo Tool"
+    );
+    assert_eq!(
+        store.load_canonical().expect("canonical history"),
+        canonical_before,
+        "disabling the extension rewrites, hides, and deletes nothing"
+    );
+    drop(second);
+
+    // ---- Launch 3: Todo composed again ----
+    let third = launch(true);
+    assert_eq!(
+        third.todo_snapshot().expect("launch 3 composes Todo"),
+        accepted,
+        "re-enabling reconstructs the latest accepted authoritative snapshot"
+    );
+    assert_eq!(
+        store.load_canonical().expect("canonical history"),
+        canonical_before,
+        "reconstruction reads the newest result; it never replays a mutation, so it \
+         commits no duplicate ToolResult"
+    );
+    assert_eq!(
+        store.read_events(None, 256).expect("events").events.len(),
+        events_before,
+        "and generates no duplicate events"
+    );
+    // The reconstructed list is a live authority, not a frozen copy: it opens
+    // batches and allocates ids from where the accepted snapshot left off.
+    let batch = third
+        .todos()
+        .expect("composed")
+        .open_batch()
+        .expect("the reconstructed list opens a batch");
+    let (task, _) = batch
+        .writer()
+        .create(TodoCreate {
+            subject: "Write the tests".to_owned(),
+            ..TodoCreate::default()
+        })
+        .expect("create");
+    assert_eq!(
+        task.id, accepted.next_id,
+        "id allocation continues from the accepted snapshot rather than restarting"
+    );
+    batch.discard();
+}
+
+/// Issue #259 regression 17: a resource reload cannot hot-install or
+/// hot-remove a Tool-providing extension.
+///
+/// The proof is structural rather than behavioural: the extension Tool set is
+/// composed once at coordinator construction and stored outside
+/// `CapabilityResourceInputs`, which is the *only* value a reload replaces.
+/// This drives a real reload through the coordinator's own publication
+/// boundary — a complete new resource-input generation that genuinely changes
+/// the ordinary capability plane, proven by the advanced revision — and shows
+/// the extension Tool surviving it unchanged in both directions.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ext259_a_resource_reload_cannot_install_or_remove_the_todo_extension() {
+    for composed in [true, false] {
+        let extensions = if composed {
+            NativeAgentExtensions::with_todo()
+        } else {
+            NativeAgentExtensions::none()
+        };
+        let fixture = common::native_fixture_with_extensions(
+            Vec::new(),
+            rustx::tools::native::NativeToolPolicies::default(),
+            &extensions,
+        );
+        let ordinary_base = || {
+            let mut registry = rustx::tools::executor::ToolRegistry::new();
+            rustx::tools::native::register_native_tools(
+                &mut registry,
+                rustx::tools::NativeToolResources {
+                    subagent_catalog: rustx::runtime::subagent::SubagentCatalog::empty(),
+                    background: fixture.runtime.background().clone(),
+                    subagents: None,
+                },
+                rustx::tools::NativeToolPolicies::default(),
+            )
+            .expect("ordinary native registration");
+            registry
+        };
+        // The first generation activates the whole ordinary native plane.
+        let capability = common::capability_lease_with(
+            ordinary_base(),
+            &fixture.runtime,
+            &extensions,
+            rustx::capabilities::ToolActivationPolicy::default(),
+        )
+        .await;
+        let (lease, coordinator) = capability.into_lease_and_coordinator();
+        let names = |coordinator: &rustx::capabilities::CapabilityCoordinator| {
+            coordinator
+                .current_snapshot()
+                .tool_registry()
+                .names()
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        let before = names(&coordinator);
+        assert_eq!(before.contains(&"todo".to_owned()), composed);
+        assert!(before.contains(&"read".to_owned()));
+        let revision_before = coordinator.current_snapshot().revision();
+        // An attempt lease pins the published generation, so a reload is
+        // refused while one is held. Releasing it is the ordinary boundary,
+        // not a timing trick.
+        drop(lease);
+
+        // A genuinely new resource generation that empties the *ordinary*
+        // plane entirely — the strongest ordinary statement there is.
+        let candidate = coordinator
+            .prepare_candidate_with_inputs(rustx::capabilities::CapabilityResourceInputs {
+                python_sources: std::collections::BTreeMap::new(),
+                base_tool_registry: Arc::new(ordinary_base()),
+                tool_activation: rustx::capabilities::ToolActivationPolicy {
+                    no_tools: true,
+                    ..rustx::capabilities::ToolActivationPolicy::default()
+                },
+                skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
+                mcp_servers: std::collections::BTreeMap::new(),
+                base_environment: fixture.runtime.environment().clone(),
+            })
+            .await
+            .expect("the reload prepares a candidate");
+        coordinator.commit(candidate).expect("the reload publishes");
+        let after = names(&coordinator);
+        assert!(
+            coordinator.current_snapshot().revision() > revision_before,
+            "the reload really did publish a new capability generation"
+        );
+        assert!(
+            !after.contains(&"read".to_owned()),
+            "and it really did change the ordinary plane"
+        );
+        assert_eq!(
+            after.contains(&"todo".to_owned()),
+            composed,
+            "a resource reload cannot hot-remove a Tool-providing extension"
+        );
+
+        // The symmetric direction from the same coordinator: an ordinary
+        // plane that activates everything cannot install the extension into a
+        // composition that does not have it.
+        let candidate = coordinator
+            .prepare_candidate_with_inputs(rustx::capabilities::CapabilityResourceInputs {
+                python_sources: std::collections::BTreeMap::new(),
+                base_tool_registry: Arc::new(ordinary_base()),
+                tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+                skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
+                mcp_servers: std::collections::BTreeMap::new(),
+                base_environment: fixture.runtime.environment().clone(),
+            })
+            .await
+            .expect("the second reload prepares a candidate");
+        coordinator
+            .commit(candidate)
+            .expect("the second reload publishes");
+        let restored = names(&coordinator);
+        assert!(restored.contains(&"read".to_owned()));
+        assert_eq!(
+            restored.contains(&"todo".to_owned()),
+            composed,
+            "and cannot hot-install one either"
+        );
+    }
+}

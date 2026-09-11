@@ -2730,6 +2730,174 @@ mod subagent_child_tests {
         }
     }
 
+    /// Issue #259 regressions 7 and 8: a Todo-enabled child composes **its
+    /// own** conversation's list, and two concurrently composed Todo-enabled
+    /// children compose two.
+    ///
+    /// The isolation is structural rather than enforced: a list belongs to a
+    /// `ConversationToolRuntime`, a child owns its own runtime over its own
+    /// Ledger, and there is no cross-conversation reader anywhere. This proves
+    /// the structure holds by mutating each list through its real batch
+    /// authority and reading every other list back — no sleep, no ordering
+    /// assumption, and no shared handle to alias through in the first place.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::too_many_lines)] // one coherent three-owner isolation proof
+    async fn ext259_parent_and_concurrent_child_todo_lists_never_alias() {
+        use crate::tools::todo::TodoCreate;
+
+        let dir = lab();
+        let parent_dir = tempfile::tempdir().expect("parent lab");
+        std::fs::create_dir_all(parent_dir.path().join("workspace")).expect("parent workspace");
+
+        // The parent conversation's own list, composed exactly as a root
+        // launch composes it.
+        let parent = crate::tools::runtime::ConversationToolRuntime::from_config(
+            ConversationId::new("conv-parent"),
+            crate::tools::runtime::ConversationRuntimeConfig::new(
+                parent_dir.path().join("workspace"),
+                parent_dir.path().join("artifacts"),
+            )
+            .with_todo(Some(crate::extensions::TodoExtensionConfig {})),
+        )
+        .expect("the parent tool runtime composes Todo");
+
+        // Two children, composed from two frozen specifications that both
+        // compose the Todo extension, over two distinct child conversations.
+        let mut children = Vec::new();
+        for index in 0..2u8 {
+            let mut child_spec = spec_with_extensions(
+                dir.path(),
+                vec![builtin("read")],
+                Vec::new(),
+                Vec::new(),
+                crate::extensions::NativeAgentExtensions::with_todo(),
+            );
+            // Distinct child conversation identities. The runtime-private
+            // root, and with it the child's durable conversation store, is
+            // *derived* from that identity, so two children can no more share
+            // a Ledger than they can share an id.
+            let id = ConversationId::new(format!("conv-parent-subagent-{index}"));
+            child_spec.subagent_id = SubagentId::new(id.as_str());
+            child_spec.child_conversation_id = id.clone();
+            std::fs::create_dir_all(
+                dir.path()
+                    .join("subagents")
+                    .join(id.as_str())
+                    .join(&child_spec.incarnation),
+            )
+            .expect("child incarnation allocation");
+            children.push(
+                LocalConversationCore::compose_subagent_child(
+                    &child_spec,
+                    &dependencies(),
+                    &ChildPreparation::detached(),
+                )
+                .await
+                .expect("the child composes its frozen Todo extension"),
+            );
+        }
+
+        // Every runtime here composes a list, and a freshly composed child's
+        // list is empty: it was rebuilt from the child's own canonical
+        // history, which is empty at birth. Nothing was inherited.
+        let lists = |core: &LocalConversationCore| {
+            core.tool_runtime()
+                .todo_snapshot()
+                .expect("a Todo-enabled child composes a list")
+        };
+        assert!(
+            parent
+                .todo_snapshot()
+                .expect("parent list")
+                .tasks
+                .is_empty()
+        );
+        for child in &children {
+            assert!(
+                lists(child).tasks.is_empty(),
+                "a child's list is its own conversation's, never its parent's"
+            );
+        }
+
+        // Write one distinct task into each of the three lists, through the
+        // real batch authority, and settle each batch the way the Agent Loop
+        // does when its ToolResult batch becomes canonical.
+        let write = |todos: &crate::tools::todo::ConversationTodoList, subject: &str| {
+            let batch = todos.open_batch().expect("a fresh list opens one batch");
+            let writer = batch.writer();
+            let (_, snapshot) = writer
+                .create(TodoCreate {
+                    subject: subject.to_owned(),
+                    ..TodoCreate::default()
+                })
+                .expect("create");
+            batch.settle(&[todo_result_message(subject, &snapshot)]);
+        };
+        write(parent.todos().expect("parent list"), "parent task");
+        for (index, child) in children.iter().enumerate() {
+            write(
+                child
+                    .tool_runtime()
+                    .todos()
+                    .expect("a Todo-enabled child composes a list"),
+                &format!("child {index} task"),
+            );
+        }
+
+        // Each list holds exactly its own task. A single shared list would
+        // show three; an aliased pair would show each other's.
+        let subjects = |snapshot: &crate::tools::todo::TodoSnapshot| {
+            snapshot
+                .tasks
+                .iter()
+                .map(|task| task.subject.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            subjects(&parent.todo_snapshot().expect("parent list")),
+            vec!["parent task".to_owned()],
+            "no child snapshot merges into the parent's list"
+        );
+        for (index, child) in children.iter().enumerate() {
+            assert_eq!(
+                subjects(&lists(child)),
+                vec![format!("child {index} task")],
+                "two concurrent Todo-enabled children observe neither each other nor the parent"
+            );
+        }
+
+        // And the two children really are two owners: the ids they allocated
+        // are independent sequences over independent lists, not one sequence
+        // over one list.
+        for child in &children {
+            assert_eq!(lists(child).tasks[0].id, 1);
+        }
+    }
+
+    /// One canonical `todo` result message, as the Agent Loop commits it.
+    fn todo_result_message(
+        id: &str,
+        snapshot: &crate::tools::todo::TodoSnapshot,
+    ) -> crate::message::types::MessageBlock {
+        crate::message::types::MessageBlock::Tool(crate::message::types::ToolMessageBlock {
+            id: crate::runtime::identity::MessageId::new(format!("message-{id}")),
+            tool_call_id: crate::runtime::identity::ToolCallId::new(format!("call-{id}")),
+            tool_id: crate::runtime::identity::ToolId::new(crate::tools::todo::TODO_TOOL_ID),
+            result: crate::tools::types::ToolExecutionResult {
+                status: crate::tools::types::ToolExecutionStatus::Success,
+                content: vec![crate::tools::types::ToolResultContent::Json {
+                    value: serde_json::to_value(snapshot).expect("a Todo snapshot serializes"),
+                }],
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+                workflow: None,
+                managed_output: None,
+            },
+        })
+    }
+
     /// A lab whose workspace ancestry is *full* of project instructions and
     /// Skills a discovering child would pick up.
     fn lab() -> tempfile::TempDir {

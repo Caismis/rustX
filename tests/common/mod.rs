@@ -964,7 +964,7 @@ pub fn native_fixture_with(
     native_fixture_with_extensions(
         environment,
         policies,
-        rustx::extensions::NativeAgentExtensionsDocument::default().resolve(),
+        &rustx::extensions::NativeAgentExtensionsDocument::default().resolve(),
     )
 }
 
@@ -982,7 +982,7 @@ pub fn native_fixture_with(
 pub fn native_fixture_with_extensions(
     environment: Vec<(String, String)>,
     policies: rustx::tools::native::NativeToolPolicies,
-    extensions: rustx::extensions::NativeAgentExtensions,
+    extensions: &rustx::extensions::NativeAgentExtensions,
 ) -> NativeFixture {
     use rustx::tools::runtime::ConversationRuntimeConfig;
     let dir = tempfile::tempdir().expect("temporary workspace");
@@ -1032,6 +1032,37 @@ pub fn native_fixture_with_extensions(
         mailbox,
         store,
     }
+}
+
+/// One canonical `todo` result message, exactly as the Agent Loop commits
+/// one: the settled result whose structured content is the complete post-call
+/// snapshot (Issue #259).
+///
+/// This is what makes a `TodoBatch` settlement truthful in a test — settling
+/// asserts that canonical history already carries the list being installed —
+/// and it is the same fact a restart rebuilds the list from.
+#[must_use]
+pub fn todo_result_message(
+    id: &str,
+    snapshot: &rustx::tools::todo::TodoSnapshot,
+) -> rustx::message::types::MessageBlock {
+    rustx::message::types::MessageBlock::Tool(rustx::message::types::ToolMessageBlock {
+        id: rustx::runtime::identity::MessageId::new(format!("message-{id}")),
+        tool_call_id: rustx::runtime::identity::ToolCallId::new(format!("call-{id}")),
+        tool_id: rustx::runtime::identity::ToolId::new(rustx::tools::todo::TODO_TOOL_ID),
+        result: rustx::tools::types::ToolExecutionResult {
+            status: rustx::tools::types::ToolExecutionStatus::Success,
+            content: vec![rustx::tools::types::ToolResultContent::Json {
+                value: serde_json::to_value(snapshot).expect("a Todo snapshot serializes"),
+            }],
+            duration_ms: 0,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+            workflow: None,
+            managed_output: None,
+        },
+    })
 }
 
 /// A no-op progress reporter for direct tool invocations.
@@ -1290,6 +1321,12 @@ pub struct CapabilityFixture {
 }
 
 impl CapabilityFixture {
+    /// The immutable capability snapshot this lease pinned.
+    #[must_use]
+    pub fn snapshot(&self) -> &std::sync::Arc<rustx::capabilities::CapabilitySnapshot> {
+        self.lease.snapshot()
+    }
+
     /// Moves the pinned attempt capability lease out of the fixture.
     #[must_use]
     pub fn into_lease(self) -> rustx::capabilities::AttemptCapabilityLease {
@@ -1318,6 +1355,27 @@ pub async fn capability_lease(
     tools: rustx::tools::executor::ToolRegistry,
     tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
 ) -> CapabilityFixture {
+    capability_lease_with(
+        tools,
+        tool_runtime,
+        &rustx::extensions::NativeAgentExtensions::none(),
+        rustx::capabilities::ToolActivationPolicy::default(),
+    )
+    .await
+}
+
+/// The same lease, composed against an explicit extension set and an explicit
+/// ordinary activation policy (Issue #259).
+///
+/// The two are separate parameters because they are separate authorities: the
+/// policy decides the ordinary capability plane, and the composition decides
+/// the extension-provided Tool surfaces.
+pub async fn capability_lease_with(
+    tools: rustx::tools::executor::ToolRegistry,
+    tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
+    extensions: &rustx::extensions::NativeAgentExtensions,
+    tool_activation: rustx::capabilities::ToolActivationPolicy,
+) -> CapabilityFixture {
     let dir = tempfile::tempdir().expect("capability temp dir");
     let coordinator = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
@@ -1325,8 +1383,8 @@ pub async fn capability_lease(
             conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: std::sync::Arc::new(tools),
-            extensions: rustx::extensions::NativeAgentExtensions::none(),
-            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            extensions: extensions.clone(),
+            tool_activation,
             skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: tool_runtime.environment().clone(),

@@ -120,7 +120,9 @@ impl ToolSelectionDocument {
                 && let Some(extension) = super::extension_provided_tool(name)
             {
                 return Err(format!(
-                    "builtin:{name} is provided by the {extension:?} Agent Extension, not by                      ordinary Tool selection; compose it with                      extensions.{extension}.enabled instead"
+                    "builtin:{name} is provided by the {extension:?} Agent Extension, \
+                     not by ordinary Tool selection; compose it with \
+                     extensions.{extension}.enabled instead"
                 ));
             }
         }

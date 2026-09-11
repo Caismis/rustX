@@ -817,7 +817,7 @@ impl BackgroundStatusModule {
 ///
 /// Consequently the two extensions are independent in both directions. With
 /// Todo composed and Agent Status not, the `todo` Tool, the list, its
-/// ToolResults and its recovery all work exactly as before — there is simply
+/// `ToolResult`s and its recovery all work exactly as before — there is simply
 /// no reminder. With Agent Status composed and Todo not, `presentation` is
 /// absent and no Todo section is fabricated, while Time and Background
 /// continue untouched.

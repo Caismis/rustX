@@ -365,7 +365,7 @@ impl RuntimeClientProjection {
         // enters this projection: `None` here means the attached runtime
         // composes no Todo extension, and the live fold below deliberately
         // cannot turn that back into a list.
-        self.snapshot.todos = seed.todos.clone();
+        self.snapshot.todos.clone_from(&seed.todos);
         // An inactive runtime has never admitted an attempt, composed an
         // Agent Status, or compacted, so `attempt`, `statuses`, and
         // `context` keep their empty initial values by construction.

@@ -77,7 +77,9 @@ fn reject_extension_tool(name: &str, label: &str) -> Result<(), String> {
     match extension_provided_tool(name) {
         None => Ok(()),
         Some(extension) => Err(format!(
-            "Tool {label} entry {name:?} is provided by the {extension:?} Agent Extension, not by              ordinary Tool selection; compose it with extensions.{extension}.enabled instead"
+            "Tool {label} entry {name:?} is provided by the {extension:?} Agent \
+             Extension, not by ordinary Tool selection; compose it with \
+             extensions.{extension}.enabled instead"
         )),
     }
 }
@@ -100,7 +102,13 @@ impl ToolActivationPolicy {
 
     /// Validates selection intent independently of capability discovery.
     /// The same boundary is used by CLI parsing and resolved composition.
-    pub(crate) fn validate(&self) -> Result<(), String> {
+    ///
+    /// # Errors
+    ///
+    /// Returns the first violation: a flag conflict, a malformed name list,
+    /// or an entry naming a Tool an Agent Extension owns rather than the
+    /// ordinary capability plane (Issue #259).
+    pub fn validate(&self) -> Result<(), String> {
         if let Some((first, second)) = self.conflict() {
             return Err(format!("{first} conflicts with {second}"));
         }
