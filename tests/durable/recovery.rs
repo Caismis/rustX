@@ -3140,6 +3140,7 @@ fn commit_subagent_ownership(store: &SqliteConversationStore, subagent: &Subagen
                 tool_call_id: ToolCallId::new("call-sub"),
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
+                profile_digest: "sha256:profile".to_owned(),
                 ownership: rustx::events::types::SubagentOwnershipKind::Normal,
                 workspace: rustx::runtime::workspace::WorkspaceSnapshot::shared(
                     std::path::PathBuf::from("<shared-workspace>"),
@@ -3162,6 +3163,7 @@ fn commit_workflow_ownership(store: &SqliteConversationStore, subagent: &Subagen
                 tool_call_id: ToolCallId::new("workflow-call"),
                 agent: "reviewer".to_owned(),
                 definition_digest: "sha256:workflow-definition".to_owned(),
+                profile_digest: "sha256:profile".to_owned(),
                 ownership: rustx::events::types::SubagentOwnershipKind::Workflow,
                 workspace: rustx::runtime::workspace::WorkspaceSnapshot::shared(
                     std::path::PathBuf::from("<shared-workspace>"),
@@ -3199,6 +3201,14 @@ fn nonterminal_subagent_work_is_terminalized_exactly_once_and_never_relaunched()
     assert_eq!(
         report.subagent_classes()[0].evidence.definition_digest,
         "sha256:definition"
+    );
+    // Issue #258: the EFFECTIVE execution profile identity is a durable
+    // execution fact too. An authorized invocation override may have
+    // specialized this child away from its role's defaults, so recovery
+    // restores exactly the committed value and never recomputes anything.
+    assert_eq!(
+        report.subagent_classes()[0].evidence.profile_digest,
+        "sha256:profile"
     );
     assert_eq!(
         report.reconciliation().subagent_terminals,

@@ -382,6 +382,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
             // selection, or the active generation — has been published yet,
             // so the previous complete generation stays authoritative.
             validate_subagent_catalog(&prepared, &self.models)?;
+            validate_workflow_agent_overrides(&prepared)?;
             #[cfg(test)]
             super::subagent_resources::test_support::before_publication(&workspace).await;
             Ok(prepared)
@@ -895,6 +896,30 @@ fn validate_subagent_catalog(
     })
 }
 
+/// Admits every Workflow Agent node's trusted static invocation override
+/// against the same candidate generation that will publish it (Issue #258).
+///
+/// The override is trusted *program* data, so its authority is the admitted
+/// generation rather than the invoking main model's narrower active tool set.
+/// What is checked here is therefore reference validity, not delegation: a
+/// statically invalid selection rejects the whole candidate off-side, exactly
+/// as a statically invalid role definition does, and the previous complete
+/// generation stays authoritative.
+fn validate_workflow_agent_overrides(
+    prepared: &PreparedRuntimeResources,
+) -> Result<(), RuntimeResourceLoadError> {
+    let candidate = prepared.capability_candidate();
+    let skills = crate::skills::SkillSnapshot::new(candidate.skill_packages().to_vec());
+    prepared
+        .workflow_catalog()
+        .validate_agent_overrides(
+            &candidate.available_tools().definitions(),
+            candidate.availability(),
+            &skills,
+        )
+        .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))
+}
+
 /// Rejects a model-facing Workflow id that is already used by another
 /// capability in the same candidate generation. The active Tool selection can
 /// hide a duplicate under `noTools`, but hiding it must not turn an identity
@@ -1224,6 +1249,11 @@ impl LocalConversationCore {
         .with_subagent_admissions(main_admission, workflow_admission)
         .with_workflow_catalog(workflows);
         validate_subagent_catalog(&prepared, &registry).map_err(|error| {
+            LocalRuntimeError::Capability {
+                detail: error.to_string(),
+            }
+        })?;
+        validate_workflow_agent_overrides(&prepared).map_err(|error| {
             LocalRuntimeError::Capability {
                 detail: error.to_string(),
             }

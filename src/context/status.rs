@@ -115,10 +115,52 @@ pub struct TimeStatusConfig {
     /// Whether Time participates in an available Agent Status opportunity.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    /// The optional IANA timezone used only by Time presentation.
+    /// The optional IANA timezone used only by Time presentation. Omitting it
+    /// renders UTC.
+    // Absence is a decision, not "unspecified". Anything reasoning about what
+    // this configuration WILL DO — delegation authorization, the effective
+    // execution-profile digest — must read `Self::effective_timezone` instead
+    // of pattern-matching this raw `Option` and inventing a second meaning.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<String>")]
     pub timezone: Option<Tz>,
+}
+
+impl TimeStatusConfig {
+    /// The timezone this configuration actually renders in.
+    ///
+    /// See [`effective_status_timezone`]: the presentation owner and every
+    /// authorization/identity decision read the same value, so "absent means
+    /// UTC" cannot mean one thing at execution and another elsewhere.
+    #[must_use]
+    pub fn effective_timezone(&self) -> Tz {
+        effective_status_timezone(self.timezone)
+    }
+}
+
+/// The **effective** Time presentation timezone of an optional configured
+/// zone.
+///
+/// ```text
+/// effective_status_timezone(None)       = UTC
+/// effective_status_timezone(Some(zone)) = zone
+/// ```
+///
+/// This is the one owner of that rule. `render_instant` and the rendered
+/// `Timezone:` label call it, so a caller that must decide what a
+/// configuration *will do* — extension delegation authorization, the
+/// effective child execution-profile digest — reaches exactly the runtime's
+/// own answer instead of pattern-matching an `Option` and inventing a second
+/// interpretation.
+///
+/// Note that `UTC` and `Etc/UTC` are distinct zones here, because they render
+/// distinct labels: the returned value compares by exact zone identity.
+#[must_use]
+pub const fn effective_status_timezone(timezone: Option<Tz>) -> Tz {
+    match timezone {
+        Some(zone) => zone,
+        None => chrono_tz::UTC,
+    }
 }
 
 impl Default for TimeStatusConfig {
@@ -1383,7 +1425,7 @@ fn todo_fingerprint(presentation: &TodoStatusPresentation) -> String {
 }
 
 fn render_instant(instant: DateTime<Utc>, timezone: Option<Tz>) -> String {
-    let timezone = timezone.unwrap_or(chrono_tz::UTC);
+    let timezone = effective_status_timezone(timezone);
     instant
         .with_timezone(&timezone)
         .format("%Y-%m-%d %H:%M:%S")
@@ -1398,7 +1440,10 @@ fn render_sections(sections: &[AgentStatusSection]) -> String {
                 current_time,
                 timezone,
             } => {
-                lines.push(format!("Timezone: {}", timezone.map_or("UTC", Tz::name)));
+                lines.push(format!(
+                    "Timezone: {}",
+                    effective_status_timezone(*timezone).name()
+                ));
                 lines.push(format!(
                     "Current time: {}",
                     render_instant(*current_time, *timezone)

@@ -396,6 +396,16 @@ impl PreparedRuntimeResources {
         &self.subagents
     }
 
+    /// The candidate generation's compiled Workflow catalog.
+    ///
+    /// A loader validates Workflow-owned static references — including each
+    /// Agent node's trusted invocation override (Issue #258) — against the
+    /// same candidate it is about to publish.
+    #[must_use]
+    pub const fn workflow_catalog(&self) -> &WorkflowCatalog {
+        &self.workflows
+    }
+
     pub(crate) fn into_parts(self) -> (PreparedCapabilityCandidate, PreparedRuntimeResourceData) {
         let Self {
             project_context_files,

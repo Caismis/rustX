@@ -37,6 +37,83 @@ impl std::fmt::Display for ToolSelector {
     }
 }
 
+/// The authored map form of an exact, source-qualified capability selection.
+///
+/// This is the one selection vocabulary shared by every trusted authoring
+/// surface: named-role frontmatter (`tools:`), a Workflow Agent node's
+/// invocation override, and the model-facing `subagent` Tool's `override`.
+/// Origins are named explicitly rather than collapsed into bare strings, so a
+/// Builtin `read` and an MCP server's `read` are never interchangeable.
+/// Wildcards are deliberately absent: a selection is an exact list. Managed
+/// Python tool packages are selected through `mcp` under their synthesized
+/// server identity (`python:<folder>`, Issue #174).
+///
+/// The `python:` namespace is reserved for those synthesized identities:
+/// `mcpServers` configuration may never declare a server under it (rejected
+/// during validation), so a selection naming `python:<folder>` always resolves
+/// to the managed package, never to a configured server.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[derive(schemars::JsonSchema)]
+pub struct ToolSelectionDocument {
+    /// Built-in/native capabilities, by canonical model-facing name.
+    pub builtin: Vec<String>,
+    /// MCP capabilities, keyed by server identity.
+    pub mcp: std::collections::BTreeMap<McpServerId, Vec<String>>,
+}
+
+impl ToolSelectionDocument {
+    /// The typed selectors this document expresses, in authored order.
+    #[must_use]
+    pub fn selectors(&self) -> Vec<ToolSelector> {
+        let mut selectors: Vec<ToolSelector> = self
+            .builtin
+            .iter()
+            .map(|name| ToolSelector::Builtin { name: name.clone() })
+            .collect();
+        for (server_id, names) in &self.mcp {
+            selectors.extend(names.iter().map(|name| ToolSelector::Mcp {
+                server_id: server_id.clone(),
+                name: name.clone(),
+            }));
+        }
+        selectors
+    }
+
+    /// Whether this document selects nothing at all.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.builtin.is_empty() && self.mcp.values().all(Vec::is_empty)
+    }
+
+    /// Rejects a structurally invalid selector before any authority check.
+    ///
+    /// Emptiness is a *spelling* violation, not a missing capability: an
+    /// empty name or server identity can never resolve, so it is refused at
+    /// the authoring boundary rather than reported later as an unknown
+    /// capability.
+    ///
+    /// # Errors
+    ///
+    /// Returns the canonical spelling diagnostic of the first violation.
+    pub fn validate_spelling(&self) -> Result<(), String> {
+        for selector in self.selectors() {
+            let empty = match &selector {
+                ToolSelector::Builtin { name } => name.trim().is_empty(),
+                ToolSelector::Mcp { server_id, name } => {
+                    server_id.as_str().is_empty() || name.trim().is_empty()
+                }
+            };
+            if empty {
+                return Err(
+                    "tools must name nonempty source-qualified capability identities".to_owned(),
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Source health and invalid selection are deliberately distinct failures.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolSelectionError {

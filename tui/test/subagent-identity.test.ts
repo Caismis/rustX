@@ -23,11 +23,11 @@ import {
 } from "./support/fixtures.ts";
 
 describe("subagent identity", () => {
-  it("negotiates v18, which adds caller-neutral approval identity", () => {
-    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 26);
+  it("negotiates the current protocol version", () => {
+    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 27);
   });
 
-  it("carries agent and definition_digest from the snapshot", () => {
+  it("carries both identity digests from the snapshot", () => {
     const state = replaceFromSnapshot(
       {
         ...snapshot(),
@@ -39,7 +39,10 @@ describe("subagent identity", () => {
     const [child] = state.subagents;
     assert.ok(child);
     assert.equal(child.agent, "explore");
+    // Two separate identities (Issue #258): the source definition the child
+    // started with, and the effective execution profile it committed with.
     assert.equal(child.definition_digest, "sha256:d1");
+    assert.equal(child.profile_digest, "sha256:d1-profile");
     assert.equal(
       (child as unknown as Record<string, unknown>).profile,
       undefined,

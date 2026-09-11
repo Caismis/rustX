@@ -67,7 +67,13 @@
 // `settings_lifetimes.extensions` boundary (Issue #256). The runtime projects
 // the composition it already materialized; this client only renders it. There
 // is no v25 decoding and no legacy top-level `agent_status` configuration form.
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 26;
+// Version 27: every projected subagent carries `profile_digest` — the
+// deterministic identity of the *effective* child execution profile — beside
+// the source `definition_digest` it can no longer be derived from once an
+// authorized invocation override may replace a role's tools, Skills, or
+// extensions (Issue #258). It is always present, on live and recovery-projected
+// children alike. There is no v26 decoding and no optional form.
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 27;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -1109,6 +1115,11 @@ export interface RuntimeClientSubagentExecutionProfile {
  * child actually started with. It is not derived from the current catalog:
  * a resource reload that redefines the same `agent` name leaves an
  * already-running child reporting its original digest.
+ *
+ * `profile_digest` is the deterministic identity of the *effective* execution
+ * profile: the same definition can produce differently specialized children
+ * once an authorized invocation override replaces tools, Skills, or
+ * extensions (Issue #258).
  */
 export interface RuntimeClientSubagent {
   subagent_id: SubagentId;
@@ -1116,6 +1127,19 @@ export interface RuntimeClientSubagent {
   child_conversation_id: ConversationId;
   agent: string;
   definition_digest: string;
+  /**
+   * The deterministic identity of the effective execution profile the child
+   * committed with (Issue #258): the named agent's defaults plus whatever an
+   * authorized invocation override replaced. Two children of one agent that
+   * were specialized differently share `definition_digest` and differ here.
+   *
+   * Committed durably with child ownership, so a recovery-projected record
+   * reports exactly the value its child started with rather than omitting it.
+   *
+   * Correlation identity only — never an authority token, and never
+   * accompanied by the effective selections themselves.
+   */
+  profile_digest: string;
   state: SubagentState;
   /**
    * The bounded terminal failure/cancellation diagnostic, once known.

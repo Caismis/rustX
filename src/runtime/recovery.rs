@@ -364,6 +364,14 @@ pub struct SubagentEvidence {
     /// never the definition the current catalog happens to hold for that
     /// name.
     pub definition_digest: String,
+    /// The deterministic **effective execution profile** digest frozen at
+    /// start (Issue #258).
+    ///
+    /// Read from the durable ownership fact for the same reason: an
+    /// authorized invocation override may have specialized this child away
+    /// from the role's defaults, and neither the current role definition nor
+    /// the current resource generation can reproduce that decision.
+    pub profile_digest: String,
     /// The terminal domain frozen at child admission. Recovery must preserve
     /// this boundary: a Workflow child is settled directly and never turned
     /// into a parent inbound notification.
@@ -938,6 +946,7 @@ impl RecoveryEvidence {
                 tool_call_id,
                 agent,
                 definition_digest,
+                profile_digest,
                 ownership,
                 workspace,
             } => {
@@ -953,6 +962,7 @@ impl RecoveryEvidence {
                         tool_call_id: tool_call_id.clone(),
                         agent: agent.clone(),
                         definition_digest: definition_digest.clone(),
+                        profile_digest: profile_digest.clone(),
                         ownership: *ownership,
                         started_at: envelope.timestamp,
                         workspace: workspace.clone(),
@@ -2683,6 +2693,7 @@ mod tests {
                 tool_call_id: ToolCallId::new("call-child"),
                 agent: "worker".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
+                profile_digest: "sha256:profile".to_owned(),
                 ownership: SubagentOwnershipKind::Normal,
                 workspace,
             },
@@ -2839,6 +2850,7 @@ mod tests {
                 tool_call_id: ToolCallId::new("call-child"),
                 agent: "worker".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
+                profile_digest: "sha256:profile".to_owned(),
                 ownership: SubagentOwnershipKind::Normal,
                 workspace: workspace.clone(),
             },
@@ -2914,6 +2926,7 @@ mod tests {
                 tool_call_id: ToolCallId::new("call-child"),
                 agent: "worker".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
+                profile_digest: "sha256:profile".to_owned(),
                 ownership: SubagentOwnershipKind::Workflow,
                 workspace: WorkspaceSnapshot::shared(std::path::PathBuf::from("/tmp/workspace")),
             },

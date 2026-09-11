@@ -152,6 +152,7 @@ fn candidate_definition(agent: bool) -> WorkflowDefinition {
                 task: "Implement the explicitly bound request".into(),
                 input: BTreeMap::new(),
                 output: schema(json!({}), &[]),
+                invocation_override: None,
             },
         );
         definition.block.entry = "implement".into();
@@ -457,7 +458,9 @@ async fn agent_dirty_bytes_reach_exact_tool_context_after_child_settlement_with_
     let resources = context.resources().clone();
     let frozen_skills = resources.skill_catalog().map(str::to_owned);
     let frozen_instructions = resources.project_instructions().map(str::to_owned);
-    let frozen = context.resolve_workflow(&profile("reviewer")).unwrap();
+    let frozen = context
+        .resolve_workflow(&profile("reviewer"), None)
+        .unwrap();
     let runtime = workflow_runtime(&plane);
     let (_, cancellation) = workflow_cancellation();
     let task = tokio::spawn(async move {
@@ -664,6 +667,7 @@ async fn cancellation_agent_failure_and_tool_failure_share_dirty_run_handoff() {
                     task: "write".into(),
                     input: BTreeMap::new(),
                     output: schema(json!({}), &[]),
+                    invocation_override: None,
                 },
             );
             definition.block.entry = "implement".into();
@@ -1131,6 +1135,7 @@ async fn stale_check_after_writer(return_value: bool, parallel_export: bool) {
             task: "write B".into(),
             input: BTreeMap::new(),
             output: schema(json!({}), &[]),
+            invocation_override: None,
         },
     );
     definition.block.edges.retain(|edge| edge.from != "check");
@@ -1279,6 +1284,7 @@ fn agent_review_program(writer: bool, parallel: bool) -> Arc<WorkflowProgram> {
         task: "Review the current candidate".into(),
         input: BTreeMap::new(),
         output: result_schema.clone(),
+        invocation_override: None,
     };
     let mut definition = program_definition();
     definition.workspace = Some(WorkflowWorkspace {
@@ -1355,6 +1361,7 @@ fn agent_review_program(writer: bool, parallel: bool) -> Arc<WorkflowProgram> {
                 task: "Produce B".into(),
                 input: BTreeMap::new(),
                 output: schema(json!({}), &[]),
+                invocation_override: None,
             },
         );
         definition
@@ -1523,6 +1530,7 @@ async fn agent_writer_summary_is_bound_to_post_write_candidate_b_for_next_tool()
             task: "Write B and summarize".into(),
             input: BTreeMap::new(),
             output: schema(json!({"summary":{"type":"string"}}), &["summary"]),
+            invocation_override: None,
         },
     );
     definition.block.edges.push(edge("writer", "check"));
@@ -1794,6 +1802,7 @@ async fn review_dirty_candidate_accept_reject_mutation_and_cancel_gate_exact_dow
                 task: "Implement".into(),
                 input: BTreeMap::new(),
                 output: schema(json!({}), &[]),
+                invocation_override: None,
             },
         );
         definition.block.nodes.insert(

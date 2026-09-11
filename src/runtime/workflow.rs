@@ -363,6 +363,24 @@ pub enum WorkflowNodeDefinition {
         input: BTreeMap<String, WorkflowValue>,
         /// The frozen `AgentRun` output contract.
         output: Value,
+        /// The optional invocation-scoped capability override of this node
+        /// (Issue #258).
+        ///
+        /// This is **trusted static program data**: it is part of the
+        /// compiled Workflow, is validated against the Workflow's own
+        /// admitted generation, and is not reachable from model output, node
+        /// input values, or task text. It may therefore legitimately replace
+        /// the role's defaults with capabilities the invoking main model does
+        /// not itself hold — never with capabilities the generation does not
+        /// authorize.
+        #[serde(
+            rename = "override",
+            default,
+            deserialize_with = "crate::extensions::present_and_not_null",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[schemars(with = "crate::runtime::subagent::SubagentInvocationOverride")]
+        invocation_override: Option<crate::runtime::subagent::SubagentInvocationOverride>,
     },
     /// Deterministic selection from one committed boolean value.
     Branch {
@@ -666,6 +684,11 @@ pub struct WorkflowAgentProgram {
     pub input: BTreeMap<String, WorkflowValue>,
     /// Frozen output contract.
     pub output_schema: Value,
+    /// The compiled trusted static invocation override of this node.
+    ///
+    /// It is fixed at compilation: no expression, interpolation, node input
+    /// value, or model output can replace it at run time.
+    pub invocation_override: Option<crate::runtime::subagent::SubagentInvocationOverride>,
 }
 
 /// Compiled explicit child input projection and private block.
@@ -1227,12 +1250,14 @@ fn compile_block(
                 task,
                 input,
                 output,
+                invocation_override,
             } => {
                 validate_agent(
                     profile,
                     task,
                     input,
                     output,
+                    invocation_override.as_ref(),
                     workflow_profiles,
                     &available_before,
                     &node_id,
@@ -1242,6 +1267,7 @@ fn compile_block(
                     task: task.clone(),
                     input: input.clone(),
                     output_schema: output.clone(),
+                    invocation_override: invocation_override.clone(),
                 };
                 available_after.insert(
                     node_id.clone(),
@@ -1628,15 +1654,29 @@ fn validate_workflow_schema_at(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // one Agent node's complete static contract
 fn validate_agent(
     profile: &SubagentName,
     task: &str,
     input: &BTreeMap<String, WorkflowValue>,
     output: &Value,
+    invocation_override: Option<&crate::runtime::subagent::SubagentInvocationOverride>,
     workflow_profiles: &BTreeSet<SubagentName>,
     available: &SchemaMap,
     node: &str,
 ) -> Result<(), WorkflowCompileError> {
+    if let Some(invocation_override) = invocation_override {
+        // Structural validity is decided at compilation, with the authored
+        // path of the offending dimension. Reference *authority* is a
+        // question about a concrete resource generation and belongs to
+        // resource-generation preparation, not to the compiler.
+        invocation_override.validate_spelling().map_err(|error| {
+            WorkflowCompileError::InvalidField(format!(
+                "Agent {node:?} invocation override is invalid: {error}"
+            ))
+            .at(crate::runtime::subagent::SubagentInvocationOverride::dimension_path(&error))
+        })?;
+    }
     if !workflow_profiles.contains(profile) {
         return Err(WorkflowCompileError::ProfileNotAdmitted {
             node: node.to_owned(),
@@ -2469,12 +2509,12 @@ impl WorkflowRuntime {
         ),
         WorkflowRunError,
     > {
-        let resolved = context.resolve_workflow(&agent.profile).map_err(|error| {
-            WorkflowRunError::ChildStart {
+        let resolved = context
+            .resolve_workflow(&agent.profile, agent.invocation_override.as_ref())
+            .map_err(|error| WorkflowRunError::ChildStart {
                 node: node_id.to_string(),
                 detail: bound_workflow_diagnostic(error.to_string()),
-            }
-        })?;
+            })?;
         if !resolved.model.primary.capabilities.tool_calls {
             return Err(WorkflowRunError::ChildStart {
                 node: node_id.to_string(),
@@ -3057,6 +3097,7 @@ mod tests {
                             task,
                             input: BTreeMap::new(),
                             output,
+                            invocation_override: None,
                         },
                     ),
                     (
@@ -3077,6 +3118,7 @@ mod tests {
             task: "Review the input.".to_owned(),
             input: BTreeMap::from([("task".to_owned(), reference("args.task"))]),
             output,
+            invocation_override: None,
         }
     }
 
@@ -3305,6 +3347,7 @@ mod tests {
             SessionModelConfig::of(model),
             models,
             ApprovalMode::Policy,
+            crate::extensions::NativeAgentExtensions::none(),
         )
     }
 
@@ -4208,6 +4251,7 @@ block:
                         task: "Review the input.".to_owned(),
                         input: BTreeMap::from([("later".to_owned(), reference("later.summary"))]),
                         output: output.clone(),
+                        invocation_override: None,
                     },
                 ),
                 ("done".to_owned(), return_node(BTreeMap::new())),
@@ -4270,6 +4314,7 @@ block:
                         task: "Join the committed facts.".to_owned(),
                         input: BTreeMap::from([("summary".to_owned(), reference("yes.summary"))]),
                         output: schema(json!({"ok": {"type": "boolean"}}), &["ok"]),
+                        invocation_override: None,
                     },
                 ),
                 ("done".to_owned(), return_node(BTreeMap::new())),
@@ -4385,6 +4430,7 @@ block:
                                 reference("args.task.detail"),
                             )]),
                             output: schema(json!({}), &[]),
+                            invocation_override: None,
                         },
                     ),
                     ("done".to_owned(), return_node(BTreeMap::new())),
@@ -4665,6 +4711,7 @@ block:
                         task: "Review ${args.task}.".to_owned(),
                         input: BTreeMap::new(),
                         output: schema(json!({"ok": {"type": "boolean"}}), &["ok"]),
+                        invocation_override: None,
                     },
                 ),
                 ("done".to_owned(), return_node(BTreeMap::new())),

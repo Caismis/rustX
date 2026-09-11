@@ -849,6 +849,20 @@ pub struct RuntimeClientSubagent {
     /// actually started with, so a later resource reload that redefines the
     /// same agent name can never be mistaken for a change to that child.
     pub definition_digest: String,
+    /// The deterministic **effective execution profile** digest frozen at
+    /// child start (Issue #258).
+    ///
+    /// It distinguishes two children of one named agent that an authorized
+    /// invocation override specialized differently — the same
+    /// `definition_digest`, different effective tools, Skills, or extensions.
+    /// It is committed with durable ownership, so it survives a restart
+    /// unchanged and a recovery-projected child reports the same value a live
+    /// one does.
+    ///
+    /// It is a bounded correlation identity and nothing more: no effective
+    /// selection, prompt, Skill body, or materialization detail is projected
+    /// with it, and no authority decision reads it.
+    pub profile_digest: String,
     /// The authoritative lifecycle state.
     pub state: crate::runtime::subagent::SubagentState,
     /// The bounded terminal failure/cancellation diagnostic, once known.

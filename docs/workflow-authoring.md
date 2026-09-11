@@ -39,6 +39,16 @@ The shared pipeline is:
    genuine metadata. Prospective analysis and runtime resource admission share
    this path. Typed dependencies retain known, inert, unavailable and unresolved
    states instead of dropping unavailable-source facts.
+   `WorkflowCatalog::validate_agent_overrides` walks the same generation for
+   every `Agent` node's optional `override`, reusing that selector resolver and
+   the admitted Skill catalog. It keeps the same asymmetry: an unavailable
+   source is tolerated per selector and never ends the walk, so it cannot hide
+   a statically invalid selection listed after it, while an unknown capability,
+   an unknown or model-hidden Skill, and an extension unsupported by one-shot
+   child scope each reject the candidate. Structural child rules — nested
+   `subagent` delegation, child-unsafe lifecycle owners, empty selectors,
+   selection bounds — are compiler-owned and reported with the offending
+   dimension's authored path.
 5. `WorkflowProgram::inspect` projects compiled facts; the local report adds
    resolution provenance and configured source/profile policies.
 
@@ -55,6 +65,11 @@ snapshot or publication handle. There is no alternative parser/compiler/executor
 
 Compiler context preserves nested paths such as
 `block.nodes.check_text.branches.clarity.block.nodes.assess_clarity.input.text`.
+An `Agent` node's invocation override keeps the same precision: a structural
+violation reports `override.tools` or `override.skills`, and a reference the
+generation does not authorize reports the node's full nested path plus
+`.override`, for example
+`block.nodes.fan.branches.only.block.nodes.work.override`.
 Loop bodies use `.body`; schema recursion uses `.properties.<name>` and `.items`.
 Edges retain their zero-based authored index: dangling sources/destinations use
 `.edges.<index>.from` / `.to`, and invalid or duplicate ports use `.port`.
