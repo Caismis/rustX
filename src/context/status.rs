@@ -39,10 +39,14 @@ use crate::message::types::{
 use crate::runtime::identity::MessageId;
 use crate::tools::background::{BackgroundExecutionSnapshot, ConversationBackgroundRegistry};
 use crate::tools::execution::ExecutionKind;
-use crate::tools::todo::{
-    ConversationTodoList, TodoStatus, TodoStatusPresentation, TodoStatusTask,
-};
+use crate::tools::todo::{TodoStatus, TodoStatusPresentation, TodoStatusTask};
 
+// Agent Status is a *consumer* of the Todo extension, never an owner of it
+// (Issue #259). Production code in this module names no Todo state owner at
+// all — no list, no snapshot authority, no writer, no canonical history — and
+// sees nothing but the bounded immutable presentation value. The module's own
+// test suite imports the owner separately, to build the presentations it
+// feeds in.
 #[cfg(test)]
 use crate::tools::todo::{MAX_TODO_STATUS_TASKS, MAX_TODO_STATUS_TEXT_BYTES};
 use crate::tools::types::ToolProgress;
@@ -1053,21 +1057,36 @@ impl AgentStatusEngine {
     /// Captures, evaluates, validates, and bounds one Agent Status generation.
     /// The engine's module array is traversed exactly in source order: Time,
     /// Background, then Todo. The caller supplies the one immutable Pre-Status
-    /// Surface view and the conversation's Todo extension owner, when that
-    /// extension is composed. Every module sees one finite opportunity set,
-    /// even when both members are present.
+    /// Surface view and — when this composition includes the Todo extension —
+    /// the bounded Todo presentation the Todo owner already derived. Every
+    /// module sees one finite opportunity set, even when both members are
+    /// present.
     ///
-    /// `todos` is `None` for a composition without the Todo extension. The
+    /// The strongest Todo value this engine can receive is
+    /// [`TodoStatusPresentation`]: a finite, immutable, Todo-owned view
+    /// carrying its own fingerprint. Agent Status has no access to
+    /// `ConversationTodoList`, `TodoSnapshot` authority, `TodoWriter`, or
+    /// canonical Todo history, so it cannot read, derive, or influence Todo
+    /// state — it decides only *whether and how often* to present what Todo
+    /// already decided (Issue #259).
+    ///
+    /// ```text
+    /// ConversationTodoList::committed()      the Todo owner, at the runtime
+    ///   -> TodoSnapshot::status_presentation()   capture boundary
+    ///     -> Option<TodoStatusPresentation>  -> THIS engine
+    /// ```
+    ///
+    /// `todo` is `None` for a composition without the Todo extension. The
     /// Todo module then contributes nothing, and Time and Background are
     /// unaffected — Agent Status never reconstructs a Todo fact from anything
-    /// else (Issue #259).
+    /// else.
     #[must_use]
     pub(crate) fn prepare_with_inputs(
         &mut self,
         opportunities: &AgentStatusOpportunitySet,
         surface: &AgentStatusSurfaceView,
         background: &ConversationBackgroundRegistry,
-        todos: Option<&ConversationTodoList>,
+        todo: Option<TodoStatusPresentation>,
         emission_lookup: &dyn AgentStatusEmissionLookup,
     ) -> Option<PreparedAgentStatus> {
         if opportunities.is_empty() {
@@ -1077,10 +1096,8 @@ impl AgentStatusEngine {
             now: self.clock.now(),
             surface,
             active_background: Arc::from(background.active_snapshot().into_boxed_slice()),
-            // The Todo owner derives its own bounded view from its own
-            // committed authority. Agent Status reads the result; it never
-            // reaches the list, the staged state, or canonical history.
-            todo: todos.map(|todos| todos.committed().status_presentation()),
+            // Already derived, by the Todo owner, before reaching here.
+            todo,
             emission_lookup,
         };
         #[cfg(test)]
@@ -1128,11 +1145,13 @@ impl AgentStatusEngine {
         surface: &AgentStatusSurfaceView,
         background: &ConversationBackgroundRegistry,
     ) -> Option<AgentStatus> {
-        let todos = ConversationTodoList::new(crate::runtime::identity::ConversationId::new(
-            "agent-status-test",
-        ));
         let lookup = EmptyEmissionLookup;
-        self.prepare_with_inputs(opportunities, surface, background, Some(&todos), &lookup)
+        // The pre-Todo module suite composes no Todo presentation at all,
+        // which is exactly what an empty list used to yield here: an empty
+        // presentation is not actionable, so the Todo module contributed
+        // nothing either way. Spelling it `None` keeps the concrete Todo
+        // owner out of production Agent Status entirely (Issue #259).
+        self.prepare_with_inputs(opportunities, surface, background, None, &lookup)
             .map(|prepared| prepared.status)
     }
 
@@ -1660,7 +1679,9 @@ mod tests {
     };
     use crate::runtime::identity::{RequestId, ToolCallId, ToolExecutionId, ToolId};
     use crate::tools::background::BackgroundLifecycle;
-    use crate::tools::todo::{TODO_TOOL_ID, TodoCreate, TodoWriter};
+    use crate::tools::todo::{
+        ConversationTodoList, TODO_TOOL_ID, TodoCreate, TodoSnapshot, TodoWriter,
+    };
     use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus, ToolResultContent};
 
     fn opportunity() -> AgentStatusOpportunitySet {
@@ -1669,6 +1690,63 @@ mod tests {
                 target_message_id: MessageId::new("inbound"),
             }),
             post_tool_batch: None,
+        }
+    }
+
+    /// Issue #259 blocker 2: the strongest Todo value Agent Status can
+    /// receive is the bounded immutable presentation.
+    ///
+    /// The proof is the *type*, not a behaviour. Binding the engine's one
+    /// production entry point to an explicit function-pointer signature makes
+    /// the Todo parameter a compile-time obligation: widening it back to
+    /// `&ConversationTodoList`, `&TodoSnapshot`, `&TodoWriter`, or anything
+    /// else carrying list authority stops compiling here, so the ownership
+    /// boundary cannot regress silently.
+    ///
+    /// A presentation carries no authority at all: it is an owned value with
+    /// no handle back to the list, no writer, no batch, no canonical history,
+    /// and its fingerprint is computed by the Todo owner rather than by any
+    /// consumer. Agent Status is therefore left with exactly its own
+    /// question — whether and how often to show it.
+    #[test]
+    fn ext259_agent_status_receives_only_the_bounded_todo_presentation() {
+        // The explicit signature is the whole point of the binding, so the
+        // complexity lint does not apply: factoring it into an alias would
+        // hide the obligation this test exists to state.
+        #[allow(clippy::type_complexity)]
+        let production_entry_point: fn(
+            &mut AgentStatusEngine,
+            &AgentStatusOpportunitySet,
+            &AgentStatusSurfaceView,
+            &ConversationBackgroundRegistry,
+            Option<TodoStatusPresentation>,
+            &dyn AgentStatusEmissionLookup,
+        ) -> Option<PreparedAgentStatus> = AgentStatusEngine::prepare_with_inputs;
+        let _ = production_entry_point;
+
+        // And production Agent Status source never names the Todo state
+        // owner outside this test suite. The concrete list, its snapshot
+        // authority, and its writer are all reachable only from the
+        // `#[cfg(test)]` import below, so no production path in this module
+        // can read or derive Todo state (Issue #259).
+        let source = include_str!("status.rs");
+        let (production, suite) = source
+            .split_once("\nmod tests {")
+            .expect("this module has a test suite");
+        assert!(
+            !suite.is_empty(),
+            "the split must keep the suite, or the scan below proves nothing"
+        );
+        for owner in ["ConversationTodoList", "TodoWriter", "TodoSnapshot"] {
+            for (number, line) in production.lines().enumerate() {
+                // Prose may name the owner; code may not.
+                let code = line.split("//").next().unwrap_or(line);
+                assert!(
+                    !code.contains(owner),
+                    "production Agent Status names the Todo owner {owner} at line {}: {line}",
+                    number + 1
+                );
+            }
         }
     }
 
@@ -1773,7 +1851,7 @@ mod tests {
         }
     }
 
-    fn todo_result(snapshot: &crate::tools::todo::TodoSnapshot) -> MessageBlock {
+    fn todo_result(snapshot: &TodoSnapshot) -> MessageBlock {
         MessageBlock::Tool(ToolMessageBlock {
             id: MessageId::new("todo-status-result"),
             tool_call_id: ToolCallId::new("todo-status-call"),
@@ -2007,7 +2085,7 @@ mod tests {
                 &combined_opportunity(),
                 &empty_surface(),
                 &registry,
-                Some(&todos),
+                Some(todos.committed().status_presentation()),
                 &FixedEmissionLookup {
                     fingerprint: None,
                     todo_progress: 0,
@@ -2859,7 +2937,7 @@ mod tests {
                     &opportunities,
                     &surface,
                     &registry,
-                    Some(&todos),
+                    Some(todos.committed().status_presentation()),
                     &FixedEmissionLookup {
                         fingerprint: None,
                         todo_progress: 0,
@@ -2902,7 +2980,7 @@ mod tests {
                     &post_tool_opportunity(),
                     &empty_surface(),
                     &registry,
-                    Some(&list),
+                    Some(list.committed().status_presentation()),
                     &lookup,
                 )
                 .is_none()
@@ -2918,7 +2996,7 @@ mod tests {
                 &post_tool_opportunity(),
                 &empty_surface(),
                 &registry,
-                Some(&list),
+                Some(list.committed().status_presentation()),
                 &lookup,
             )
             .expect("committed Todo work is visible");
@@ -2963,7 +3041,7 @@ mod tests {
                         &post_tool_opportunity(),
                         &empty_surface(),
                         &registry,
-                        Some(&todos),
+                        Some(todos.committed().status_presentation()),
                         &lookup,
                     )
                     .is_none()
@@ -2987,7 +3065,7 @@ mod tests {
                 &post_tool_opportunity(),
                 &empty_surface(),
                 &registry,
-                Some(&todos),
+                Some(todos.committed().status_presentation()),
                 &FixedEmissionLookup {
                     fingerprint: None,
                     todo_progress: 0,
@@ -3008,7 +3086,7 @@ mod tests {
                     &post_tool_opportunity(),
                     &empty_surface(),
                     &registry,
-                    Some(&todos),
+                    Some(todos.committed().status_presentation()),
                     &lookup,
                 )
                 .is_none(),
@@ -3026,7 +3104,7 @@ mod tests {
                     &post_tool_opportunity(),
                     &empty_surface(),
                     &registry,
-                    Some(&todos),
+                    Some(todos.committed().status_presentation()),
                     &before_threshold,
                 )
                 .is_none(),
@@ -3043,7 +3121,7 @@ mod tests {
                 &post_tool_opportunity(),
                 &empty_surface(),
                 &registry,
-                Some(&todos),
+                Some(todos.committed().status_presentation()),
                 &at_threshold,
             )
             .expect("the identical fingerprint is eligible at the inclusive threshold");
@@ -3059,7 +3137,7 @@ mod tests {
                 &post_tool_opportunity(),
                 &empty_surface(),
                 &registry,
-                Some(&todos),
+                Some(todos.committed().status_presentation()),
                 &changed,
             )
             .expect("a changed fingerprint bypasses the cooldown");
@@ -3090,7 +3168,7 @@ mod tests {
                 &post_tool_opportunity(),
                 &empty_surface(),
                 &registry,
-                Some(&todos),
+                Some(todos.committed().status_presentation()),
                 &first_lookup,
             )
             .expect("bounded Todo status");
@@ -3125,7 +3203,7 @@ mod tests {
                     &post_tool_opportunity(),
                     &empty_surface(),
                     &registry,
-                    Some(&todos),
+                    Some(todos.committed().status_presentation()),
                     &duplicate_lookup,
                 )
                 .is_none()
@@ -3145,7 +3223,7 @@ mod tests {
                 &post_tool_opportunity(),
                 &empty_surface(),
                 &registry,
-                Some(&changed_todos),
+                Some(changed_todos.committed().status_presentation()),
                 &duplicate_lookup,
             )
             .expect("changed Todo state is eligible");

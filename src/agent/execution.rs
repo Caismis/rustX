@@ -2659,7 +2659,11 @@ impl<'a> AgentExecution<'a> {
                 &opportunities,
                 &surface,
                 self.tool_runtime.background(),
-                self.tool_runtime.todos(),
+                // The Todo owner's own bounded derivation, captured here —
+                // outside the Agent Status engine — so the engine receives a
+                // finite immutable presentation rather than the list
+                // authority (Issue #259).
+                self.tool_runtime.todo_status_presentation(),
                 &emission_lookup,
             )
             .map(|prepared| AgentStatusGeneration {
@@ -7346,7 +7350,7 @@ mod tests {
                 conversation_id: tool_runtime.conversation_id().clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: tools,
-                extensions: crate::extensions::NativeAgentExtensions::none(),
+                extension_tools: tool_runtime.extension_tool_plane(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
