@@ -351,6 +351,40 @@ pub enum ConversationRuntimeError {
         /// The tool runtime conversation owner.
         runtime_conversation: ConversationId,
     },
+    /// The materialized native Agent Extension facets of this composition do
+    /// not all follow from **one** frozen composition (Issue #259).
+    ///
+    /// A conversation's Todo state owner, its extension Tool plane, its
+    /// Agent Status engine, and the composition the Runtime Client projects
+    /// are four facets of a single decision, and this runtime is where they
+    /// are transferred into one owner. Construction therefore proves they
+    /// agree instead of trusting the caller to have passed matching values:
+    /// a runtime that offered the model `todo` while owning no
+    /// `ConversationTodoList` would fail every call for a purely
+    /// architectural reason, and one owning a list it never offers a Tool for
+    /// would publish a task list nothing can change.
+    ///
+    /// Reaching this error takes deliberate effort — the plane can only be
+    /// derived from a materialized tool runtime, so the realistic way to
+    /// produce it is pairing a coordinator with a *different* conversation's
+    /// materialization — and it fails closed rather than running a
+    /// composition that cannot be described coherently.
+    ExtensionCompositionMismatch {
+        /// The conversation whose facets disagree.
+        conversation_id: ConversationId,
+        /// Whether the frozen composition of the attached conversation
+        /// composes the Todo extension.
+        composed_todo: bool,
+        /// Whether the conversation tool runtime materialized a Todo state
+        /// owner.
+        materialized_todo_state: bool,
+        /// Whether the capability coordinator's extension Tool plane
+        /// publishes the `todo` Tool.
+        published_todo_tool: bool,
+        /// Whether the composition's Agent Status engine materialization
+        /// matches the frozen composition.
+        agent_status_agrees: bool,
+    },
     /// The context engine configuration is impossible.
     Context(String),
     /// The runtime-owned model request deadline policy is invalid.
@@ -444,6 +478,18 @@ impl core::fmt::Display for ConversationRuntimeError {
             } => write!(
                 f,
                 "capability owner {capability_conversation} does not match tool runtime owner {runtime_conversation}"
+            ),
+            Self::ExtensionCompositionMismatch {
+                conversation_id,
+                composed_todo,
+                materialized_todo_state,
+                published_todo_tool,
+                agent_status_agrees,
+            } => write!(
+                f,
+                "the native Agent Extension facets of conversation {conversation_id} do not follow from one frozen composition: \
+                 composed todo={composed_todo}, materialized todo state={materialized_todo_state}, \
+                 published todo Tool={published_todo_tool}, agent status agrees={agent_status_agrees}"
             ),
             Self::Context(message) => write!(f, "context configuration failed: {message}"),
             Self::InvalidModelTimeoutPolicy => write!(
@@ -2172,10 +2218,7 @@ impl RuntimeInner {
                         // only: a child never inherits it, and it reaches a
                         // frozen child specification only through an explicit
                         // authorized invocation override.
-                        crate::extensions::NativeAgentExtensions::from_materialized(
-                            self.context.status_engine.as_ref(),
-                            self.tool_runtime.todos(),
-                        ),
+                        self.tool_runtime.extensions().clone(),
                     )
                 }),
             workflow_output: self.workflow_output.clone(),
@@ -3032,6 +3075,44 @@ impl ConversationRuntime {
                 runtime_conversation: conversation_id,
             });
         }
+        // The one native Agent Extension composition invariant (Issue #259).
+        //
+        // This runtime is the ownership-transfer boundary at which the four
+        // facets of one frozen composition come together, so it is where
+        // their coherence is *proved* rather than assumed:
+        //
+        // ```text
+        // NativeAgentExtensions              the conversation tool runtime's
+        //                                    stored frozen composition
+        //   |-- Todo state owner             tool_runtime.todos()
+        //   |-- extension Tool plane         capability.extension_tool_plane_shape()
+        //   |-- Agent Status engine          context.status_engine
+        //   `-- Runtime Client projection    native_extensions(), which reads
+        //                                    the stored composition directly
+        // ```
+        //
+        // The first facet cannot disagree — the tool runtime materializes its
+        // list *from* the stored composition — and the plane can only be
+        // derived from a materialized tool runtime, so the check is not the
+        // primary defence. It is the boundary that catches the one remaining
+        // way to construct an incoherent runtime: pairing a coordinator, or a
+        // status engine, built for one composition with a conversation frozen
+        // on another.
+        let composition = config.tool_runtime.extensions();
+        let materialized = crate::extensions::NativeAgentExtensions::from_materialized(
+            config.context.status_engine.as_ref(),
+            config.tool_runtime.todos(),
+        );
+        let plane = config.capability.extension_tool_plane_shape();
+        if &materialized != composition || plane != composition.expected_tool_plane() {
+            return Err(ConversationRuntimeError::ExtensionCompositionMismatch {
+                conversation_id,
+                composed_todo: composition.todo().is_some(),
+                materialized_todo_state: config.tool_runtime.todos().is_some(),
+                published_todo_tool: plane.todo,
+                agent_status_agrees: materialized.agent_status() == composition.agent_status(),
+            });
+        }
         // The subagent registry is a conversation-owned logical plane: the
         // runtime must not adopt a registry that belongs to another
         // conversation/agent domain or another canonical mailbox. The typed
@@ -3470,13 +3551,15 @@ impl ConversationRuntime {
     /// against (Issue #256).
     ///
     /// This is the **one** source of the Runtime Client effective-extension
-    /// projection, for a root runtime and for a Subagent child alike. It is
-    /// read straight back off the extension owners this composition
-    /// materialized — see
-    /// [`NativeAgentExtensions::from_materialized`](crate::extensions::NativeAgentExtensions::from_materialized)
-    /// — so it cannot disagree
-    /// with what the runtime actually runs, and there is no path from here to
-    /// a configuration document, a `ProspectiveLaunch`, a
+    /// projection, for a root runtime and for a Subagent child alike. It
+    /// returns the single frozen composition the conversation tool runtime
+    /// stored when it materialized this composition's extension owners —
+    /// the same value the capability coordinator's extension Tool plane and
+    /// the Agent Status engine were proved against at construction (see
+    /// [`ConversationRuntimeError::ExtensionCompositionMismatch`]). So the
+    /// projection cannot disagree with the Tool Plane, or with the Todo state
+    /// the runtime actually owns, and there is no path from here to a
+    /// configuration document, a `ProspectiveLaunch`, a
     /// `RuntimeResourceSnapshot`, an Agent Status observation, or the Event
     /// Journal.
     ///
@@ -3486,10 +3569,7 @@ impl ConversationRuntime {
     /// produce a different one.
     #[must_use]
     pub fn native_extensions(&self) -> crate::extensions::NativeAgentExtensions {
-        crate::extensions::NativeAgentExtensions::from_materialized(
-            self.inner.context.status_engine.as_ref(),
-            self.inner.tool_runtime.todos(),
-        )
+        self.inner.tool_runtime.extensions().clone()
     }
 
     /// The one capability coordinator of this runtime.
@@ -6355,7 +6435,7 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(base_tool_registry.unwrap_or_default()),
-                extensions: crate::extensions::NativeAgentExtensions::none(),
+                extension_tools: tool_runtime.extension_tool_plane(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: options.skill_discovery,
                 mcp_servers: options.mcp_servers.clone(),
@@ -6483,7 +6563,7 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
-                extensions: crate::extensions::NativeAgentExtensions::none(),
+                extension_tools: tool_runtime.extension_tool_plane(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
@@ -6561,7 +6641,7 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
-                extensions: crate::extensions::NativeAgentExtensions::none(),
+                extension_tools: tool_runtime.extension_tool_plane(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
@@ -6678,7 +6758,7 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
-                extensions: crate::extensions::NativeAgentExtensions::none(),
+                extension_tools: tool_runtime.extension_tool_plane(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
@@ -10448,7 +10528,7 @@ mod tests {
                 conversation_id: other_runtime.conversation_id().clone(),
                 workspace: other_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
-                extensions: crate::extensions::NativeAgentExtensions::none(),
+                extension_tools: other_runtime.extension_tool_plane(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
@@ -10513,7 +10593,7 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
-                extensions: crate::extensions::NativeAgentExtensions::none(),
+                extension_tools: tool_runtime.extension_tool_plane(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
@@ -14289,7 +14369,7 @@ mod tests {
                 conversation_id,
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(registry),
-                extensions: crate::extensions::NativeAgentExtensions::none(),
+                extension_tools: tool_runtime.extension_tool_plane(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
@@ -15083,7 +15163,7 @@ mod tests {
                 conversation_id,
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(registry),
-                extensions: crate::extensions::NativeAgentExtensions::none(),
+                extension_tools: tool_runtime.extension_tool_plane(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
@@ -16769,7 +16849,7 @@ mod tests {
                 conversation_id,
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(ToolRegistry::new()),
-                extensions: crate::extensions::NativeAgentExtensions::none(),
+                extension_tools: tool_runtime.extension_tool_plane(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
@@ -16878,7 +16958,7 @@ mod tests {
                 conversation_id,
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(ToolRegistry::new()),
-                extensions: crate::extensions::NativeAgentExtensions::none(),
+                extension_tools: tool_runtime.extension_tool_plane(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
@@ -16962,7 +17042,7 @@ mod tests {
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
-                extensions: crate::extensions::NativeAgentExtensions::none(),
+                extension_tools: tool_runtime.extension_tool_plane(),
                 tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),

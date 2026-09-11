@@ -1087,7 +1087,12 @@ impl LocalConversationCore {
             &paths.workspace,
             artifacts_root.clone(),
         )
-        .with_todo(extensions.todo().copied());
+        // The one frozen composition, handed to its materialization owner.
+        // Everything Todo downstream — the Tool plane the coordinator
+        // composes, the presentation Agent Status consumes, the Runtime
+        // Client projection — is derived from what this materializes, never
+        // configured a second time.
+        .with_extensions(extensions.clone());
         let conversation_access = Arc::new(
             crate::runtime::local_storage::ConversationAccess::start(lifecycle, &artifacts_root)
                 .map_err(|e| LocalRuntimeError::ToolRuntime {
@@ -1230,11 +1235,11 @@ impl LocalConversationCore {
             conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: Arc::new(base_registry),
-            // The same frozen composition the tool runtime and the Agent
-            // Loop materialize. The coordinator uses it only to compose the
-            // extension-provided Tool surfaces, once, outside its reloadable
-            // inputs (Issue #259).
-            extensions: extensions.clone(),
+            // The extension Tool surfaces the tool runtime above actually
+            // materialized. The coordinator composes them once, outside its
+            // reloadable inputs (Issue #259); it is handed no second
+            // composition decision of its own.
+            extension_tools: tool_runtime.extension_tool_plane(),
             tool_activation: ToolActivationPolicy {
                 default_tools: Some(default_tools),
                 no_builtin_tools: paths.no_builtin_tools,
@@ -1476,13 +1481,13 @@ impl LocalConversationCore {
             &spec.workspace_snapshot.logical_workspace,
             runtime_root.join("artifacts"),
         )
-        // The child's Todo extension owner, composed from exactly the
-        // extension set its invoking generation froze into
-        // `ResolvedSubagentSpec` (Issue #259). The list is rebuilt from this
-        // *child conversation's* own canonical history — empty at birth —
-        // which is why a child's list can never alias its parent's, or a
-        // concurrent sibling's, and why no child list merges upward.
-        .with_todo(spec.resolved.extensions.todo().copied());
+        // The child's frozen composition, handed to its materialization
+        // owner, from exactly the extension set its invoking generation froze
+        // into `ResolvedSubagentSpec` (Issue #259). The Todo list is rebuilt
+        // from this *child conversation's* own canonical history — empty at
+        // birth — which is why a child's list can never alias its parent's,
+        // or a concurrent sibling's, and why no child list merges upward.
+        .with_extensions(spec.resolved.extensions.clone());
         let durable_store_path = lifecycle
             .confined(&child_conversation_store_path(
                 lifecycle.root(),
@@ -1539,10 +1544,11 @@ impl LocalConversationCore {
             conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: Arc::new(base_registry),
-            // The frozen child composition again, for its Tool half. The
-            // child never rereads a role file or a configuration document to
-            // reinterpret which extensions it owns.
-            extensions: spec.resolved.extensions.clone(),
+            // The child's extension Tool surfaces, derived from the owners
+            // its own tool runtime materialized above. The child never
+            // rereads a role file or a configuration document to reinterpret
+            // which extensions it owns.
+            extension_tools: tool_runtime.extension_tool_plane(),
             tool_activation: ToolActivationPolicy::default(),
             skill_discovery: SkillDiscoveryConfig::default(),
             mcp_servers,
@@ -2757,7 +2763,7 @@ mod subagent_child_tests {
                 parent_dir.path().join("workspace"),
                 parent_dir.path().join("artifacts"),
             )
-            .with_todo(Some(crate::extensions::TodoExtensionConfig {})),
+            .with_extensions(crate::extensions::NativeAgentExtensions::with_todo()),
         )
         .expect("the parent tool runtime composes Todo");
 

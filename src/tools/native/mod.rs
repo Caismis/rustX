@@ -18,7 +18,7 @@
 //! The `todo` Tool is **not** an ordinary native capability and is
 //! deliberately absent from every composition below. It is contributed by the
 //! Todo Native Agent Extension
-//! ([`NativeAgentExtensions::tool_registrations`](crate::extensions::NativeAgentExtensions::tool_registrations)),
+//! ([`ExtensionToolPlane`](crate::extensions::ExtensionToolPlane)),
 //! which is why it cannot be named in `defaultTools`, `--tools`,
 //! `--exclude-tools`, a role's `tools.builtin`, or a Workflow capability
 //! selection — and why `--no-tools` does not remove it. Its module lives here
@@ -390,7 +390,7 @@ fn subagent_child_registration(
 ///
 /// This is the *only* construction site of the `todo` Tool in the runtime,
 /// and its one caller is
-/// [`NativeAgentExtensions::tool_registrations`](crate::extensions::NativeAgentExtensions::tool_registrations).
+/// [`ExtensionToolPlane`](crate::extensions::ExtensionToolPlane).
 /// Ordinary native composition, subagent child materialization, and every
 /// selection surface deliberately cannot reach it.
 pub(crate) fn todo_tool_registration() -> crate::tools::executor::ToolRegistration {
@@ -709,17 +709,20 @@ mod tests {
         );
         assert_eq!(registry.len(), 0);
 
-        // And the extension plane does register it, from the composition
-        // alone — the one seam that can.
+        // And the extension plane does register it — from a *materialized*
+        // Todo state owner, which is the one seam that can (Issue #259).
+        let list = crate::tools::todo::ConversationTodoList::new(
+            crate::runtime::identity::ConversationId::new("conv-todo-plane"),
+        );
         let mut composed = ToolRegistry::new();
-        crate::extensions::NativeAgentExtensions::with_todo()
-            .register_tools(&mut composed)
-            .expect("the composed extension registers its Tool");
+        crate::extensions::ExtensionToolPlane::of_materialized_owners(Some(&list))
+            .register_into(&mut composed)
+            .expect("the materialized extension registers its Tool");
         assert_eq!(composed.names(), vec![super::TODO_TOOL_NAME]);
         let mut absent = ToolRegistry::new();
-        crate::extensions::NativeAgentExtensions::none()
-            .register_tools(&mut absent)
-            .expect("an absent extension registers nothing");
+        crate::extensions::ExtensionToolPlane::of_materialized_owners(None)
+            .register_into(&mut absent)
+            .expect("an unmaterialized extension registers nothing");
         assert_eq!(absent.len(), 0);
     }
 }

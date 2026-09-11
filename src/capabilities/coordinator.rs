@@ -42,8 +42,15 @@ pub struct CapabilityCoordinatorConfig {
     pub workspace: Workspace,
     /// The deterministic native/runtime registry used as the composition base.
     pub base_tool_registry: Arc<ToolRegistry>,
-    /// The frozen Native Agent Extension composition of the Agent this
-    /// coordinator serves (Issue #259).
+    /// The materialized extension-provided Tool surfaces of the conversation
+    /// this coordinator serves (Issue #259).
+    ///
+    /// It is **not** a second composition input. The only way to obtain an
+    /// [`ExtensionToolPlane`] is
+    /// [`ConversationToolRuntime::extension_tool_plane`], which derives it
+    /// from the extension owners that conversation tool runtime actually
+    /// materialized — so a coordinator cannot be told to publish `todo`
+    /// unless a `ConversationTodoList` exists to serve it.
     ///
     /// It is taken **once**, here, and stored outside
     /// [`CapabilityResourceInputs`] on purpose: resource inputs are what a
@@ -52,7 +59,10 @@ pub struct CapabilityCoordinatorConfig {
     /// value out of the reloadable half makes that structural rather than
     /// conventional — there is no code path from a republished
     /// `RuntimeResourceSnapshot` to this field.
-    pub extensions: crate::extensions::NativeAgentExtensions,
+    ///
+    /// [`ExtensionToolPlane`]: crate::extensions::ExtensionToolPlane
+    /// [`ConversationToolRuntime::extension_tool_plane`]: crate::tools::runtime::ConversationToolRuntime::extension_tool_plane
+    pub extension_tools: crate::extensions::ExtensionToolPlane,
     /// Current startup availability/activation policy. It is not durable
     /// Session state and is re-applied for every process composition.
     pub tool_activation: ToolActivationPolicy,
@@ -162,7 +172,7 @@ struct CoordinatorInner {
     /// Tool-providing extension. Every candidate — full preparation,
     /// base-only, and selected-only — composes exactly this set on top of its
     /// own ordinary selection.
-    extension_tools: Vec<ToolRegistration>,
+    extension_tools: crate::extensions::ExtensionToolPlane,
     environment_store: EnvironmentStore,
     state: Mutex<CoordinatorState>,
     condvar: Condvar,
@@ -460,6 +470,17 @@ impl PreparedCapabilityCandidate {
 }
 
 impl CapabilityCoordinator {
+    /// The composition-identifying shape of the extension Tool plane this
+    /// coordinator serves (Issue #259).
+    ///
+    /// Read only by the `ConversationRuntime` ownership-transfer boundary,
+    /// which proves it equals the shape the attached conversation's frozen
+    /// composition requires.
+    #[must_use]
+    pub(crate) fn extension_tool_plane_shape(&self) -> crate::extensions::ExtensionToolPlaneShape {
+        self.inner.extension_tools.shape()
+    }
+
     /// Creates the coordinator with an initial empty capability set at
     /// revision zero.
     ///
@@ -544,7 +565,7 @@ impl CapabilityCoordinator {
             })
             .collect();
         let tool_activation = config.tool_activation;
-        let extension_tools = config.extensions.tool_registrations();
+        let extension_tools = config.extension_tools;
         let skill_discovery = config.skill_discovery;
         // Only the Python store *location* is computed here; the store
         // itself is opened inside the optional managed-package preparation
@@ -973,7 +994,7 @@ impl CapabilityCoordinator {
         );
         let (available_tools, candidate_registry) = select_tools(
             &discovered_tools,
-            &self.inner.extension_tools,
+            self.inner.extension_tools.registrations(),
             &inputs.tool_activation,
         )
         .map_err(CapabilityPreparationError::ToolActivation)?;
@@ -1246,7 +1267,7 @@ impl CapabilityCoordinator {
         let base_registrations = inputs.base_tool_registry.registrations();
         let (available_tools, candidate_registry) = select_tools(
             &base_registrations,
-            &self.inner.extension_tools,
+            self.inner.extension_tools.registrations(),
             &inputs.tool_activation,
         )
         .map_err(CapabilityPreparationError::ToolActivation)?;
@@ -1407,7 +1428,7 @@ impl CapabilityCoordinator {
         // ordinary selection, and never from a document it reads itself.
         let (available_tools, candidate_registry) = match select_tools(
             &registrations,
-            &self.inner.extension_tools,
+            self.inner.extension_tools.registrations(),
             &ToolActivationPolicy::default(),
         ) {
             Ok(selected) => selected,
@@ -2500,7 +2521,7 @@ body
             conversation_id: crate::runtime::identity::ConversationId::new("conv-test"),
             workspace: workspace.clone(),
             base_tool_registry: Arc::new(ToolRegistry::new()),
-            extensions: crate::extensions::NativeAgentExtensions::none(),
+            extension_tools: crate::extensions::ExtensionToolPlane::none(),
             tool_activation: crate::capabilities::ToolActivationPolicy::default(),
             // Keep this unit fixture independent of the developer's HOME:
             // the relocation proof owns both current roots explicitly.
@@ -2761,7 +2782,7 @@ body
             conversation_id: crate::runtime::identity::ConversationId::new("conv-lazy-store"),
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(ToolRegistry::new()),
-            extensions: crate::extensions::NativeAgentExtensions::none(),
+            extension_tools: crate::extensions::ExtensionToolPlane::none(),
             tool_activation: crate::capabilities::ToolActivationPolicy::default(),
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
@@ -3134,7 +3155,7 @@ mod mcp_race_tests {
             conversation_id: ConversationId::new("mcp-race"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
-            extensions: crate::extensions::NativeAgentExtensions::none(),
+            extension_tools: crate::extensions::ExtensionToolPlane::none(),
             tool_activation: crate::capabilities::ToolActivationPolicy::default(),
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::from([(
@@ -3213,7 +3234,7 @@ mod mcp_race_tests {
             conversation_id: ConversationId::new("mcp-drain"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
-            extensions: crate::extensions::NativeAgentExtensions::none(),
+            extension_tools: crate::extensions::ExtensionToolPlane::none(),
             tool_activation: crate::capabilities::ToolActivationPolicy::default(),
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
             mcp_servers,
