@@ -1,5 +1,14 @@
 # Architecture
 
+Goal joins the existing Runtime Client projection contract: the inactive bootstrap
+cut seeds its bounded view, and native authoritative observations update that copy
+and publish `goal_changed` through the single cursor/replay owner. Journal Written
+and RoundAdmitted facts commit atomically with Goal state and ordinary round
+acceptance; ActivationChanged observes the won process-local transition. Journal
+facts never reconstruct Goal state or activation. See the [integration and drain
+contracts](goal-extension.md#execution-facts-and-drain-ownership).
+
+
 Goal is the third closed Native Agent Extension. `GoalDomain` is the sole durable
 revisioned state authority; its commands and context are adapters. The synchronous
 `GoalRoundDriver` participates in the existing coordinator worker and submits

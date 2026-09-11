@@ -219,6 +219,85 @@ pub(crate) fn transition(current: Option<&GoalSnapshot>, write: GoalWrite) -> Go
     }
 }
 
+/// Bounded audit vocabulary; no objective/history and no recovery authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum GoalFact {
+    Written {
+        previous: Option<GoalRef>,
+        current: GoalRef,
+        phase: GoalPhase,
+        change: GoalChange,
+    },
+    RoundAdmitted {
+        previous: GoalRef,
+        current: GoalRef,
+        round: u32,
+        message_id: MessageId,
+    },
+    ActivationChanged {
+        armed: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GoalChange {
+    Create,
+    Pause,
+    Resume,
+    Block,
+    Complete,
+    Edit,
+    Budget,
+}
+
+impl GoalWrite {
+    pub(crate) fn change(&self) -> GoalChange {
+        match self {
+            Self::Create { .. } => GoalChange::Create,
+            Self::Mutate { mutation, .. } => match mutation {
+                GoalMutation::Pause => GoalChange::Pause,
+                GoalMutation::Resume => GoalChange::Resume,
+                GoalMutation::Block { .. } => GoalChange::Block,
+                GoalMutation::Complete => GoalChange::Complete,
+                GoalMutation::Edit { .. } => GoalChange::Edit,
+                GoalMutation::Budget { .. } => GoalChange::Budget,
+            },
+        }
+    }
+}
+
+pub(crate) fn journal_envelope(
+    conversation_id: &crate::runtime::identity::ConversationId,
+    fact: GoalFact,
+) -> crate::events::types::RuntimeEventEnvelope {
+    crate::events::types::RuntimeEventEnvelope {
+        schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
+        event_id: crate::runtime::identity::EventId::new(""),
+        sequence: 0,
+        conversation_id: conversation_id.clone(),
+        attempt_id: None,
+        turn_id: None,
+        timestamp: chrono::Utc::now(),
+        event: crate::events::types::RuntimeEvent::Goal { fact },
+    }
+}
+
+/// Foreground-only authority supplied by the owning execution step.
+#[derive(Clone)]
+pub(crate) struct GoalToolContext {
+    pub domain: GoalDomain,
+    pub origin: Option<GoalOrigin>,
+    pub mailbox: crate::runtime::inbound::ConversationInboundMailbox,
+}
+
+/// Leaf observer called under the domain mutex; never acquires coordinator locks.
+pub(crate) trait GoalObserver: Send + Sync {
+    fn changed(&self, view: GoalView);
+    fn disarmed(&self);
+}
+
 /// One durable state owner, with separate process-local activation.
 /// The mutex orders disarm/mutation against a driver's local reservation.
 #[derive(Clone)]
@@ -229,6 +308,11 @@ pub struct GoalDomain {
 struct GoalDomainInner {
     store: Arc<dyn ConversationStore>,
     armed: Mutex<bool>,
+    observer: std::sync::OnceLock<Arc<dyn GoalObserver>>,
+    #[cfg(test)]
+    before_tool_commit: crate::runtime::conversation_runtime::Gate,
+    #[cfg(test)]
+    during_write: crate::runtime::conversation_runtime::Gate,
     wake: Arc<tokio::sync::Notify>,
 }
 
@@ -238,9 +322,38 @@ impl GoalDomain {
             inner: Arc::new(GoalDomainInner {
                 store,
                 armed: Mutex::new(false),
+                observer: std::sync::OnceLock::new(),
+                #[cfg(test)]
+                before_tool_commit: crate::runtime::conversation_runtime::Gate::default(),
+                #[cfg(test)]
+                during_write: crate::runtime::conversation_runtime::Gate::default(),
                 wake,
             }),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tool_commit_gate(
+        &self,
+        inside: bool,
+    ) -> &crate::runtime::conversation_runtime::Gate {
+        if inside {
+            &self.inner.during_write
+        } else {
+            &self.inner.before_tool_commit
+        }
+    }
+
+    pub(crate) fn write_from_tool(
+        &self,
+        mailbox: &crate::runtime::inbound::ConversationInboundMailbox,
+        write: GoalWrite,
+        cancellation: &crate::runtime::cancellation::ExecutionCancellation,
+    ) -> Result<Result<GoalResult, ConversationStoreError>, crate::runtime::inbound::MailboxError>
+    {
+        #[cfg(test)]
+        self.inner.before_tool_commit.enter();
+        mailbox.with_running_commit(|| self.write_if(write, || !cancellation.is_cancelled()))
     }
 
     /// Reads phase and activation without changing either.
@@ -260,6 +373,25 @@ impl GoalDomain {
             current: self.inner.store.load_goal()?,
             armed: *armed,
         })
+    }
+
+    /// Installed at the inactive `ConversationRuntime` bootstrap cut. Model
+    /// tools and controls are lifecycle-gated, so no production write can
+    /// intervene between the bootstrap read and observer installation.
+    pub(crate) fn install_observer(&self, observer: Arc<dyn GoalObserver>) {
+        assert!(
+            self.inner.observer.set(observer).is_ok(),
+            "Goal observer already installed"
+        );
+    }
+
+    // Process-local activation facts are best-effort audit, after the winning
+    // mutex transition. Failure cannot undo activation or hide its live view.
+    fn activation_fact(&self, armed: bool) {
+        let _ = self.inner.store.append_event(journal_envelope(
+            self.inner.store.conversation_id(),
+            GoalFact::ActivationChanged { armed },
+        ));
     }
 
     pub(crate) fn write(&self, write: GoalWrite) -> Result<GoalResult, ConversationStoreError> {
@@ -282,6 +414,8 @@ impl GoalDomain {
                 self.inner.store.load_goal()?.as_ref(),
             )));
         }
+        #[cfg(test)]
+        self.inner.during_write.enter();
         let rearm = matches!(
             write,
             GoalWrite::Create { .. }
@@ -292,10 +426,20 @@ impl GoalDomain {
         );
         let result = self.inner.store.write_goal(write)?;
         if let Ok(goal) = &result {
+            let was_armed = *armed;
             if goal.phase != GoalPhase::Active {
                 *armed = false;
             } else if rearm {
                 *armed = true;
+            }
+            if was_armed != *armed {
+                self.activation_fact(*armed);
+            }
+            if let Some(observer) = self.inner.observer.get() {
+                observer.changed(GoalView {
+                    current: Some(goal.clone()),
+                    armed: *armed,
+                });
             }
             self.inner.wake.notify_one();
         }
@@ -303,11 +447,18 @@ impl GoalDomain {
     }
 
     pub(crate) fn disarm(&self) {
-        *self
+        let mut armed = self
             .inner
             .armed
             .lock()
-            .expect("Goal activation lock poisoned") = false;
+            .expect("Goal activation lock poisoned");
+        if *armed {
+            *armed = false;
+            self.activation_fact(false);
+            if let Some(observer) = self.inner.observer.get() {
+                observer.disarmed();
+            }
+        }
     }
 
     pub(crate) fn reserve_and_accept(
@@ -322,7 +473,7 @@ impl GoalDomain {
         if !*armed {
             return Ok(None);
         }
-        let Some(goal) = self.inner.store.load_goal()? else {
+        let Some(mut goal) = self.inner.store.load_goal()? else {
             return Ok(None);
         };
         if goal.phase != GoalPhase::Active
@@ -330,10 +481,25 @@ impl GoalDomain {
         {
             return Ok(None);
         }
-        let expected = goal.reference;
-        self.inner
+        let expected = goal.reference.clone();
+        let accepted = self
+            .inner
             .store
-            .accept_goal_round(&expected, draft(expected.clone()))
+            .accept_goal_round(&expected, draft(expected.clone()))?;
+        if let Some(accepted) = &accepted {
+            // Exact result of the atomic CAS under this domain mutex. No
+            // fallible post-commit read and no competing domain write.
+            goal.reference.revision += 1;
+            goal.autonomous_rounds_consumed += 1;
+            goal.last_round_message_id = Some(accepted.message_id.clone());
+            if let Some(observer) = self.inner.observer.get() {
+                observer.changed(GoalView {
+                    current: Some(goal),
+                    armed: *armed,
+                });
+            }
+        }
+        Ok(accepted)
     }
 }
 
@@ -473,15 +639,70 @@ mod tests {
     }
 
     #[test]
+    fn goal84_journal_failure_rolls_back_durable_write_but_not_activation() {
+        let (store, domain) = fixture();
+        store.arm_fail_event_times(1);
+        assert!(
+            domain
+                .write(GoalWrite::Create {
+                    objective: "Must not leak into repeated facts".into(),
+                    budget: 2,
+                    origin: GoalOrigin::RuntimeControl,
+                })
+                .is_err()
+        );
+        assert_eq!(
+            domain.view().unwrap(),
+            GoalView {
+                current: None,
+                armed: false
+            }
+        );
+        assert!(store.read_events(None, 64).unwrap().events.is_empty());
+        let goal = create(&domain);
+        let before = store.read_events(None, 64).unwrap().events;
+        store.arm_fail_event_times(1);
+        assert!(
+            domain
+                .write(GoalWrite::Mutate {
+                    expected: goal.reference.clone(),
+                    mutation: GoalMutation::Complete
+                })
+                .is_err()
+        );
+        assert_eq!(store.load_goal().unwrap(), Some(goal));
+        assert_eq!(store.read_events(None, 64).unwrap().events, before);
+        store.arm_fail_event_times(1);
+        domain.disarm();
+        assert!(
+            !domain.view().unwrap().armed,
+            "audit failure cannot undo a won disarm"
+        );
+        assert_eq!(store.read_events(None, 64).unwrap().events, before);
+        assert!(
+            !serde_json::to_string(&before)
+                .unwrap()
+                .contains("Keep working")
+        );
+    }
+
+    #[test]
     fn goal84_atomic_round_frontier_failure_recovery_and_no_refund() {
         let (store, domain) = fixture();
         let goal = create(&domain);
+        let facts_before = store.read_events(None, 64).unwrap().events;
         store.arm_fail_accept_times(1);
         assert!(domain.reserve_and_accept(draft).is_err());
+        assert_eq!(store.read_events(None, 64).unwrap().events, facts_before);
         assert!(store.load_pending().unwrap().is_empty());
         assert_eq!(store.load_goal().unwrap(), Some(goal));
         let accepted = domain.reserve_and_accept(draft).unwrap().unwrap();
         let committed = store.load_goal().unwrap().unwrap();
+        let facts = store.read_events(None, 64).unwrap().events;
+        assert_eq!(facts.len(), facts_before.len() + 1);
+        assert!(matches!(&facts.last().unwrap().event,
+            crate::events::types::RuntimeEvent::Goal { fact: GoalFact::RoundAdmitted { round: 1, message_id, current, .. } }
+                if message_id == &accepted.message_id && current == &committed.reference));
         assert_eq!(committed.reference.revision, 2);
         assert_eq!(committed.autonomous_rounds_consumed, 1);
         assert_eq!(committed.last_round_message_id, Some(accepted.message_id));
@@ -796,7 +1017,7 @@ mod tests {
     }
 
     #[test]
-    fn goal84_file_reopen_and_disabled_launch_preserve_domain_without_journal() {
+    fn goal84_file_reopen_uses_domain_even_when_goal_journal_is_removed() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("conversation.sqlite");
         let id = ConversationId::new("persist-goal");
@@ -804,9 +1025,37 @@ mod tests {
             let store = Arc::new(SqliteConversationStore::open(id.clone(), &path).unwrap());
             let domain = GoalDomain::new(store.clone(), Arc::new(tokio::sync::Notify::new()));
             let goal = create(&domain);
-            assert!(store.read_events(None, 64).unwrap().events.is_empty());
+            let facts = store.read_events(None, 64).unwrap().events;
+            assert!(facts.iter().any(|event| matches!(
+                event.event,
+                crate::events::types::RuntimeEvent::Goal {
+                    fact: GoalFact::Written {
+                        change: GoalChange::Create,
+                        ..
+                    }
+                }
+            )));
+            assert!(facts.iter().any(|event| matches!(
+                event.event,
+                crate::events::types::RuntimeEvent::Goal {
+                    fact: GoalFact::ActivationChanged { armed: true }
+                }
+            )));
+            // Arm evidence exists, yet recovering below must start disarmed.
+            let recovered = GoalDomain::new(store.clone(), Arc::new(tokio::sync::Notify::new()));
+            assert_eq!(
+                recovered.view().unwrap(),
+                GoalView {
+                    current: Some(goal.clone()),
+                    armed: false
+                }
+            );
             goal
         };
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute("DELETE FROM events", [])
+            .unwrap();
         let disabled_store = Arc::new(SqliteConversationStore::open(id, &path).unwrap());
         assert_eq!(disabled_store.load_goal().unwrap(), Some(original.clone()));
         let enabled = GoalDomain::new(disabled_store, Arc::new(tokio::sync::Notify::new()));

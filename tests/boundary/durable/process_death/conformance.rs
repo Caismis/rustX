@@ -438,6 +438,24 @@ fn goal84_process_death_cannot_split_round_accounting_from_ordinary_pending_work
             assert_eq!(goal.autonomous_rounds_consumed, consumed);
             assert_eq!(goal.reference.revision, u64::from(consumed) + 1);
             assert_eq!(goal.phase, crate::goal::GoalPhase::Active);
+            let facts = durable.store().read_events(None, 256).unwrap().events;
+            let rounds: Vec<_> = facts
+                .iter()
+                .filter_map(|event| match &event.event {
+                    crate::events::types::RuntimeEvent::Goal {
+                        fact:
+                            crate::goal::GoalFact::RoundAdmitted {
+                                message_id, round, ..
+                            },
+                    } => Some((message_id, round)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(rounds.len(), consumed as usize);
+            if let Some((message_id, round)) = rounds.first() {
+                assert_eq!(Some(*message_id), goal.last_round_message_id.as_ref());
+                assert_eq!(**round, consumed);
+            }
             let pending = durable.store().load_pending().unwrap();
             assert_eq!(pending.len(), consumed as usize);
             assert_eq!(durable.recover().pending_inbound(), consumed as usize);

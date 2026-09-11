@@ -209,6 +209,8 @@ pub struct RuntimeEventEnvelope {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeEvent {
+    /// Observational Goal facts; never replayed as Goal state.
+    Goal { fact: crate::goal::GoalFact },
     /// Execution evidence without invented canonical model framing.
     NativeToolInvocation {
         invocation_id: crate::tools::types::ToolInvocationId,

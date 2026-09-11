@@ -1,5 +1,13 @@
 # Agent Loop (M3 + Issue #22 + Issue #55 + Issue #56 + Issue #130 + Issue #136 + Issue #137 + Issue #201 + Issue #203)
 
+Model Goal creation authorization has one logical-step lifetime. Immediately
+after validating the step's `FreshInboundTurn`, request preparation freezes the
+newest Human Message identity in native batch order with the current AttemptId.
+A safe-boundary Human batch can authorize the next step even in a continuation
+attempt. Retries and that step's Tool batch retain it; the next logical step clears
+it. Tool execution never searches history or reuses the attempt's initial trigger.
+
+
 Goal rounds enter as `InboundKind::GoalContinuation(GoalRef)` through ordinary
 durable Pending Inbound. The existing coordinator selects/adopts them and admits
 the ordinary Agent Loop. At idle, its synchronous GoalRoundDriver may request one

@@ -1,7 +1,8 @@
 # Goal extension admission design
 
 The round linearization point is the SQLite commit that both inserts
-ordinary Pending Inbound and updates Goal revision and consumed rounds.
+ordinary Pending Inbound, updates Goal revision and consumed rounds, and records
+the bounded Goal round-admission journal fact.
 This extends the existing `accept_inbound_tx` transaction seam; neither local
 reservation nor later canonical adoption consumes an additional round.
 
@@ -66,8 +67,21 @@ cross-turn pursuit, including ordinary natural-language requests such as “keep
 working until …”. Complexity, length, many Tools, Workflow or Subagent use alone
 do not justify it. This semantic boundary is explicit in the Tool description;
 there is no keyword classifier or evaluator model. Runtime supplies the actual
-initiating Human MessageId and AttemptId from admitted canonical input. Model
-arguments cannot supply or rebind that correlation. Explicit client creation is
+Human MessageId and AttemptId from the fresh inbound observed by the current
+logical model step. `AgentExecution::step_goal_origin` is reset at
+`run_turn_body`, then frozen in `prepare_model_turn` immediately after validating
+`pending_fresh_inbound`, before Context Assembly and model request start. It picks
+the most recent Human `Message` in that batch's native inbound sequence order;
+a later Runtime item does not replace that Human identity. No fresh Human means
+no creation authority. Request retries retain the same frozen origin; the Tool
+batch consumes that step's origin even though successful model completion has
+already consumed `pending_fresh_inbound`. The next logical step clears it.
+
+A Human message adopted at a later safe boundary can therefore authorize creation
+in the next step, including in an attempt that started from non-Human continuation.
+History outside that exact fresh batch is never searched for authorization, and
+Tool execution never rediscovers an origin from history. Model arguments cannot
+supply or rebind that correlation. Explicit client creation is
 identified as RuntimeControl. Both paths enforce one unfinished Goal and native
 bounds (objective/reason at most 8192 UTF-8 bytes; budget 1–100, default 10).
 
@@ -87,17 +101,70 @@ this observation along with normal request inputs. History may show older
 observations; those never supply current Goal authority. Provider adapters only
 project the existing provider-neutral messages and Tool definitions.
 
-Runtime Client protocol 30 adds the typed `goal` operation (Show/Create/Mutate),
-current Goal snapshot/ref and process-local `armed` projection. Goal has its own
-revision domain; snapshot reads sample current domain state without reconstructing
-it from the observation cursor. Attach/reconnect/read never arms. `/goal` is a
-client adapter over those operations and has no scheduler or state authority.
+Runtime Client protocol 31 includes the typed `goal` operation (Show/Create/Mutate)
+and bounded `goal_changed { view: GoalView }` event. `GoalDomain` revision is not
+`RuntimeClientCursor`: the former versions durable state; the latter governs all
+externally visible snapshot state, including Goal activation. Two successful
+snapshots at the same cursor cannot contain different Goal views.
+
+The inactive `ConversationRuntime::install_observation_bridge` bootstrap cut reads
+Goal with the other native state. Lifecycle gating prevents model/control writes
+before activation; the coordinator lock excludes activation and installs the
+Goal observer before releasing the cut. `RuntimeBootstrapSnapshot.goal` seeds
+`RuntimeClientProjection`: absent when disabled, `{ current, armed: false }` on
+recovery when composed. Attach/snapshot return only the projection's copy and
+never overwrite it with a later domain read.
+
+Under its mutex, GoalDomain commits state and publishes a bounded authoritative
+view through `GoalObserver` -> ConversationRuntime's `RuntimeObserver` -> the
+existing reliable observation queue -> `RuntimeClientProjection::fold`. Create,
+pause, resume/re-arm, block, complete, edit, budget, and round admission all carry
+`GoalChanged`; an activation-only cancellation/drain carries `GoalDisarmed`.
+The fold updates the read-model copy and publishes `goal_changed` at a new cursor.
+Disarm preserves the durable revision and phase. Duplicate/no-change observations
+publish nothing; stale CAS and reads produce no observation. Goal journal facts
+are INTERNAL in the existing event mapping, never an alternative projection input.
+TUI folds the same typed event and snapshot. Attach/reconnect/read never arms.
+`/goal` remains a client adapter, with no state or scheduling authority.
 
 Recovery creates a new disarmed activation owner even for durable Active. It
 enqueues nothing. A previously accepted ordinary continuation follows the existing
 inbound/attempt recovery evidence exactly once; its round remains consumed.
 Disabling and re-enabling the extension never deletes durable state or implicitly
 re-arms it. Event Journal is not required to reconstruct Goal state or activation.
+
+## Execution facts and drain ownership
+
+`RuntimeEvent::Goal { fact }` has three bounded fact forms:
+
+- `Written { previous, current, phase, change }`, where `change` is Create, Pause,
+  Resume, Block, Complete, Edit, or Budget. It omits objective and reason text.
+- `RoundAdmitted { previous, current, round, message_id }`.
+- `ActivationChanged { armed }`, a conversation-scoped process observation.
+
+`write_goal` commits the new `goal_state` and Written fact in one Immediate SQLite
+transaction. Failed CAS writes no fact. A journal failure rolls back the state
+write. `accept_goal_round` commits accounting, ordinary Pending Inbound acceptance,
+and RoundAdmitted in its original single SQLite transaction; rollback or process
+death cannot split any of the three. Generic `append_event` refuses the two
+compound fact forms, which require their specialized durable transition.
+ActivationChanged is best-effort audit after the activation mutex transition wins,
+still under that mutex for ordering. Audit failure cannot undo disarm or suppress
+its live observation. Recovery never reads Goal facts, whether present, missing,
+or recording historical armed=true: `goal_state` supplies durable state and a new
+process-local owner always starts disarmed.
+
+Model Goal mutations use the existing mailbox `with_running_commit` seam.
+The foreground Tool retains ordinary AgentExecution ownership while its synchronous
+operation holds lifecycle commit guard -> Goal activation mutex -> SQLite. It
+checks cancellation under the Goal mutex before writing. Runtime drain requests
+attempt cancellation, disarms under that same Goal mutex, and commits
+Running -> Draining through the same lifecycle guard. A Tool that already passed
+the cancellation check under those locks commits before drain; otherwise it is
+refused by cancellation or the lifecycle guard. Drain waits for foreground Tool
+settlement even when refused. No Tool takes the coordinator lock, and no Goal
+lifecycle or worker was added. Deterministic gates before guard acquisition and
+after the cancellation check prove both orders for create and update.
 
 Goal = WHAT, Workflow = HOW, Scheduler = WHEN, Subagent = WHO, Tool = DO, Todo =
 bounded working state. This feature adds no plugin registry, separate Agent Loop,
@@ -114,7 +181,7 @@ are liveness guards, never correctness ordering.
 
 | Contracts | Owning tests |
 | --- | --- |
-| 1, 17–19, 41–43 | `disabled_reenabled_and_reconnect_never_rearm_or_start_a_request`; `file_reopen_and_disabled_launch_preserve_domain_without_journal`; existing `ext256_an_empty_extension_composition_changes_nothing_but_agent_status` |
+| 1, 17–19, 41–43 | `disabled_reenabled_and_reconnect_never_rearm_or_start_a_request`; `file_reopen_uses_domain_even_when_goal_journal_is_removed`; existing `ext256_an_empty_extension_composition_changes_nothing_but_agent_status` |
 | 2–4 | `natural_intent_creates_from_human_with_stable_tools_and_current_context`; `model_schema_is_stable_narrow_and_source_cannot_be_spoofed`; `commands_are_rejected_on_every_ordinary_tool_selection_surface`; `partial_or_altered_goal_tools_cannot_masquerade_as_disabled_composition` |
 | 5–7, 11–13 | `cas_state_machine_revision_and_terminal_authority`; `revision_races_have_one_durable_winner`; `model_schema_is_stable_narrow_and_source_cannot_be_spoofed` |
 | 8–10 | `natural_intent_creates_from_human_with_stable_tools_and_current_context`; `model_schema_is_stable_narrow_and_source_cannot_be_spoofed` (semantic intent instructions, strict argument vocabulary, actual Human MessageId/AttemptId binding) |
@@ -148,3 +215,31 @@ Current context samples domain state at each request boundary and stays User dat
 Child scope fails in the shared resolver before ownership. Event Journal is never
 read by GoalDomain. Drain settles the existing worker; no Goal-owned task can
 outlive it. No generic plugin, state, scheduling or transaction framework was added.
+
+
+## Review repair regressions
+
+- `goal84_runtime_client_projection_same_cursor_controls_activation_and_replay`:
+  parks the projection after real control commits; snapshot and attach retain the
+  old Goal/cursor, then exact folds advance cursors, deliver events, and replay.
+  Stale CAS emits nothing; disarm changes activation without a durable revision.
+- `goal84_runtime_client_subscriber_sees_model_create_block_and_complete`:
+  subscribers present before invocation observe model create and block/complete.
+- `goal84_driver_uses_ordinary_admission_consumes_one_and_drain_disarms`:
+  live create, atomic round accounting, and shutdown disarm each reach subscribers.
+- `goal84_safe_boundary_non_human_start_authorizes_exact_later_human` and
+  `goal84_safe_boundary_human_b_replaces_a_and_origin_expires_next_step`:
+  a gated first request accepts two Humans and a Runtime tail; the next request
+  sees that batch and creates from the newer Human. A subsequent create after
+  completion fails without fresh Human input.
+- `goal84_model_mutation_and_drain_have_one_owned_commit_order`: four gated
+  interleavings (create/update, Tool/drain wins), awaited to full quiescence.
+- `goal84_journal_failure_rolls_back_durable_write_but_not_activation` and
+  `goal84_atomic_round_frontier_failure_recovery_and_no_refund`: failed journal or
+  admission commit cannot expose half a durable transition.
+- `goal84_file_reopen_uses_domain_even_when_goal_journal_is_removed`: recovery with
+  armed audit facts and after deleting the journal produces the same durable Goal,
+  always disarmed. The process-death regression checks the admission fact and
+  Pending Inbound/accounting on both sides of SIGKILL.
+- TUI `goal84 folds live Goal and activation changes at their stream cursors`:
+  event and snapshot read models agree without changing a Goal revision on disarm.

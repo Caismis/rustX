@@ -76,6 +76,7 @@ export function emptyPresentationState(
     settingsEvidence: "live_session",
     settingsLifetimes: null,
     todos: undefined,
+    goal: null,
     runtimeShutdown: false,
     effectiveApprovalMode: "policy",
     pendingApprovalMode: undefined,
@@ -132,6 +133,7 @@ export function replaceFromSnapshot(
 
   return {
     conversationId: snapshot.conversation_id,
+    goal: snapshot.goal,
     workflows: snapshot.workflows,
     cursor,
     transcript: orderTranscript(transcript),
@@ -226,6 +228,8 @@ export function reduce(
   const next = { ...state, cursor: protocolEvent.cursor };
 
   switch (event.type) {
+    case "goal_changed":
+      return { ...next, goal: event.view };
     case "workflows_updated":
       return { ...state, cursor: protocolEvent.cursor, workflows: event.workflows };
     case "attempt_started":

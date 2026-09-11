@@ -584,16 +584,7 @@ impl ClientInner {
         } else {
             self.refresh_transcript_page(&mut state)?;
         }
-        let (mut snapshot, cursor) = state.projection.snapshot()?;
-        snapshot.goal = self
-            .runtime
-            .as_ref()
-            .map(ConversationRuntime::goal_view)
-            .transpose()
-            .map_err(|error| RuntimeClientError::RuntimeFailure {
-                message: error.to_string(),
-            })?
-            .flatten();
+        let (snapshot, cursor) = state.projection.snapshot()?;
         state.next_attachment_seq = state.next_attachment_seq.saturating_add(1);
         let attachment_id = AttachmentId::new(format!("attachment-{}", state.next_attachment_seq));
         let attachment_state = AttachmentState {
@@ -901,16 +892,7 @@ impl ClientInner {
         } else {
             self.refresh_transcript_page(&mut state)?;
         }
-        let (mut snapshot, cursor) = state.projection.snapshot()?;
-        snapshot.goal = self
-            .runtime
-            .as_ref()
-            .map(ConversationRuntime::goal_view)
-            .transpose()
-            .map_err(|error| RuntimeClientError::RuntimeFailure {
-                message: error.to_string(),
-            })?
-            .flatten();
+        let (snapshot, cursor) = state.projection.snapshot()?;
         Ok((snapshot, cursor))
     }
 

@@ -1,5 +1,15 @@
 # Runtime Invariants
 
+`RuntimeClientProjection` exclusively owns externally visible Goal snapshot state
+and its cursor: bootstrap includes Goal at the inactive runtime cut; all live
+Goal changes, including activation-only disarm, fold through the observation
+bridge and publish bounded `goal_changed` events. Goal revision and client cursor
+remain distinct. Goal journal facts are audit-only, atomically committed with
+durable writes/admissions; neither state nor activation is reconstructed from them.
+Model creation uses only the current logical step's frozen fresh Human identity.
+Foreground Goal writes share the existing lifecycle commit guard with drain.
+
+
 Goal mutations require an observed `GoalRef`; stale actions are rejected without
 retry. Autonomous accounting and ordinary Pending Inbound acceptance commit in
 one SQLite transaction. Process-local activation is never inferred from durable

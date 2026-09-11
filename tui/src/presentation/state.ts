@@ -145,6 +145,7 @@ export interface AttemptPresentation {
 }
 
 export interface PresentationState {
+  goal: import("../protocol/types.ts").GoalView | null;
   settingsEvidence: "live_session" | "frozen_child" | "historical_partial";
   workflows: import("../protocol/types.ts").WorkflowSnapshot;
   conversationId: ConversationId;

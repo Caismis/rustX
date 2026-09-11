@@ -1,4 +1,4 @@
-//! Stable Goal command adapters; authority is supplied by the initiating attempt.
+//! Stable Goal command adapters; authority is frozen by the current logical model step.
 
 use crate::goal::{DEFAULT_ROUND_BUDGET, GoalMutation, GoalRef, GoalWrite};
 use crate::tools::executor::{
@@ -69,10 +69,12 @@ impl ToolExecutor for GoalExecutor {
         ToolExecutionHandle::settled_by_operation(
             Box::pin(async move {
                 let result = (|| -> Result<serde_json::Value, String> {
-                    let (domain, origin) = context
+                    let goal_context = context
                         .goal
                         .as_deref()
                         .ok_or("Goal is unavailable in this execution context")?;
+                    let domain = &goal_context.domain;
+                    let origin = &goal_context.origin;
                     let write = match self.0 {
                         "get_goal" => {
                             serde_json::from_value::<GetInput>(invocation.arguments)
@@ -89,7 +91,7 @@ impl ToolExecutor for GoalExecutor {
                                 objective: input.objective,
                                 budget: input.autonomous_round_budget,
                                 origin: origin.clone().ok_or(
-                                    "Goal creation requires the initiating Human execution context",
+                                    "Goal creation requires fresh Human authorization in this model step",
                                 )?,
                             }
                         }
@@ -109,8 +111,11 @@ impl ToolExecutor for GoalExecutor {
                         }
                         _ => unreachable!("closed Goal command surface"),
                     };
+                    // Same lifecycle commit guard as ordinary inbound ownership.
+                    // Drain cannot cross Running -> Draining during this commit.
                     match domain
-                        .write_if(write, || !context.cancellation.is_cancelled())
+                        .write_from_tool(&goal_context.mailbox, write, &context.cancellation)
+                        .map_err(|e| e.to_string())?
                         .map_err(|e| e.to_string())?
                     {
                         Ok(goal) => serde_json::to_value(goal).map_err(|e| e.to_string()),

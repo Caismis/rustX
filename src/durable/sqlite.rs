@@ -1007,9 +1007,28 @@ impl ConversationStore for SqliteConversationStore {
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("Goal transaction: {error}")))?;
-        let result = crate::goal::transition(read_goal(&tx)?.as_ref(), write);
+        let previous = read_goal(&tx)?;
+        let change = write.change();
+        let result = crate::goal::transition(previous.as_ref(), write);
         if let Ok(goal) = &result {
             save_goal(&tx, goal)?;
+            #[cfg(test)]
+            if Self::consume(&self.fail_event_remaining) {
+                return Err(storage("fault injected: Goal journal commit"));
+            }
+            persist_event_tx(
+                &tx,
+                &self.conversation_id,
+                crate::goal::journal_envelope(
+                    &self.conversation_id,
+                    crate::goal::GoalFact::Written {
+                        previous: previous.map(|g| g.reference),
+                        current: goal.reference.clone(),
+                        phase: goal.phase,
+                        change,
+                    },
+                ),
+            )?;
             tx.commit()
                 .map_err(|error| storage(format!("Goal commit: {error}")))?;
         }
@@ -1063,6 +1082,19 @@ impl ConversationStore for SqliteConversationStore {
             .ok_or(ConversationStoreError::SequenceExhausted)?;
         goal.last_round_message_id = Some(accepted.message_id.clone());
         save_goal(&tx, &goal)?;
+        persist_event_tx(
+            &tx,
+            &self.conversation_id,
+            crate::goal::journal_envelope(
+                &self.conversation_id,
+                crate::goal::GoalFact::RoundAdmitted {
+                    previous: expected.clone(),
+                    current: goal.reference.clone(),
+                    round: goal.autonomous_rounds_consumed,
+                    message_id: accepted.message_id.clone(),
+                },
+            ),
+        )?;
         #[cfg(test)]
         if Self::consume(&self.fail_accept_remaining) {
             return Err(storage("fault injected: Goal accept commit"));
@@ -8123,7 +8155,10 @@ fn load_user_notification_tx(
 fn requires_specialized_transition(event: &RuntimeEvent) -> bool {
     matches!(
         event,
-        RuntimeEvent::InboundTurnAdopted { .. }
+        RuntimeEvent::Goal {
+            fact: crate::goal::GoalFact::Written { .. }
+                | crate::goal::GoalFact::RoundAdmitted { .. }
+        } | RuntimeEvent::InboundTurnAdopted { .. }
             | RuntimeEvent::AssistantMessageCommitted { .. }
             | RuntimeEvent::ToolMessageCommitted { .. }
             | RuntimeEvent::CompactionCompleted { .. }

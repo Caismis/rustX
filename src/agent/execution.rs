@@ -429,6 +429,9 @@ pub struct AgentExecution<'a> {
     /// invocation has observed it. One pending fresh inbound turn produces
     /// at most one Agent Status generation.
     pending_fresh_inbound: Option<FreshInboundTurn>,
+    /// Frozen from this logical step's fresh inbound; retries retain it,
+    /// subsequent logical steps clear it before preparing their own request.
+    step_goal_origin: Option<crate::goal::GoalOrigin>,
     /// The attempt-local marker installed after one complete canonical
     /// `ToolResult` batch settles, together with the durable transcript
     /// position that batch committed at. It is consumed by the next
@@ -1240,6 +1243,7 @@ impl<'a> AgentExecution<'a> {
             pending_continuation: None,
             continuation_owner: None,
             pending_fresh_inbound: None,
+            step_goal_origin: None,
             pending_post_tool_batch: None,
             context_runtime,
             subagent_context: runtime_policy.subagent_context,
@@ -1627,6 +1631,7 @@ impl<'a> AgentExecution<'a> {
         // post-compaction retry — consumes the one shared request ordinal
         // below. Retries never re-enter dynamic context admission.
         self.accepted_context = None;
+        self.step_goal_origin = None;
         self.frozen_agent_status = None;
         self.frozen_carryover = None;
         self.last_started_request = None;
@@ -2303,6 +2308,25 @@ impl<'a> AgentExecution<'a> {
         if let Err(error) = self.validate_pending_fresh_inbound() {
             return Err(Self::context_failure_terminal(&error));
         }
+        // Native inbound sequence order is retained by FreshInboundTurn.
+        // The most recent Human Message in this exact fresh batch authorizes
+        // only this logical step and its tool batch (including request retries).
+        self.step_goal_origin = self.pending_fresh_inbound.as_ref().and_then(|fresh| {
+            fresh.message_ids().iter().rev().find_map(|id| {
+                match self.conversation.ledger().get(id) {
+                    Some(MessageBlock::User(user))
+                        if user.source == crate::message::UserSource::Human
+                            && user.kind == crate::message::InboundKind::Message =>
+                    {
+                        Some(crate::goal::GoalOrigin::HumanAttempt {
+                            message_id: id.clone(),
+                            attempt_id: self.request.attempt_id.clone(),
+                        })
+                    }
+                    _ => None,
+                }
+            })
+        });
         let status_generation = match self.compose_status() {
             Ok(status) => status,
             Err(error) => return Err(Self::context_failure_terminal(&error)),
@@ -4975,32 +4999,11 @@ impl<'a> AgentExecution<'a> {
         };
         let mut context = context;
         if let Some(goal) = self.tool_runtime.goal() {
-            let origin = match &self.request.initial_turn_trigger {
-                InitialTurnTrigger::FreshInbound(fresh) => self
-                    .store
-                    .load_messages(fresh.message_ids())
-                    .ok()
-                    .and_then(|messages| {
-                        messages
-                            .into_iter()
-                            .rev()
-                            .find_map(|message| match message {
-                                MessageBlock::User(user)
-                                    if user.source == crate::message::types::UserSource::Human
-                                        && user.kind
-                                            == crate::message::types::InboundKind::Message =>
-                                {
-                                    Some(crate::goal::GoalOrigin::HumanAttempt {
-                                        message_id: user.id,
-                                        attempt_id: self.request.attempt_id.clone(),
-                                    })
-                                }
-                                _ => None,
-                            })
-                    }),
-                InitialTurnTrigger::Continuation => None,
-            };
-            context.goal = Some(Box::new((goal.clone(), origin)));
+            context.goal = Some(Box::new(crate::goal::GoalToolContext {
+                domain: goal.clone(),
+                origin: self.step_goal_origin.clone(),
+                mailbox: self.tool_runtime.mailbox(),
+            }));
         }
         // The task-list authority of *this* batch, named rather than
         // ambient: an invocation that is not part of a batch never receives

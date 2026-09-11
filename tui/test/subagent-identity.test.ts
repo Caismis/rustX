@@ -24,7 +24,7 @@ import {
 
 describe("subagent identity", () => {
   it("negotiates the current protocol version", () => {
-    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 30);
+    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 31);
   });
 
   it("carries both identity digests from the snapshot", () => {

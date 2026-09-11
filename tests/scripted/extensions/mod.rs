@@ -104,6 +104,19 @@ async fn goal84_driver_uses_ordinary_admission_consumes_one_and_drain_disarms() 
             .published()
             .await;
     let composed = conversation_runtime_over_model(&tools, capability, model.clone()).unwrap();
+    let host = rustx::runtime_client::RuntimeClientHost::new(
+        rustx::runtime_client::RuntimeClientHostConfig {
+            runtime: composed.runtime.clone(),
+            replay_limit: None,
+        },
+    )
+    .unwrap();
+    let (attachment, _) = host
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .unwrap();
+    let subscription = attachment
+        .subscribe_events(host.snapshot().unwrap().1)
+        .unwrap();
     composed.runtime.activate();
     assert!(model.requests().is_empty());
     let mut parked = model.parked();
@@ -122,10 +135,19 @@ async fn goal84_driver_uses_ordinary_admission_consumes_one_and_drain_disarms() 
     assert_eq!(model.requests().len(), 1);
     let view = composed.runtime.goal_view().unwrap().unwrap();
     assert_eq!(view.current.as_ref().unwrap().autonomous_rounds_consumed, 1);
+    let (created_event, created_cursor) = goal_event(&subscription).await;
+    assert_eq!(created_event.current.unwrap().autonomous_rounds_consumed, 0);
+    let (admitted_event, admitted_cursor) = goal_event(&subscription).await;
+    assert!(admitted_cursor > created_cursor);
+    assert_eq!(admitted_event, view);
+    assert_eq!(host.snapshot().unwrap().0.goal, Some(view.clone()));
     assert!(model.requests()[0].messages.iter().any(|message| matches!(message.as_canonical(), Some(MessageBlock::User(user)) if matches!(user.kind, InboundKind::GoalContinuation(_)))));
     composed.runtime.shutdown().await.unwrap();
     let after = composed.runtime.goal_view().unwrap().unwrap();
     assert!(!after.armed);
+    let (disarmed_event, disarmed_cursor) = goal_event(&subscription).await;
+    assert_eq!(disarmed_event, after);
+    assert!(disarmed_cursor > admitted_cursor);
     assert_eq!(
         after.current, view.current,
         "shutdown never rewrites phase or refunds accepted work"
@@ -366,10 +388,24 @@ async fn goal84_disabled_reenabled_and_reconnect_never_rearm_or_start_a_request(
         let (attachment, initialized) = host
             .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
             .unwrap();
-        assert!(matches!(
-            initialized,
-            rustx::runtime_client::RuntimeClientResult::Initialized { .. }
-        ));
+        let rustx::runtime_client::RuntimeClientResult::Initialized {
+            snapshot, cursor, ..
+        } = initialized
+        else {
+            panic!("initialized")
+        };
+        assert_eq!(cursor.get(), 0);
+        assert_eq!(
+            snapshot.goal,
+            if extensions.goal().is_some() {
+                Some(rustx::goal::GoalView {
+                    current: Some(goal.clone()),
+                    armed: false,
+                })
+            } else {
+                None
+            }
+        );
         drop(attachment);
         let (reattached, _) = host
             .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
@@ -2400,5 +2436,447 @@ async fn ext259_the_effective_projection_cannot_disagree_with_the_tool_plane() {
             composed,
             "and the Tool Plane the same decision published"
         );
+    }
+}
+
+fn goal_create_call() -> ScriptedCall {
+    ScriptedCall {
+        id: "create",
+        tool_id: "native.create_goal",
+        name: "create_goal",
+        arguments: serde_json::json!({"objective": "Keep working until deployment succeeds", "autonomous_round_budget": 2}),
+    }
+}
+
+async fn goal_event(
+    subscription: &rustx::runtime_client::EventSubscription,
+) -> (
+    rustx::goal::GoalView,
+    rustx::runtime_client::RuntimeClientCursor,
+) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match subscription.next().await {
+                rustx::runtime_client::EventDelivery::Event(event) => {
+                    if let rustx::runtime_client::RuntimeClientEvent::GoalChanged { view } =
+                        event.event
+                    {
+                        return (view, event.cursor);
+                    }
+                }
+                other => panic!("Goal stream ended: {other:?}"),
+            }
+        }
+    })
+    .await
+    .expect("Goal observation must arrive")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn goal84_safe_boundary_non_human_start_authorizes_exact_later_human() {
+    goal_safe_boundary_origin(UserSource::Runtime).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn goal84_safe_boundary_human_b_replaces_a_and_origin_expires_next_step() {
+    goal_safe_boundary_origin(UserSource::Human).await;
+}
+
+async fn goal_safe_boundary_origin(source: UserSource) {
+    let extensions = NativeAgentExtensions::none().and_goal();
+    let (_dir, tools) = todo_tool_runtime("goal-origin-boundary", &extensions);
+    let (release, wait) = support::fake::model_release();
+    let mut first = tool_turn(&[scripted("read", "native.get_goal", "get_goal")]);
+    first.insert(1, FakeStep::ParkUntilReleased(wait));
+    let complete = ScriptedCall {
+        id: "complete",
+        tool_id: "native.update_goal",
+        name: "update_goal",
+        arguments: serde_json::json!({"action":"complete", "expected":{"id":"goal-1","revision":1}}),
+    };
+    let mut stale_create = goal_create_call();
+    stale_create.id = "stale-create";
+    let model = fake_model(vec![
+        first,
+        tool_turn(&[goal_create_call()]),
+        tool_turn(&[complete]),
+        tool_turn(&[stale_create]),
+        stop_turn(),
+    ]);
+    let capability = common::capability_lease(ToolRegistry::new(), &tools).await;
+    let mut initial = inbound("human-a", "Initial request");
+    initial.source = source.clone();
+    let trigger = if source == UserSource::Human {
+        InitialTurnTrigger::FreshInbound(FreshInboundTurn::new(vec![initial.id.clone()]).unwrap())
+    } else {
+        InitialTurnTrigger::Continuation
+    };
+    let request = AgentExecutionRequest {
+        agent_id: AgentId::new("goal-agent"),
+        conversation_id: tools.conversation_id().clone(),
+        attempt_id: AttemptId::new("goal-attempt"),
+        conversation: rustx::conversation::ConversationState::from_messages(vec![
+            MessageBlock::User(initial),
+        ])
+        .unwrap(),
+        initial_turn_trigger: trigger,
+        model: support::attempt_model(model.clone(), "goal-model"),
+    };
+    let mut parked = model.parked();
+    let mailbox = tools.mailbox();
+    let controller = tokio::spawn(async move {
+        tokio::time::timeout(Duration::from_secs(10), parked.wait_for(|value| *value))
+            .await
+            .unwrap()
+            .unwrap();
+        // Explicit native sequence: two Humans followed by Runtime input.
+        mailbox
+            .enqueue(inbound("human-b1", "Keep working until tests pass"))
+            .unwrap();
+        mailbox
+            .enqueue(inbound(
+                "human-b2",
+                "Keep working until deployment succeeds",
+            ))
+            .unwrap();
+        let mut runtime_tail = inbound("runtime-tail", "A runtime observation");
+        runtime_tail.source = UserSource::Runtime;
+        mailbox.enqueue(runtime_tail).unwrap();
+        release.send(true).unwrap();
+    });
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let result = AgentExecution::new(
+        request,
+        capability.into_lease(),
+        &cancellation,
+        support::default_execution_policy(),
+        context_runtime(&model, &extensions),
+        &tools,
+        rustx::agent::AttemptLifecycle::inert(),
+    )
+    .unwrap()
+    .run()
+    .await;
+    controller.await.unwrap();
+    assert!(
+        matches!(result.outcome, AttemptOutcome::Completed { .. }),
+        "{:?}",
+        result.outcome
+    );
+    let requests = model.requests();
+    assert_eq!(requests.len(), 5);
+    assert!(!requests[0].messages.iter().any(
+        |m| matches!(m.as_canonical(), Some(MessageBlock::User(u)) if u.id.as_str() == "human-b2")
+    ));
+    assert!(requests[1].messages.iter().any(
+        |m| matches!(m.as_canonical(), Some(MessageBlock::User(u)) if u.id.as_str() == "human-b2")
+    ));
+    let goal = tools.goal().unwrap().view().unwrap().current.unwrap();
+    assert_eq!(
+        goal.origin,
+        rustx::goal::GoalOrigin::HumanAttempt {
+            message_id: MessageId::new("human-b2"),
+            attempt_id: AttemptId::new("goal-attempt")
+        }
+    );
+    assert_eq!(goal.phase, rustx::goal::GoalPhase::Complete);
+    assert_eq!(
+        goal.reference.revision, 2,
+        "later step cannot create another Goal using stale Human authorization"
+    );
+    assert!(result.messages().iter().any(|m| matches!(m, MessageBlock::Tool(t) if t.tool_call_id.as_str() == "stale-create" && matches!(t.result.status, rustx::tools::types::ToolExecutionStatus::Failed { .. }))));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn goal84_runtime_client_projection_same_cursor_controls_activation_and_replay() {
+    use rustx::goal::{GoalControl, GoalMutation};
+    let extensions = NativeAgentExtensions::none().and_goal();
+    let (_dir, tools) = todo_tool_runtime("goal-cursors", &extensions);
+    let model = fake_model(vec![vec![FakeStep::ParkUntilCancelled]]);
+    let capability =
+        extension_capability(&tools, tools.extension_tool_plane(), Publication::Published)
+            .published()
+            .await;
+    let composed = conversation_runtime_over_model(&tools, capability, model.clone()).unwrap();
+    let host = rustx::runtime_client::RuntimeClientHost::new(
+        rustx::runtime_client::RuntimeClientHostConfig {
+            runtime: composed.runtime.clone(),
+            replay_limit: None,
+        },
+    )
+    .unwrap();
+    let (attachment, _) = host
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .unwrap();
+    composed.runtime.activate();
+    let mut parked = model.parked();
+    composed
+        .runtime
+        .submit_inbound(inbound("unused", "Hold foreground").content)
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), parked.wait_for(|value| *value))
+        .await
+        .unwrap()
+        .unwrap();
+    let (baseline, cursor) = host.snapshot().unwrap();
+    assert_eq!(
+        baseline.goal,
+        Some(rustx::goal::GoalView {
+            current: None,
+            armed: false
+        })
+    );
+    let subscription = attachment.subscribe_events(cursor).unwrap();
+    let inner = host.weak_inner().upgrade().unwrap();
+    inner.park_projection_worker();
+    let created = inner
+        .goal_control(GoalControl::Create {
+            objective: "Deliver".into(),
+            budget: 3,
+        })
+        .unwrap();
+    let rustx::runtime_client::RuntimeClientResult::Goal { view: created } = created else {
+        panic!("Goal result")
+    };
+    assert_ne!(Some(created.clone()), baseline.goal);
+    // Domain has committed; projection is deliberately frozen. Both public
+    // snapshot and attach must still describe the original cursor.
+    let (unfolded, same_cursor) = host.snapshot().unwrap();
+    assert_eq!(same_cursor, cursor);
+    assert_eq!(unfolded.goal, baseline.goal);
+    let (_read_attachment, initialized) = host
+        .attach_read_only(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .unwrap();
+    let rustx::runtime_client::RuntimeClientResult::Initialized {
+        snapshot,
+        cursor: attach_cursor,
+        ..
+    } = initialized
+    else {
+        panic!("initialized")
+    };
+    assert_eq!(attach_cursor, cursor);
+    assert_eq!(snapshot.goal, baseline.goal);
+    let mut expected = created;
+    let mut last_cursor = cursor;
+    let mut first_revision = None;
+    for mutation in [
+        None,
+        Some(GoalMutation::Pause),
+        Some(GoalMutation::Edit {
+            objective: "Deliver verified".into(),
+        }),
+        Some(GoalMutation::Budget { rounds: 4 }),
+        Some(GoalMutation::Resume),
+    ] {
+        if let Some(mutation) = mutation {
+            let result = inner
+                .goal_control(GoalControl::Mutate {
+                    expected: expected.current.as_ref().unwrap().reference.clone(),
+                    mutation,
+                })
+                .unwrap();
+            let rustx::runtime_client::RuntimeClientResult::Goal { view } = result else {
+                panic!("Goal result")
+            };
+            expected = view;
+        }
+        let (folded, next_cursor) = inner.fold_one_observation().expect("one Goal observation");
+        assert_eq!(folded.goal, Some(expected.clone()));
+        assert!(next_cursor > last_cursor);
+        let (event_view, event_cursor) = goal_event(&subscription).await;
+        assert_eq!((event_view, event_cursor), (expected.clone(), next_cursor));
+        assert_eq!(host.snapshot().unwrap().1, next_cursor);
+        first_revision.get_or_insert_with(|| expected.current.as_ref().unwrap().reference.clone());
+        last_cursor = next_cursor;
+    }
+    assert!(
+        inner
+            .goal_control(GoalControl::Mutate {
+                expected: first_revision.unwrap(),
+                mutation: GoalMutation::Complete
+            })
+            .is_err()
+    );
+    assert_eq!(inner.queued_observations(), 0, "stale CAS emits no change");
+    let before_disarm = expected.current.clone();
+    composed.runtime.disarm_goal();
+    let (frozen, frozen_cursor) = host.snapshot().unwrap();
+    assert!(frozen.goal.unwrap().armed);
+    assert_eq!(frozen_cursor, last_cursor);
+    let (disarmed, disarm_cursor) = inner.fold_one_observation().unwrap();
+    let view = disarmed.goal.unwrap();
+    assert!(!view.armed);
+    assert_eq!(
+        view.current, before_disarm,
+        "activation does not invent a durable revision"
+    );
+    assert!(disarm_cursor > last_cursor);
+    assert_eq!(
+        goal_event(&subscription).await,
+        (view.clone(), disarm_cursor)
+    );
+    let replay = attachment.subscribe_events(cursor).unwrap();
+    for _ in 0..5 {
+        goal_event(&replay).await;
+    }
+    assert_eq!(goal_event(&replay).await, (view, disarm_cursor));
+    composed.runtime.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn goal84_runtime_client_subscriber_sees_model_create_block_and_complete() {
+    for complete in [false, true] {
+        let extensions = NativeAgentExtensions::none().and_goal();
+        let (_dir, tools) = todo_tool_runtime("goal-live-model", &extensions);
+        let update = ScriptedCall {
+            id: "update",
+            tool_id: "native.update_goal",
+            name: "update_goal",
+            arguments: if complete {
+                serde_json::json!({"action":"complete","expected":{"id":"goal-1","revision":1}})
+            } else {
+                serde_json::json!({"action":"blocked","expected":{"id":"goal-1","revision":1},"reason":"Need access"})
+            },
+        };
+        let model = fake_model(vec![
+            tool_turn(&[goal_create_call()]),
+            tool_turn(&[update]),
+            vec![FakeStep::ParkUntilCancelled],
+        ]);
+        let capability =
+            extension_capability(&tools, tools.extension_tool_plane(), Publication::Published)
+                .published()
+                .await;
+        let composed = conversation_runtime_over_model(&tools, capability, model).unwrap();
+        let host = rustx::runtime_client::RuntimeClientHost::new(
+            rustx::runtime_client::RuntimeClientHostConfig {
+                runtime: composed.runtime.clone(),
+                replay_limit: None,
+            },
+        )
+        .unwrap();
+        let (attachment, _) = host
+            .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let subscription = attachment
+            .subscribe_events(host.snapshot().unwrap().1)
+            .unwrap();
+        composed.runtime.activate();
+        let accepted = composed
+            .runtime
+            .submit_inbound(inbound("unused", "Keep working until deployment succeeds").content)
+            .unwrap();
+        let (created, cursor1) = goal_event(&subscription).await;
+        assert!(created.armed);
+        let created = created.current.unwrap();
+        assert!(
+            matches!(created.origin, rustx::goal::GoalOrigin::HumanAttempt { message_id, .. } if message_id == accepted.message_id)
+        );
+        let (updated, cursor2) = goal_event(&subscription).await;
+        assert!(cursor2 > cursor1);
+        assert!(!updated.armed);
+        assert_eq!(
+            updated.current.as_ref().unwrap().phase,
+            if complete {
+                rustx::goal::GoalPhase::Complete
+            } else {
+                rustx::goal::GoalPhase::Blocked
+            }
+        );
+        assert_eq!(host.snapshot().unwrap().0.goal, Some(updated));
+        composed.runtime.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn goal84_model_mutation_and_drain_have_one_owned_commit_order() {
+    for inside in [false, true] {
+        for update in [false, true] {
+            let extensions = NativeAgentExtensions::none().and_goal();
+            let (_dir, tools) = todo_tool_runtime("goal-drain-tool", &extensions);
+            if update {
+                tools
+                    .goal()
+                    .unwrap()
+                    .write(rustx::goal::GoalWrite::Create {
+                        objective: "Deliver".into(),
+                        budget: 2,
+                        origin: rustx::goal::GoalOrigin::RuntimeControl,
+                    })
+                    .unwrap()
+                    .unwrap();
+            }
+            tools.goal().unwrap().disarm();
+            let call = if update {
+                ScriptedCall {
+                    id: "complete",
+                    tool_id: "native.update_goal",
+                    name: "update_goal",
+                    arguments: serde_json::json!({"action":"complete","expected":{"id":"goal-1","revision":1}}),
+                }
+            } else {
+                goal_create_call()
+            };
+            let model = fake_model(vec![tool_turn(&[call]), vec![FakeStep::ParkUntilCancelled]]);
+            let capability =
+                extension_capability(&tools, tools.extension_tool_plane(), Publication::Published)
+                    .published()
+                    .await;
+            let composed = conversation_runtime_over_model(&tools, capability, model).unwrap();
+            let arrival = Arc::new(tokio::sync::Notify::new());
+            let linearized = Arc::new(tokio::sync::Notify::new());
+            composed
+                .runtime
+                .install_drain_signals(arrival.clone(), linearized.clone());
+            let domain = tools.goal().unwrap().clone();
+            domain.tool_commit_gate(inside).arm();
+            // The seed is explicitly disarmed; only this Human attempt runs.
+            composed.runtime.activate();
+            composed
+                .runtime
+                .submit_inbound(inbound("unused", "Keep working until delivery").content)
+                .unwrap();
+            let waiter = domain.clone();
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                tokio::task::spawn_blocking(move || waiter.tool_commit_gate(inside).wait_entered()),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let runtime = composed.runtime.clone();
+            let shutdown = tokio::spawn(async move { runtime.shutdown().await });
+            tokio::time::timeout(Duration::from_secs(10), arrival.notified())
+                .await
+                .unwrap();
+            if !inside {
+                tokio::time::timeout(Duration::from_secs(10), linearized.notified())
+                    .await
+                    .unwrap();
+            }
+            domain.tool_commit_gate(inside).release();
+            tokio::time::timeout(Duration::from_secs(10), shutdown)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let view = domain.view().unwrap();
+            assert!(!view.armed);
+            if update {
+                let goal = view.current.unwrap();
+                assert_eq!(goal.reference.revision, if inside { 2 } else { 1 });
+                assert_eq!(
+                    goal.phase,
+                    if inside {
+                        rustx::goal::GoalPhase::Complete
+                    } else {
+                        rustx::goal::GoalPhase::Active
+                    }
+                );
+            } else {
+                assert_eq!(view.current.is_some(), inside);
+            }
+        }
     }
 }

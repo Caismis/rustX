@@ -83,7 +83,11 @@
 // the same way as "Todo composed over an empty task list" (an empty snapshot).
 // Both follow from one frozen composition and cannot disagree. There is no v28
 // decoding and no compatibility shim.
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 30;
+// Version 30: root Goal controls and snapshot member.
+// Version 31: Goal joins coherent projection bootstrap and the bounded
+// `goal_changed` stream. Activation-only changes advance the client cursor
+// while preserving the independent durable Goal revision.
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 31;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -1657,6 +1661,7 @@ export interface PublicationAudit {
 }
 
 export type RuntimeClientEvent =
+  | { type: "goal_changed"; view: GoalView }
   | { type: "workflows_updated"; workflows: WorkflowSnapshot }
   | {
       type: "attempt_started";
@@ -2287,6 +2292,7 @@ export function isKnownRuntimeClientEvent(
     case "tool_call_assembled":
     case "assistant_publication_settled":
     case "tool_execution_started":
+    case "goal_changed":
     case "workflows_updated":
     case "tool_execution_progress":
     case "tool_execution_settled":

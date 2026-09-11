@@ -233,7 +233,7 @@ pub struct RuntimeClientSnapshot {
     /// [`ConversationTodoList`]: crate::tools::todo::ConversationTodoList
     #[serde(default)]
     pub todos: Option<TodoSnapshot>,
-    /// Revisioned Goal read domain; absent when disabled, never reconstructed from events.
+    /// Goal read model at this projection cursor; absent when disabled. Journal facts never reconstruct it.
     pub goal: Option<crate::goal::GoalView>,
 }
 

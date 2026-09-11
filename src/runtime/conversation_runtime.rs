@@ -2032,6 +2032,12 @@ impl RuntimeInner {
         // one of those commits. Reading the committed list inside the same
         // freeze keeps the seed and the live stream on one cut.
         let todos = self.tool_runtime.todo_snapshot();
+        let goal = self
+            .tool_runtime
+            .goal()
+            .map(crate::goal::GoalDomain::view)
+            .transpose()
+            .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
         self.interaction.install_observer(observer.clone());
         // ---- T1: the mailbox (frozen: an inactive conversation refuses
         //          inbound) ----
@@ -2039,6 +2045,9 @@ impl RuntimeInner {
             .mailbox
             .install_observer_and_pending(observer.clone())
             .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
+        if let Some(domain) = self.tool_runtime.goal() {
+            domain.install_observer(observer.clone());
+        }
         // ---- T2: the background registry (frozen: the registry refuses
         //          commits while its mailbox is bound inactive) ----
         let background = self
@@ -2082,6 +2091,7 @@ impl RuntimeInner {
             subagents,
             pending_interactions,
             todos,
+            goal,
             capabilities,
             capability_availability,
             resources,
@@ -3588,6 +3598,18 @@ impl ConversationRuntime {
             .lock()
             .expect("coordinator probe lock poisoned") = Some(probe);
         Ok(runtime)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_drain_signals(
+        &self,
+        arrival: Arc<tokio::sync::Notify>,
+        linearization: Arc<tokio::sync::Notify>,
+    ) {
+        let mut probe = self.inner.probe.lock().expect("probe lock");
+        let probe = probe.get_or_insert_with(CoordinatorProbe::default);
+        probe.shutdown_arrival = Some(arrival);
+        probe.drain_linearization = Some(linearization);
     }
 
     #[cfg(test)]
@@ -5321,6 +5343,7 @@ impl std::error::Error for RuntimeBootstrapError {}
 /// Every one of those facts arrives through the live observation stream.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeBootstrapSnapshot {
+    pub goal: Option<crate::goal::GoalView>,
     /// The conversation identity.
     pub conversation_id: ConversationId,
     /// Whether runtime drain has begun and new admission is closed.
@@ -5820,6 +5843,15 @@ impl RuntimeObserver {
             return;
         };
         inner.observe(observation);
+    }
+}
+
+impl crate::goal::GoalObserver for RuntimeObserver {
+    fn changed(&self, view: crate::goal::GoalView) {
+        self.push(ConversationObservation::GoalChanged(view));
+    }
+    fn disarmed(&self) {
+        self.push(ConversationObservation::GoalDisarmed);
     }
 }
 
