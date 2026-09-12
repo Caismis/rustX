@@ -1351,8 +1351,8 @@ mod tests {
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
                 extension_tools: crate::extensions::ExtensionToolPlane::none(),
                 agent_activation: crate::capabilities::AgentActivation::default(),
-                skill_discovery: crate::skills::SkillDiscoveryConfig::default_for_workspace(
-                    &workspace,
+                skill_discovery: crate::skills::SkillDiscoveryConfig::workspace_root(
+                    workspace.root().join(".agents/skills"),
                 ),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: crate::tools::environment::ToolEnvironment::new(),

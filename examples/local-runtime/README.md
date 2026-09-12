@@ -45,7 +45,7 @@ examples/local-runtime/
 | `settings.toml` | Copy to the host configuration directory: user model selection and host-only Tool approval/invocation policies. |
 | `rustx.toml` | Project configuration: default model selection, context, Agent Status modules/timezone, tool activation, project MCP sources, contained Skill roots, and tool environment. It cannot set Tool approval/invocation policies. |
 | `workspace/` | The authoritative execution cwd and conventional project/source tree, including Skills and editable custom Python tool packages. Relative native file-tool paths resolve here. This is not a general filesystem sandbox for Read/Write/Edit/Grep/Glob. |
-| `workspace/.agents/skills/*` | Canonical project Skills, automatically discovered through the Skill plane's own semantics; discovery grants no execution authority. |
+| `workspace/.agents/skills/*` | Canonical `workspace`-source Skills, automatically discovered through the Skill plane's own semantics; discovery grants no execution authority. |
 | `workspace/.agents/tools/*` | Inertly discovered managed Python packages. Discovery does not prepare or activate their MCP servers. |
 | `workspace/.agents/agents/*` | Explicitly defined/admitted Subagent instruction and project-guidance sources. The config controls admission; filesystem presence alone does not expose a profile. |
 | `workspace/.agents/workflows/*` | Canonical Workflow YAML sources, discovered deterministically. Settings select model visibility. |
@@ -287,10 +287,15 @@ Partial native policy objects override only explicitly supplied axes over
 that tool's own defaults. `full_access` bypasses only Tool approval, without
 changing exposure, execution mode or concurrency.
 
-Native launch discovers Skills under the user configuration directory's
-`skills/` and `<workspace>/.agents/skills/`, plus the resolved `skills` list.
-Repeating `--skill` supplies one list replacing the configured list.
-This example uses only `workspace/.agents/skills/`.
+Native launch discovers Skills under the two canonical automatic sources —
+`global` (`~/.agents/skills`) and `workspace` (`<workspace>/.agents/skills`) —
+selected by `[skills].sources`, plus the explicit `--skill` launch paths.
+`workspace` shadows `global` for the same logical Skill identity, and explicit
+paths shadow both. Array order is never precedence. One malformed package is
+excluded with a typed generation diagnostic; unrelated valid packages still
+publish. This example uses only `workspace/.agents/skills/`, and its root
+Agent authors no `skills` list: the root automatically sees every eligible
+catalog Skill, minus `agent.disabled_skills`.
 `disable-model-invocation: true`
 keeps a validated Skill in runtime resource state but omits it from the
 model-visible catalog.

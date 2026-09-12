@@ -28,7 +28,8 @@
 use std::sync::Arc;
 
 use crate::protocol::manifest::SkillBinding;
-use crate::skills::package::SkillPackage;
+use crate::skills::diagnostics::{SkillDiagnostic, SkillProvenance};
+use crate::skills::package::{SkillDiscoveryOutcome, SkillPackage};
 
 /// One model-visible Skill catalog entry: standard metadata plus the host
 /// location of the primary instructions file.
@@ -48,20 +49,63 @@ pub struct SkillCatalogEntry {
 ///
 /// The snapshot holds the accepted Skill packages, the deterministically
 /// ordered catalog metadata entries after Skill-level invocation filtering,
-/// and the deterministic `SkillId` + `SkillVersionId` bindings. The entries
-/// are the one Skill-level model-visible set used by capability projections.
-/// It is constructed once per candidate preparation and never mutated.
+/// the deterministic `SkillId` + `SkillVersionId` bindings, the effective
+/// source provenance of each identity, and the generation-scoped discovery
+/// diagnostics. The entries are the one Skill-level model-visible set used
+/// by capability projections. It is constructed once per candidate
+/// preparation and never mutated.
+///
+/// Provenance and diagnostics are deliberately *beside* the catalog, not in
+/// it: they explain the generation to inspection, and they never reach the
+/// model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillSnapshot {
     packages: Vec<Arc<SkillPackage>>,
     catalog: Vec<SkillCatalogEntry>,
     bindings: Vec<SkillBinding>,
     visible_bindings: Vec<SkillBinding>,
+    provenance: Vec<SkillProvenance>,
+    diagnostics: Vec<SkillDiagnostic>,
 }
 
 impl SkillSnapshot {
+    /// Freezes one complete discovery outcome, including its provenance and
+    /// its typed generation-scoped diagnostics.
+    #[must_use]
+    pub fn from_discovery(outcome: SkillDiscoveryOutcome) -> Self {
+        let SkillDiscoveryOutcome {
+            packages,
+            provenance,
+            diagnostics,
+        } = outcome;
+        Self {
+            provenance,
+            diagnostics,
+            ..Self::new(packages.into_iter().map(Arc::new).collect())
+        }
+    }
+
+    /// The effective source provenance of every admitted identity, ordered
+    /// by Skill name. Generation/inspection metadata, never model input.
+    #[must_use]
+    pub fn provenance(&self) -> &[SkillProvenance] {
+        &self.provenance
+    }
+
+    /// The canonically ordered Skill diagnostics of this generation.
+    ///
+    /// They are computed once, with the generation, and are never re-emitted
+    /// per model turn.
+    #[must_use]
+    pub fn diagnostics(&self) -> &[SkillDiagnostic] {
+        &self.diagnostics
+    }
+
     /// Builds the immutable snapshot from the accepted packages, ordering
     /// everything deterministically by validated Skill name.
+    ///
+    /// Provenance is derived from the packages themselves and records no
+    /// shadowing; [`Self::from_discovery`] is the complete boundary.
     #[must_use]
     pub fn new(packages: Vec<Arc<SkillPackage>>) -> Self {
         let mut packages = packages;
@@ -90,11 +134,22 @@ impl SkillSnapshot {
                 version_id: package.version_id().clone(),
             })
             .collect();
+        let provenance = packages
+            .iter()
+            .map(|package| SkillProvenance {
+                name: package.name().to_owned(),
+                source: package.source(),
+                location: package.location().to_owned(),
+                shadowed: Vec::new(),
+            })
+            .collect();
         Self {
             packages,
             catalog,
             bindings,
             visible_bindings,
+            provenance,
+            diagnostics: Vec::new(),
         }
     }
 

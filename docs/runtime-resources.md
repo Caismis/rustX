@@ -22,9 +22,11 @@ control and does not disable external preparation.
 
 Root and named Agents resolve one [Agent Profile](agent-profiles.md) against
 admitted resources. Each frozen registry exposes only that Agent's selection.
-Root selects `agent.tools`, `agent.skills`, `agent.extensions`, `agent.agents`
-and `agent.workflows`. Named defaults use their independently authored profile
-against generation authority, never the root registry as a ceiling.
+Root selects `agent.tools`, `agent.extensions`, `agent.agents` and
+`agent.workflows`, and subtracts `agent.disabled_skills` from the eligible
+Skill catalog it automatically sees. Named defaults use their independently
+authored profile — including an exact `skills` list — against generation
+authority, never the root registry as a ceiling.
 
 `--tools a,b` is an explicit host profile layer selecting admitted ordinary
 names. Unknown or ambiguous CLI names fail. `--no-builtin-tools` and `--no-tools`
@@ -480,9 +482,124 @@ active capability and invocation approval. Managed Python discovery never enters
 package parsing or preparation. The runtime root (often `.rustx/`) remains generated
 state, separate from these canonical authored resources.
 
-Native launch resolves automatic Skill roots to the user configuration
-directory's `skills/` and `<workspace>/.agents/skills/`. Explicit Skill paths
-are layered by the Rust resolver. See [launch configuration](launch-configuration.md).
+### Skill sources and discovery
+
+There is one Skill model. Sources decide *where* packages may be discovered;
+validation decides *which* packages enter the effective catalog; Agent Profiles
+decide *which admitted identities* an Agent selects; and every Agent loads a
+Skill's contents lazily, only when it needs them.
+
+```text
+configured Skill sources
+        |
+        v
+discover candidate packages per source
+        |
+        v
+validate each candidate independently
+        |
+        +-- valid   -> source-local candidate
+        |
+        +-- invalid -> excluded + typed generation diagnostic
+        |
+        v
+same-scope logical-identity conflict elimination
+        |
+        v
+explicit > workspace > global merge
+        |
+        v
+frozen generation SkillCatalog / SkillSnapshot
+        |
+        +--> root visible set = eligible catalog - agent.disabled_skills
+        +--> named Agent explicit Skill selection
+        +--> Workflow child explicit/default Skill selection
+        |
+        v
+existing lazy Read-based Skill loading
+```
+
+For v1 there are exactly two **automatic** sources:
+
+| Source | Root |
+| --- | --- |
+| `global` | `~/.agents/skills` |
+| `workspace` | `<workspace>/.agents/skills` |
+
+```text
+precedence:
+explicit --skill > workspace > global
+```
+
+The global root is resolved from the launch owner's captured home directory.
+It is never a rustX configuration directory, never shell-expanded at a use
+site, and `~/.config/rustx/skills` is not a source, an alias, a fallback, or a
+migration path.
+
+The session policy selects which automatic roots are scanned:
+
+```toml
+[skills]
+sources = ["global", "workspace"]
+```
+
+`global` and `workspace` are the only accepted identities; there is no `all`,
+no include/exclude pair, no wildcard, no regex, and no custom root registry.
+An unknown identity, a duplicate entry, and an unknown field are hard
+configuration authoring errors. An explicitly empty array selects no automatic
+source. **Array order is not precedence** — precedence is the architectural
+rule above. The policy is launch-scoped: a reload rescans the roots the launch
+resolved, but never installs or removes a source authority under a running
+composition.
+
+`--skill <path>` remains a separate launch authority for an explicit package
+directory, a `SKILL.md`, or a collection root. It passes through the same
+Agent Skills package validation, the same identity validation, the same
+containment rules, the same deterministic conflict handling, and the same
+generation freeze; it is not a bypass. Because explicit launch intent is the
+highest-precedence layer everywhere else in rustX, an explicit package wins
+the same logical identity against both automatic sources. A `--skill` path
+that does not exist is a launch error — it is authored intent, not discovered
+content. `--no-skills` disables automatic discovery entirely.
+
+Discovery is bounded by its source: an accepted candidate's canonical root must
+stay inside its own source's canonical root. Global and workspace are different
+authorities, so containment is always package-in-source, never
+package-in-workspace.
+
+**One malformed Skill package never suppresses unrelated valid Skills.** A
+candidate that fails validation is excluded and represented by a typed
+generation-scoped diagnostic; the rest of its source still publishes. Two
+distinct packages resolving to one logical identity *in the same scope* exclude
+every conflicting definition and emit one deterministic conflict fact —
+discovery never picks a winner by enumeration order. A valid workspace package
+shadowing a valid global one is intentional, not an error: the shadow is kept
+as generation provenance (effective identity, winning source and location, and
+each shadowed source and location) and never reaches the model-facing catalog.
+
+The typed facts frozen with each generation are:
+
+| Diagnostic | Severity | Meaning |
+| --- | --- | --- |
+| `source_root_missing` | fact | The root does not exist; an empty set, never a failure. |
+| `source_root_invalid` | warning | The root exists but cannot be scanned; only that source is excluded. |
+| `package_invalid` | warning | One candidate failed Agent Skills validation; the typed cause is preserved. |
+| `package_escapes_source` | warning | One candidate resolved outside its own source root. |
+| `duplicate_identity` | warning | One scope defines the identity more than once; every definition is excluded. |
+| `shadowed` | fact | A higher-precedence source won the same identity. |
+
+Root `disabled_skills` adds its own `disabled_skill_absent` Agent Profile
+diagnostic for an identity the effective catalog does not contain. Diagnostics
+are computed once with the generation, canonically ordered, and never
+re-emitted per model turn.
+
+A later generation may change discovered and effective Skills for future work.
+It never mutates an already admitted attempt, child, or running Workflow: an
+attempt admitted against generation R1 keeps R1's frozen Skill identities,
+versions, and locations after R2 publishes.
+
+See [launch configuration](launch-configuration.md) and
+[Agent Profiles](agent-profiles.md).
 
 After the host grants trust, runtime creation and explicit reload load only
 the resolved workspace's instructions. At most one file is selected with this precedence:

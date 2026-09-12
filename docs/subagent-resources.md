@@ -74,7 +74,7 @@ Both root and named authoring use this type and the same semantic resolver.
 | `timeout_ms` | Optional integer, 1–86,400,000; the whole-child lifecycle deadline. |
 | `tools.builtin` | Exact array of **ordinary** native Tool names; default empty. A Tool provided by an Agent Extension (`todo`) is rejected here by name: compose it under `extensions` instead. |
 | `tools.sources` | Map of typed source identities to `"all"` or exact Tool-name arrays; default empty. MCP and `python:<package>` use this same selection vocabulary. |
-| `skills` | Exact Skill-name array; default empty. |
+| `skills` | Exact Skill-name array over the effective merged catalog; default empty. Root `disabled_skills` never constrains it. |
 | `agents_md.inherit` | Boolean, default true; include the parent's frozen project guidance. |
 | `agents_md.files` | Ordered supplemental guidance paths; default empty, at most eight. They are distinct project instructions, never the primary role body. |
 | `worktree.enabled` | Boolean, default false. |
@@ -297,11 +297,13 @@ are checked against the owning boundary. Missing resources fail the candidate.
 These checks do not claim syscall isolation against an actively hostile OS user.
 An untrusted project activates no project roles, Skills, Workflows or instructions.
 
-Local launch's automatic Skill roots are the known user configuration directory's
-`skills` and the workspace's `.agents/skills`. The standalone Skill discovery
-default uses user and workspace `.agents/skills`; neither reads `.rustx/skills`.
-Explicit Skill paths retain the existing user/project/CLI ownership validation.
-No user files are deleted or migrated.
+Local launch's automatic Skill sources are `global` (the captured host home's
+`.agents/skills`) and `workspace` (`<workspace>/.agents/skills`), selected by
+the launch-scoped `[skills].sources` policy; `workspace` shadows `global` for
+the same logical identity. Neither reads `.rustx/skills` or
+`~/.config/rustx/skills`. Explicit `--skill` paths remain a separate launch
+authority with the existing user/project/CLI ownership validation and win the
+merge against both automatic sources. No user files are deleted or migrated.
 
 Implicit project guidance reads at most one file at the admitted workspace root,
 using existing precedence: `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`,

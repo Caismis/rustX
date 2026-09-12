@@ -100,7 +100,6 @@ fn config_json(
     reserve_tokens: u64,
     timezone: &str,
     environment_value: &str,
-    skills_root: &std::path::Path,
     builtin_tools: &[&str],
     include_old_mcp: bool,
 ) -> String {
@@ -115,7 +114,7 @@ fn config_json(
     } else {
         serde_json::json!({})
     };
-    toml::to_string_pretty(&serde_json::json!({"schema_version": 8, "agent_id": "agent-issue96", "context": {"reserve_tokens": reserve_tokens, "keep_recent_tokens": 4096}, "mcp_servers": mcp_servers, "environment": {"ISSUE96_CURRENT": environment_value}, "agent": {"model": {"model": model}, "skills": std::fs::read_dir(skills_root).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>(), "extensions": {
+    toml::to_string_pretty(&serde_json::json!({"schema_version": 8, "agent_id": "agent-issue96", "context": {"reserve_tokens": reserve_tokens, "keep_recent_tokens": 4096}, "mcp_servers": mcp_servers, "environment": {"ISSUE96_CURRENT": environment_value}, "agent": {"model": {"model": model}, "extensions": {
             "todo": {"enabled": true},
             "agent_status": {
                 "enabled": true,
@@ -150,15 +149,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
     std::fs::write(root.path().join("models.toml"), MODELS).expect("models");
     std::fs::write(
         &config_path,
-        config_json(
-            "local/model-a",
-            11,
-            "UTC",
-            "v1",
-            &skills_root,
-            &["read"],
-            true,
-        ),
+        config_json("local/model-a", 11, "UTC", "v1", &["read"], true),
     )
     .expect("config v1");
     let startup = paths(root.path(), &config_path);
@@ -209,15 +200,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
     .expect("new project instructions");
     std::fs::write(
         &config_path,
-        config_json(
-            "local/model-c",
-            22,
-            "Asia/Shanghai",
-            "v2",
-            &skills_root,
-            &[],
-            false,
-        ),
+        config_json("local/model-c", 22, "Asia/Shanghai", "v2", &[], false),
     )
     .expect("config v2");
 
@@ -380,15 +363,7 @@ async fn invalid_current_config_is_rejected_even_when_a_catalog_exists() {
     std::fs::write(root.path().join("models.toml"), MODELS).expect("models");
     std::fs::write(
         &config_path,
-        config_json(
-            "local/model-a",
-            11,
-            "UTC",
-            "v1",
-            &skills_root,
-            &["read"],
-            false,
-        ),
+        config_json("local/model-a", 11, "UTC", "v1", &["read"], false),
     )
     .expect("valid config");
     let startup = paths(root.path(), &config_path);
@@ -424,15 +399,7 @@ async fn invalid_first_boot_model_does_not_publish_a_poisoned_session() {
 
     std::fs::write(
         &config_path,
-        config_json(
-            "local/missing",
-            11,
-            "UTC",
-            "invalid-first-boot",
-            &skills_root,
-            &[],
-            false,
-        ),
+        config_json("local/missing", 11, "UTC", "invalid-first-boot", &[], false),
     )
     .expect("invalid first config");
     assert!(
@@ -448,15 +415,7 @@ async fn invalid_first_boot_model_does_not_publish_a_poisoned_session() {
 
     std::fs::write(
         &config_path,
-        config_json(
-            "local/model-a",
-            11,
-            "UTC",
-            "corrected",
-            &skills_root,
-            &[],
-            false,
-        ),
+        config_json("local/model-a", 11, "UTC", "corrected", &[], false),
     )
     .expect("corrected config");
     let product = LocalSessionProduct::compose(&(startup).resolve(), &dependencies())

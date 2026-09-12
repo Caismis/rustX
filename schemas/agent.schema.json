@@ -429,6 +429,14 @@
       "description": "The bounded model-facing routing description.",
       "type": "string"
     },
+    "disabled_skills": {
+      "default": [],
+      "description": "The root Agent's Skill deny-list over the effective catalog.\n\n**Root only.** This is capability *visibility*, not catalog\nmembership: a disabled Skill stays in the generation's catalog and a\nnamed Agent that selects it explicitly still gets it.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "extensions": {
       "$ref": "#/$defs/NativeAgentExtensionsDocument",
       "default": {
@@ -465,7 +473,7 @@
     },
     "skills": {
       "default": [],
-      "description": "The exact Skill allowlist over the admitted Skill catalog.",
+      "description": "The exact Skill allowlist over the admitted Skill catalog.\n\n**Named Agents only.** The root Agent has no positive Skill list: it\nsees every eligible catalog Skill and subtracts `disabled_skills`.",
       "items": {
         "type": "string"
       },

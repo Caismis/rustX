@@ -94,23 +94,10 @@ fn node_deps(json: &str) -> (&'static str, &'static str) {
     )
 }
 
+/// The root Agent needs no positive Skill list (#280): it automatically sees
+/// every eligible Skill in the effective catalog.
 fn fixture_activation() -> rustx::capabilities::AgentActivation {
-    let mut activation = rustx::capabilities::AgentActivation::default();
-    activation.profile.skills = [
-        "a",
-        "b",
-        "bad",
-        "node-skill",
-        "pdf",
-        "runtime-only",
-        "shell",
-        "slides",
-        "visible",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect();
-    activation
+    rustx::capabilities::AgentActivation::default()
 }
 
 fn conversation() -> Conversation {
@@ -119,6 +106,18 @@ fn conversation() -> Conversation {
 
 fn conversation_with_options(
     agent_activation: rustx::capabilities::AgentActivation,
+) -> Conversation {
+    conversation_with(agent_activation, |_, workspace| {
+        rustx::skills::SkillDiscoveryConfig::workspace_root(workspace.root().join(".agents/skills"))
+    })
+}
+
+/// The fixture with an explicit Skill source authority (#280). The `home`
+/// argument is the fixture's *isolated* temporary home: no test resolves the
+/// global source against the developer's real home directory.
+fn conversation_with(
+    agent_activation: rustx::capabilities::AgentActivation,
+    skill_discovery: impl FnOnce(&std::path::Path, &Workspace) -> rustx::skills::SkillDiscoveryConfig,
 ) -> Conversation {
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace_root = dir.path().join("workspace");
@@ -163,10 +162,7 @@ fn conversation_with_options(
             base_tool_registry: Arc::new(base_tool_registry),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
             agent_activation,
-            skill_discovery: rustx::skills::SkillDiscoveryConfig {
-                automatic_roots: vec![workspace.root().join(".agents/skills")],
-                explicit_paths: Vec::new(),
-            },
+            skill_discovery: skill_discovery(dir.path(), &workspace),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: dir.path().join("skill-env"),
@@ -308,6 +304,296 @@ async fn lazy_skills_follow_frozen_read_authority_without_changing_discovery() {
         let view = crate::runtime_client::projection::capability_view(&snapshot, &BTreeMap::new());
         assert!(view.skills.is_empty());
     }
+}
+
+// ---------------------------------------------------------------------------
+// Skill sources, merge, diagnostics, and freezing (Issue #280)
+// ---------------------------------------------------------------------------
+
+/// A conversation whose automatic sources are an isolated global root plus
+/// the workspace root. The global root is never the developer's real home.
+fn conversation_with_sources(
+    activation: rustx::capabilities::AgentActivation,
+    selected: &std::collections::BTreeSet<rustx::skills::AutomaticSkillSource>,
+    home_name: &'static str,
+) -> (Conversation, std::path::PathBuf) {
+    let mut home = std::path::PathBuf::new();
+    let conversation = conversation_with(activation, |root, workspace| {
+        home = root.join(home_name);
+        rustx::skills::SkillDiscoveryConfig {
+            automatic: rustx::skills::automatic_skill_roots(
+                Some(&home),
+                workspace.root(),
+                selected,
+            ),
+            explicit_paths: Vec::new(),
+        }
+    });
+    (conversation, home)
+}
+
+/// #280 (6)(7)(9)(11)(13)(14): the whole ownership chain proven through the
+/// real candidate/commit owner — validation, exclusion, the
+/// `workspace > global` merge, provenance, root visibility, and the fact
+/// that a root deny-list removes nothing from the committed catalog.
+#[tokio::test]
+async fn cfg280_the_committed_generation_owns_sources_merge_and_root_visibility() {
+    let (conversation, home) = conversation_with_sources(
+        rustx::capabilities::AgentActivation {
+            profile: rustx::local_runtime::config::AgentProfileDocument {
+                disabled_skills: vec!["legacy-java".into(), "never-authored".into()],
+                ..rustx::local_runtime::config::builtin_root_profile()
+            },
+            ..Default::default()
+        },
+        &rustx::skills::default_automatic_sources(),
+        "home",
+    );
+    write_skill(&home, "legacy-java", "Legacy Java guidance.", &[]);
+    write_skill(&home, "shared", "Global shared guidance.", &[]);
+    write_skill(
+        conversation.workspace.root(),
+        "shared",
+        "Workspace shared guidance.",
+        &[],
+    );
+    write_skill(conversation.workspace.root(), "rust-review", "Review.", &[]);
+    // One malformed package in the workspace source.
+    let broken = conversation.workspace.root().join(".agents/skills/broken");
+    std::fs::create_dir_all(&broken).expect("broken package");
+    std::fs::write(broken.join("SKILL.md"), "not frontmatter\n").expect("broken SKILL.md");
+
+    let snapshot = prepare_and_commit(&conversation.coordinator).await;
+
+    // (11): the malformed package is excluded; everything else publishes.
+    assert_eq!(
+        snapshot
+            .skills()
+            .catalog_entries()
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        ["legacy-java", "rust-review", "shared"]
+    );
+    // (13): workspace shadows global for the same identity.
+    let shared = snapshot
+        .skills()
+        .packages()
+        .iter()
+        .find(|package| package.name() == "shared")
+        .expect("shared package");
+    assert_eq!(shared.source(), rustx::skills::SkillSource::Workspace);
+    assert_eq!(shared.description(), "Workspace shared guidance.");
+    // (14): the shadow is retained as generation provenance, not model input.
+    let provenance = snapshot
+        .skills()
+        .provenance()
+        .iter()
+        .find(|entry| entry.name == "shared")
+        .expect("shared provenance");
+    assert_eq!(provenance.shadowed.len(), 1);
+    assert_eq!(
+        provenance.shadowed[0].source,
+        rustx::skills::SkillSource::Global
+    );
+    let rendered = snapshot.skill_catalog().expect("catalog");
+    assert!(!rendered.contains("shadow"));
+    assert!(!rendered.contains("Global shared guidance."));
+
+    // Typed, canonically ordered diagnostics travel with the generation.
+    let diagnostics = snapshot.skills().diagnostics();
+    assert!(
+        diagnostics
+            .iter()
+            .any(|fact| matches!(fact, rustx::skills::SkillDiagnostic::PackageInvalid { .. })),
+        "{diagnostics:?}"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|fact| matches!(fact, rustx::skills::SkillDiagnostic::Shadowed { .. })),
+        "{diagnostics:?}"
+    );
+    let mut sorted = diagnostics.to_vec();
+    sorted.sort();
+    assert_eq!(sorted, diagnostics, "diagnostics must already be canonical");
+
+    // (6)(7): the root sees the eligible catalog minus its deny-list, and
+    // the denied Skill is still owned by the committed generation.
+    let profile = snapshot.resolved_profile().expect("root profile");
+    assert_eq!(profile.skills, ["rust-review", "shared"]);
+    assert!(
+        snapshot
+            .skills()
+            .packages()
+            .iter()
+            .any(|package| package.name() == "legacy-java")
+    );
+    assert!(
+        snapshot
+            .skills()
+            .bindings()
+            .iter()
+            .any(|binding| binding.skill_id.as_str() == "legacy-java")
+    );
+    assert_eq!(
+        snapshot
+            .model_skill_entries()
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        ["rust-review", "shared"]
+    );
+    // (8): the absent deny-list identity is exactly one generation fact.
+    assert_eq!(
+        profile
+            .diagnostics
+            .iter()
+            .filter(|fact| matches!(
+                fact,
+                rustx::runtime::agent_profile::AgentProfileDiagnostic::DisabledSkillAbsent { .. }
+            ))
+            .count(),
+        1
+    );
+}
+
+/// #280 (2)(3)(5): the session source policy decides which roots are
+/// scanned, and a missing root is a benign empty set rather than a failure.
+#[tokio::test]
+async fn cfg280_the_source_policy_selects_the_scanned_roots() {
+    for (selected, expected) in [
+        (
+            vec![rustx::skills::AutomaticSkillSource::Global],
+            vec!["global-only"],
+        ),
+        (
+            vec![rustx::skills::AutomaticSkillSource::Workspace],
+            vec!["workspace-only"],
+        ),
+        (Vec::new(), Vec::new()),
+    ] {
+        let (conversation, home) = conversation_with_sources(
+            fixture_activation(),
+            &selected.into_iter().collect(),
+            "home",
+        );
+        write_skill(&home, "global-only", "Global.", &[]);
+        write_skill(
+            conversation.workspace.root(),
+            "workspace-only",
+            "Workspace.",
+            &[],
+        );
+        let snapshot = prepare_and_commit(&conversation.coordinator).await;
+        assert_eq!(
+            snapshot
+                .skills()
+                .catalog_entries()
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    // (5) A selected-but-absent root contributes a benign fact only.
+    let (conversation, _home) = conversation_with_sources(
+        fixture_activation(),
+        &rustx::skills::default_automatic_sources(),
+        "absent-home",
+    );
+    let snapshot = prepare_and_commit(&conversation.coordinator).await;
+    assert!(snapshot.skills().packages().is_empty());
+    assert!(
+        snapshot
+            .skills()
+            .diagnostics()
+            .iter()
+            .all(|fact| fact.severity() == rustx::skills::SkillDiagnosticSeverity::Fact)
+    );
+}
+
+/// #280 (18)(19)(20)(21): a later generation changes future work only.
+///
+/// The attempt admitted against R1 keeps R1's frozen Skill identity,
+/// version, and location after R2 publishes; a failed candidate leaves R1
+/// completely authoritative; and no `SKILL.md` body is ever injected. The
+/// proof is exact ownership — a held attempt lease — never a sleep.
+#[tokio::test]
+async fn cfg280_a_later_generation_never_mutates_an_admitted_attempt() {
+    let conversation = conversation();
+    write_skill(
+        conversation.workspace.root(),
+        "pinned",
+        "First generation guidance.",
+        &[],
+    );
+    std::fs::write(
+        conversation
+            .workspace
+            .root()
+            .join(".agents/skills/pinned/SKILL.md"),
+        "---\nname: pinned\ndescription: First generation guidance.\n---\nR1-BODY-SENTINEL\n",
+    )
+    .expect("first generation body");
+    let first = prepare_and_commit(&conversation.coordinator).await;
+    let lease = conversation.coordinator.acquire_attempt_lease();
+    let pinned = lease.snapshot().clone();
+    let frozen_bindings = pinned.skills().bindings().to_vec();
+    assert_eq!(frozen_bindings.len(), 1);
+    assert!(
+        !pinned
+            .skill_catalog()
+            .expect("catalog")
+            .contains("R1-BODY-SENTINEL"),
+        "a committed catalog is metadata plus a location, never a Skill body"
+    );
+
+    // Edit the package and add a second one: later generation material.
+    std::fs::write(
+        conversation
+            .workspace
+            .root()
+            .join(".agents/skills/pinned/SKILL.md"),
+        "---\nname: pinned\ndescription: Second generation guidance.\n---\nR2-BODY-SENTINEL\n",
+    )
+    .expect("second generation body");
+    write_skill(conversation.workspace.root(), "late", "Late guidance.", &[]);
+
+    let candidate = conversation
+        .coordinator
+        .prepare_candidate()
+        .await
+        .expect("prepare");
+    // (18): preparing the later generation cannot touch the admitted attempt.
+    assert_eq!(lease.snapshot().as_ref(), &*pinned);
+    assert_eq!(lease.snapshot().skills().bindings(), frozen_bindings);
+    // (19): the commit boundary is unchanged — a busy conversation cannot
+    // activate a new revision, and the active revision stays authoritative.
+    assert!(conversation.coordinator.commit(candidate).is_err());
+    assert_eq!(
+        conversation.coordinator.current_snapshot().revision(),
+        first.revision()
+    );
+    drop(lease);
+
+    let second = prepare_and_commit(&conversation.coordinator).await;
+    assert_ne!(second.revision(), first.revision());
+    assert_eq!(second.skills().packages().len(), 2);
+    assert_ne!(second.skills().bindings(), frozen_bindings);
+    // (21): neither generation's catalog carries a body.
+    for snapshot in [&first, &second] {
+        let catalog = snapshot.skill_catalog().expect("catalog");
+        assert!(!catalog.contains("R1-BODY-SENTINEL"));
+        assert!(!catalog.contains("R2-BODY-SENTINEL"));
+    }
+    // The first snapshot value itself still describes the first generation.
+    assert_eq!(first.skills().bindings(), frozen_bindings);
+    assert_eq!(
+        first.skills().catalog_entries()[0].description,
+        "First generation guidance."
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -513,8 +799,8 @@ async fn absolute_store_path_does_not_change_the_digest() {
                 base_tool_registry: Arc::new(ToolRegistry::new()),
                 extension_tools: rustx::extensions::ExtensionToolPlane::none(),
                 agent_activation: fixture_activation(),
-                skill_discovery: rustx::skills::SkillDiscoveryConfig::default_for_workspace(
-                    &workspace,
+                skill_discovery: rustx::skills::SkillDiscoveryConfig::workspace_root(
+                    workspace.root().join(".agents/skills"),
                 ),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: ToolEnvironment::new(),
@@ -1397,22 +1683,69 @@ async fn stale_candidate_cannot_overwrite_a_newer_revision() {
 #[tokio::test]
 async fn failed_preparation_leaves_revision_authoritative() {
     let conversation = conversation();
-    let snapshot = prepare_and_commit(&conversation.coordinator).await;
     write_skill(
         conversation.workspace.root(),
-        "bad",
-        "Bad skill.",
-        &[python_deps(r#"{"pypdf":"5.9.0","other":"not a version"}"#)],
+        "a",
+        "Skill A.",
+        &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
+    );
+    let snapshot = prepare_and_commit(&conversation.coordinator).await;
+    // A conflict across two *valid* Skills is still a whole-candidate
+    // preparation failure: the merged dependency set has no answer.
+    write_skill(
+        conversation.workspace.root(),
+        "b",
+        "Skill B.",
+        &[python_deps(r#"{"pypdf":"5.10.0"}"#)],
     );
     let _ = conversation
         .coordinator
         .prepare_candidate()
         .await
+        .map(drop)
         .expect_err("malformed candidate");
     assert_eq!(
         conversation.coordinator.current_snapshot().revision(),
         snapshot.revision()
     );
+}
+
+/// #280 (11)(12): a malformed dependency declaration is a *package*
+/// exclusion, not a candidate failure. The candidate still prepares and
+/// publishes every unrelated valid Skill.
+#[tokio::test]
+async fn cfg280_a_malformed_declaration_excludes_only_its_own_package() {
+    let conversation = conversation();
+    write_skill(
+        conversation.workspace.root(),
+        "good",
+        "Good skill.",
+        &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
+    );
+    write_skill(
+        conversation.workspace.root(),
+        "bad",
+        "Bad skill.",
+        &[python_deps(r#"{"other":"not a version"}"#)],
+    );
+    let snapshot = prepare_and_commit(&conversation.coordinator).await;
+    assert_eq!(
+        snapshot
+            .skills()
+            .catalog_entries()
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        ["good"]
+    );
+    assert!(snapshot.python_environment().is_some());
+    assert!(snapshot.skills().diagnostics().iter().any(|fact| matches!(
+        fact,
+        rustx::skills::SkillDiagnostic::PackageInvalid {
+            cause: rustx::skills::SkillPackageError::InvalidDependencyDeclaration { .. },
+            ..
+        }
+    )));
 }
 
 // ---------------------------------------------------------------------------
@@ -1716,10 +2049,9 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
                 },
                 ..Default::default()
             },
-            skill_discovery: rustx::skills::SkillDiscoveryConfig {
-                automatic_roots: vec![conversation.workspace.root().join(".agents/skills")],
-                explicit_paths: Vec::new(),
-            },
+            skill_discovery: rustx::skills::SkillDiscoveryConfig::workspace_root(
+                conversation.workspace.root().join(".agents/skills"),
+            ),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: conversation.dir.path().join("skill-env-2"),

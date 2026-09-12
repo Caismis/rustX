@@ -1858,6 +1858,14 @@ fn optional_explicit_malformed_and_typed_rejections_are_distinct() {
             "expected a sequence",
         ),
         ("[agent]\nskills = 'null'", "expected a sequence"),
+        ("[agent]\ndisabled_skills = 'null'", "expected a sequence"),
+        // #280: the source policy is closed authoring.
+        ("[skills]\nsources = ['all']", "unknown variant"),
+        (
+            "[skills]\nsources = ['global', 'global']",
+            "duplicate source",
+        ),
+        ("[skills]\nroots = ['global']", "unknown field `roots`"),
     ] {
         text.parse::<toml_edit::DocumentMut>()
             .expect("syntactically valid TOML");
@@ -1909,10 +1917,13 @@ fn relative_paths_keep_their_document_and_cli_bases() {
         json!({"description": "project", "agents_md": {"files":["instructions.md"]}}),
         "Project role",
     );
-    f.user(json!({"subagents": {}, "agent": {"model": {"model":"host/one"}, "skills": ["user-skills"]}}));
+    f.user(
+        json!({"subagents": {}, "agent": {"model": {"model":"host/one"},
+        "disabled_skills": ["user-skills"]}}),
+    );
     f.project(json!({"subagents":{}}));
     let resolved = f.resolve();
-    assert_eq!(resolved.config.agent.skills, ["user-skills"]);
+    assert_eq!(resolved.config.agent.disabled_skills, ["user-skills"]);
     f.request.skill_paths = vec!["cli-skill".into()];
     assert_eq!(
         f.resolve().skill_paths,
@@ -2096,7 +2107,7 @@ async fn resolution_and_composition_failures_preserve_published_session_selectio
     f.project(json!({"agent_id":""}));
     assert!(resolve(&f.request, &f.host).is_err());
     assert_eq!(before, std::fs::read(&catalog).unwrap());
-    f.project(json!({"agent": {"skills": ["missing-skill"]}}));
+    f.project(json!({"agent": {"disabled_skills": ["missing-skill"]}}));
     assert!(
         analyze(&f.request, &f.host).is_ok(),
         "unavailable profile selections remain usable"
@@ -2413,7 +2424,7 @@ async fn project_resource_authority_rejects_every_declared_escape_but_preserves_
     let skill = other.join("outside");
     std::fs::create_dir(&skill).unwrap();
     f.request.skill_paths = vec![skill];
-    f.user(json!({"agent": {"model": {"model": "host/one"}, "skills": ["outside"]}}));
+    f.user(json!({"agent": {"model": {"model": "host/one"}}}));
     std::fs::write(
         f.request.skill_paths[0].join("SKILL.md"),
         "---\nname: outside\ndescription: Host resource\n---\nHost instructions\n",
@@ -2436,6 +2447,132 @@ async fn project_resource_authority_rejects_every_declared_escape_but_preserves_
         "user-owned bytes"
     );
     assert!(resources.skill_catalog().unwrap().contains("outside"));
+    product.runtime().shutdown().await.unwrap();
+}
+
+/// #280 (1)(2)(3)(4)(13)(22)(23): the launch owner resolves the automatic
+/// Skill sources from the session policy and the **captured host home**, not
+/// from any rustX configuration directory, and the explicit `--skill` launch
+/// authority passes through the same validation and merge.
+#[tokio::test]
+async fn cfg280_launch_resolves_the_canonical_skill_sources_and_explicit_authority() {
+    let write_skill = |root: &Path, name: &str, description: &str| {
+        let package = root.join(name);
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(
+            package.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {description}\n---\nInstructions\n"),
+        )
+        .unwrap();
+    };
+
+    let mut f = Fixture::new();
+    let global = f.host.home_directory.join(".agents/skills");
+    let workspace = f.host.launch_directory.join(".agents/skills");
+    write_skill(&global, "global-only", "Global only");
+    write_skill(&global, "shared", "Global shared");
+    write_skill(&workspace, "shared", "Workspace shared");
+    // The superseded rustX-config-relative root must contribute nothing.
+    write_skill(&f.host.config_directory.join("skills"), "legacy", "Legacy");
+    f.project(json!({"subagents": {}}));
+
+    let resolved = f.resolve();
+    let names = |launch: &ResolvedLaunch| {
+        launch
+            .skill_provenance
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(&resolved), ["global-only", "shared"]);
+    // (13) The workspace package wins the shared identity; (22) `legacy` is
+    // never discovered, and its bytes are left untouched.
+    let shared = resolved
+        .skill_provenance
+        .iter()
+        .find(|entry| entry.name == "shared")
+        .unwrap();
+    assert_eq!(shared.source, crate::skills::SkillSource::Workspace);
+    assert_eq!(shared.shadowed.len(), 1);
+    assert_eq!(
+        shared.shadowed[0].source,
+        crate::skills::SkillSource::Global
+    );
+    assert!(
+        f.host
+            .config_directory
+            .join("skills/legacy/SKILL.md")
+            .is_file()
+    );
+
+    // (2)(3)(4) The session policy selects which roots are scanned.
+    f.project(json!({"subagents": {}, "skills": {"sources": ["workspace"]}}));
+    assert_eq!(names(&f.resolve()), ["shared"]);
+    f.project(json!({"subagents": {}, "skills": {"sources": ["global"]}}));
+    assert_eq!(names(&f.resolve()), ["global-only", "shared"]);
+    assert_eq!(
+        f.resolve()
+            .skill_provenance
+            .iter()
+            .find(|entry| entry.name == "shared")
+            .unwrap()
+            .source,
+        crate::skills::SkillSource::Global
+    );
+    f.project(json!({"subagents": {}, "skills": {"sources": []}}));
+    assert!(names(&f.resolve()).is_empty());
+    f.project(json!({"subagents": {}, "skills": {"sources": ["plugin"]}}));
+    assert!(
+        resolve(&f.request, &f.host)
+            .unwrap_err()
+            .contains("unknown variant")
+    );
+
+    // (23) The explicit launch authority is validated identically and wins
+    // the merge; a malformed explicit package is excluded, not fatal, and a
+    // missing explicit path is a launch error.
+    f.project(json!({"subagents": {}}));
+    let explicit = f.root.path().join("explicit");
+    write_skill(&explicit, "shared", "Explicit shared");
+    std::fs::create_dir_all(explicit.join("broken")).unwrap();
+    std::fs::write(explicit.join("broken/SKILL.md"), "not frontmatter\n").unwrap();
+    f.request.skill_paths = vec![explicit.clone()];
+    let resolved = f.resolve();
+    let shared = resolved
+        .skill_provenance
+        .iter()
+        .find(|entry| entry.name == "shared")
+        .unwrap();
+    assert_eq!(shared.source, crate::skills::SkillSource::Explicit);
+    assert_eq!(shared.shadowed.len(), 2);
+    assert!(
+        resolved
+            .skill_diagnostics
+            .iter()
+            .any(|fact| matches!(fact, crate::skills::SkillDiagnostic::PackageInvalid { .. }))
+    );
+    f.request.skill_paths = vec![f.root.path().join("absent")];
+    assert!(
+        resolve(&f.request, &f.host)
+            .unwrap_err()
+            .contains("does not exist")
+    );
+
+    // The committed generation carries exactly those effective identities.
+    f.request.skill_paths = vec![explicit];
+    let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+        .await
+        .unwrap();
+    let resources = product.runtime().runtime_resources();
+    let catalog = resources.skill_catalog().unwrap();
+    assert!(catalog.contains("Explicit shared"));
+    assert!(!catalog.contains("Workspace shared"));
+    assert!(!catalog.contains("legacy"));
+    // (6) The root authored no positive Skill list and still sees them all.
+    assert_eq!(
+        resources.root_profile().unwrap().skills,
+        ["global-only", "shared"]
+    );
     product.runtime().shutdown().await.unwrap();
 }
 
@@ -2796,7 +2933,9 @@ async fn cfg271_all_catalogs_publish_together_and_failed_candidates_publish_noth
     assert_eq!(added.managed_python_catalog().packages().len(), 1);
     assert_eq!(added.capability().skills().packages().len(), 1);
     assert_eq!(added.workflows().definitions().len(), 1);
-    for path in [&agent, &skills.join("SKILL.md"), &workflow] {
+    // A malformed Agent or Workflow still fails the whole candidate: the
+    // atomic resource-generation contract is unchanged for those catalogs.
+    for path in [&agent, &workflow] {
         let bytes = std::fs::read(path).unwrap();
         std::fs::write(path, "malformed: [").unwrap();
         assert!(product.runtime().reload_resources().await.is_err());
@@ -2806,6 +2945,49 @@ async fn cfg271_all_catalogs_publish_together_and_failed_candidates_publish_noth
         ));
         std::fs::write(path, bytes).unwrap();
     }
+    // #280 (11)(19): a malformed *Skill package* is the deliberate exception.
+    // It is excluded with a typed generation diagnostic, and the candidate
+    // still publishes every other catalog atomically; one malformed package
+    // must not suppress unrelated resources.
+    let skill_markdown = skills.join("SKILL.md");
+    let skill_bytes = std::fs::read(&skill_markdown).unwrap();
+    std::fs::write(&skill_markdown, "malformed: [").unwrap();
+    product.runtime().reload_resources().await.unwrap();
+    let excluded = product.runtime().runtime_resources();
+    assert!(!std::sync::Arc::ptr_eq(
+        &added,
+        &product.runtime().runtime_resources()
+    ));
+    assert!(excluded.capability().skills().packages().is_empty());
+    assert_eq!(excluded.subagents().len(), 1);
+    assert_eq!(excluded.workflows().definitions().len(), 1);
+    assert_eq!(excluded.managed_python_catalog().packages().len(), 1);
+    assert_eq!(
+        excluded
+            .capability()
+            .skills()
+            .diagnostics()
+            .iter()
+            .filter(|fact| matches!(fact, crate::skills::SkillDiagnostic::PackageInvalid { .. }))
+            .count(),
+        1,
+        "{:?}",
+        excluded.capability().skills().diagnostics()
+    );
+    std::fs::write(&skill_markdown, skill_bytes).unwrap();
+    product.runtime().reload_resources().await.unwrap();
+    let added = product.runtime().runtime_resources();
+    assert_eq!(added.capability().skills().packages().len(), 1);
+    assert!(
+        !added
+            .capability()
+            .skills()
+            .diagnostics()
+            .iter()
+            .any(|fact| fact.severity() == crate::skills::SkillDiagnosticSeverity::Warning),
+        "{:?}",
+        added.capability().skills().diagnostics()
+    );
     std::fs::remove_file(agent).unwrap();
     std::fs::remove_file(workflow).unwrap();
     std::fs::remove_dir_all(skills).unwrap();

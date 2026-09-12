@@ -2858,11 +2858,6 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 agent_activation: {
                     let mut activation = crate::capabilities::AgentActivation::default();
-                    activation.profile.skills = vec![
-                        "probe-skill".into(),
-                        "generation-skill".into(),
-                        "lifetime-skill".into(),
-                    ];
                     activation.profile.tools.builtin = tools
                         .definitions()
                         .into_iter()
@@ -2873,10 +2868,9 @@ mod tests {
                 },
                 base_tool_registry: Arc::new(tools),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                skill_discovery: crate::skills::SkillDiscoveryConfig {
-                    automatic_roots: vec![workspace.join(".agents/skills")],
-                    explicit_paths: Vec::new(),
-                },
+                skill_discovery: crate::skills::SkillDiscoveryConfig::workspace_root(
+                    workspace.join(".agents/skills"),
+                ),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
@@ -2973,10 +2967,9 @@ mod tests {
                 base_tool_registry: Arc::new(ToolRegistry::new()),
                 extension_tools: tool_runtime.extension_tool_plane(),
                 agent_activation: crate::capabilities::AgentActivation::default(),
-                skill_discovery: crate::skills::SkillDiscoveryConfig {
-                    automatic_roots: vec![workspace.join(".agents/skills")],
-                    explicit_paths: Vec::new(),
-                },
+                skill_discovery: crate::skills::SkillDiscoveryConfig::workspace_root(
+                    workspace.join(".agents/skills"),
+                ),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
@@ -6915,11 +6908,6 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 agent_activation: {
                     let mut activation = crate::capabilities::AgentActivation::default();
-                    activation.profile.skills = vec![
-                        "probe-skill".into(),
-                        "generation-skill".into(),
-                        "lifetime-skill".into(),
-                    ];
                     activation.profile.tools.builtin = tools
                         .definitions()
                         .into_iter()
@@ -6930,10 +6918,9 @@ mod tests {
                 },
                 base_tool_registry: Arc::new(tools),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                skill_discovery: crate::skills::SkillDiscoveryConfig {
-                    automatic_roots: vec![workspace.join(".agents/skills")],
-                    explicit_paths: Vec::new(),
-                },
+                skill_discovery: crate::skills::SkillDiscoveryConfig::workspace_root(
+                    workspace.join(".agents/skills"),
+                ),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
@@ -7029,10 +7016,9 @@ mod tests {
                 base_tool_registry: Arc::new(ToolRegistry::new()),
                 extension_tools: tool_runtime.extension_tool_plane(),
                 agent_activation: crate::capabilities::AgentActivation::default(),
-                skill_discovery: crate::skills::SkillDiscoveryConfig {
-                    automatic_roots: vec![workspace.join(".agents/skills")],
-                    explicit_paths: Vec::new(),
-                },
+                skill_discovery: crate::skills::SkillDiscoveryConfig::workspace_root(
+                    workspace.join(".agents/skills"),
+                ),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
@@ -7160,11 +7146,6 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 agent_activation: {
                     let mut activation = crate::capabilities::AgentActivation::default();
-                    activation.profile.skills = vec![
-                        "probe-skill".into(),
-                        "generation-skill".into(),
-                        "lifetime-skill".into(),
-                    ];
                     activation.profile.tools.builtin = tools
                         .definitions()
                         .into_iter()
@@ -7175,10 +7156,9 @@ mod tests {
                 },
                 base_tool_registry: Arc::new(tools),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                skill_discovery: crate::skills::SkillDiscoveryConfig {
-                    automatic_roots: vec![workspace.join(".agents/skills")],
-                    explicit_paths: Vec::new(),
-                },
+                skill_discovery: crate::skills::SkillDiscoveryConfig::workspace_root(
+                    workspace.join(".agents/skills"),
+                ),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
@@ -8419,11 +8399,6 @@ model = "scripted/scripted"
                 workspace: tool_runtime.workspace().clone(),
                 agent_activation: {
                     let mut activation = crate::capabilities::AgentActivation::default();
-                    activation.profile.skills = vec![
-                        "probe-skill".into(),
-                        "generation-skill".into(),
-                        "lifetime-skill".into(),
-                    ];
                     activation.profile.tools.builtin = tools
                         .definitions()
                         .into_iter()
@@ -8434,10 +8409,9 @@ model = "scripted/scripted"
                 },
                 base_tool_registry: Arc::new(tools),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                skill_discovery: crate::skills::SkillDiscoveryConfig {
-                    automatic_roots: vec![workspace.join(".agents/skills")],
-                    explicit_paths: Vec::new(),
-                },
+                skill_discovery: crate::skills::SkillDiscoveryConfig::workspace_root(
+                    workspace.join(".agents/skills"),
+                ),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),

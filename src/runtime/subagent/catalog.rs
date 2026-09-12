@@ -365,9 +365,10 @@ impl NamedAgentDefinition {
         tools.sort();
         tools.dedup();
         let mut skills = skills;
-        skills.sort();
-        skills.dedup();
-        if let Some(empty) = skills.iter().find(|skill| skill.trim().is_empty()) {
+        let selectors = skills.names_mut();
+        selectors.sort();
+        selectors.dedup();
+        if let Some(empty) = selectors.iter().find(|skill| skill.trim().is_empty()) {
             let _ = empty;
             return Err(NamedAgentDefinitionError::EmptySkillSelector { agent: name });
         }
@@ -451,7 +452,7 @@ impl NamedAgentDefinition {
     /// The canonically ordered exact Skill allowlist.
     #[must_use]
     pub fn skills(&self) -> &[String] {
-        &self.profile.skills
+        self.profile.skills.names()
     }
 
     /// The project-instruction inheritance policy and explicit resources.
@@ -731,7 +732,7 @@ fn compute_digest(
     model: Option<&SessionModelConfig>,
     execution_deadline: Option<SubagentExecutionDeadline>,
     tools: &[AgentToolSelection],
-    skills: &[String],
+    skills: &crate::runtime::agent_profile::AgentSkillSelection,
     project_instructions: &crate::runtime::agent_profile::AgentProjectInstructionPolicy,
     workspace_policy: crate::runtime::workspace::WorkspacePolicy,
     extensions: &crate::extensions::NativeAgentExtensions,
@@ -779,8 +780,12 @@ fn compute_digest(
             &serde_json::to_string(selector).expect("typed Tool selector serializes"),
         );
     }
-    count(&mut hasher, "skills", skills.len());
-    for skill in skills {
+    // The selection polarity is part of the identity: "exactly these" and
+    // "everything eligible except these" are different definitions even when
+    // they name the same identities.
+    field(&mut hasher, "skill_selection", skills.polarity());
+    count(&mut hasher, "skills", skills.names().len());
+    for skill in skills.names() {
         field(&mut hasher, "skill", skill);
     }
     field(
@@ -870,7 +875,7 @@ mod tests {
                 model: None,
                 execution_deadline: None,
                 tools,
-                skills,
+                skills: crate::runtime::agent_profile::AgentSkillSelection::Exact(skills),
                 project_instructions: policy(),
                 workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
@@ -1049,7 +1054,7 @@ mod tests {
                 model: None,
                 execution_deadline: None,
                 tools: Vec::new(),
-                skills: Vec::new(),
+                skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 project_instructions:
                     crate::runtime::agent_profile::AgentProjectInstructionPolicy {
                         inherit: false,
@@ -1071,7 +1076,7 @@ mod tests {
                 model: None,
                 execution_deadline: None,
                 tools: Vec::new(),
-                skills: Vec::new(),
+                skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 project_instructions:
                     crate::runtime::agent_profile::AgentProjectInstructionPolicy {
                         inherit: true,
@@ -1098,7 +1103,7 @@ mod tests {
                 model: None,
                 execution_deadline: None,
                 tools: Vec::new(),
-                skills: Vec::new(),
+                skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 project_instructions:
                     crate::runtime::agent_profile::AgentProjectInstructionPolicy {
                         inherit: true,
@@ -1125,7 +1130,7 @@ mod tests {
                 model: None,
                 execution_deadline: None,
                 tools: Vec::new(),
-                skills: Vec::new(),
+                skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 project_instructions: policy(),
                 workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
@@ -1135,7 +1140,7 @@ mod tests {
             std::path::PathBuf::from("/w/.agents/subagents/explore.md"),
         )
         .expect("definition");
-        let isolated = NamedAgentDefinition::new(SubagentName::parse("explore").expect("name"), crate::runtime::agent_profile::AgentProfile { description: "a description".to_owned(), instructions: "instructions".to_owned(), model: None, execution_deadline: None, tools: Vec::new(), skills: Vec::new(), project_instructions: policy(), workspace_policy: // The default isolated definition (Issue #188) is strict.
+        let isolated = NamedAgentDefinition::new(SubagentName::parse("explore").expect("name"), crate::runtime::agent_profile::AgentProfile { description: "a description".to_owned(), instructions: "instructions".to_owned(), model: None, execution_deadline: None, tools: Vec::new(), skills: crate::runtime::agent_profile::AgentSkillSelection::default(), project_instructions: policy(), workspace_policy: // The default isolated definition (Issue #188) is strict.
             WorkspacePolicy::GitWorktree {
                 require_clean_parent: true,
             }, extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(), agents: std::collections::BTreeSet::default(), workflows: std::collections::BTreeSet::default() }, std::path::PathBuf::from("/w/.agents/subagents/explore.md"))
@@ -1163,7 +1168,7 @@ mod tests {
                 model: None,
                 execution_deadline: None,
                 tools: Vec::new(),
-                skills: Vec::new(),
+                skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 project_instructions: policy(),
                 workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
@@ -1181,7 +1186,7 @@ mod tests {
                 model: None,
                 execution_deadline: None,
                 tools: Vec::new(),
-                skills: Vec::new(),
+                skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 project_instructions: policy(),
                 workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
@@ -1227,7 +1232,7 @@ mod tests {
                 model: None,
                 execution_deadline: Some(deadline),
                 tools: Vec::new(),
-                skills: Vec::new(),
+                skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 project_instructions: policy(),
                 workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
