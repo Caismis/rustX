@@ -1,11 +1,25 @@
 # Agent Loop (M3 + Issue #22 + Issue #55 + Issue #56 + Issue #130 + Issue #136 + Issue #137 + Issue #201 + Issue #203)
 
-Model Goal creation authorization has one logical-step lifetime. Immediately
-after validating the step's `FreshInboundTurn`, request preparation freezes the
-newest Human Message identity in native batch order with the current AttemptId.
-A safe-boundary Human batch can authorize the next step even in a continuation
-attempt. Retries and that step's Tool batch retain it; the next logical step clears
-it. Tool execution never searches history or reuses the attempt's initial trigger.
+The current Human request owns one consumable model Goal-creation authorization
+in `AgentExecution::goal_creation_authorization`. After validating a fresh inbound
+batch, preparation installs its newest Human ordinary Message identity in native
+order with the current AttemptId, replacing the previous authorization. A
+safe-boundary Human batch can authorize later steps even in a continuation attempt.
+Runtime/background input alone does not replace or erase Human authority.
+
+Request retries preserve frozen request state; logical model steps consume their
+fresh-inbound context; the Human request's authorization survives ordinary model
+and Tool steps. These are different lifetimes. Only successful model `create_goal`
+consumes the authorization, immediately after its authoritative commit; failed
+creation retains it. Goal completion cannot restore it. Tool execution never
+searches history or reuses the attempt's initial trigger.
+
+Recovery adopts pending Human input through the same fresh-batch path. An
+already-adopted continuation has only a recovered answer obligation, without a
+trusted current Human identity/unused authorization in the recovery report or
+Request Snapshot. It therefore starts unauthorized and needs newer Human input
+or explicit client Goal creation. This bounded restart limitation is detailed in
+[Goal extension](goal-extension.md); no Goal-specific recovery log is introduced.
 
 
 Goal rounds enter as `InboundKind::GoalContinuation(GoalRef)` through ordinary

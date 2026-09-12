@@ -2448,6 +2448,265 @@ fn goal_create_call() -> ScriptedCall {
     }
 }
 
+fn goal_complete_call() -> ScriptedCall {
+    ScriptedCall {
+        id: "complete",
+        tool_id: "native.update_goal",
+        name: "update_goal",
+        arguments: serde_json::json!({"action":"complete", "expected":{"id":"goal-1","revision":1}}),
+    }
+}
+
+fn goal_inspection_tools() -> ToolRegistry {
+    let mut tools = ToolRegistry::new();
+    for (name, id, output) in [
+        ("read", "goal-read", "Repository files read"),
+        ("bash", "goal-bash", "Tests need further work"),
+    ] {
+        FakeTool::new(
+            common::tool_policies(
+                name,
+                id,
+                ToolExecutionPolicy::ForegroundOnly,
+                ToolConcurrencyPolicy::Sequential,
+            ),
+            success_result(output),
+        )
+        .register(&mut tools);
+    }
+    tools
+}
+
+fn assert_goal_tool_result(result: &AgentExecutionResult, id: &str, error: Option<&str>) {
+    let tool = result
+        .messages()
+        .iter()
+        .find_map(|message| match message {
+            MessageBlock::Tool(tool) if tool.tool_call_id.as_str() == id => Some(tool),
+            _ => None,
+        })
+        .expect("Tool result committed");
+    match (&tool.result.status, error) {
+        (rustx::tools::types::ToolExecutionStatus::Success, None) => {}
+        (rustx::tools::types::ToolExecutionStatus::Failed { error }, Some(expected)) => {
+            assert!(error.contains(expected), "{error}");
+        }
+        (status, expected) => panic!("{id}: unexpected {status:?}, expected {expected:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn goal84_human_authorization_survives_read_and_test_steps_before_create() {
+    let extensions = NativeAgentExtensions::none().and_goal();
+    let (_dir, tools) = todo_tool_runtime("goal-delayed-create", &extensions);
+    let model = fake_model(vec![
+        tool_turn(&[scripted("read", "goal-read", "read")]),
+        tool_turn(&[scripted("test", "goal-bash", "bash")]),
+        tool_turn(&[goal_create_call()]),
+        stop_turn(),
+    ]);
+    let (result, _) = run_with_text(
+        &extensions,
+        &tools,
+        goal_inspection_tools(),
+        model.clone(),
+        "Keep working until all tests pass",
+    )
+    .await;
+    assert_eq!(model.requests().len(), 4);
+    for id in ["read", "test", "create"] {
+        assert_goal_tool_result(&result, id, None);
+    }
+    let goal = tools.goal().unwrap().view().unwrap().current.unwrap();
+    assert_eq!(
+        goal.origin,
+        rustx::goal::GoalOrigin::HumanAttempt {
+            message_id: MessageId::new("ext256-inbound"),
+            attempt_id: AttemptId::new("ext256-attempt"),
+        }
+    );
+    assert_eq!(goal.autonomous_rounds_consumed, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn goal84_successful_create_consumes_authorization_even_within_one_tool_batch() {
+    // Prove consumption at the create commit, both across logical steps and
+    // before the enclosing ToolResult batch has settled.
+    for same_batch in [false, true] {
+        let extensions = NativeAgentExtensions::none().and_goal();
+        let (_dir, tools) = todo_tool_runtime("goal-consumed", &extensions);
+        let mut second = goal_create_call();
+        second.id = "second-create";
+        let calls = [goal_create_call(), goal_complete_call(), second];
+        let mut script = if same_batch {
+            vec![tool_turn(&calls)]
+        } else {
+            calls
+                .iter()
+                .map(|call| tool_turn(std::slice::from_ref(call)))
+                .collect()
+        };
+        script.push(stop_turn());
+        let (result, _) = run_with_text(
+            &extensions,
+            &tools,
+            ToolRegistry::new(),
+            fake_model(script),
+            "Keep working until all tests pass",
+        )
+        .await;
+        assert_goal_tool_result(&result, "create", None);
+        assert_goal_tool_result(&result, "complete", None);
+        assert_goal_tool_result(
+            &result,
+            "second-create",
+            Some("unused current Human request authorization"),
+        );
+        let goal = tools.goal().unwrap().view().unwrap().current.unwrap();
+        assert_eq!(goal.phase, rustx::goal::GoalPhase::Complete);
+        assert_eq!(goal.reference.revision, 2);
+        assert_eq!(
+            goal.origin,
+            rustx::goal::GoalOrigin::HumanAttempt {
+                message_id: MessageId::new("ext256-inbound"),
+                attempt_id: AttemptId::new("ext256-attempt"),
+            }
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn goal84_failed_create_retains_authorization_for_later_valid_create() {
+    let extensions = NativeAgentExtensions::none().and_goal();
+    let (_dir, tools) = todo_tool_runtime("goal-rejected-create", &extensions);
+    let mut invalid = goal_create_call();
+    invalid.id = "invalid-create";
+    invalid.arguments["autonomous_round_budget"] = serde_json::json!(0);
+    let model = fake_model(vec![
+        tool_turn(&[invalid]),
+        tool_turn(&[scripted("read", "goal-read", "read")]),
+        tool_turn(&[goal_create_call()]),
+        stop_turn(),
+    ]);
+    let (result, _) = run_with_text(
+        &extensions,
+        &tools,
+        goal_inspection_tools(),
+        model,
+        "Keep working until all tests pass",
+    )
+    .await;
+    assert_goal_tool_result(&result, "invalid-create", Some("out of bounds"));
+    assert_goal_tool_result(&result, "read", None);
+    assert_goal_tool_result(&result, "create", None);
+    let goal = tools.goal().unwrap().view().unwrap().current.unwrap();
+    assert_eq!(goal.reference.revision, 1);
+    assert_eq!(
+        goal.origin,
+        rustx::goal::GoalOrigin::HumanAttempt {
+            message_id: MessageId::new("ext256-inbound"),
+            attempt_id: AttemptId::new("ext256-attempt"),
+        }
+    );
+    assert_eq!(goal.autonomous_rounds_consumed, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn goal84_recovery_authorizes_pending_human_but_does_not_infer_continuation_authority() {
+    for already_adopted in [false, true] {
+        let extensions = NativeAgentExtensions::none().and_goal();
+        let (_dir, tools) = todo_tool_runtime("goal-recovery-authority", &extensions);
+        let store = tools.durable_store();
+        store.initialize(&[]).unwrap();
+        let human = inbound("recovered-human", "Keep working until tests pass");
+        let accepted = store
+            .accept_inbound(rustx::durable::inbox::InboundDraft {
+                message_id: Some(human.id),
+                source: human.source,
+                kind: human.kind,
+                content: human.content,
+                timestamp: human.timestamp.unwrap(),
+                correlation: None,
+            })
+            .unwrap();
+        if already_adopted {
+            store
+                .adopt_pending_batch(
+                    accepted.sequence,
+                    rustx::durable::inbox::inbound_adoption_event(
+                        tools.conversation_id(),
+                        None,
+                        vec![accepted.message_id.clone()],
+                    ),
+                )
+                .unwrap();
+        }
+        // Crash prefix: either Pending Inbound, or adopted before model start.
+        // The latter restores an answer obligation, not a fresh Human identity.
+        let mut script = vec![
+            tool_turn(&[scripted("inspect", "native.get_goal", "get_goal")]),
+            tool_turn(&[goal_create_call()]),
+        ];
+        if !already_adopted {
+            script.push(tool_turn(&[goal_complete_call()]));
+        }
+        script.push(stop_turn());
+        let model = fake_model(script);
+        let capability =
+            extension_capability(&tools, tools.extension_tool_plane(), Publication::Published)
+                .published()
+                .await;
+        let composed = conversation_runtime_over_model(&tools, capability, model.clone()).unwrap();
+        assert_eq!(
+            composed.runtime.recovery().resume(),
+            if already_adopted {
+                rustx::runtime::recovery::ResumeDisposition::ContinueAdoptedTurn
+            } else {
+                rustx::runtime::recovery::ResumeDisposition::PendingInboundOnly
+            },
+        );
+        composed.runtime.activate();
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            composed.runtime.settlement_signal().notified(),
+        )
+        .await
+        .expect("recovered attempt settles");
+        assert!(
+            model.requests()[0]
+                .messages
+                .iter()
+                .any(|message| message.canonical_id() == Some(&accepted.message_id))
+        );
+        let canonical = store.load_canonical().unwrap();
+        let status = canonical
+            .iter()
+            .find_map(|message| match message {
+                MessageBlock::Tool(tool) if tool.tool_call_id.as_str() == "create" => {
+                    Some(&tool.result.status)
+                }
+                _ => None,
+            })
+            .expect("create result committed");
+        if already_adopted {
+            assert!(
+                matches!(status, rustx::tools::types::ToolExecutionStatus::Failed { error }
+                if error.contains("unused current Human request authorization"))
+            );
+            assert!(tools.goal().unwrap().view().unwrap().current.is_none());
+        } else {
+            assert_eq!(*status, rustx::tools::types::ToolExecutionStatus::Success);
+            let goal = tools.goal().unwrap().view().unwrap().current.unwrap();
+            assert!(
+                matches!(goal.origin, rustx::goal::GoalOrigin::HumanAttempt { message_id, .. }
+                if message_id == accepted.message_id)
+            );
+            assert_eq!(goal.phase, rustx::goal::GoalPhase::Complete);
+        }
+        composed.runtime.shutdown().await.unwrap();
+    }
+}
+
 async fn goal_event(
     subscription: &rustx::runtime_client::EventSubscription,
 ) -> (
@@ -2474,36 +2733,37 @@ async fn goal_event(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn goal84_safe_boundary_non_human_start_authorizes_exact_later_human() {
-    goal_safe_boundary_origin(UserSource::Runtime).await;
+    goal_safe_boundary_origin(UserSource::Runtime, true).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn goal84_safe_boundary_human_b_replaces_a_and_origin_expires_next_step() {
-    goal_safe_boundary_origin(UserSource::Human).await;
+async fn goal84_safe_boundary_human_b_replaces_a_survives_steps_and_is_consumed() {
+    goal_safe_boundary_origin(UserSource::Human, true).await;
 }
 
-async fn goal_safe_boundary_origin(source: UserSource) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn goal84_safe_boundary_runtime_input_preserves_human_authorization() {
+    goal_safe_boundary_origin(UserSource::Human, false).await;
+}
+
+async fn goal_safe_boundary_origin(source: UserSource, newer_human: bool) {
     let extensions = NativeAgentExtensions::none().and_goal();
     let (_dir, tools) = todo_tool_runtime("goal-origin-boundary", &extensions);
     let (release, wait) = support::fake::model_release();
-    let mut first = tool_turn(&[scripted("read", "native.get_goal", "get_goal")]);
+    let mut first = tool_turn(&[scripted("read-a", "goal-read", "read")]);
     first.insert(1, FakeStep::ParkUntilReleased(wait));
-    let complete = ScriptedCall {
-        id: "complete",
-        tool_id: "native.update_goal",
-        name: "update_goal",
-        arguments: serde_json::json!({"action":"complete", "expected":{"id":"goal-1","revision":1}}),
-    };
     let mut stale_create = goal_create_call();
     stale_create.id = "stale-create";
     let model = fake_model(vec![
         first,
+        tool_turn(&[scripted("read-b", "goal-read", "read")]),
+        tool_turn(&[scripted("test", "goal-bash", "bash")]),
         tool_turn(&[goal_create_call()]),
-        tool_turn(&[complete]),
+        tool_turn(&[goal_complete_call()]),
         tool_turn(&[stale_create]),
         stop_turn(),
     ]);
-    let capability = common::capability_lease(ToolRegistry::new(), &tools).await;
+    let capability = common::capability_lease(goal_inspection_tools(), &tools).await;
     let mut initial = inbound("human-a", "Initial request");
     initial.source = source.clone();
     let trigger = if source == UserSource::Human {
@@ -2529,16 +2789,18 @@ async fn goal_safe_boundary_origin(source: UserSource) {
             .await
             .unwrap()
             .unwrap();
-        // Explicit native sequence: two Humans followed by Runtime input.
-        mailbox
-            .enqueue(inbound("human-b1", "Keep working until tests pass"))
-            .unwrap();
-        mailbox
-            .enqueue(inbound(
-                "human-b2",
-                "Keep working until deployment succeeds",
-            ))
-            .unwrap();
+        // Explicit native sequence: optionally two Humans, then Runtime input.
+        if newer_human {
+            mailbox
+                .enqueue(inbound("human-b1", "Keep working until tests pass"))
+                .unwrap();
+            mailbox
+                .enqueue(inbound(
+                    "human-b2",
+                    "Keep working until deployment succeeds",
+                ))
+                .unwrap();
+        }
         let mut runtime_tail = inbound("runtime-tail", "A runtime observation");
         runtime_tail.source = UserSource::Runtime;
         mailbox.enqueue(runtime_tail).unwrap();
@@ -2564,27 +2826,38 @@ async fn goal_safe_boundary_origin(source: UserSource) {
         result.outcome
     );
     let requests = model.requests();
-    assert_eq!(requests.len(), 5);
+    assert_eq!(requests.len(), 7);
     assert!(!requests[0].messages.iter().any(
         |m| matches!(m.as_canonical(), Some(MessageBlock::User(u)) if u.id.as_str() == "human-b2")
     ));
-    assert!(requests[1].messages.iter().any(
+    assert_eq!(requests[1].messages.iter().any(
         |m| matches!(m.as_canonical(), Some(MessageBlock::User(u)) if u.id.as_str() == "human-b2")
+    ), newer_human);
+    assert!(requests[1].messages.iter().any(
+        |m| matches!(m.as_canonical(), Some(MessageBlock::User(u)) if u.id.as_str() == "runtime-tail")
     ));
+    for id in ["read-a", "read-b", "test", "create", "complete"] {
+        assert_goal_tool_result(&result, id, None);
+    }
     let goal = tools.goal().unwrap().view().unwrap().current.unwrap();
     assert_eq!(
         goal.origin,
         rustx::goal::GoalOrigin::HumanAttempt {
-            message_id: MessageId::new("human-b2"),
+            message_id: MessageId::new(if newer_human { "human-b2" } else { "human-a" }),
             attempt_id: AttemptId::new("goal-attempt")
         }
     );
     assert_eq!(goal.phase, rustx::goal::GoalPhase::Complete);
+    assert_eq!(goal.autonomous_rounds_consumed, 0);
     assert_eq!(
         goal.reference.revision, 2,
         "later step cannot create another Goal using stale Human authorization"
     );
-    assert!(result.messages().iter().any(|m| matches!(m, MessageBlock::Tool(t) if t.tool_call_id.as_str() == "stale-create" && matches!(t.result.status, rustx::tools::types::ToolExecutionStatus::Failed { .. }))));
+    assert_goal_tool_result(
+        &result,
+        "stale-create",
+        Some("unused current Human request authorization"),
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

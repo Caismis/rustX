@@ -67,23 +67,46 @@ cross-turn pursuit, including ordinary natural-language requests such as “keep
 working until …”. Complexity, length, many Tools, Workflow or Subagent use alone
 do not justify it. This semantic boundary is explicit in the Tool description;
 there is no keyword classifier or evaluator model. Runtime supplies the actual
-Human MessageId and AttemptId from the fresh inbound observed by the current
-logical model step. `AgentExecution::step_goal_origin` is reset at
-`run_turn_body`, then frozen in `prepare_model_turn` immediately after validating
-`pending_fresh_inbound`, before Context Assembly and model request start. It picks
-the most recent Human `Message` in that batch's native inbound sequence order;
-a later Runtime item does not replace that Human identity. No fresh Human means
-no creation authority. Request retries retain the same frozen origin; the Tool
-batch consumes that step's origin even though successful model completion has
-already consumed `pending_fresh_inbound`. The next logical step clears it.
+Human MessageId and AttemptId through
+`AgentExecution::goal_creation_authorization`: the current Human request owns one
+consumable model Goal-creation authorization. Immediately after validating
+`pending_fresh_inbound`, `prepare_model_turn` selects the most recent Human ordinary
+`Message` in that batch's native order and replaces any previous authorization.
+A batch containing only Runtime/background input leaves the current Human
+authorization intact. The execution owns this state and lends it to foreground
+Tools through `ToolExecutionContext`; it is not GoalDomain state.
+
+Three lifetimes differ. Transport and compaction retries retain the same frozen
+logical model request. A logical step ends after its model response and Tool
+batch, consuming fresh-inbound context. The Human request's Goal authorization
+survives those ordinary steps until replaced by newer Human input or consumed by
+successful model `create_goal`. Thus read -> test -> create remains authorized.
+The native adapter consumes it immediately after the authoritative create commits,
+before result serialization or outer cancellation settlement. Invalid input,
+unfinished-Goal rejection, storage failure, and cancellation/drain before commit
+do not consume it. Completing a Goal never restores consumed authorization, even
+when create -> complete -> create appears in one Tool batch.
 
 A Human message adopted at a later safe boundary can therefore authorize creation
-in the next step, including in an attempt that started from non-Human continuation.
+in subsequent steps, including in an attempt that started from non-Human continuation.
 History outside that exact fresh batch is never searched for authorization, and
 Tool execution never rediscovers an origin from history. Model arguments cannot
 supply or rebind that correlation. Explicit client creation is
 identified as RuntimeControl. Both paths enforce one unfinished Goal and native
 bounds (objective/reason at most 8192 UTF-8 bytes; budget 1–100, default 10).
+
+Authorization is process-local execution context. Recovery of ordinary Pending
+Human Inbound adopts a fresh batch and installs its trusted identity as usual.
+An already-adopted recovered continuation starts without Goal-create authority:
+the existing `ContinueAdoptedTurn` report carries only an answer obligation, not
+the current Human identity or whether its authorization is unused. Request
+Snapshots freeze provider inputs but carry no such authorization. Consequently,
+a crash after adoption can require a later Human message or explicit `/goal create`
+before the model can create a Goal, even when the interrupted request was Human.
+Preserving that right would require extending recovery's trusted request-boundary
+contract; this repair does not infer rights from historical messages or Goal
+journal facts, nor add a Goal replay log. Existing durable Goals still recover
+from GoalDomain alone and start disarmed.
 
 The model may only declare Active -> Complete or Active -> Blocked with a reason.
 Completion is a domain declaration, not evidence verification. User controls own
@@ -228,10 +251,20 @@ outlive it. No generic plugin, state, scheduling or transaction framework was ad
 - `goal84_driver_uses_ordinary_admission_consumes_one_and_drain_disarms`:
   live create, atomic round accounting, and shutdown disarm each reach subscribers.
 - `goal84_safe_boundary_non_human_start_authorizes_exact_later_human` and
-  `goal84_safe_boundary_human_b_replaces_a_and_origin_expires_next_step`:
+  `goal84_safe_boundary_human_b_replaces_a_survives_steps_and_is_consumed`:
   a gated first request accepts two Humans and a Runtime tail; the next request
-  sees that batch and creates from the newer Human. A subsequent create after
-  completion fails without fresh Human input.
+  sees that batch, performs read and test steps, then creates from the newer Human.
+  A subsequent create after completion cannot fall back to either older Human.
+- `goal84_human_authorization_survives_read_and_test_steps_before_create` and
+  `goal84_safe_boundary_runtime_input_preserves_human_authorization`: delayed
+  creation keeps the exact Human/Attempt identity, including across Runtime input,
+  and consumes no autonomous round.
+- `goal84_successful_create_consumes_authorization_even_within_one_tool_batch` and
+  `goal84_failed_create_retains_authorization_for_later_valid_create`: successful
+  creation consumes the right; a bounded-value rejection does not.
+- `goal84_recovery_authorizes_pending_human_but_does_not_infer_continuation_authority`:
+  durable crash prefixes distinguish fresh pending Human adoption from an
+  already-adopted continuation that has no recovered authorization identity.
 - `goal84_model_mutation_and_drain_have_one_owned_commit_order`: four gated
   interleavings (create/update, Tool/drain wins), awaited to full quiescence.
 - `goal84_journal_failure_rolls_back_durable_write_but_not_activation` and

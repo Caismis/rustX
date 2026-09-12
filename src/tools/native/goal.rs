@@ -1,4 +1,4 @@
-//! Stable Goal command adapters; authority is frozen by the current logical model step.
+//! Stable Goal command adapters; `AgentExecution` owns consumable Human request authority.
 
 use crate::goal::{DEFAULT_ROUND_BUDGET, GoalMutation, GoalRef, GoalWrite};
 use crate::tools::executor::{
@@ -74,7 +74,7 @@ impl ToolExecutor for GoalExecutor {
                         .as_deref()
                         .ok_or("Goal is unavailable in this execution context")?;
                     let domain = &goal_context.domain;
-                    let origin = &goal_context.origin;
+                    let mut creation_authorization = None;
                     let write = match self.0 {
                         "get_goal" => {
                             serde_json::from_value::<GetInput>(invocation.arguments)
@@ -87,12 +87,18 @@ impl ToolExecutor for GoalExecutor {
                         "create_goal" => {
                             let input: CreateInput = serde_json::from_value(invocation.arguments)
                                 .map_err(|e| e.to_string())?;
+                            let authorization = goal_context
+                                .creation_authorization
+                                .lock()
+                                .expect("Goal authorization mutex poisoned");
+                            let origin = authorization.clone().ok_or(
+                                "Goal creation requires unused current Human request authorization",
+                            )?;
+                            creation_authorization = Some(authorization);
                             GoalWrite::Create {
                                 objective: input.objective,
                                 budget: input.autonomous_round_budget,
-                                origin: origin.clone().ok_or(
-                                    "Goal creation requires fresh Human authorization in this model step",
-                                )?,
+                                origin,
                             }
                         }
                         "update_goal" => {
@@ -118,7 +124,15 @@ impl ToolExecutor for GoalExecutor {
                         .map_err(|e| e.to_string())?
                         .map_err(|e| e.to_string())?
                     {
-                        Ok(goal) => serde_json::to_value(goal).map_err(|e| e.to_string()),
+                        Ok(goal) => {
+                            // Consume at the authoritative create success, before
+                            // serialization or outer Tool cancellation settlement.
+                            // Rejections and failed commits leave it untouched.
+                            if let Some(mut authorization) = creation_authorization {
+                                authorization.take();
+                            }
+                            serde_json::to_value(goal).map_err(|e| e.to_string())
+                        }
                         Err(rejection) => {
                             Err(serde_json::to_string(&rejection).map_err(|e| e.to_string())?)
                         }

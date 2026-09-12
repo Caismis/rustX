@@ -6,7 +6,9 @@ Goal changes, including activation-only disarm, fold through the observation
 bridge and publish bounded `goal_changed` events. Goal revision and client cursor
 remain distinct. Goal journal facts are audit-only, atomically committed with
 durable writes/admissions; neither state nor activation is reconstructed from them.
-Model creation uses only the current logical step's frozen fresh Human identity.
+Model creation uses the current Human request's consumable AgentExecution
+authorization. Newer fresh Human inbound replaces it; ordinary steps and Runtime
+input retain it; only a successful create consumes it. Completion never restores it.
 Foreground Goal writes share the existing lifecycle commit guard with drain.
 
 

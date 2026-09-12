@@ -284,11 +284,11 @@ pub(crate) fn journal_envelope(
     }
 }
 
-/// Foreground-only authority supplied by the owning execution step.
+/// Foreground-only authority borrowed from the owning `AgentExecution`.
 #[derive(Clone)]
-pub(crate) struct GoalToolContext {
+pub(crate) struct GoalToolContext<'a> {
     pub domain: GoalDomain,
-    pub origin: Option<GoalOrigin>,
+    pub creation_authorization: &'a Mutex<Option<GoalOrigin>>,
     pub mailbox: crate::runtime::inbound::ConversationInboundMailbox,
 }
 

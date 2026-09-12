@@ -152,7 +152,7 @@ pub struct ToolExecutionContext<'a> {
     ///
     /// [`TodoBatch`]: crate::tools::todo::TodoBatch
     pub(crate) todos: Option<TodoWriter>,
-    pub(crate) goal: Option<Box<crate::goal::GoalToolContext>>,
+    pub(crate) goal: Option<Box<crate::goal::GoalToolContext<'a>>>,
     /// The attempt-scoped subagent resolution view (Issue #144).
     ///
     /// This is intentionally *not* a runtime handle and intentionally not
