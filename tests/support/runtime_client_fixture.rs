@@ -65,7 +65,7 @@ impl RuntimeClientFixture {
             mcp_servers: std::collections::BTreeMap::new(),
             native_tools: false,
             extensions: rustx::extensions::NativeAgentExtensions::none(),
-            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            agent_activation: rustx::capabilities::AgentActivation::default(),
             session_model: None,
             context_policy: SessionContextPolicy {
                 reserve_tokens: 0,
@@ -129,7 +129,7 @@ pub struct RuntimeClientFixtureBuilder {
     /// Client fixtures want.
     extensions: rustx::extensions::NativeAgentExtensions,
     /// The startup activation policy applied to the available tool set.
-    tool_activation: rustx::capabilities::ToolActivationPolicy,
+    agent_activation: rustx::capabilities::AgentActivation,
     /// An explicit session model authority, when the test needs a specific
     /// catalog (several models, reasoning profiles, or an explicit summary
     /// model). Defaults to the one scripted model.
@@ -166,6 +166,12 @@ impl RuntimeClientFixtureBuilder {
     /// Replaces the base tool registry.
     #[must_use]
     pub fn tools(mut self, tools: ToolRegistry) -> Self {
+        self.agent_activation.profile.tools.builtin = tools
+            .definitions()
+            .into_iter()
+            .filter(|tool| tool.origin.source().is_none())
+            .map(|tool| tool.name.clone())
+            .collect();
         self.base_tools = tools;
         self
     }
@@ -244,8 +250,8 @@ impl RuntimeClientFixtureBuilder {
 
     /// Replaces the startup tool activation policy.
     #[must_use]
-    pub fn tool_activation(mut self, policy: rustx::capabilities::ToolActivationPolicy) -> Self {
-        self.tool_activation = policy;
+    pub fn agent_activation(mut self, policy: rustx::capabilities::AgentActivation) -> Self {
+        self.agent_activation = policy;
         self
     }
 
@@ -321,21 +327,26 @@ impl RuntimeClientFixtureBuilder {
             .expect("register native tools");
         }
 
-        let mut tool_activation = self.tool_activation;
-        tool_activation.sources.insert(
+        let mut agent_activation = self.agent_activation;
+        agent_activation.profile.skills = vec!["skill-readme".into()];
+        agent_activation.profile.tools.sources.insert(
             rustx::capabilities::ToolSourceId::ManagedPython("py-echo".into()),
             rustx::capabilities::selection::SourceToolSelection::All,
         );
         for definition in base_tools.definitions() {
             if let Some(source) = definition.origin.source() {
-                tool_activation
+                agent_activation
+                    .profile
+                    .tools
                     .sources
                     .entry(source)
                     .or_insert(rustx::capabilities::selection::SourceToolSelection::All);
             }
         }
         for id in self.mcp_servers.keys() {
-            tool_activation
+            agent_activation
+                .profile
+                .tools
                 .sources
                 .entry(rustx::capabilities::ToolSourceId::Mcp(id.clone()))
                 .or_insert(rustx::capabilities::selection::SourceToolSelection::All);
@@ -351,7 +362,7 @@ impl RuntimeClientFixtureBuilder {
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(base_tools),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                tool_activation,
+                agent_activation,
                 skill_discovery: rustx::skills::SkillDiscoveryConfig {
                     automatic_roots: vec![tool_runtime.workspace().root().join(".agents/skills")],
                     explicit_paths: Vec::new(),

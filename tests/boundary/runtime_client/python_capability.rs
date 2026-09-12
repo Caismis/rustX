@@ -66,13 +66,13 @@ async fn capability_projection_covers_native_python_and_skills() {
             base
         })
         .native_tools()
-        .tool_activation(rustx::capabilities::ToolActivationPolicy {
+        .agent_activation(rustx::capabilities::AgentActivation {
             tools: Some(vec![
                 "ls".to_owned(),
                 "py_echo".to_owned(),
                 "read".to_owned(),
             ]),
-            ..rustx::capabilities::ToolActivationPolicy::default()
+            ..rustx::capabilities::AgentActivation::default()
         })
         .workspace_fixture(|workspace| {
             support::runtime_client_fixture::write_python_package(

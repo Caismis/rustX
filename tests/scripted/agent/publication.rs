@@ -994,10 +994,15 @@ async fn runtime_fixture(conversation: &str, model: Arc<FakeModel>) -> RuntimeFi
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
-    let tool_runtime = rustx::tools::runtime::ConversationToolRuntime::new(
+    let tool_runtime = rustx::tools::runtime::ConversationToolRuntime::from_config(
         ConversationId::new(conversation),
-        &workspace,
-        dir.path().join("artifacts"),
+        rustx::tools::runtime::ConversationRuntimeConfig::new(
+            &workspace,
+            dir.path().join("artifacts"),
+        )
+        .with_extensions(rustx::extensions::NativeAgentExtensions::with_agent_status(
+            rustx::context::AgentStatusConfig::default(),
+        )),
     )
     .expect("tool runtime");
     let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
@@ -1006,7 +1011,7 @@ async fn runtime_fixture(conversation: &str, model: Arc<FakeModel>) -> RuntimeFi
         workspace: tool_runtime.workspace().clone(),
         base_tool_registry: Arc::new(ToolRegistry::new()),
         extension_tools: tool_runtime.extension_tool_plane(),
-        tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+        agent_activation: rustx::capabilities::AgentActivation::default(),
         skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
         mcp_servers: std::collections::BTreeMap::new(),
         base_environment: tool_runtime.environment().clone(),

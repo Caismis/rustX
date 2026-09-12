@@ -94,12 +94,31 @@ fn node_deps(json: &str) -> (&'static str, &'static str) {
     )
 }
 
+fn fixture_activation() -> rustx::capabilities::AgentActivation {
+    let mut activation = rustx::capabilities::AgentActivation::default();
+    activation.profile.skills = [
+        "a",
+        "b",
+        "bad",
+        "node-skill",
+        "pdf",
+        "runtime-only",
+        "shell",
+        "slides",
+        "visible",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    activation
+}
+
 fn conversation() -> Conversation {
-    conversation_with_options(rustx::capabilities::ToolActivationPolicy::default())
+    conversation_with_options(fixture_activation())
 }
 
 fn conversation_with_options(
-    tool_activation: rustx::capabilities::ToolActivationPolicy,
+    agent_activation: rustx::capabilities::AgentActivation,
 ) -> Conversation {
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace_root = dir.path().join("workspace");
@@ -143,7 +162,7 @@ fn conversation_with_options(
             workspace: workspace.clone(),
             base_tool_registry: Arc::new(base_tool_registry),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            tool_activation,
+            agent_activation,
             skill_discovery: rustx::skills::SkillDiscoveryConfig {
                 automatic_roots: vec![workspace.root().join(".agents/skills")],
                 explicit_paths: Vec::new(),
@@ -242,25 +261,31 @@ async fn hidden_skills_keep_attempt_provenance_but_not_model_visibility() {
 #[tokio::test]
 async fn lazy_skills_follow_frozen_read_authority_without_changing_discovery() {
     let policies = [
-        rustx::capabilities::ToolActivationPolicy {
+        rustx::capabilities::AgentActivation {
             no_tools: true,
-            ..rustx::capabilities::ToolActivationPolicy::default()
+            ..fixture_activation()
         },
-        rustx::capabilities::ToolActivationPolicy {
+        rustx::capabilities::AgentActivation {
             no_builtin_tools: true,
-            ..rustx::capabilities::ToolActivationPolicy::default()
+            ..fixture_activation()
         },
-        rustx::capabilities::ToolActivationPolicy {
+        rustx::capabilities::AgentActivation {
             tools: Some(vec!["write".to_owned()]),
-            ..rustx::capabilities::ToolActivationPolicy::default()
+            ..fixture_activation()
         },
-        rustx::capabilities::ToolActivationPolicy {
+        rustx::capabilities::AgentActivation {
             exclude_tools: vec!["read".to_owned()],
-            ..rustx::capabilities::ToolActivationPolicy::default()
+            ..fixture_activation()
         },
-        rustx::capabilities::ToolActivationPolicy {
-            default_tools: Some(vec!["write".to_owned()]),
-            ..rustx::capabilities::ToolActivationPolicy::default()
+        rustx::capabilities::AgentActivation {
+            profile: rustx::local_runtime::config::AgentProfileDocument {
+                tools: rustx::capabilities::selection::ToolSelectionDocument {
+                    builtin: vec!["write".to_owned()],
+                    sources: std::collections::BTreeMap::default(),
+                },
+                ..fixture_activation().profile
+            },
+            ..fixture_activation()
         },
     ];
 
@@ -487,7 +512,7 @@ async fn absolute_store_path_does_not_change_the_digest() {
                 workspace: workspace.clone(),
                 base_tool_registry: Arc::new(ToolRegistry::new()),
                 extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-                tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+                agent_activation: fixture_activation(),
                 skill_discovery: rustx::skills::SkillDiscoveryConfig::default_for_workspace(
                     &workspace,
                 ),
@@ -949,7 +974,7 @@ fn environment_store_inside_workspace_is_rejected_before_creation() {
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            agent_activation: fixture_activation(),
             skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
@@ -980,7 +1005,7 @@ fn workspace_inside_environment_store_is_rejected() {
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            agent_activation: fixture_activation(),
             skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
@@ -1010,7 +1035,7 @@ fn external_environment_store_is_accepted() {
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            agent_activation: fixture_activation(),
             skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
@@ -1048,7 +1073,7 @@ fn symlink_prefix_environment_store_is_rejected_before_creation() {
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            agent_activation: fixture_activation(),
             skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
@@ -1666,18 +1691,29 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
             workspace: conversation.workspace.clone(),
             base_tool_registry: tools.clone(),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            tool_activation: rustx::capabilities::ToolActivationPolicy {
-                sources: tools
-                    .definitions()
-                    .into_iter()
-                    .filter_map(|definition| definition.origin.source())
-                    .map(|source| {
-                        (
-                            source,
-                            rustx::capabilities::selection::SourceToolSelection::All,
-                        )
-                    })
-                    .collect(),
+            agent_activation: rustx::capabilities::AgentActivation {
+                profile: rustx::local_runtime::config::AgentProfileDocument {
+                    tools: rustx::capabilities::selection::ToolSelectionDocument {
+                        builtin: tools
+                            .definitions()
+                            .into_iter()
+                            .filter(|tool| tool.origin.source().is_none())
+                            .map(|tool| tool.name.clone())
+                            .collect(),
+                        sources: tools
+                            .definitions()
+                            .into_iter()
+                            .filter_map(|definition| definition.origin.source())
+                            .map(|source| {
+                                (
+                                    source,
+                                    rustx::capabilities::selection::SourceToolSelection::All,
+                                )
+                            })
+                            .collect(),
+                    },
+                    ..fixture_activation().profile
+                },
                 ..Default::default()
             },
             skill_discovery: rustx::skills::SkillDiscoveryConfig {

@@ -4,6 +4,151 @@
       "description": "Identifies an agent.",
       "type": "string"
     },
+    "AgentProfileLayer": {
+      "additionalProperties": false,
+      "properties": {
+        "agents": {
+          "items": {
+            "$ref": "#/$defs/SubagentName"
+          },
+          "type": [
+            "array"
+          ]
+        },
+        "agents_md": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentProjectInstructionsDocument"
+            }
+          ]
+        },
+        "description": {
+          "type": [
+            "string"
+          ]
+        },
+        "extensions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeAgentExtensionsDocument"
+            }
+          ]
+        },
+        "instructions": {
+          "type": [
+            "string"
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelLayer"
+            }
+          ]
+        },
+        "skills": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array"
+          ]
+        },
+        "timeout_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer"
+          ]
+        },
+        "tools": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolSelectionDocument"
+            }
+          ]
+        },
+        "workflows": {
+          "items": {
+            "$ref": "#/$defs/WorkflowId"
+          },
+          "type": [
+            "array"
+          ]
+        },
+        "worktree": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentWorktreeDocument"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AgentProjectInstructionsDocument": {
+      "additionalProperties": false,
+      "description": "Project-instruction selection from admitted workspace resources.",
+      "properties": {
+        "files": {
+          "default": [],
+          "description": "Explicit agent-owned project instruction files, in deterministic\nconfigured order. Relative paths resolve against the owning\nconfiguration document's directory at launch resolution.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "inherit": {
+          "default": true,
+          "description": "Whether the invoking generation's normal project instruction chain is\nprepended to the explicit files.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "AgentStatusExtensionDocument": {
+      "additionalProperties": false,
+      "description": "The authored Agent Status extension.\n\n`enabled` composes the extension in or out of the runtime as a whole;\n`time` and `background` remain the two bounded status contributors, with\nexactly the semantics they had before the migration.",
+      "properties": {
+        "background": {
+          "$ref": "#/$defs/BackgroundStatusConfig",
+          "default": {
+            "enabled": true
+          },
+          "description": "The Background contributor configuration."
+        },
+        "enabled": {
+          "default": true,
+          "description": "Whether this composition includes the Agent Status extension at all.\n\nWith `false` the runtime composes no status engine: the Agent Loop\nemits no Agent Status and is otherwise a completely ordinary\n`ConversationRuntime`.",
+          "type": "boolean"
+        },
+        "time": {
+          "$ref": "#/$defs/TimeStatusConfig",
+          "default": {
+            "enabled": true
+          },
+          "description": "The Time contributor configuration."
+        }
+      },
+      "type": "object"
+    },
+    "AgentWorktreeDocument": {
+      "additionalProperties": false,
+      "description": "The resource representation of a named subagent's optional Git worktree\nisolation. An omitted or disabled value is the existing shared-workspace\nbehavior; there is no model-facing per-call override.\n\nIssue #188: when enabled, isolation runs the child from the committed\nparent `HEAD` snapshot. `require_clean_parent` defaults to `true`\n(strict): the parent source workspace must be clean, otherwise the child\nis rejected rather than silently dropping parent-local changes. Only an\nexplicit `\"require_clean_parent\": false` permits a dirty parent while the\nchild still receives exactly the committed snapshot.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Whether this named definition uses an isolated Git worktree.",
+          "type": "boolean"
+        },
+        "require_clean_parent": {
+          "default": true,
+          "description": "Whether acquisition rejects a dirty parent workspace/index.\n\nThis is the one authoritative strictness switch, normalized at the\nconfiguration boundary: it defaults to `true` whenever isolation is\nenabled, and an explicit `false` is the intentional opt-out that runs\nfrom the captured committed `HEAD` while excluding dirty parent bytes.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "AllTools": {
       "enum": [
         "all"
@@ -40,13 +185,14 @@
         }
       ]
     },
-    "BackgroundLayer": {
+    "BackgroundStatusConfig": {
       "additionalProperties": false,
+      "description": "Configuration of the bounded Background status contributor.",
       "properties": {
         "enabled": {
-          "type": [
-            "boolean"
-          ]
+          "default": true,
+          "description": "Whether Background participates in an available Agent Status opportunity.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -117,33 +263,6 @@
           "type": "string"
         }
       ]
-    },
-    "ExtensionsLayer": {
-      "additionalProperties": false,
-      "properties": {
-        "agent_status": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/StatusLayer"
-            }
-          ]
-        },
-        "goal": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/GoalExtensionDocument"
-            }
-          ]
-        },
-        "todo": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TodoExtensionDocument"
-            }
-          ]
-        }
-      },
-      "type": "object"
     },
     "GoalExtensionDocument": {
       "additionalProperties": false,
@@ -381,6 +500,40 @@
       "description": "A fully qualified catalog model reference: `provider-id/model-id`.\n\nThe first `/` separates the provider from the model. The model ID itself\nmay contain additional `/` characters, as is common for Hugging Face\nidentities such as `Qwen/Qwen3`, but no model-ID segment may be empty.\n\nThis is the explicit model-identity domain of the runtime. Concatenated\nstrings never travel through the runtime in its place: a reference either\nresolves to exactly one catalog model or it fails.",
       "type": "string"
     },
+    "NativeAgentExtensionsDocument": {
+      "additionalProperties": false,
+      "description": "The closed authored composition surface of native Agent Extensions.\n\nEvery member is a concrete named extension in a closed record.\nUnknown extension names are rejected. Runtime TOML layers use the separate\n`snake_case` authoring boundary; resource and wire documents retain their\nown serialization contract.",
+      "properties": {
+        "agent_status": {
+          "$ref": "#/$defs/AgentStatusExtensionDocument",
+          "default": {
+            "background": {
+              "enabled": true
+            },
+            "enabled": false,
+            "time": {
+              "enabled": true
+            }
+          },
+          "description": "The Agent Status extension: optional provider-independent runtime\ncontext for an already-established model step."
+        },
+        "goal": {
+          "$ref": "#/$defs/GoalExtensionDocument",
+          "default": {
+            "enabled": false
+          },
+          "description": "Root-only persistent Goal pursuit, disabled by default."
+        },
+        "todo": {
+          "$ref": "#/$defs/TodoExtensionDocument",
+          "default": {
+            "enabled": false
+          },
+          "description": "The Todo extension: the conversation-owned task list, its\nmodel-facing `todo` Tool, and its bounded status presentation\n(Issue #259)."
+        }
+      },
+      "type": "object"
+    },
     "NativePolicyOverrideDocument": {
       "additionalProperties": false,
       "description": "Explicit native policy axes, resolved over that tool's product default.\nAbsence never applies the generic external-tool policy to a native tool.",
@@ -504,31 +657,6 @@
       ],
       "description": "Exactly two trust granularities for one source. This is also the authoring\nboundary: only the literal \"all\" or an exact array is accepted."
     },
-    "StatusLayer": {
-      "additionalProperties": false,
-      "properties": {
-        "background": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/BackgroundLayer"
-            }
-          ]
-        },
-        "enabled": {
-          "type": [
-            "boolean"
-          ]
-        },
-        "time": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TimeLayer"
-            }
-          ]
-        }
-      },
-      "type": "object"
-    },
     "SubagentName": {
       "description": "The canonical typed name of one admitted subagent definition.\n\nThe keyspace is deliberately narrow: lowercase ASCII letters, digits,\n`-`, and `_`, starting with a letter. A name is the model-facing routing\ntoken, the durable ownership identity, and the Runtime Client projection\nidentity, so an ambiguous or shell-shaped spelling is rejected at the\nconfiguration boundary rather than normalized later.",
       "type": "string"
@@ -536,14 +664,6 @@
     "SubagentsLayer": {
       "additionalProperties": false,
       "properties": {
-        "main": {
-          "items": {
-            "$ref": "#/$defs/SubagentName"
-          },
-          "type": [
-            "array"
-          ]
-        },
         "max_concurrent": {
           "format": "uint",
           "minimum": 0,
@@ -650,19 +770,19 @@
         }
       ]
     },
-    "TimeLayer": {
+    "TimeStatusConfig": {
       "additionalProperties": false,
+      "description": "Configuration of the bounded Time status contributor.",
       "properties": {
         "enabled": {
-          "type": [
-            "boolean"
-          ]
+          "default": true,
+          "description": "Whether Time participates in an available Agent Status opportunity.",
+          "type": "boolean"
         },
         "timezone": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Timezone"
-            }
+          "description": "The optional IANA timezone used only by Time presentation. Omitting it\nrenders UTC.",
+          "type": [
+            "string"
           ]
         }
       },
@@ -687,9 +807,6 @@
         }
       },
       "type": "object"
-    },
-    "Timezone": {
-      "type": "string"
     },
     "TodoExtensionDocument": {
       "additionalProperties": false,
@@ -747,25 +864,18 @@
     "WorkflowId": {
       "description": "The configured workflow identity.\n\nThis is both the catalog key and the eventual model-facing Tool name. It\nis deliberately not repeated inside YAML.",
       "type": "string"
-    },
-    "WorkflowsLayer": {
-      "additionalProperties": false,
-      "properties": {
-        "main": {
-          "items": {
-            "$ref": "#/$defs/WorkflowId"
-          },
-          "type": [
-            "array"
-          ]
-        }
-      },
-      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "agent": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentProfileLayer"
+        }
+      ]
+    },
     "agent_id": {
       "anyOf": [
         {
@@ -787,27 +897,12 @@
         }
       ]
     },
-    "default_tools": {
-      "items": {
-        "type": "string"
-      },
-      "type": [
-        "array"
-      ]
-    },
     "environment": {
       "additionalProperties": {
         "type": "string"
       },
       "type": [
         "object"
-      ]
-    },
-    "extensions": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ExtensionsLayer"
-        }
       ]
     },
     "mcp_servers": {
@@ -824,13 +919,6 @@
       },
       "type": [
         "object"
-      ]
-    },
-    "model": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ModelLayer"
-        }
       ]
     },
     "model_timeout_policy": {
@@ -864,14 +952,6 @@
         "integer"
       ]
     },
-    "skills": {
-      "items": {
-        "type": "string"
-      },
-      "type": [
-        "array"
-      ]
-    },
     "subagents": {
       "anyOf": [
         {
@@ -883,20 +963,6 @@
       "anyOf": [
         {
           "$ref": "#/$defs/ToolDeadlineLayer"
-        }
-      ]
-    },
-    "tools": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ToolSelectionDocument"
-        }
-      ]
-    },
-    "workflows": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/WorkflowsLayer"
         }
       ]
     }

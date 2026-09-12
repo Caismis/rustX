@@ -486,9 +486,7 @@ pub fn tool(name: &str, id: &str) -> rustx::tools::types::ToolDefinition {
         concurrency_policy: ToolConcurrencyPolicy::Sequential,
         approval_policy: rustx::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Idempotent,
-        origin: ToolOrigin::Mcp {
-            server_id: rustx::runtime::identity::McpServerId::new("mcp-test"),
-        },
+        origin: ToolOrigin::Builtin,
     }
 }
 
@@ -975,7 +973,8 @@ pub fn native_fixture_with(
     native_fixture_with_extensions(
         environment,
         policies,
-        &rustx::extensions::NativeAgentExtensionsDocument::default().resolve(),
+        &rustx::extensions::NativeAgentExtensions::with_todo()
+            .and_agent_status(rustx::context::AgentStatusConfig::default()),
     )
 }
 
@@ -1388,12 +1387,14 @@ pub async fn capability_lease(
     tools: rustx::tools::executor::ToolRegistry,
     tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
 ) -> CapabilityFixture {
-    capability_lease_with(
-        tools,
-        tool_runtime,
-        rustx::capabilities::ToolActivationPolicy::default(),
-    )
-    .await
+    let mut activation = rustx::capabilities::AgentActivation::default();
+    activation.profile.tools.builtin = tools
+        .definitions()
+        .into_iter()
+        .filter(|tool| tool.origin.source().is_none())
+        .map(|tool| tool.name.clone())
+        .collect();
+    capability_lease_with(tools, tool_runtime, activation).await
 }
 
 /// The same lease, composed against an explicit ordinary activation policy
@@ -1408,11 +1409,13 @@ pub async fn capability_lease(
 pub async fn capability_lease_with(
     tools: rustx::tools::executor::ToolRegistry,
     tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
-    mut tool_activation: rustx::capabilities::ToolActivationPolicy,
+    mut agent_activation: rustx::capabilities::AgentActivation,
 ) -> CapabilityFixture {
     for definition in tools.definitions() {
         if let Some(source) = definition.origin.source() {
-            tool_activation
+            agent_activation
+                .profile
+                .tools
                 .sources
                 .entry(source)
                 .or_insert(rustx::capabilities::selection::SourceToolSelection::All);
@@ -1426,7 +1429,7 @@ pub async fn capability_lease_with(
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: std::sync::Arc::new(tools),
             extension_tools: tool_runtime.extension_tool_plane(),
-            tool_activation,
+            agent_activation,
             skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: tool_runtime.environment().clone(),

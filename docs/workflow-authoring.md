@@ -37,7 +37,9 @@ The shared pipeline is:
 4. `WorkflowCatalog::inspect_metadata` uses the native selector resolver and
    genuine metadata. Prospective analysis and runtime resource admission share
    this path. Typed dependencies retain known, inert, unavailable and unresolved
-   states instead of dropping unavailable-source facts.
+   states instead of dropping unavailable-source facts. This static dependency
+   analysis is distinct from the shared resolver's warning/suppression of
+   unavailable selections in a complete Agent Profile.
    `WorkflowCatalog::validate_agent_overrides` walks the same generation for
    every `Agent` node's optional `override`, reusing that selector resolver and
    the admitted Skill catalog. It keeps the same asymmetry: an unavailable

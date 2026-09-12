@@ -66,29 +66,38 @@ chat_reasoning_replay = "omit"
 /// The launch configuration with the deliberately tiny frozen timeout
 /// policy that every launched child must inherit.
 const SESSION_TOML: &str = r#"agent_id = "agent-parent"
-default_tools = ["read", "subagent"]
-
-[model]
-model = "fixture/subagent-model"
 
 [context]
 reserve_tokens = 1024
 keep_recent_tokens = 8192
 
+
 [model_timeout_policy]
 response_start_timeout_ms = 300
 stream_idle_timeout_ms = 300
 
+
 [subagents]
 max_concurrent = 4
-main = ["conformance"]
 workflow = []
 
+[subagents.roles]
 [subagents.roles.conformance]
 description = "Issue 138 named conformance child."
 skills = ["conformance"]
 
 [subagents.roles.conformance.tools]
+builtin = ["read"]
+
+
+[agent]
+agents = ["conformance"]
+
+[agent.model]
+model = "fixture/subagent-model"
+
+
+[agent.tools]
 builtin = ["read"]
 "#;
 

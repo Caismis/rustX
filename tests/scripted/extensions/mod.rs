@@ -800,8 +800,8 @@ async fn ext256_an_empty_extension_composition_changes_nothing_but_agent_status(
     let mut status_counts = Vec::new();
     let mut status_events = Vec::new();
     for document in [
-        serde_json::json!({"agentStatus": {"enabled": true}}),
-        serde_json::json!({"agentStatus": {"enabled": false}}),
+        serde_json::json!({"agent_status": {"enabled": true}}),
+        serde_json::json!({"agent_status": {"enabled": false}}),
     ] {
         let extensions = composition(document);
         let fixture = common::native_fixture();
@@ -864,7 +864,7 @@ async fn ext256_an_empty_extension_composition_changes_nothing_but_agent_status(
 /// model request.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ext256_a_disabled_agent_status_extension_emits_nothing_anywhere() {
-    let extensions = composition(serde_json::json!({"agentStatus": {"enabled": false}}));
+    let extensions = composition(serde_json::json!({"agent_status": {"enabled": false}}));
     assert!(
         extensions.agent_status().is_none(),
         "this regression is about the Agent Status extension only; Todo composes \
@@ -918,7 +918,7 @@ async fn ext256_a_disabled_agent_status_extension_emits_nothing_anywhere() {
 async fn ext256_a_composed_agent_status_extension_preserves_time_and_background_semantics() {
     for (document, expect_time, expect_background) in [
         (
-            serde_json::json!({"agentStatus": {
+            serde_json::json!({"agent_status": {
                 "enabled": true,
                 "time": {"enabled": true, "timezone": "Asia/Shanghai"},
                 "background": {"enabled": true}
@@ -927,7 +927,7 @@ async fn ext256_a_composed_agent_status_extension_preserves_time_and_background_
             true,
         ),
         (
-            serde_json::json!({"agentStatus": {
+            serde_json::json!({"agent_status": {
                 "enabled": true,
                 "time": {"enabled": false},
                 "background": {"enabled": true}
@@ -936,7 +936,7 @@ async fn ext256_a_composed_agent_status_extension_preserves_time_and_background_
             true,
         ),
         (
-            serde_json::json!({"agentStatus": {
+            serde_json::json!({"agent_status": {
                 "enabled": true,
                 "time": {"enabled": true, "timezone": "Asia/Shanghai"},
                 "background": {"enabled": false}
@@ -1096,7 +1096,7 @@ async fn wait_for_running(registry: &ConversationBackgroundRegistry, id: &ToolEx
 fn todo_and_status(todo: bool, agent_status: bool) -> NativeAgentExtensions {
     composition(serde_json::json!({
         "todo": {"enabled": todo},
-        "agentStatus": {"enabled": agent_status},
+        "agent_status": {"enabled": agent_status},
     }))
 }
 
@@ -1104,7 +1104,7 @@ fn todo_and_status(todo: bool, agent_status: bool) -> NativeAgentExtensions {
 /// activation policy, and the ordinary *available* catalog beside them.
 async fn published_tools(
     extensions: &NativeAgentExtensions,
-    policy: rustx::capabilities::ToolActivationPolicy,
+    policy: rustx::capabilities::AgentActivation,
 ) -> (Vec<String>, Vec<String>) {
     let fixture = common::native_fixture_with_extensions(
         Vec::new(),
@@ -1148,7 +1148,7 @@ async fn published_tools(
 ///
 /// ```text
 /// Todo on,  every ordinary default        -> todo present
-/// Todo on,  defaultTools naming only read -> todo present
+/// Todo on,  agent.tools.builtin naming only read -> todo present
 /// Todo on,  --tools read (exact)          -> todo present
 /// Todo on,  --no-tools                    -> todo present
 /// Todo off, every ordinary default        -> todo absent
@@ -1161,7 +1161,7 @@ async fn published_tools(
 /// Tool-providing extension.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ext259_ordinary_tool_selection_neither_adds_nor_removes_the_extension_tool() {
-    use rustx::capabilities::ToolActivationPolicy as Selection;
+    use rustx::capabilities::AgentActivation as Selection;
 
     let enabled = todo_and_status(true, true);
     let disabled = todo_and_status(false, true);
@@ -1169,7 +1169,13 @@ async fn ext259_ordinary_tool_selection_neither_adds_nor_removes_the_extension_t
     for policy in [
         Selection::default(),
         Selection {
-            default_tools: Some(vec!["read".to_owned()]),
+            profile: rustx::local_runtime::config::AgentProfileDocument {
+                tools: rustx::capabilities::selection::ToolSelectionDocument {
+                    builtin: vec!["read".into()],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
             ..Selection::default()
         },
         Selection {
@@ -1241,17 +1247,27 @@ async fn ext259_ordinary_tool_selection_neither_adds_nor_removes_the_extension_t
 /// model-facing `subagent` Tool's override all use.
 #[test]
 fn ext259_todo_is_rejected_on_every_ordinary_selection_surface() {
-    use rustx::capabilities::ToolActivationPolicy as Selection;
+    use rustx::capabilities::AgentActivation as Selection;
 
     // Root configuration.
     let config = r#"schema_version = 8
 agent_id = "agent-ext259"
-default_tools = ["read", "todo"]
-model = { model = "local/model-a" }
-context = { reserve_tokens = 0, keep_recent_tokens = 0 }
+
+[context]
+reserve_tokens = 0
+keep_recent_tokens = 0
+
+
+[agent]
+[agent.model]
+model = "local/model-a"
+
+
+[agent.tools]
+builtin = ["read", "todo"]
 "#;
     let error = rustx::local_runtime::CurrentRuntimeConfig::from_toml_slice(config.as_bytes())
-        .expect_err("defaultTools may not name an extension Tool");
+        .expect_err("agent.tools.builtin may not name an extension Tool");
     let rendered = error.to_string();
     assert!(
         rendered.contains("Agent Extension") && rendered.contains("extensions.todo"),
@@ -1261,7 +1277,13 @@ context = { reserve_tokens = 0, keep_recent_tokens = 0 }
     // The CLI-facing ordinary activation policy, on all three of its lists.
     for policy in [
         Selection {
-            default_tools: Some(vec!["todo".to_owned()]),
+            profile: rustx::local_runtime::config::AgentProfileDocument {
+                tools: rustx::capabilities::selection::ToolSelectionDocument {
+                    builtin: vec!["todo".into()],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
             ..Selection::default()
         },
         Selection {
@@ -1328,7 +1350,7 @@ async fn ext259_the_todo_tool_schema_is_stable_across_list_mutations() {
     let capability = common::capability_lease_with(
         rustx::tools::executor::ToolRegistry::new(),
         &fixture.runtime,
-        rustx::capabilities::ToolActivationPolicy::default(),
+        rustx::capabilities::AgentActivation::default(),
     )
     .await;
     let (lease, coordinator) = capability.into_lease_and_coordinator();
@@ -1741,7 +1763,7 @@ async fn ext259_a_resource_reload_cannot_install_or_remove_the_todo_extension() 
         let capability = common::capability_lease_with(
             ordinary_base(),
             &fixture.runtime,
-            rustx::capabilities::ToolActivationPolicy::default(),
+            rustx::capabilities::AgentActivation::default(),
         )
         .await;
         let (lease, coordinator) = capability.into_lease_and_coordinator();
@@ -1769,9 +1791,9 @@ async fn ext259_a_resource_reload_cannot_install_or_remove_the_todo_extension() 
             .prepare_candidate_with_inputs(rustx::capabilities::CapabilityResourceInputs {
                 source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
                 base_tool_registry: Arc::new(ordinary_base()),
-                tool_activation: rustx::capabilities::ToolActivationPolicy {
+                agent_activation: rustx::capabilities::AgentActivation {
                     no_tools: true,
-                    ..rustx::capabilities::ToolActivationPolicy::default()
+                    ..rustx::capabilities::AgentActivation::default()
                 },
                 skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
@@ -1802,7 +1824,7 @@ async fn ext259_a_resource_reload_cannot_install_or_remove_the_todo_extension() 
             .prepare_candidate_with_inputs(rustx::capabilities::CapabilityResourceInputs {
                 source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
                 base_tool_registry: Arc::new(ordinary_base()),
-                tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+                agent_activation: rustx::capabilities::AgentActivation::default(),
                 skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: fixture.runtime.environment().clone(),
@@ -1910,7 +1932,7 @@ fn extension_capability(
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: std::sync::Arc::new(rustx::tools::executor::ToolRegistry::new()),
             extension_tools,
-            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            agent_activation: rustx::capabilities::AgentActivation::default(),
             skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: tool_runtime.environment().clone(),
@@ -2392,7 +2414,7 @@ async fn ext259_the_effective_projection_cannot_disagree_with_the_tool_plane() {
     for composed in [true, false] {
         let extensions = composition(serde_json::json!({
             "todo": {"enabled": composed},
-            "agentStatus": {"enabled": false},
+            "agent_status": {"enabled": false},
         }));
         let (_dir, tool_runtime) = todo_tool_runtime("conv-ext259-projection", &extensions);
         let composed_runtime = conversation_runtime_with_extension_plane(

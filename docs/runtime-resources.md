@@ -20,19 +20,17 @@ control and does not disable external preparation.
 
 ## Exact Tool authority and native defaults
 
-An ordinary main Agent sees and can invoke exactly its frozen selected registry.
-Revision zero has no executable Tool authority; a prepared candidate publishes
-the selection. Default selection includes available built-ins named by
-`default_tools` (Read is an ordinary member) and admitted main Workflow tools.
-External Tools require the main Agent's explicit `tools.sources` selection;
-materialization for another Agent never exposes them to main. `--no-builtin-tools` removes all built-ins from this
-default selection, including generated Subagent/Workflow tools.
-`--tools a,b` narrows selection to those applicable registered names; external
-identities must first be selected through `tools.sources`.
-`--exclude-tools a,b` subtracts last, without reinsertion. Exclusions resolve
-against applicable availability, so excluding an already unselected available
-identity is valid, while unknown/ineligible or ambiguous names fail.
-`--no-tools` selects zero ordinary tools, including generated dispatchers.
+Root and named Agents resolve one [Agent Profile](agent-profiles.md) against
+admitted resources. Each frozen registry exposes only that Agent's selection.
+Root selects `agent.tools`, `agent.skills`, `agent.extensions`, `agent.agents`
+and `agent.workflows`. Named defaults use their independently authored profile
+against generation authority, never the root registry as a ceiling.
+
+`--tools a,b` is an explicit host profile layer selecting admitted ordinary
+names. Unknown or ambiguous CLI names fail. `--no-builtin-tools` and `--no-tools`
+restrict model exposure; `--exclude-tools a,b` subtracts last. None activates a
+source or changes invocation policy. Profile capabilities unavailable in the
+current generation produce typed diagnostics and suppression.
 
 ### Ordinary selection is one of two planes
 
@@ -42,7 +40,7 @@ Extension may also contribute a model-facing Tool, and that Tool belongs to
 
 ```text
   ordinary selected Tool capabilities        every flag in this section
-+ enabled extension-provided Tool surfaces   extensions.<name>.enabled
++ enabled extension-provided Tool surfaces   agent.extensions.<name>.enabled
 + already-admitted domain terminal protocols Workflow output, ...
 ```
 
@@ -55,7 +53,7 @@ incidental to where the implementation lives.
 
 Symmetrically, no selector can switch an extension on. `todo` is provided by
 the Todo Agent Extension and is rejected — with a diagnostic naming the
-extension — in `defaultTools`, `--tools`, `--exclude-tools`, a named
+extension — in `agent.tools.builtin`, `--tools`, `--exclude-tools`, a named
 Subagent's `tools.builtin`, and a Workflow's admitted capability set. It is not
 an ordinary available capability at all, so it never appears in the available
 catalog those selectors resolve against. See
@@ -63,11 +61,12 @@ catalog those selectors resolve against. See
 
 `--no-tools` conflicts with `--tools`, `--exclude-tools`, and
 `--no-builtin-tools`; `--tools` conflicts with `--no-builtin-tools`.
-All explicit lists reject empty values/entries, duplicates, unknown or
+Explicit CLI lists reject empty values/entries, duplicates, unknown or
 unavailable identities, and names shared by multiple applicable origins.
 There is no registration-order precedence. Use `--no-tools`, not an empty
 `--tools` list. The Rust selection boundary validates resolved intent too.
-These filters do not grant source activation or alter independently admitted
+Complete-profile empty dimensions are valid; unavailable profile selections
+produce typed diagnostics and suppression. These filters do not grant source activation or alter independently admitted
 child/Workflow capabilities. An invisible dispatcher cannot initiate execution.
 
 Native product defaults are independent typed axes:
@@ -164,8 +163,9 @@ executor Arcs; they cannot see a replacement executor through a new generation.
 WF-02 retains executable registrations (including frozen foreground policy) in
 the generation's `AvailableToolCatalog`, independently of its active model
 `ToolRegistry`. A fixed Workflow explicitly admits source-qualified Builtin/MCP
-selectors and resolves them using the same availability and identity rules as
-named subagents. Managed Python retains typed package source identity above its materializer.
+selectors and uses the shared source identity/availability machinery. Its strict
+static dependency contract is separate from complete Agent Profile suppression.
+Managed Python retains typed package source identity above its materializer.
 An inactive but available capability can serve a Workflow without widening the
 model surface. Unavailable sources, unknown selectors, changed identities and
 ineligible orchestration capabilities fail closed. Registration reconstruction
@@ -228,17 +228,45 @@ from the retired span's canonical tool calls, never from the generated prose.
 Historical Status observations may be summarized as
 past evidence, but the summary is never current runtime authority.
 
-## Named subagent definitions
+## Named Agent Profiles
 
 A generation's `AgentCatalog` is configuration/resource-generation state,
-never live execution state. A loader builds it off-side — reading each
-canonical role Markdown resource and explicit project-instruction files —
-validates every definition against the very capability candidate it is about
-to publish, and only then does the candidate commit. A definition that names
-an unknown capability, model, or Skill therefore rejects the whole candidate,
-and the previous complete generation stays authoritative in every half.
+never live execution state. Off-side loading reads canonical named TOML
+Agent Profile resources and their explicit project-instruction files:
 
-`AgentDocument.timeout_ms` is an optional, definition-level positive
+```text
+strict AgentProfileDocument
+    ↓
+AgentProfile
+    ↓
+generation-scoped resolve_agent_profile
+    ↓
+ResolvedAgentProfile + canonical typed diagnostics
+```
+
+Root and named Agents use this same semantic boundary. Named defaults resolve
+against the admitted generation, independently of the root's visible toolbar.
+Valid unavailable selections are diagnosed and suppressed: an unavailable
+builtin, an undefined/inactive/unprepared/failed ToolSource, an Exact Tool absent
+from a ready source, or a missing Skill, named Agent or admitted Workflow leaves
+the remaining profile usable. Known scope-ineligible capabilities in a complete
+one-shot child profile follow the shared scope-suppression policy.
+
+Malformed authoring still rejects the candidate: unknown fields, wrong types,
+malformed typed identities, duplicate exact selections, unknown Extensions,
+invalid extension configuration and invalid native bounds are hard errors.
+Explicit model configuration/reference validation remains with the model owner
+and can also fail; model errors are not generic capability suppression.
+Failed preparation preserves the previous complete generation.
+
+Dynamic invocation overrides are a separate strict authorization boundary.
+Absent dimensions use named defaults; present dimensions replace completely,
+including explicit empty replacements. Model-authored and Workflow-authored
+overrides must pass their typed authority inputs and validity checks. An
+unauthorized or invalid override is refused, never made successful by suppressing
+its request. Workflow static program admission also retains its own validation.
+
+`AgentProfileDocument.timeout_ms` is an optional, definition-level positive
 millisecond value. Admission rejects zero, malformed values, and values above
 the rustX-owned 86,400,000 millisecond (24 hour) maximum; it never clamps an
 invalid value. The validated `SubagentExecutionDeadline` is part of the
@@ -247,13 +275,10 @@ attempt keeps the deadline of the immutable generation it admitted even if a
 later reload changes the current configuration. The model-facing `subagent`
 call has no deadline field and cannot set or extend it.
 
-The capability-source availability carried alongside the catalog is what lets
-resolution distinguish two different facts:
-
-- a *source* that is unavailable in this generation keeps the runtime healthy
-  and blocks only the agents that explicitly require it;
-- a selector whose source authority is present but that names an unknown
-  capability is a static configuration error.
+The capability-source availability carried alongside the catalog distinguishes
+source unavailability from an Exact Tool missing in a ready source. Both produce
+typed profile diagnostics and suppression. Selection cannot activate a source,
+create a resource or change host invocation/approval policy.
 
 `CapabilitySnapshot` stays focused on executable capability identity — its
 revision advances only when the effective committed executable set changes —
@@ -324,11 +349,12 @@ nominal:
 
 ### What `definition_digest` is, and is not
 
-`SubagentDefinitionDigest` is the identity of the **named definition
+`NamedAgentDefinitionDigest` is the identity of the **named definition
 itself** — the normalized semantics configuration declares for that agent
-(name, description, instruction document, explicit model reference,
-whole-lifecycle execution deadline, selector set, Skill selector set,
-project-instruction policy). It is deliberately
+(name, description, instructions, complete explicit model policy,
+whole-lifecycle execution deadline, Tools, Skills, Extensions, Agent and Workflow
+selections, project-instruction and workspace policies). Its current framing is
+`rustx-agent-definition-v5`. It is deliberately
 *not* a digest of the full effective child runtime.
 
 Everything the invoking generation contributes at resolution time —

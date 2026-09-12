@@ -479,6 +479,7 @@ async fn a_new_tool_runtime_rebuilds_the_list_from_conversation_history() {
     let resumed = ConversationToolRuntime::from_config(
         conversation_id,
         ConversationRuntimeConfig {
+            extensions: rustx::extensions::NativeAgentExtensions::with_todo(),
             durable_binding: Some(ConversationStoreBinding::new(store)),
             ..ConversationRuntimeConfig::new(&workspace, dir.path().join("artifacts"))
         },

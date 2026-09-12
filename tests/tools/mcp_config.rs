@@ -15,7 +15,7 @@ use rustx::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy};
 /// Wraps an MCP configuration fragment in an otherwise minimal session.
 fn session_toml(fragment: &str) -> String {
     format!(
-        "agent_id = \"agent-46\"\n{fragment}\n[model]\nmodel = \"p/m\"\n[context]\nreserve_tokens = 1024\nkeep_recent_tokens = 4096\n"
+        "agent_id = \"agent-46\"\n{fragment}\n[agent.model]\nmodel = \"p/m\"\n[context]\nreserve_tokens = 1024\nkeep_recent_tokens = 4096\n"
     )
 }
 

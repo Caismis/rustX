@@ -745,24 +745,30 @@ mod tests {
 
     #[test]
     fn goal84_commands_are_rejected_on_every_ordinary_tool_selection_surface() {
-        use crate::capabilities::ToolActivationPolicy;
+        use crate::capabilities::AgentActivation;
         for name in crate::tools::native::GOAL_TOOL_NAMES {
             assert_eq!(
                 crate::capabilities::extension_provided_tool(name),
                 Some("goal")
             );
             for policy in [
-                ToolActivationPolicy {
-                    default_tools: Some(vec![name.into()]),
-                    ..ToolActivationPolicy::default()
+                AgentActivation {
+                    profile: crate::local_runtime::config::AgentProfileDocument {
+                        tools: crate::capabilities::selection::ToolSelectionDocument {
+                            builtin: vec![name.into()],
+                            sources: std::collections::BTreeMap::default(),
+                        },
+                        ..crate::local_runtime::config::builtin_root_profile()
+                    },
+                    ..AgentActivation::default()
                 },
-                ToolActivationPolicy {
+                AgentActivation {
                     tools: Some(vec![name.into()]),
-                    ..ToolActivationPolicy::default()
+                    ..AgentActivation::default()
                 },
-                ToolActivationPolicy {
+                AgentActivation {
                     exclude_tools: vec![name.into()],
-                    ..ToolActivationPolicy::default()
+                    ..AgentActivation::default()
                 },
             ] {
                 assert!(

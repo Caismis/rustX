@@ -20,7 +20,7 @@
 //! An extension is *optional Agent behavior or context augmentation* that
 //! belongs to one concrete Agent/Conversation composition. It is not a
 //! plugin, not a capability, and not an ordinary Tool: ordinary tool
-//! selection stays the business of `defaultTools`/`--tools` and the
+//! selection stays the business of `agent.tools.builtin`/`--tools` and the
 //! capability plane.
 //!
 //! # Two authority planes, not one list
@@ -38,7 +38,7 @@
 //! capabilities; it does not disable an independently composed extension, so a
 //! genuinely Tool-free model request needs no ordinary Tools **and** no
 //! Tool-providing extension. Symmetrically, naming an extension's Tool in
-//! `defaultTools`, `--tools`, `--exclude-tools`, a role's `tools.builtin`, or a
+//! `agent.tools.builtin`, `--tools`, `--exclude-tools`, a role's `tools.builtin`, or a
 //! Workflow capability selection is refused: those surfaces address ordinary
 //! execution capabilities only, and an extension is switched on by composing
 //! it. The classification is semantic, not incidental — `--no-builtin-tools`
@@ -87,11 +87,11 @@
 //! > Root Agent extensions and named-Subagent extensions are independently
 //! > authored compositions.
 //!
-//! The root composition comes from `CurrentRuntimeConfig::extensions`; a
-//! named role's comes from its own canonical frontmatter. A child never
+//! Root `[agent.extensions]` and named `[extensions]` use the same Agent Profile
+//! document and semantic resolver. A child never
 //! *implicitly inherits* the root's set: a role that authors no `extensions`
-//! composes its own built-in defaults, never whatever the invoking runtime
-//! happens to run with.
+//! composes none. Root product defaults are an explicit lower-priority profile
+//! layer.
 //!
 //! Since Issue #258 the invoking Agent's frozen root composition does appear
 //! in the resolver — as **delegation authority**, never as an inheritance
@@ -128,8 +128,8 @@ use crate::context::{
 /// Unknown extension names are rejected. Runtime TOML layers use the separate
 /// `snake_case` authoring boundary; resource and wire documents retain their
 /// own serialization contract.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields, default)]
 #[derive(schemars::JsonSchema)]
 pub struct NativeAgentExtensionsDocument {
     /// The Agent Status extension: optional provider-independent runtime
@@ -141,6 +141,19 @@ pub struct NativeAgentExtensionsDocument {
     pub todo: TodoExtensionDocument,
     /// Root-only persistent Goal pursuit, disabled by default.
     pub goal: GoalExtensionDocument,
+}
+
+impl Default for NativeAgentExtensionsDocument {
+    fn default() -> Self {
+        Self {
+            agent_status: AgentStatusExtensionDocument {
+                enabled: false,
+                ..AgentStatusExtensionDocument::default()
+            },
+            todo: TodoExtensionDocument { enabled: false },
+            goal: GoalExtensionDocument::default(),
+        }
+    }
 }
 
 /// Authored opt-in Goal composition.
@@ -219,7 +232,7 @@ pub struct TodoExtensionDocument {
 impl Default for TodoExtensionDocument {
     fn default() -> Self {
         // The product default. It is deliberately expressed here rather than
-        // in `defaultTools`: Todo is an extension, and only extension
+        // in `agent.tools.builtin`: Todo is an extension, and only extension
         // composition may decide whether it exists.
         Self { enabled: true }
     }
@@ -242,7 +255,7 @@ impl NativeAgentExtensionsDocument {
     /// This is the **only** transition from mutable configuration to
     /// executed composition. Root composition calls it once, at
     /// `LocalConversationCore::compose`; named-role loading calls it once,
-    /// while building the immutable `SubagentDefinition`.
+    /// while building the immutable `NamedAgentDefinition`.
     #[must_use]
     pub fn resolve(&self) -> NativeAgentExtensions {
         NativeAgentExtensions {
@@ -258,21 +271,11 @@ impl NativeAgentExtensionsDocument {
 
 /// The **presence-aware** closed selection an invocation override expresses.
 ///
-/// This is deliberately *not* [`NativeAgentExtensionsDocument`]. The authored
-/// document supplies launch/role **defaults** — its `agentStatus` member has
-/// `enabled: true` — which is exactly right for "an unconfigured role composes
-/// Agent Status" and exactly wrong for an override, where the whole point is
-/// that a present `extensions` dimension **replaces** the role's composition:
-///
-/// ```text
-/// role frontmatter   extensions: {}   ->  Agent Status composed (role default)
-/// invocation override "extensions": {} ->  no extension composed at all
-/// ```
-///
-/// Every member is therefore an explicit `Option`: absent means "this
-/// extension is not part of the requested composition", never "use a default".
-/// Presence is the only way to compose an extension, and a present member
-/// still carries its own complete authored configuration.
+/// Complete profiles and invocation selections share omission semantics:
+/// omitted members compose no extension. The outer invocation dimension is
+/// presence-aware: absent retains the named default; present replaces it.
+/// This wire record preserves the invocation protocol's camelCase spelling
+/// and rejects explicit null members.
 ///
 /// The record stays closed exactly like the authored document: an unknown
 /// extension name is rejected by `deny_unknown_fields`, so a misspelled or
@@ -526,6 +529,11 @@ pub struct NativeAgentExtensions {
 }
 
 impl NativeAgentExtensions {
+    pub(crate) fn without_goal(mut self) -> Self {
+        self.goal = None;
+        self
+    }
+
     /// The composition with no native Agent Extension at all.
     #[must_use]
     pub const fn none() -> Self {
@@ -659,7 +667,7 @@ impl NativeAgentExtensions {
     /// materialized.
     ///
     /// ```text
-    /// ordinary selected Tool capabilities      defaultTools / --tools /
+    /// ordinary selected Tool capabilities      agent.tools.builtin / --tools /
     ///                                          --exclude-tools / tools.builtin
     /// + enabled extension-provided Tools       the extension plane
     /// + already-admitted domain protocols      Workflow output, ...
@@ -1275,30 +1283,25 @@ mod tests {
     }
 
     #[test]
-    fn ext256_an_omitted_document_composes_the_default_agent_status_extension() {
-        let resolved = NativeAgentExtensionsDocument::default().resolve();
-        let agent_status = resolved.agent_status().expect("Agent Status is composed");
-        assert!(agent_status.time.enabled);
-        assert!(agent_status.background.enabled);
-        assert_eq!(agent_status.time.timezone, None);
-        assert!(!resolved.is_empty());
+    fn cfg273_omitted_extension_document_selects_no_extensions() {
+        assert!(
+            NativeAgentExtensionsDocument::default()
+                .resolve()
+                .is_empty()
+        );
+        assert!(document(serde_json::json!({})).resolve().is_empty());
     }
 
-    /// Issue #259: the product default of the Todo extension lives here, in
-    /// the closed extension document — not in `defaultTools`, which no
-    /// longer knows the name at all.
     #[test]
-    fn ext259_an_omitted_document_composes_the_todo_extension() {
-        let resolved = NativeAgentExtensionsDocument::default().resolve();
+    fn cfg273_root_product_defaults_are_an_explicit_profile_layer() {
+        let resolved = crate::local_runtime::config::builtin_root_profile()
+            .extensions
+            .resolve();
+        assert!(resolved.agent_status().is_some());
         assert!(resolved.todo().is_some());
         assert_eq!(
             resolved.prospective_tool_names(),
-            vec![crate::tools::native::TODO_TOOL_NAME],
-            "a composed Todo contributes exactly one model Tool"
-        );
-        assert_eq!(
-            composed_extension_names(&resolved),
-            vec![AGENT_STATUS_EXTENSION, TODO_EXTENSION]
+            vec![crate::tools::native::TODO_TOOL_NAME]
         );
     }
 
@@ -1307,7 +1310,7 @@ mod tests {
     /// composition.
     #[test]
     fn ext259_todo_and_agent_status_compose_independently() {
-        let todo_only = document(serde_json::json!({"agentStatus": {"enabled": false}})).resolve();
+        let todo_only = document(serde_json::json!({"todo": {"enabled": true}})).resolve();
         assert!(todo_only.agent_status().is_none() && todo_only.todo().is_some());
         assert_eq!(todo_only, NativeAgentExtensions::with_todo());
         assert!(!todo_only.is_empty());
@@ -1316,7 +1319,8 @@ mod tests {
             vec![crate::tools::native::TODO_TOOL_NAME]
         );
 
-        let status_only = document(serde_json::json!({"todo": {"enabled": false}})).resolve();
+        let status_only =
+            document(serde_json::json!({"agent_status": {"enabled": true}})).resolve();
         assert!(status_only.agent_status().is_some() && status_only.todo().is_none());
         assert!(
             status_only.prospective_tool_names().is_empty(),
@@ -1324,7 +1328,7 @@ mod tests {
         );
 
         let neither = document(
-            serde_json::json!({"agentStatus": {"enabled": false}, "todo": {"enabled": false}}),
+            serde_json::json!({"agent_status": {"enabled": false}, "todo": {"enabled": false}}),
         )
         .resolve();
         assert_eq!(neither, NativeAgentExtensions::none());
@@ -1347,7 +1351,7 @@ mod tests {
     #[test]
     fn ext256_disabling_agent_status_removes_the_extension_from_the_composition() {
         let resolved = document(
-            serde_json::json!({"agentStatus": {"enabled": false}, "todo": {"enabled": false}}),
+            serde_json::json!({"agent_status": {"enabled": false}, "todo": {"enabled": false}}),
         )
         .resolve();
         assert_eq!(resolved, NativeAgentExtensions::none());
@@ -1364,7 +1368,7 @@ mod tests {
     #[test]
     fn ext256_contributor_settings_survive_the_freeze_unchanged() {
         let resolved = document(serde_json::json!({
-            "agentStatus": {
+            "agent_status": {
                 "enabled": true,
                 "time": {"enabled": true, "timezone": "Asia/Shanghai"},
                 "background": {"enabled": false}
@@ -1389,7 +1393,7 @@ mod tests {
     #[test]
     fn ext256_disabled_agent_status_discards_contributor_configuration() {
         let resolved = document(serde_json::json!({
-            "agentStatus": {"enabled": false, "time": {"timezone": "Asia/Shanghai"}}
+            "agent_status": {"enabled": false, "time": {"timezone": "Asia/Shanghai"}}
         }))
         .resolve();
         assert!(resolved.agent_status().is_none());
@@ -1399,9 +1403,9 @@ mod tests {
     fn ext256_unknown_extension_names_and_fields_are_rejected() {
         for value in [
             serde_json::json!({"futureGoal": {"enabled": true}}),
-            serde_json::json!({"agentStatus": {"future": true}}),
-            serde_json::json!({"agentStatus": {"time": {"future": true}}}),
-            serde_json::json!({"agentStatus": {"background": {"future": true}}}),
+            serde_json::json!({"agent_status": {"future": true}}),
+            serde_json::json!({"agent_status": {"time": {"future": true}}}),
+            serde_json::json!({"agent_status": {"background": {"future": true}}}),
             // Todo's closed record is just as strict: it has one member.
             serde_json::json!({"todo": {"future": true}}),
             serde_json::json!({"todo": {"enabled": "true"}}),
@@ -1417,15 +1421,17 @@ mod tests {
     fn ext256_the_digest_framing_separates_every_semantic_composition() {
         let framings = [
             NativeAgentExtensions::none(),
-            document(serde_json::json!({})).resolve(),
-            document(serde_json::json!({"agentStatus": {"time": {"enabled": false}}})).resolve(),
-            document(serde_json::json!({"agentStatus": {"background": {"enabled": false}}}))
+            crate::local_runtime::config::builtin_root_profile()
+                .extensions
                 .resolve(),
-            document(serde_json::json!({"agentStatus": {"time": {"timezone": "Asia/Shanghai"}}}))
+            document(serde_json::json!({"agent_status": {"time": {"enabled": false}}})).resolve(),
+            document(serde_json::json!({"agent_status": {"background": {"enabled": false}}}))
+                .resolve(),
+            document(serde_json::json!({"agent_status": {"time": {"timezone": "Asia/Shanghai"}}}))
                 .resolve(),
             // Issue #259: Todo is framed too, so a role that composes it is a
             // different definition from one that does not.
-            document(serde_json::json!({"todo": {"enabled": false}})).resolve(),
+            document(serde_json::json!({"agent_status": {"enabled": true}})).resolve(),
             NativeAgentExtensions::with_todo(),
         ]
         .map(|composition| composition.authored_digest_framing());
@@ -1447,13 +1453,15 @@ mod tests {
     fn ext256_materialized_owners_recover_the_exact_frozen_composition() {
         for composition in [
             NativeAgentExtensions::none(),
-            document(serde_json::json!({})).resolve(),
-            document(serde_json::json!({"agentStatus": {"time": {"enabled": false}}})).resolve(),
-            document(serde_json::json!({"agentStatus": {"background": {"enabled": false}}}))
+            crate::local_runtime::config::builtin_root_profile()
+                .extensions
                 .resolve(),
-            document(serde_json::json!({"agentStatus": {"time": {"timezone": "Asia/Shanghai"}}}))
+            document(serde_json::json!({"agent_status": {"time": {"enabled": false}}})).resolve(),
+            document(serde_json::json!({"agent_status": {"background": {"enabled": false}}}))
                 .resolve(),
-            document(serde_json::json!({"todo": {"enabled": false}})).resolve(),
+            document(serde_json::json!({"agent_status": {"time": {"timezone": "Asia/Shanghai"}}}))
+                .resolve(),
+            document(serde_json::json!({"agent_status": {"enabled": true}})).resolve(),
             NativeAgentExtensions::with_todo(),
         ] {
             let engine = composition.agent_status_engine(Arc::new(crate::context::SystemClock));
@@ -1480,7 +1488,7 @@ mod tests {
         for composition in [
             NativeAgentExtensions::none(),
             NativeAgentExtensions::with_todo(),
-            document(serde_json::json!({"agentStatus": {"time": {"timezone": "Asia/Shanghai"}}}))
+            document(serde_json::json!({"agent_status": {"time": {"timezone": "Asia/Shanghai"}}}))
                 .resolve(),
         ] {
             let encoded = serde_json::to_vec(&composition).expect("encodes");

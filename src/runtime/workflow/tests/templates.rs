@@ -14,10 +14,8 @@ pub(super) fn template(id: &str) -> Arc<WorkflowProgram> {
     .unwrap();
     assert_eq!(roles.len(), 1);
     assert_eq!(sources[&profile("reviewer")].layer, "project");
-    let document = serde_json::from_value(json!({ "main":[id]})).unwrap();
     let catalog = crate::local_runtime::workflow_resources::load(
         &root,
-        &document,
         &profiles,
         &crate::local_runtime::agent_resources::load(&root, &root.join("user-agents"), &profiles)
             .unwrap()

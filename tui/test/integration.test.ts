@@ -96,15 +96,17 @@ ${modelToml("second-model", 32000, 256)}`;
 
 const RUNTIME_CONFIG_TOML = `schema_version = 8
 agent_id = "agent-tui-integration"
-model = { model = "fixture/integration-model" }
 context = { reserve_tokens = 1024, keep_recent_tokens = 8192 }
+[agent]
+model = { model = "fixture/integration-model" }
 `;
 
 const BEFORE_START_RUNTIME_CONFIG_TOML = `schema_version = 8
 agent_id = "agent-tui-before-start"
-default_tools = ["bash"]
-model = { model = "fixture/integration-model" }
 context = { reserve_tokens = 1024, keep_recent_tokens = 8192 }
+[agent]
+model = { model = "fixture/integration-model" }
+tools = { builtin = ["bash"] }
 `;
 
 it("native Workflow retirement preserves visible Tool identity through stdio, reconnect and reopen", { skip: SKIP, timeout: 20_000 }, async (test) => {
@@ -113,7 +115,7 @@ it("native Workflow retirement preserves visible Tool identity through stdio, re
   const workspace = fixture.path("workspace");
   mkdirSync(join(workspace, ".agents/workflows"), { recursive: true });
   writeFileSync(fixture.path("models.toml"), modelsToml(provider.url("/v1")).replaceAll("integration-model", "workflow-model"));
-  writeFileSync(fixture.path("rustx.toml"), RUNTIME_CONFIG_TOML.replace("fixture/integration-model", "fixture/workflow-model") + '\ndefault_tools = ["read"]\n[workflows]\nmain = ["review_pr"]\n' );
+  writeFileSync(fixture.path("rustx.toml"), RUNTIME_CONFIG_TOML.replace("fixture/integration-model", "fixture/workflow-model") + '\nworkflows = ["review_pr"]\n[agent.tools]\nbuiltin = ["read"]\n' );
   writeFileSync(join(workspace, ".agents/workflows/review_pr.yaml"), `description: Inspect registered workflow files.
 tools: [{origin: builtin, name: glob}]
 block:
@@ -912,8 +914,9 @@ describe("real rustx structured ask_user questionnaire", { skip: SKIP }, () => {
 
 const COMPACTION_RUNTIME_CONFIG_TOML = `schema_version = 8
 agent_id = "agent-tui-compaction"
-model = { model = "fixture/integration-model" }
 context = { reserve_tokens = 1536, keep_recent_tokens = 256 }
+[agent]
+model = { model = "fixture/integration-model" }
 `;
 
 const TUI_TURN_ONE = "tui compaction: turn one";

@@ -1677,9 +1677,9 @@ pub async fn capability_projection_is_deterministic(factory: &dyn DriverFactory)
     let fixture = ConformanceFixture::builder(&conversation(factory, "capability"))
         .tools(base)
         .native_tools()
-        .tool_activation(rustx::capabilities::ToolActivationPolicy {
+        .agent_activation(rustx::capabilities::AgentActivation {
             tools: Some(vec!["ls".to_owned(), "read".to_owned()]),
-            ..rustx::capabilities::ToolActivationPolicy::default()
+            ..rustx::capabilities::AgentActivation::default()
         })
         .workspace_fixture(|workspace| {
             write_skill(workspace, "skill-readme", "Reads the README");

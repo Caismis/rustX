@@ -7385,6 +7385,13 @@ mod tests {
         crate::capabilities::CapabilityCoordinator,
         crate::capabilities::AttemptCapabilityLease,
     ) {
+        let mut agent_activation = crate::capabilities::AgentActivation::default();
+        agent_activation.profile.tools.builtin = tools
+            .definitions()
+            .into_iter()
+            .filter(|tool| tool.origin.source().is_none())
+            .map(|tool| tool.name.clone())
+            .collect();
         let tools = std::sync::Arc::new(tools);
         let dir = tempfile::tempdir().expect("temp dir");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
@@ -7394,7 +7401,7 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: tools,
                 extension_tools: tool_runtime.extension_tool_plane(),
-                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                agent_activation,
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),

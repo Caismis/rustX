@@ -1,5 +1,25 @@
 {
   "$defs": {
+    "AgentProjectInstructionsDocument": {
+      "additionalProperties": false,
+      "description": "Project-instruction selection from admitted workspace resources.",
+      "properties": {
+        "files": {
+          "default": [],
+          "description": "Explicit agent-owned project instruction files, in deterministic\nconfigured order. Relative paths resolve against the owning\nconfiguration document's directory at launch resolution.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "inherit": {
+          "default": true,
+          "description": "Whether the invoking generation's normal project instruction chain is\nprepended to the explicit files.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "AgentStatusExtensionDocument": {
       "additionalProperties": false,
       "description": "The authored Agent Status extension.\n\n`enabled` composes the extension in or out of the runtime as a whole;\n`time` and `background` remain the two bounded status contributors, with\nexactly the semantics they had before the migration.",
@@ -22,6 +42,23 @@
             "enabled": true
           },
           "description": "The Time contributor configuration."
+        }
+      },
+      "type": "object"
+    },
+    "AgentWorktreeDocument": {
+      "additionalProperties": false,
+      "description": "The resource representation of a named subagent's optional Git worktree\nisolation. An omitted or disabled value is the existing shared-workspace\nbehavior; there is no model-facing per-call override.\n\nIssue #188: when enabled, isolation runs the child from the committed\nparent `HEAD` snapshot. `require_clean_parent` defaults to `true`\n(strict): the parent source workspace must be clean, otherwise the child\nis rejected rather than silently dropping parent-local changes. Only an\nexplicit `\"require_clean_parent\": false` permits a dirty parent while the\nchild still receives exactly the committed snapshot.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Whether this named definition uses an isolated Git worktree.",
+          "type": "boolean"
+        },
+        "require_clean_parent": {
+          "default": true,
+          "description": "Whether acquisition rejects a dirty parent workspace/index.\n\nThis is the one authoritative strictness switch, normalized at the\nconfiguration boundary: it defaults to `true` whenever isolation is\nenabled, and an explicit `false` is the intentional opt-out that runs\nfrom the captured committed `HEAD` while excluding dirty parent bytes.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -55,6 +92,83 @@
       },
       "type": "object"
     },
+    "ModelLayer": {
+      "additionalProperties": false,
+      "properties": {
+        "max_output_tokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelOutput"
+            }
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelRef"
+            }
+          ]
+        },
+        "reasoning_profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningSelection"
+            }
+          ]
+        },
+        "request_params_json": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequestParamsJson"
+            }
+          ]
+        },
+        "summary_model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SummaryAuthoring"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ModelOutput": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "catalog_default",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "limit",
+              "type": "string"
+            },
+            "tokens": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "mode",
+            "tokens"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ModelRef": {
       "description": "A fully qualified catalog model reference: `provider-id/model-id`.\n\nThe first `/` separates the provider from the model. The model ID itself\nmay contain additional `/` characters, as is common for Hugging Face\nidentities such as `Qwen/Qwen3`, but no model-ID segment may be empty.\n\nThis is the explicit model-identity domain of the runtime. Concatenated\nstrings never travel through the runtime in its place: a reference either\nresolves to exactly one catalog model or it fails.",
       "type": "string"
@@ -63,13 +177,13 @@
       "additionalProperties": false,
       "description": "The closed authored composition surface of native Agent Extensions.\n\nEvery member is a concrete named extension in a closed record.\nUnknown extension names are rejected. Runtime TOML layers use the separate\n`snake_case` authoring boundary; resource and wire documents retain their\nown serialization contract.",
       "properties": {
-        "agentStatus": {
+        "agent_status": {
           "$ref": "#/$defs/AgentStatusExtensionDocument",
           "default": {
             "background": {
               "enabled": true
             },
-            "enabled": true,
+            "enabled": false,
             "time": {
               "enabled": true
             }
@@ -86,12 +200,54 @@
         "todo": {
           "$ref": "#/$defs/TodoExtensionDocument",
           "default": {
-            "enabled": true
+            "enabled": false
           },
           "description": "The Todo extension: the conversation-owned task list, its\nmodel-facing `todo` Tool, and its bounded status presentation\n(Issue #259)."
         }
       },
       "type": "object"
+    },
+    "ReasoningProfileId": {
+      "description": "The identity of one reasoning profile declared by a model.\n\nThe runtime assigns no meaning to the name: `off`, `on`, `low`,\n`thinking-32k`, and `deep` are all just names whose wire behaviour is\nexactly the profile's configured `request_params_json`.",
+      "type": "string"
+    },
+    "ReasoningSelection": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "catalog_default",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "profile",
+              "type": "string"
+            },
+            "name": {
+              "$ref": "#/$defs/ReasoningProfileId"
+            }
+          },
+          "required": [
+            "mode",
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RequestParamsJson": {
+      "description": "JSON text with an object at its top level. Arbitrary nested provider-native JSON is retained, including null. Protected wire keys are rejected during model resolution.",
+      "type": "string"
     },
     "SourceToolSelection": {
       "anyOf": [
@@ -107,42 +263,61 @@
       ],
       "description": "Exactly two trust granularities for one source. This is also the authoring\nboundary: only the literal \"all\" or an exact array is accepted."
     },
-    "SubagentAgentsMdDocument": {
-      "additionalProperties": false,
-      "description": "The project-instruction policy of one named definition.",
-      "properties": {
-        "files": {
-          "default": [],
-          "description": "Explicit agent-owned project instruction files, in deterministic\nconfigured order. Relative paths resolve against the owning\nconfiguration document's directory at launch resolution.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "inherit": {
-          "default": true,
-          "description": "Whether the invoking generation's normal project instruction chain is\nprepended to the explicit files.",
-          "type": "boolean"
-        }
-      },
-      "type": "object"
+    "SubagentName": {
+      "description": "The canonical typed name of one admitted subagent definition.\n\nThe keyspace is deliberately narrow: lowercase ASCII letters, digits,\n`-`, and `_`, starting with a letter. A name is the model-facing routing\ntoken, the durable ownership identity, and the Runtime Client projection\nidentity, so an ambiguous or shell-shaped spelling is rejected at the\nconfiguration boundary rather than normalized later.",
+      "type": "string"
     },
-    "SubagentWorktreeDocument": {
-      "additionalProperties": false,
-      "description": "The resource representation of a named subagent's optional Git worktree\nisolation. An omitted or disabled value is the existing shared-workspace\nbehavior; there is no model-facing per-call override.\n\nIssue #188: when enabled, isolation runs the child from the committed\nparent `HEAD` snapshot. `require_clean_parent` defaults to `true`\n(strict): the parent source workspace must be clean, otherwise the child\nis rejected rather than silently dropping parent-local changes. Only an\nexplicit `\"requireCleanParent\": false` permits a dirty parent while the\nchild still receives exactly the committed snapshot.",
-      "properties": {
-        "enabled": {
-          "default": false,
-          "description": "Whether this named definition uses an isolated Git worktree.",
-          "type": "boolean"
+    "SummaryAuthoring": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "session",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
         },
-        "requireCleanParent": {
-          "default": true,
-          "description": "Whether acquisition rejects a dirty parent workspace/index.\n\nThis is the one authoritative strictness switch, normalized at the\nconfiguration boundary: it defaults to `true` whenever isolation is\nenabled, and an explicit `false` is the intentional opt-out that runs\nfrom the captured committed `HEAD` while excluding dirty parent bytes.",
-          "type": "boolean"
+        {
+          "additionalProperties": false,
+          "properties": {
+            "max_output_tokens": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelOutput"
+                }
+              ]
+            },
+            "mode": {
+              "const": "explicit",
+              "type": "string"
+            },
+            "model": {
+              "$ref": "#/$defs/ModelRef"
+            },
+            "reasoning_profile": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ReasoningSelection"
+                }
+              ]
+            },
+            "request_params_json": {
+              "$ref": "#/$defs/RequestParamsJson",
+              "default": "{}"
+            }
+          },
+          "required": [
+            "mode",
+            "model"
+          ],
+          "type": "object"
         }
-      },
-      "type": "object"
+      ]
     },
     "TimeStatusConfig": {
       "additionalProperties": false,
@@ -194,14 +369,25 @@
         }
       },
       "type": "object"
+    },
+    "WorkflowId": {
+      "description": "The configured workflow identity.\n\nThis is both the catalog key and the eventual model-facing Tool name. It\nis deliberately not repeated inside YAML.",
+      "type": "string"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Strict canonical Agent TOML document with explicit primary instructions.\n\nEverything here is *definition* state, and the definition is the child's\ncanonical **default** execution profile. One invocation may replace\n`tools`, `skills`, and `extensions` for exactly that child through the\nshared `SubagentInvocationOverride` (Issue #258), within an explicit\ndelegation ceiling. Every other field here — model, instructions,\n`timeout_ms`, `agents_md`, `worktree` — has no per-call form at all.",
+  "description": "Strict Agent Profile authoring shared by root and named Agents.\n\nComplete selected intent resolves against admitted resources. Execution\nscope controls child lifecycle/worktree applicability. Dynamic child\ninvocations may replace only Tools, Skills and Extensions within their\nfrozen delegation ceiling; the other dimensions remain authored defaults.",
   "properties": {
+    "agents": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/SubagentName"
+      },
+      "type": "array"
+    },
     "agents_md": {
-      "$ref": "#/$defs/SubagentAgentsMdDocument",
+      "$ref": "#/$defs/AgentProjectInstructionsDocument",
       "default": {
         "files": [],
         "inherit": true
@@ -209,17 +395,18 @@
       "description": "The project-instruction policy of this agent."
     },
     "description": {
+      "default": "",
       "description": "The bounded model-facing routing description.",
       "type": "string"
     },
     "extensions": {
       "$ref": "#/$defs/NativeAgentExtensionsDocument",
       "default": {
-        "agentStatus": {
+        "agent_status": {
           "background": {
             "enabled": true
           },
-          "enabled": true,
+          "enabled": false,
           "time": {
             "enabled": true
           }
@@ -228,19 +415,20 @@
           "enabled": false
         },
         "todo": {
-          "enabled": true
+          "enabled": false
         }
       },
-      "description": "The closed **Native Agent Extension** composition of this named role\n(Issue #256).\n\nIndependently authored: a role never inherits the root Agent's\nextension set, and an omitted value means this role's own built-in\ndefaults, never the invoking runtime's configuration."
+      "description": "Closed native Extension composition. Omission selects none. Root\nproduct defaults are an explicit lower-priority authoring layer,\nindependent of this complete document's semantics."
     },
     "instructions": {
+      "default": "",
       "description": "Explicit primary Agent instructions authored as TOML data.",
       "type": "string"
     },
     "model": {
       "anyOf": [
         {
-          "$ref": "#/$defs/ModelRef"
+          "$ref": "#/$defs/ModelLayer"
         }
       ],
       "description": "The explicit model this agent runs on. Omit to inherit the invoking\nattempt's frozen effective model configuration."
@@ -269,19 +457,22 @@
       },
       "description": "The exact source-qualified capability selection."
     },
+    "workflows": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/WorkflowId"
+      },
+      "type": "array"
+    },
     "worktree": {
-      "$ref": "#/$defs/SubagentWorktreeDocument",
+      "$ref": "#/$defs/AgentWorktreeDocument",
       "default": {
         "enabled": false,
-        "requireCleanParent": true
+        "require_clean_parent": true
       },
       "description": "The bounded project-workspace policy of this agent."
     }
   },
-  "required": [
-    "description",
-    "instructions"
-  ],
-  "title": "AgentDocument",
+  "title": "AgentProfileDocument",
   "type": "object"
 }

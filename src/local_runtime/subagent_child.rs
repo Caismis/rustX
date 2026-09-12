@@ -1200,10 +1200,17 @@ mod tests {
     ) -> ConversationRuntime {
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        let tool_runtime = ConversationToolRuntime::new(
+        let tool_runtime = ConversationToolRuntime::from_config(
             conversation_id.clone(),
-            &workspace,
-            dir.path().join("artifacts"),
+            crate::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace,
+                dir.path().join("artifacts"),
+            )
+            .with_extensions(
+                crate::extensions::NativeAgentExtensions::with_agent_status(
+                    crate::context::AgentStatusConfig::default(),
+                ),
+            ),
         )
         .expect("tool runtime");
         let capability = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
@@ -1212,7 +1219,7 @@ mod tests {
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: tool_runtime.extension_tool_plane(),
-            tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+            agent_activation: crate::capabilities::AgentActivation::default(),
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: tool_runtime.environment().clone(),

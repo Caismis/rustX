@@ -234,7 +234,7 @@ fn fixture_with_selection(
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            agent_activation: rustx::capabilities::AgentActivation::default(),
             skill_discovery: rustx::skills::SkillDiscoveryConfig {
                 automatic_roots: vec![workspace_root.join(".agents/skills")],
                 explicit_paths: Vec::new(),

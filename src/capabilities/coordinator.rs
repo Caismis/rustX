@@ -11,7 +11,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use crate::capabilities::availability::{CapabilityAvailability, CapabilitySourceState};
 use crate::capabilities::error::{CapabilityCommitError, CapabilityPreparationError};
 use crate::capabilities::snapshot::CapabilitySnapshot;
-use crate::capabilities::tools::{AvailableToolCatalog, ToolActivationPolicy, select_tools};
+use crate::capabilities::tools::{AgentActivation, AvailableToolCatalog, select_tools};
 use crate::runtime::identity::{CapabilityRevision, ConversationId, McpServerId};
 use crate::runtime::process_runner::RunnerBackedProcessRunner;
 use crate::runtime::types::ConversationLifecycle;
@@ -65,7 +65,7 @@ pub struct CapabilityCoordinatorConfig {
     pub extension_tools: crate::extensions::ExtensionToolPlane,
     /// Current startup availability/activation policy. It is not durable
     /// Session state and is re-applied for every process composition.
-    pub tool_activation: ToolActivationPolicy,
+    pub agent_activation: AgentActivation,
     /// Current automatic and explicit Skill resource roots.
     pub skill_discovery: SkillDiscoveryConfig,
     /// The immutable configured MCP server set for this coordinator, keyed
@@ -314,7 +314,7 @@ pub struct CapabilityResourceInputs {
     /// Native/extension Tool registrations.
     pub base_tool_registry: Arc<ToolRegistry>,
     /// Effective Tool activation policy.
-    pub tool_activation: ToolActivationPolicy,
+    pub agent_activation: AgentActivation,
     /// Skill discovery roots and explicit sources.
     pub skill_discovery: SkillDiscoveryConfig,
     /// Configured MCP sources.
@@ -371,6 +371,7 @@ pub(crate) struct CommittedCapability {
 /// rejects it as stale when the active revision has advanced.
 #[derive(Debug)]
 pub struct PreparedCapabilityCandidate {
+    resolved_profile: Option<Arc<crate::runtime::agent_profile::ResolvedAgentProfile>>,
     base_revision: CapabilityRevision,
     skills: Arc<SkillSnapshot>,
     python: Option<crate::skills::environments::PythonEnvironment>,
@@ -417,6 +418,11 @@ pub struct PreparedCapabilityCandidate {
 }
 
 impl PreparedCapabilityCandidate {
+    #[must_use]
+    pub fn resolved_profile(&self) -> Option<&crate::runtime::agent_profile::ResolvedAgentProfile> {
+        self.resolved_profile.as_deref()
+    }
+
     /// Settles every physical runtime of a prepared candidate that will
     /// never commit (Issue #145): pre-commit cancellation won the race
     /// against this candidate's completion, so the preparation that owns
@@ -570,7 +576,7 @@ impl CapabilityCoordinator {
                     .map(|id| (id, CapabilitySourceState::Unprepared)),
             )
             .collect();
-        let tool_activation = config.tool_activation;
+        let agent_activation = config.agent_activation;
         let extension_tools = config.extension_tools;
         let skill_discovery = config.skill_discovery;
         // Only the Python store *location* is computed here; the store
@@ -607,7 +613,7 @@ impl CapabilityCoordinator {
                 resource_inputs: Mutex::new(CapabilityResourceInputs {
                     source_demand: config.source_demand,
                     base_tool_registry: config.base_tool_registry,
-                    tool_activation,
+                    agent_activation,
                     skill_discovery,
                     mcp_servers,
                     base_environment: config.base_environment.clone(),
@@ -999,14 +1005,17 @@ impl CapabilityCoordinator {
                 .into_iter()
                 .map(|(definition, executor)| ToolRegistration::plain(definition, executor)),
         );
-        let (available_tools, candidate_registry) = select_tools(
+        let (available_tools, candidate_registry, resolved_profile) = select_tools(
             &discovered_tools,
             self.inner.extension_tools.registrations(),
-            &inputs.tool_activation,
+            &inputs.agent_activation,
+            &skills,
+            &availability,
         )
         .map_err(CapabilityPreparationError::ToolActivation)?;
         let candidate_registry = Arc::new(candidate_registry);
         Ok(PreparedCapabilityCandidate {
+            resolved_profile: Some(Arc::new(resolved_profile)),
             base_revision,
             skills,
             python,
@@ -1270,14 +1279,17 @@ impl CapabilityCoordinator {
             .expect("capability resource-input lock poisoned")
             .clone();
         let base_registrations = inputs.base_tool_registry.registrations();
-        let (available_tools, candidate_registry) = select_tools(
+        let (available_tools, candidate_registry, resolved_profile) = select_tools(
             &base_registrations,
             self.inner.extension_tools.registrations(),
-            &inputs.tool_activation,
+            &inputs.agent_activation,
+            &SkillSnapshot::new(Vec::new()),
+            &CapabilityAvailability::new(),
         )
         .map_err(CapabilityPreparationError::ToolActivation)?;
         let candidate_registry = Arc::new(candidate_registry);
         Ok(PreparedCapabilityCandidate {
+            resolved_profile: Some(Arc::new(resolved_profile)),
             base_revision,
             skills: Arc::new(SkillSnapshot::new(Vec::new())),
             python: None,
@@ -1432,30 +1444,22 @@ impl CapabilityCoordinator {
         // Tools are composed alongside it from the extension set its invoking
         // generation froze into `ResolvedSubagentSpec` — never from its
         // ordinary selection, and never from a document it reads itself.
-        let mut selected_sources = BTreeMap::new();
-        for tool in &plan.source_tools {
-            let selection = selected_sources
-                .entry(tool.source_id.clone())
-                .or_insert_with(|| super::selection::SourceToolSelection::Exact(Vec::new()));
-            if let super::selection::SourceToolSelection::Exact(names) = selection {
-                names.push(tool.name.clone());
-            }
-        }
-        let (available_tools, candidate_registry) = match select_tools(
-            &registrations,
-            self.inner.extension_tools.registrations(),
-            &ToolActivationPolicy {
-                sources: selected_sources,
-                ..ToolActivationPolicy::default()
-            },
+        let available_tools = AvailableToolCatalog::new(registrations.clone());
+        let candidate_registry = match ToolRegistry::from_registrations(
+            registrations
+                .into_iter()
+                .chain(self.inner.extension_tools.registrations().iter().cloned()),
         ) {
-            Ok(selected) => selected,
+            Ok(registry) => registry,
             Err(error) => {
                 retire_candidate_runtimes(mcp_runtimes).await;
-                return Err(CapabilityPreparationError::ToolActivation(error));
+                return Err(CapabilityPreparationError::ToolActivation(
+                    error.to_string(),
+                ));
             }
         };
         Ok(PreparedCapabilityCandidate {
+            resolved_profile: None,
             base_revision,
             skills: Arc::new(SkillSnapshot::new(Vec::new())),
             python: None,
@@ -1981,7 +1985,14 @@ impl CapabilityCoordinator {
                     .expect("capability resource-input lock poisoned") = candidate_inputs.clone();
                 let availability_changed =
                     Self::install_availability(&mut state, &candidate.availability);
-                let snapshot = state.snapshot.clone();
+                let snapshot = Arc::new(
+                    state
+                        .snapshot
+                        .as_ref()
+                        .clone()
+                        .with_resolved_profile(candidate.resolved_profile.clone()),
+                );
+                state.snapshot = snapshot.clone();
                 let availability = state.availability.clone();
                 drop(invalidation);
                 if availability_changed && !defers_observation {
@@ -1999,19 +2010,22 @@ impl CapabilityCoordinator {
             let mcp_lease_authority = Arc::new(McpRuntimeLeaseAuthority::from_generations(
                 &candidate.mcp_runtimes,
             ));
-            let snapshot = Arc::new(CapabilitySnapshot::new(
-                self.inner.conversation_id.clone(),
-                self.inner.workspace.root().to_path_buf(),
-                revision,
-                candidate.candidate_registry,
-                candidate.available_tools,
-                candidate.skills,
-                candidate.python,
-                candidate.node,
-                candidate.effective_environment,
-                mcp_lease_authority,
-                Arc::new(candidate.effective_mcp_servers.clone()),
-            ));
+            let snapshot = Arc::new(
+                CapabilitySnapshot::new(
+                    self.inner.conversation_id.clone(),
+                    self.inner.workspace.root().to_path_buf(),
+                    revision,
+                    candidate.candidate_registry,
+                    candidate.available_tools,
+                    candidate.skills,
+                    candidate.python,
+                    candidate.node,
+                    candidate.effective_environment,
+                    mcp_lease_authority,
+                    Arc::new(candidate.effective_mcp_servers.clone()),
+                )
+                .with_resolved_profile(candidate.resolved_profile),
+            );
             // The published physical generation of a carried-forward server
             // is *retained*, not retired: its catalog is still the
             // authoritative last-known-good knowledge and its stable
@@ -2546,7 +2560,7 @@ body
             workspace: workspace.clone(),
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: crate::extensions::ExtensionToolPlane::none(),
-            tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+            agent_activation: crate::capabilities::AgentActivation::default(),
             // Keep this unit fixture independent of the developer's HOME:
             // the relocation proof owns both current roots explicitly.
             skill_discovery: crate::skills::SkillDiscoveryConfig {
@@ -2811,7 +2825,7 @@ body
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: crate::extensions::ExtensionToolPlane::none(),
-            tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+            agent_activation: crate::capabilities::AgentActivation::default(),
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
@@ -3056,7 +3070,7 @@ mod mcp_race_tests {
         );
         let mut inputs = coordinator.inner.resource_inputs.lock().unwrap().clone();
         inputs.source_demand.sources.clear();
-        inputs.tool_activation.sources.clear();
+        inputs.agent_activation.profile.tools.sources.clear();
         let candidate = coordinator
             .prepare_candidate_with_inputs(inputs.clone())
             .await
@@ -3076,7 +3090,7 @@ mod mcp_race_tests {
         );
         candidate.retire_uncommitted().await;
         inputs.source_demand.sources = [source.clone(), source.clone(), source.clone()].into();
-        inputs.tool_activation.sources.insert(
+        inputs.agent_activation.profile.tools.sources.insert(
             source.clone(),
             crate::capabilities::selection::SourceToolSelection::All,
         );
@@ -3232,7 +3246,7 @@ mod mcp_race_tests {
                 "capabilities::coordinator::mcp_race_tests::cfg233_exposure_and_domain_references_never_grant_source_activation",
             );
             let mut inputs = coordinator.inner.resource_inputs.lock().unwrap().clone();
-            inputs.tool_activation.no_tools = true;
+            inputs.agent_activation.no_tools = true;
             if !enabled {
                 inputs.mcp_servers.get_mut(&id).unwrap().activation =
                     crate::capabilities::activation::SourceActivation::Disabled;
@@ -3364,12 +3378,20 @@ mod mcp_race_tests {
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: crate::extensions::ExtensionToolPlane::none(),
-            tool_activation: crate::capabilities::ToolActivationPolicy {
-                sources: [(
-                    crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
-                    crate::capabilities::selection::SourceToolSelection::All,
-                )]
-                .into(),
+            agent_activation: crate::capabilities::AgentActivation {
+                profile: crate::local_runtime::config::AgentProfileDocument {
+                    tools: crate::capabilities::selection::ToolSelectionDocument {
+                        builtin: crate::local_runtime::config::builtin_root_profile()
+                            .tools
+                            .builtin,
+                        sources: [(
+                            crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
+                            crate::capabilities::selection::SourceToolSelection::All,
+                        )]
+                        .into(),
+                    },
+                    ..crate::local_runtime::config::builtin_root_profile()
+                },
                 ..Default::default()
             },
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
@@ -3456,17 +3478,25 @@ mod mcp_race_tests {
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: crate::extensions::ExtensionToolPlane::none(),
-            tool_activation: crate::capabilities::ToolActivationPolicy {
-                sources: mcp_servers
-                    .keys()
-                    .cloned()
-                    .map(|id| {
-                        (
-                            crate::capabilities::ToolSourceId::Mcp(id),
-                            crate::capabilities::selection::SourceToolSelection::All,
-                        )
-                    })
-                    .collect(),
+            agent_activation: crate::capabilities::AgentActivation {
+                profile: crate::local_runtime::config::AgentProfileDocument {
+                    tools: crate::capabilities::selection::ToolSelectionDocument {
+                        builtin: crate::local_runtime::config::builtin_root_profile()
+                            .tools
+                            .builtin,
+                        sources: mcp_servers
+                            .keys()
+                            .cloned()
+                            .map(|id| {
+                                (
+                                    crate::capabilities::ToolSourceId::Mcp(id),
+                                    crate::capabilities::selection::SourceToolSelection::All,
+                                )
+                            })
+                            .collect(),
+                    },
+                    ..crate::local_runtime::config::builtin_root_profile()
+                },
                 ..Default::default()
             },
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),

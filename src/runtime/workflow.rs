@@ -711,7 +711,7 @@ pub struct WorkflowEdgeProgram {
 #[derive(Debug, Clone, Default)]
 pub struct WorkflowCatalog {
     definitions: BTreeMap<WorkflowId, Arc<WorkflowProgram>>,
-    main: BTreeSet<WorkflowId>,
+    admitted: BTreeSet<WorkflowId>,
 }
 
 impl WorkflowCatalog {
@@ -723,7 +723,7 @@ impl WorkflowCatalog {
     /// duplicate model-visible ids, or an unknown model-visible id.
     pub fn new(
         programs: impl IntoIterator<Item = WorkflowProgram>,
-        main: impl IntoIterator<Item = WorkflowId>,
+        admitted: impl IntoIterator<Item = WorkflowId>,
     ) -> Result<Self, WorkflowCatalogError> {
         let mut definitions = BTreeMap::new();
         for program in programs {
@@ -734,17 +734,20 @@ impl WorkflowCatalog {
                 return Err(WorkflowCatalogError::DuplicateDefinition);
             }
         }
-        let mut admitted_main = BTreeSet::new();
-        for id in main {
-            if !admitted_main.insert(id.clone()) {
-                return Err(WorkflowCatalogError::DuplicateMain(id));
+        let mut admitted_ids = BTreeSet::new();
+        for id in admitted {
+            if !admitted_ids.insert(id.clone()) {
+                return Err(WorkflowCatalogError::DuplicateAdmission(id));
             }
         }
-        let main = admitted_main;
-        if let Some(unknown) = main.iter().find(|id| !definitions.contains_key(*id)) {
-            return Err(WorkflowCatalogError::UnknownMain(unknown.clone()));
+        let admitted = admitted_ids;
+        if let Some(unknown) = admitted.iter().find(|id| !definitions.contains_key(*id)) {
+            return Err(WorkflowCatalogError::UnknownAdmission(unknown.clone()));
         }
-        Ok(Self { definitions, main })
+        Ok(Self {
+            definitions,
+            admitted,
+        })
     }
 
     /// The empty catalog.
@@ -767,8 +770,8 @@ impl WorkflowCatalog {
 
     /// The explicitly model-visible workflow ids.
     #[must_use]
-    pub fn main(&self) -> &BTreeSet<WorkflowId> {
-        &self.main
+    pub fn admitted(&self) -> &BTreeSet<WorkflowId> {
+        &self.admitted
     }
 
     /// Whether this catalog has no discovered definitions.
@@ -784,20 +787,23 @@ pub enum WorkflowCatalogError {
     /// Two compiled programs used one configured identity.
     DuplicateDefinition,
     /// A model-visible id is not discovered.
-    UnknownMain(WorkflowId),
+    UnknownAdmission(WorkflowId),
     /// A model-visible id was repeated in the admission list.
-    DuplicateMain(WorkflowId),
+    DuplicateAdmission(WorkflowId),
 }
 
 impl fmt::Display for WorkflowCatalogError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DuplicateDefinition => formatter.write_str("duplicate workflow definition id"),
-            Self::UnknownMain(id) => {
-                write!(formatter, "workflows.main names unknown workflow {id:?}")
+            Self::UnknownAdmission(id) => {
+                write!(
+                    formatter,
+                    "Workflow admission names unknown workflow {id:?}"
+                )
             }
-            Self::DuplicateMain(id) => {
-                write!(formatter, "workflows.main repeats workflow {id:?}")
+            Self::DuplicateAdmission(id) => {
+                write!(formatter, "Workflow admission repeats workflow {id:?}")
             }
         }
     }
@@ -3064,8 +3070,7 @@ mod tests {
     use crate::runtime::subagent::process::StagedChild;
     #[cfg(unix)]
     use crate::runtime::subagent::{
-        SubagentDefinition, SubagentProjectInstructionPolicy, SubagentRegistry,
-        SubagentRegistryConfig, SubagentSpawnPlan,
+        NamedAgentDefinition, SubagentRegistry, SubagentRegistryConfig, SubagentSpawnPlan,
     };
     #[cfg(unix)]
     use crate::runtime::types::{ApprovalMode, CancellationReason, SystemClock};
@@ -3328,21 +3333,26 @@ chat_reasoning_replay = "omit"
         .expect("workflow test model bindings");
         let model = ModelRef::parse("local/model").expect("workflow test model");
         let reviewer = profile("reviewer");
-        let definition = SubagentDefinition::new(
+        let definition = NamedAgentDefinition::new(
             reviewer.clone(),
-            "Workflow test reviewer".to_owned(),
-            instructions.to_owned(),
-            plane.dir.path().join("reviewer.md"),
-            Some(model.clone()),
-            None,
-            Vec::new(),
-            Vec::new(),
-            SubagentProjectInstructionPolicy {
-                inherit: false,
-                files: Vec::new(),
+            crate::runtime::agent_profile::AgentProfile {
+                description: "Workflow test reviewer".to_owned(),
+                instructions: instructions.to_owned(),
+                model: Some(SessionModelConfig::of(model.clone())),
+                execution_deadline: None,
+                tools: Vec::new(),
+                skills: Vec::new(),
+                project_instructions:
+                    crate::runtime::agent_profile::AgentProjectInstructionPolicy {
+                        inherit: false,
+                        files: Vec::new(),
+                    },
+                workspace_policy,
+                extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+                agents: std::collections::BTreeSet::default(),
+                workflows: std::collections::BTreeSet::default(),
             },
-            workspace_policy,
-            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+            plane.dir.path().join("reviewer.md"),
         )
         .expect("workflow test subagent definition");
         let catalog = crate::runtime::subagent::AgentCatalog::new([definition])
@@ -3369,7 +3379,7 @@ chat_reasoning_replay = "omit"
                 capabilities,
             )
             .with_subagent_catalog(catalog)
-            .with_subagent_admissions(BTreeSet::new(), BTreeSet::from([reviewer]))
+            .with_workflow_admission(BTreeSet::from([reviewer]))
             .with_workflow_catalog(workflow_catalog),
         );
         crate::runtime::subagent::AttemptSubagentContext::new(
@@ -4768,12 +4778,12 @@ block:
         let unknown = WorkflowId::parse("missing").expect("id");
         assert!(matches!(
             WorkflowCatalog::new([program.clone()], [unknown]),
-            Err(WorkflowCatalogError::UnknownMain(_))
+            Err(WorkflowCatalogError::UnknownAdmission(_))
         ));
         let id = program.id().clone();
         assert!(matches!(
             WorkflowCatalog::new([program.clone()], [id.clone(), id]),
-            Err(WorkflowCatalogError::DuplicateMain(_))
+            Err(WorkflowCatalogError::DuplicateAdmission(_))
         ));
         assert!(matches!(
             WorkflowCatalog::new([program.clone(), program], []),

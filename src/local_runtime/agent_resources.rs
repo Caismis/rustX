@@ -1,11 +1,9 @@
 //! Bounded canonical named Agent discovery. Project overrides user as a whole resource.
-use super::config::{AgentDocument, SubagentsDocument};
+use super::config::{AgentProfileDocument, SubagentsDocument};
 use crate::runtime::resources::{
     ProjectContextFile, RuntimeResourceLoadError, validate_project_resource_path,
 };
-use crate::runtime::subagent::{
-    AgentCatalog, SubagentDefinition, SubagentName, SubagentProjectInstructionPolicy,
-};
+use crate::runtime::subagent::{AgentCatalog, NamedAgentDefinition, SubagentName};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -18,14 +16,39 @@ pub struct AgentSource {
     pub overridden: Option<PathBuf>,
 }
 
-pub(crate) fn parse(text: &str) -> Result<AgentDocument, String> {
+pub(crate) fn parse(text: &str) -> Result<AgentProfileDocument, String> {
     if text.len() > 1024 * 1024 {
         return Err("Agent resource exceeds 1 MiB".into());
     }
-    let document: AgentDocument = crate::toml_authoring::parse(text.as_bytes())?;
-    document.tools.validate_spelling()?;
+    let document: AgentProfileDocument = crate::toml_authoring::parse(text.as_bytes())?;
+    crate::runtime::agent_profile::AgentProfile::from_document(&document, Vec::new())?;
     document.execution_deadline()?;
     Ok(document)
+}
+
+pub(crate) fn load_profile_files(
+    paths: &[PathBuf],
+) -> Result<Vec<ProjectContextFile>, RuntimeResourceLoadError> {
+    if paths.len() > crate::runtime::subagent::catalog::MAX_SUBAGENT_PROJECT_FILES {
+        return Err(RuntimeResourceLoadError::new(
+            "Agent project file count exceeds native bound",
+        ));
+    }
+    paths
+        .iter()
+        .map(|path| {
+            let bytes = crate::bounded_file::read_bounded(path).map_err(|error| {
+                RuntimeResourceLoadError::new(error).at(path, "agent.agents_md.files")
+            })?;
+            let content = String::from_utf8(bytes).map_err(|error| {
+                RuntimeResourceLoadError::new(error.to_string()).at(path, "agent.agents_md.files")
+            })?;
+            Ok(ProjectContextFile {
+                path: path.clone(),
+                content,
+            })
+        })
+        .collect()
 }
 
 fn candidates(
@@ -83,14 +106,14 @@ pub(crate) fn load(
             > crate::runtime::subagent::catalog::MAX_SUBAGENT_PROJECT_FILES
         {
             return Err(error(
-                "agentsMd.files exceeds the native file-count bound".into(),
+                "agents_md.files exceeds the native file-count bound".into(),
             ));
         }
         let mut files = Vec::new();
         for file in &agent.agents_md.files {
             let resolved = boundary.join(file);
             validate_project_resource_path(boundary, &resolved)
-                .map_err(|e| e.at(path, format!("{field}.agentsMd.files")))?;
+                .map_err(|e| e.at(path, format!("{field}.agents_md.files")))?;
             let bytes = crate::bounded_file::read_bounded(&resolved).map_err(error)?;
             let content = String::from_utf8(bytes).map_err(|e| error(e.to_string()))?;
             files.push(ProjectContextFile {
@@ -98,29 +121,11 @@ pub(crate) fn load(
                 content,
             });
         }
-        let deadline = agent.execution_deadline().map_err(error)?;
+        let profile = crate::runtime::agent_profile::AgentProfile::from_document(&agent, files)
+            .map_err(error)?;
         definitions.push(
-            SubagentDefinition::new(
-                name.clone(),
-                agent.description,
-                agent.instructions.clone(),
-                path.clone(),
-                agent.model.clone(),
-                deadline,
-                agent.tools.selectors(),
-                agent.skills,
-                SubagentProjectInstructionPolicy {
-                    inherit: agent.agents_md.inherit,
-                    files,
-                },
-                agent.worktree.to_policy(),
-                // The role's own closed extension composition, frozen into
-                // its immutable definition and its semantic digest
-                // (Issue #256). The invoking runtime's root extension
-                // configuration is not an input here.
-                agent.extensions.resolve(),
-            )
-            .map_err(|e| error(e.to_string()))?,
+            NamedAgentDefinition::new(name.clone(), profile, path.clone())
+                .map_err(|e| error(e.to_string()))?,
         );
         sources.insert(
             name.clone(),
@@ -134,10 +139,8 @@ pub(crate) fn load(
     }
     let catalog =
         AgentCatalog::new(definitions).map_err(|e| RuntimeResourceLoadError::new(e.to_string()))?;
-    for (field, admission) in [
-        ("subagents.main", &document.main),
-        ("subagents.workflow", &document.workflow),
-    ] {
+    {
+        let (field, admission) = ("subagents.workflow", &document.workflow);
         catalog
             .admitted(&admission.iter().cloned().collect())
             .map_err(|e| RuntimeResourceLoadError::new(e.to_string()).at(workspace, field))?;
@@ -260,7 +263,6 @@ mod tests {
         for text in [
             "---\ndescription: old\n---\nbody",
             "description = 'x'\ninstructions = 'x'\nname = 'other'",
-            "description = 'x'",
             "description = 'x'\ninstructions = 'x'\nunknown = true",
         ] {
             assert!(parse(text).is_err());
@@ -287,6 +289,28 @@ mod tests {
             .unwrap_err()
         );
     }
+    #[test]
+    fn agent_profile_file_diagnostics_use_current_toml_field_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().canonicalize().unwrap();
+        let root = workspace.join(".agents/agents");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("alpha.toml"),
+            "description = 'Alpha'\ninstructions = 'Inspect'\n[agents_md]\nfiles = ['../outside.md']\n",
+        ).unwrap();
+        let error = load(
+            &workspace,
+            &workspace.join("user"),
+            &SubagentsDocument::default(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.field_path.as_deref(),
+            Some("agents.alpha.agents_md.files")
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn agent_discovery_rejects_redirected_files_before_reading() {

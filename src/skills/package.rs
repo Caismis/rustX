@@ -736,7 +736,7 @@ fn walk_package_files(
 /// Validates one Skill name against the Agent Skills naming rules:
 /// 1-64 characters, lowercase letters, numbers, and hyphens only, no
 /// leading/trailing or consecutive hyphens.
-fn validate_skill_name(name: &str) -> Result<(), String> {
+pub(crate) fn validate_skill_name(name: &str) -> Result<(), String> {
     let count = name.chars().count();
     if !(1..=MAX_SKILL_NAME_CHARS).contains(&count) {
         return Err(format!(

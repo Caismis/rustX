@@ -185,6 +185,12 @@ impl ToolSelectionDocument {
         }
         names(&self.builtin)?;
         for name in &self.builtin {
+            if name == crate::tools::native::SUBAGENT_TOOL_NAME {
+                return Err(
+                    "subagent is selected through Agent Profile agents, not tools.builtin".into(),
+                );
+            }
+
             if let Some(extension) = super::extension_provided_tool(name) {
                 return Err(format!(
                     "{name} is provided by the {extension:?} Agent Extension, not by ordinary Tool selection; compose it with extensions.{extension}.enabled instead"
@@ -201,7 +207,8 @@ impl ToolSelectionDocument {
 }
 
 /// Typed facts for admission owners; they choose their own failure policy.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
 pub enum SourceResolutionFailure {
     Undefined,
     Inactive(super::activation::SourceActivation),
@@ -220,7 +227,8 @@ impl std::fmt::Display for SourceResolutionFailure {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToolSelectionError {
     SourceUnavailable {
         selector: String,
@@ -671,6 +679,7 @@ mod tests {
         }
         let valid = r#"[tools]
 builtin = ["read", "grep"]
+
 [tools.sources]
 github = "all"
 "python:data-analysis" = ["run_python", "inspect_dataframe"]
@@ -706,17 +715,16 @@ github = "all"
     #[test]
     fn root_and_named_agent_documents_keep_source_all() {
         let selection = "[tools.sources]\ngithub = 'all'\n";
-        let root: crate::local_runtime::config::CurrentRuntimeConfig =
-            toml::from_str(&format!("[model]\nmodel = 'local/test'\n{selection}")).unwrap();
-        let named: crate::local_runtime::config::AgentDocument = toml::from_str(&format!(
+        let root: crate::local_runtime::config::CurrentRuntimeConfig = toml::from_str(
+            "[agent.model]\nmodel = 'local/test'\n[agent.tools.sources]\ngithub = 'all'\n",
+        )
+        .unwrap();
+        let named: crate::local_runtime::config::AgentProfileDocument = toml::from_str(&format!(
             "description = 'Review'\ninstructions = 'Review code'\n{selection}"
         ))
         .unwrap();
         let source = ToolSourceId::Mcp(McpServerId::new("github"));
-        assert_eq!(
-            root.tools.unwrap().sources[&source],
-            SourceToolSelection::All
-        );
+        assert_eq!(root.agent.tools.sources[&source], SourceToolSelection::All);
         assert_eq!(named.tools.sources[&source], SourceToolSelection::All);
     }
 
@@ -846,22 +854,43 @@ github = "all"
                     assert_eq!(selected[0].origin.source(), Some(source.clone()));
                 }
             }
+            let availability = [(
+                source.clone(),
+                crate::capabilities::CapabilitySourceState::Ready,
+            )]
+            .into();
             let registration =
                 ToolRegistration::plain(source_definition(&source, "todo"), Arc::new(Unused));
-            let policy = super::super::ToolActivationPolicy {
-                sources: [(source, SourceToolSelection::All)].into(),
+            let policy = super::super::AgentActivation {
+                profile: crate::local_runtime::config::AgentProfileDocument {
+                    tools: crate::capabilities::selection::ToolSelectionDocument {
+                        builtin: crate::local_runtime::config::builtin_root_profile()
+                            .tools
+                            .builtin,
+                        sources: [(source, SourceToolSelection::All)].into(),
+                    },
+                    ..crate::local_runtime::config::builtin_root_profile()
+                },
                 ..Default::default()
             };
-            let (_, selected) = super::super::tools::select_tools(
+            let (_, selected, _) = super::super::tools::select_tools(
                 std::slice::from_ref(&registration),
                 &[],
                 &policy,
+                &crate::skills::SkillSnapshot::new(Vec::new()),
+                &availability,
             )
             .unwrap();
             assert_eq!(selected.definitions().len(), 1);
             let extension = crate::tools::native::todo_tool_registration();
-            let error = super::super::tools::select_tools(&[registration], &[extension], &policy)
-                .unwrap_err();
+            let error = super::super::tools::select_tools(
+                &[registration],
+                &[extension],
+                &policy,
+                &crate::skills::SkillSnapshot::new(Vec::new()),
+                &availability,
+            )
+            .unwrap_err();
             assert!(
                 error.contains("active Tool selection is invalid"),
                 "{error}"

@@ -8,7 +8,7 @@
 //!
 //! # This layer owns the ordinary capability plane only
 //!
-//! Everything here — `defaultTools`, `--tools`, `--exclude-tools`,
+//! Everything here — `agent.tools.builtin`, `--tools`, `--exclude-tools`,
 //! `--no-tools`, `--no-builtin-tools` — addresses *ordinary execution
 //! capabilities*. A Native Agent Extension may also contribute a model-facing
 //! Tool, and that Tool belongs to the extension's composition, not to this
@@ -24,8 +24,8 @@
 //! plus an enabled Todo still exposes `todo`, and a truly Tool-free request
 //! needs both zero ordinary Tools and no Tool-providing extension), and it
 //! cannot add one either: an extension's Tool name is not an ordinary
-//! identity, so naming it in an allowlist, an exclusion, or `defaultTools` is
-//! rejected by [`ToolActivationPolicy::validate`] rather than silently
+//! identity, so naming it in an allowlist, an exclusion, or `agent.tools.builtin` is
+//! rejected by [`AgentActivation::validate`] rather than silently
 //! accepted. The classification is semantic: `--no-builtin-tools` removes
 //! ordinary built-ins, not every Tool that happens to be implemented in Rust.
 //!
@@ -41,14 +41,13 @@ use crate::tools::types::{ToolDefinition, ToolOrigin};
 
 /// Startup activation controls supplied by current runtime/project settings
 /// and CLI options. They are never Session-persisted.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ToolActivationPolicy {
-    /// Source-qualified main Agent exposure, independent of materialization demand.
-    pub sources:
-        std::collections::BTreeMap<super::ToolSourceId, super::selection::SourceToolSelection>,
-    /// Built-in names selected by default. None selects all applicable
-    /// built-ins; external Tools require explicit source selection.
-    pub default_tools: Option<Vec<String>>,
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentActivation {
+    /// Complete root profile intent, independent of admitted catalogs.
+    pub profile: crate::local_runtime::config::AgentProfileDocument,
+    pub admitted_agents: BTreeSet<crate::runtime::subagent::SubagentName>,
+    pub admitted_workflows: BTreeSet<crate::runtime::workflow::WorkflowId>,
+    pub project_files: Vec<crate::runtime::resources::ProjectContextFile>,
     /// Remove all built-ins from default selection, including generated Tools.
     pub no_builtin_tools: bool,
     /// Expose and authorize zero ordinary main-model Tools.
@@ -57,6 +56,21 @@ pub struct ToolActivationPolicy {
     pub tools: Option<Vec<String>>,
     /// Final subtraction from selection, resolved against applicable identities.
     pub exclude_tools: Vec<String>,
+}
+
+impl Default for AgentActivation {
+    fn default() -> Self {
+        Self {
+            profile: crate::local_runtime::config::builtin_root_profile(),
+            admitted_agents: BTreeSet::new(),
+            admitted_workflows: BTreeSet::new(),
+            project_files: Vec::new(),
+            no_builtin_tools: false,
+            no_tools: false,
+            tools: None,
+            exclude_tools: Vec::new(),
+        }
+    }
 }
 
 /// The extension that owns `name` as a Tool surface, when one does
@@ -93,7 +107,7 @@ fn reject_extension_tool(name: &str, label: &str) -> Result<(), String> {
     }
 }
 
-impl ToolActivationPolicy {
+impl AgentActivation {
     pub(crate) fn conflict(&self) -> Option<(&'static str, &'static str)> {
         if self.no_tools {
             for (present, flag) in [
@@ -118,11 +132,7 @@ impl ToolActivationPolicy {
     /// or an entry naming a Tool an Agent Extension owns rather than the
     /// ordinary capability plane (Issue #259).
     pub fn validate(&self) -> Result<(), String> {
-        super::selection::ToolSelectionDocument {
-            builtin: Vec::new(),
-            sources: self.sources.clone(),
-        }
-        .validate_spelling()?;
+        self.profile.tools.validate_spelling()?;
         if let Some((first, second)) = self.conflict() {
             return Err(format!("{first} conflicts with {second}"));
         }
@@ -132,13 +142,13 @@ impl ToolActivationPolicy {
         if !self.exclude_tools.is_empty() {
             validate_names(&self.exclude_tools, "exclusion")?;
         }
-        // An extension-provided Tool is refused on bare-name startup selection
-        // surfaces, including `default_tools` — where an unknown name is
-        // otherwise harmlessly ignored, and would therefore have made
-        // `defaultTools: ["todo"]` look like it worked while deciding
-        // nothing at all (Issue #259).
+        // Extension surfaces belong to closed profile composition, never an
+        // ordinary builtin selector or host CLI name filter.
         for (names, label) in [
-            (self.default_tools.as_deref(), "default selection"),
+            (
+                Some(self.profile.tools.builtin.as_slice()),
+                "profile selection",
+            ),
             (self.tools.as_deref(), "allowlist"),
             (Some(self.exclude_tools.as_slice()), "exclusion"),
         ] {
@@ -209,6 +219,16 @@ impl PartialEq for AvailableToolCatalog {
 }
 
 impl AvailableToolCatalog {
+    pub(crate) fn metadata(definitions: impl IntoIterator<Item = ToolDefinition>) -> Self {
+        Self {
+            tools: definitions
+                .into_iter()
+                .map(|definition| AvailableTool { definition })
+                .collect(),
+            registrations: Vec::new(),
+        }
+    }
+
     /// Creates an available catalog in deterministic registration order.
     #[must_use]
     pub(crate) fn new(registrations: Vec<ToolRegistration>) -> Self {
@@ -273,8 +293,17 @@ impl AvailableToolCatalog {
 pub(crate) fn select_tools(
     available: &[ToolRegistration],
     extensions: &[ToolRegistration],
-    policy: &ToolActivationPolicy,
-) -> Result<(AvailableToolCatalog, ToolRegistry), String> {
+    policy: &AgentActivation,
+    skills: &crate::skills::SkillSnapshot,
+    availability: &super::CapabilityAvailability,
+) -> Result<
+    (
+        AvailableToolCatalog,
+        ToolRegistry,
+        crate::runtime::agent_profile::ResolvedAgentProfile,
+    ),
+    String,
+> {
     // Validate every candidate before projecting availability. Selection can
     // intentionally hide ordinary tools (`no_tools`, exclusions, or a strict
     // allowlist), but it must never hide an identity collision with a
@@ -286,12 +315,34 @@ pub(crate) fn select_tools(
         ToolRegistry::from_registrations([registration.clone()])
             .map_err(|error| format!("available Tool selection is invalid: {error}"))?;
     }
-    let available_catalog = AvailableToolCatalog::new(available.to_vec());
+    let available_catalog = AvailableToolCatalog::new(
+        available
+            .iter()
+            .filter(|entry| {
+                !crate::runtime::agent_profile::is_dispatcher(
+                    &entry.definition,
+                    &policy.admitted_workflows,
+                )
+            })
+            .cloned()
+            .collect(),
+    );
     let definitions = available
         .iter()
         .map(|registration| &registration.definition)
         .collect::<Vec<_>>();
-    let selected = select_definitions(&definitions, policy)?;
+    let mut profile = resolve_profile(&available_catalog, policy, skills, availability)?;
+    let selected = apply_cli(&definitions, &profile, policy)?;
+    // Freeze the final host-restricted exposure in the same profile value.
+    // CLI restrictions never grant a capability to another profile.
+    let selected_ids: BTreeSet<_> = selected.iter().map(|tool| &tool.id).collect();
+    profile.tools.retain(|tool| selected_ids.contains(&tool.id));
+    profile
+        .workflows
+        .retain(|id| selected_ids.contains(&crate::tools::native::workflow_tool_id(id)));
+    if !selected_ids.contains(&crate::tools::native::subagent_tool_id()) {
+        profile.agents.clear();
+    }
     let registrations = selected
         .into_iter()
         .map(|definition| {
@@ -308,35 +359,98 @@ pub(crate) fn select_tools(
         .chain(extensions.iter().cloned());
     let active = ToolRegistry::from_registrations(registrations)
         .map_err(|error| format!("active Tool selection is invalid: {error}"))?;
-    Ok((available_catalog, active))
+    Ok((available_catalog, active, profile))
 }
 
-/// Apply the same exact selection rules to known metadata, without executors.
+/// Prospective metadata projection uses the same profile boundary as execution.
 pub(crate) fn select_definitions<'a>(
     available: &[&'a ToolDefinition],
-    policy: &ToolActivationPolicy,
+    policy: &AgentActivation,
+    skills: &crate::skills::SkillSnapshot,
+    availability: &super::CapabilityAvailability,
+) -> Result<Vec<&'a ToolDefinition>, String> {
+    let catalog = AvailableToolCatalog::metadata(
+        available
+            .iter()
+            .filter(|definition| {
+                !crate::runtime::agent_profile::is_dispatcher(
+                    definition,
+                    &policy.admitted_workflows,
+                )
+            })
+            .map(|definition| (*definition).clone()),
+    );
+    let profile = resolve_profile(&catalog, policy, skills, availability)?;
+    apply_cli(available, &profile, policy)
+}
+fn resolve_profile(
+    available: &AvailableToolCatalog,
+    policy: &AgentActivation,
+    skills: &crate::skills::SkillSnapshot,
+    availability: &super::CapabilityAvailability,
+) -> Result<crate::runtime::agent_profile::ResolvedAgentProfile, String> {
+    use crate::runtime::agent_profile::{
+        AgentProfile, AgentProfileAuthority, AgentScope, resolve_agent_profile,
+    };
+    let mut document = policy.profile.clone();
+    // CLI selection is an explicit host-authored profile layer. Resolve its
+    // names against admitted identities before the common semantic boundary.
+    if let Some(names) = &policy.tools {
+        document.tools = super::selection::ToolSelectionDocument::default();
+        let definitions = available.definitions();
+        for name in names {
+            let references: Vec<_> = definitions.iter().collect();
+            let definition = resolve_name(&references, name, "allowlist")?;
+            if let Some(source) = definition.origin.source() {
+                let selection =
+                    document.tools.sources.entry(source).or_insert_with(|| {
+                        super::selection::SourceToolSelection::Exact(Vec::new())
+                    });
+                if let super::selection::SourceToolSelection::Exact(selected) = selection {
+                    selected.push(definition.name.clone());
+                }
+            } else {
+                document.tools.builtin.push(definition.name.clone());
+            }
+        }
+    }
+    let profile = AgentProfile::from_document(&document, policy.project_files.clone())?;
+    Ok(resolve_agent_profile(
+        &profile,
+        &AgentProfileAuthority {
+            tools: available,
+            availability,
+            skills,
+            agents: &policy.admitted_agents,
+            workflows: &policy.admitted_workflows,
+            scope: AgentScope::Root,
+        },
+    ))
+}
+/// CLI controls are a final restriction of resolved profile exposure.
+fn apply_cli<'a>(
+    available: &[&'a ToolDefinition],
+    profile: &crate::runtime::agent_profile::ResolvedAgentProfile,
+    policy: &AgentActivation,
 ) -> Result<Vec<&'a ToolDefinition>, String> {
     policy.validate()?;
-    let eligible = available
+    let eligible: Vec<_> = available
         .iter()
         .copied()
-        .filter(|registration| {
-            !policy.no_builtin_tools || !matches!(registration.origin, ToolOrigin::Builtin)
-        })
+        .filter(|definition| !policy.no_builtin_tools || definition.origin != ToolOrigin::Builtin)
         .filter(|definition| {
-            definition
-                .origin
-                .source()
-                .is_none_or(|source| match policy.sources.get(&source) {
-                    Some(super::selection::SourceToolSelection::All) => true,
-                    Some(super::selection::SourceToolSelection::Exact(names)) => {
-                        names.contains(&definition.name)
-                    }
-                    None => false,
-                })
+            profile
+                .tools
+                .iter()
+                .any(|selected| selected.id == definition.id)
+                || profile
+                    .workflows
+                    .iter()
+                    .any(|id| definition.id == crate::tools::native::workflow_tool_id(id))
+                || (!profile.agents.is_empty()
+                    && definition.id == crate::tools::native::subagent_tool_id())
         })
-        .collect::<Vec<_>>();
-
+        .collect();
     let mut selected = if policy.no_tools {
         Vec::new()
     } else if let Some(names) = &policy.tools {
@@ -345,39 +459,14 @@ pub(crate) fn select_definitions<'a>(
             .map(|name| resolve_name(&eligible, name, "allowlist"))
             .collect::<Result<Vec<_>, _>>()?
     } else {
-        eligible
-            .iter()
-            .copied()
-            .filter(|registration| {
-                registration.origin.source().map_or_else(
-                    || {
-                        policy
-                            .default_tools
-                            .as_ref()
-                            .is_none_or(|names| names.contains(&registration.name))
-                    },
-                    |source| match policy.sources.get(&source) {
-                        Some(super::selection::SourceToolSelection::All) => true,
-                        Some(super::selection::SourceToolSelection::Exact(names)) => {
-                            names.contains(&registration.name)
-                        }
-                        None => false,
-                    },
-                )
-            })
-            .collect::<Vec<_>>()
+        eligible.clone()
     };
-
-    // Resolve exclusions against applicable availability, even if a default
-    // or an allowlist has already omitted the identity. Ambiguity never
-    // chooses an origin, and a typo never becomes a successful no-op.
     let excluded = policy
         .exclude_tools
         .iter()
         .map(|name| resolve_name(&eligible, name, "exclusion").map(|entry| &entry.id))
         .collect::<Result<BTreeSet<_>, _>>()?;
-    selected.retain(|registration| !excluded.contains(&registration.id));
-
+    selected.retain(|definition| !excluded.contains(&definition.id));
     Ok(selected)
 }
 
@@ -385,7 +474,26 @@ pub(crate) fn select_definitions<'a>(
 mod tests {
     use std::sync::Arc;
 
-    use super::{ToolActivationPolicy, select_tools};
+    use super::AgentActivation;
+    fn select_tools(
+        available: &[ToolRegistration],
+        extensions: &[ToolRegistration],
+        policy: &AgentActivation,
+    ) -> Result<(super::AvailableToolCatalog, ToolRegistry), String> {
+        let availability = available
+            .iter()
+            .filter_map(|entry| entry.definition.origin.source())
+            .map(|id| (id, crate::capabilities::CapabilitySourceState::Ready))
+            .collect();
+        super::select_tools(
+            available,
+            extensions,
+            policy,
+            &crate::skills::SkillSnapshot::new(Vec::new()),
+            &availability,
+        )
+        .map(|(catalog, registry, _)| (catalog, registry))
+    }
     use crate::runtime::identity::ToolId;
     use crate::tools::deadline::ToolProgressCapability;
     use crate::tools::executor::{
@@ -426,23 +534,30 @@ mod tests {
         }
     }
 
-    fn source_policy() -> ToolActivationPolicy {
-        ToolActivationPolicy {
-            sources: [(
-                crate::capabilities::ToolSourceId::Mcp(crate::runtime::identity::McpServerId::new(
-                    "search",
-                )),
-                crate::capabilities::selection::SourceToolSelection::All,
-            )]
-            .into(),
-            ..ToolActivationPolicy::default()
+    fn source_policy() -> AgentActivation {
+        AgentActivation {
+            profile: crate::local_runtime::config::AgentProfileDocument {
+                tools: crate::capabilities::selection::ToolSelectionDocument {
+                    builtin: crate::local_runtime::config::builtin_root_profile()
+                        .tools
+                        .builtin,
+                    sources: [(
+                        crate::capabilities::ToolSourceId::Mcp(
+                            crate::runtime::identity::McpServerId::new("search"),
+                        ),
+                        crate::capabilities::selection::SourceToolSelection::All,
+                    )]
+                    .into(),
+                },
+                ..crate::local_runtime::config::builtin_root_profile()
+            },
+            ..AgentActivation::default()
         }
     }
 
     #[test]
     fn materialization_does_not_implicitly_expose_external_tools_to_main() {
-        let (_, active) =
-            select_tools(&registrations(), &[], &ToolActivationPolicy::default()).unwrap();
+        let (_, active) = select_tools(&registrations(), &[], &AgentActivation::default()).unwrap();
         assert_eq!(names(&active), ["read", "bash"]);
     }
 
@@ -492,8 +607,14 @@ mod tests {
 
     #[test]
     fn available_and_active_sets_are_distinct_and_selection_is_deterministic() {
-        let policy = ToolActivationPolicy {
-            default_tools: Some(vec!["read".to_owned()]),
+        let policy = AgentActivation {
+            profile: crate::local_runtime::config::AgentProfileDocument {
+                tools: crate::capabilities::selection::ToolSelectionDocument {
+                    builtin: vec!["read".to_owned()],
+                    sources: source_policy().profile.tools.sources,
+                },
+                ..crate::local_runtime::config::builtin_root_profile()
+            },
             ..source_policy()
         };
         let (available, active) =
@@ -512,12 +633,49 @@ mod tests {
     }
 
     #[test]
+    fn cfg273_frozen_profile_reports_final_host_restricted_exposure() {
+        for policy in [
+            AgentActivation {
+                no_tools: true,
+                ..Default::default()
+            },
+            AgentActivation {
+                exclude_tools: vec!["read".into()],
+                ..Default::default()
+            },
+        ] {
+            let (available, registry, profile) = super::select_tools(
+                &registrations(),
+                &[],
+                &policy,
+                &crate::skills::SkillSnapshot::new(Vec::new()),
+                &std::collections::BTreeMap::default(),
+            )
+            .unwrap();
+            assert_eq!(profile.tools, registry.definitions());
+            assert!(
+                available
+                    .definitions()
+                    .iter()
+                    .any(|tool| tool.name == "read")
+            );
+            assert!(!profile.tools.iter().any(|tool| tool.name == "read"));
+        }
+    }
+
+    #[test]
     fn builtin_disable_and_no_tools_retain_truthful_availability() {
         let (available, active) = select_tools(
             &registrations(),
             &[],
-            &ToolActivationPolicy {
-                default_tools: Some(Vec::new()),
+            &AgentActivation {
+                profile: crate::local_runtime::config::AgentProfileDocument {
+                    tools: crate::capabilities::selection::ToolSelectionDocument {
+                        builtin: Vec::new(),
+                        sources: source_policy().profile.tools.sources,
+                    },
+                    ..crate::local_runtime::config::builtin_root_profile()
+                },
                 ..source_policy()
             },
         )
@@ -528,7 +686,7 @@ mod tests {
         let (available, active) = select_tools(
             &registrations(),
             &[],
-            &ToolActivationPolicy {
+            &AgentActivation {
                 no_builtin_tools: true,
                 ..source_policy()
             },
@@ -540,7 +698,7 @@ mod tests {
         let (available, active) = select_tools(
             &registrations(),
             &[],
-            &ToolActivationPolicy {
+            &AgentActivation {
                 no_tools: true,
                 ..source_policy()
             },
@@ -555,7 +713,7 @@ mod tests {
         let (available, active) = select_tools(
             &registrations(),
             &[],
-            &ToolActivationPolicy {
+            &AgentActivation {
                 tools: Some(vec!["bash".to_owned(), "search".to_owned()]),
                 exclude_tools: vec!["bash".to_owned()],
                 ..source_policy()
@@ -568,7 +726,7 @@ mod tests {
         let error = select_tools(
             &registrations(),
             &[],
-            &ToolActivationPolicy {
+            &AgentActivation {
                 tools: Some(vec!["missing".to_owned()]),
                 ..source_policy()
             },
@@ -608,19 +766,27 @@ mod tests {
         let error = select_tools(
             &registrations,
             &[],
-            &ToolActivationPolicy {
+            &AgentActivation {
+                profile: crate::local_runtime::config::AgentProfileDocument {
+                    tools: crate::capabilities::selection::ToolSelectionDocument {
+                        builtin: crate::local_runtime::config::builtin_root_profile()
+                            .tools
+                            .builtin,
+                        sources: ["one", "two"]
+                            .map(|id| {
+                                (
+                                    crate::capabilities::ToolSourceId::Mcp(
+                                        crate::runtime::identity::McpServerId::new(id),
+                                    ),
+                                    crate::capabilities::selection::SourceToolSelection::All,
+                                )
+                            })
+                            .into(),
+                    },
+                    ..crate::local_runtime::config::builtin_root_profile()
+                },
                 tools: Some(vec!["duplicate".to_owned()]),
-                sources: ["one", "two"]
-                    .map(|id| {
-                        (
-                            crate::capabilities::ToolSourceId::Mcp(
-                                crate::runtime::identity::McpServerId::new(id),
-                            ),
-                            crate::capabilities::selection::SourceToolSelection::All,
-                        )
-                    })
-                    .into(),
-                ..ToolActivationPolicy::default()
+                ..AgentActivation::default()
             },
         )
         .expect_err("ambiguous identity");
@@ -628,19 +794,27 @@ mod tests {
         let error = select_tools(
             &registrations,
             &[],
-            &ToolActivationPolicy {
+            &AgentActivation {
+                profile: crate::local_runtime::config::AgentProfileDocument {
+                    tools: crate::capabilities::selection::ToolSelectionDocument {
+                        builtin: crate::local_runtime::config::builtin_root_profile()
+                            .tools
+                            .builtin,
+                        sources: ["one", "two"]
+                            .map(|id| {
+                                (
+                                    crate::capabilities::ToolSourceId::Mcp(
+                                        crate::runtime::identity::McpServerId::new(id),
+                                    ),
+                                    crate::capabilities::selection::SourceToolSelection::All,
+                                )
+                            })
+                            .into(),
+                    },
+                    ..crate::local_runtime::config::builtin_root_profile()
+                },
                 exclude_tools: vec!["duplicate".to_owned()],
-                sources: ["one", "two"]
-                    .map(|id| {
-                        (
-                            crate::capabilities::ToolSourceId::Mcp(
-                                crate::runtime::identity::McpServerId::new(id),
-                            ),
-                            crate::capabilities::selection::SourceToolSelection::All,
-                        )
-                    })
-                    .into(),
-                ..ToolActivationPolicy::default()
+                ..AgentActivation::default()
             },
         )
         .expect_err("exclusion may not silently choose or remove multiple origins");
@@ -650,55 +824,55 @@ mod tests {
     #[test]
     fn explicit_selection_fails_closed_and_exclusions_are_final() {
         for policy in [
-            ToolActivationPolicy {
+            AgentActivation {
                 tools: Some(vec![]),
                 ..Default::default()
             },
-            ToolActivationPolicy {
+            AgentActivation {
                 tools: Some(vec![String::new()]),
                 ..Default::default()
             },
-            ToolActivationPolicy {
+            AgentActivation {
                 tools: Some(vec!["read".into(), "read".into()]),
                 ..Default::default()
             },
-            ToolActivationPolicy {
+            AgentActivation {
                 exclude_tools: vec![String::new()],
                 ..Default::default()
             },
-            ToolActivationPolicy {
+            AgentActivation {
                 exclude_tools: vec!["read".into(), "read".into()],
                 ..Default::default()
             },
-            ToolActivationPolicy {
+            AgentActivation {
                 exclude_tools: vec!["typo".into()],
                 ..Default::default()
             },
-            ToolActivationPolicy {
+            AgentActivation {
                 tools: Some(vec!["subagent".into()]),
                 ..Default::default()
             },
-            ToolActivationPolicy {
+            AgentActivation {
                 no_builtin_tools: true,
                 exclude_tools: vec!["read".into()],
                 ..Default::default()
             },
-            ToolActivationPolicy {
+            AgentActivation {
                 no_tools: true,
                 tools: Some(vec!["read".into()]),
                 ..Default::default()
             },
-            ToolActivationPolicy {
+            AgentActivation {
                 no_tools: true,
                 exclude_tools: vec!["read".into()],
                 ..Default::default()
             },
-            ToolActivationPolicy {
+            AgentActivation {
                 no_tools: true,
                 no_builtin_tools: true,
                 ..Default::default()
             },
-            ToolActivationPolicy {
+            AgentActivation {
                 tools: Some(vec!["read".into()]),
                 no_builtin_tools: true,
                 ..Default::default()
@@ -712,21 +886,21 @@ mod tests {
         for (policy, expected) in [
             (source_policy(), vec!["read", "bash", "search"]),
             (
-                ToolActivationPolicy {
+                AgentActivation {
                     tools: Some(vec!["bash".into()]),
                     ..source_policy()
                 },
                 vec!["bash"],
             ),
             (
-                ToolActivationPolicy {
+                AgentActivation {
                     exclude_tools: vec!["read".into()],
                     ..source_policy()
                 },
                 vec!["bash", "search"],
             ),
             (
-                ToolActivationPolicy {
+                AgentActivation {
                     tools: Some(vec!["read".into()]),
                     exclude_tools: vec!["read".into()],
                     ..source_policy()
@@ -734,7 +908,7 @@ mod tests {
                 vec![],
             ),
             (
-                ToolActivationPolicy {
+                AgentActivation {
                     no_builtin_tools: true,
                     exclude_tools: vec!["search".into()],
                     ..source_policy()
@@ -763,7 +937,7 @@ mod tests {
                     Arc::new(NoopTool),
                 )],
                 &[],
-                &ToolActivationPolicy {
+                &AgentActivation {
                     no_tools: true,
                     ..source_policy()
                 },

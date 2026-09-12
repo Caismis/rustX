@@ -6328,7 +6328,7 @@ mod tests {
 
         let diagnostic = error.to_string();
         for leaked in [
-            "requireCleanParent",
+            "require_clean_parent",
             "subagent definition",
             "rev-parse",
             "porcelain",

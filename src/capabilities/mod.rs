@@ -70,9 +70,7 @@ pub use error::{CapabilityCommitError, CapabilityPreparationError};
 pub use selected::{SelectedCapabilityPlan, SelectedMaterializationError, SelectedSourceTool};
 pub use snapshot::CapabilitySnapshot;
 pub(crate) use tools::validate_names as validate_tool_names;
-pub use tools::{
-    AvailableTool, AvailableToolCatalog, ToolActivationPolicy, extension_provided_tool,
-};
+pub use tools::{AgentActivation, AvailableTool, AvailableToolCatalog, extension_provided_tool};
 
 /// The commit-boundary synchronization hook, used by the Runtime Client
 /// lock-order tests to park a commit with the coordinator lock held.

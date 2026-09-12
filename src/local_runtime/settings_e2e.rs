@@ -77,15 +77,26 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
     // The launch also authors a distinctive native Agent Extension
     // composition (Issue #256): every contributor field is non-default, so a
     // projection that substituted built-in defaults could not pass below.
-    let settings = r#"# future default A; retain this comment
-[model]
-model = "local/a"
-[extensions.agent_status.time]
-timezone = "Asia/Shanghai"
-[extensions.agent_status.background]
-enabled = false
+    let settings = r#"# retain this comment
 [environment]
 PRIVATE = "SECRET_SENTINEL"
+
+
+[agent]
+[agent.model]
+model = "local/a"
+
+
+[agent.extensions]
+[agent.extensions.todo]
+enabled = true
+[agent.extensions.agent_status]
+[agent.extensions.agent_status.time]
+timezone = "Asia/Shanghai"
+
+
+[agent.extensions.agent_status.background]
+enabled = false
 "#;
     std::fs::write(&user_path, settings).unwrap();
     let request = super::launch::LaunchRequest::default();
@@ -141,7 +152,7 @@ PRIVATE = "SECRET_SENTINEL"
         registry,
         launch.config().clone(),
         super::session::SessionPersistentState {
-            model: launch.config().model.clone(),
+            model: launch.config().initial_model().clone().clone(),
         },
         crate::runtime::identity::ConversationId::new("cfg238"),
         controller.root().join("artifacts"),
@@ -315,7 +326,7 @@ PRIVATE = "SECRET_SENTINEL"
     };
     let disk: serde_json::Value =
         crate::toml_authoring::parse(&std::fs::read(&user_path).unwrap()).unwrap();
-    assert_eq!(disk["model"]["model"], "local/b");
+    assert_eq!(disk["agent"]["model"]["model"], "local/b");
     assert_eq!(disk["approval_mode"], "full_access");
     assert_eq!(
         runtime.approval_mode_state().effective,
@@ -526,7 +537,7 @@ PRIVATE = "SECRET_SENTINEL"
     // the end of this test.
     std::fs::write(
         workspace.join("rustx.toml"),
-        "[extensions.agent_status]\nenabled = false\n",
+        "[agent]\n[agent.extensions]\n[agent.extensions.agent_status]\nenabled = false\n",
     )
     .unwrap();
     assert_eq!(
@@ -593,9 +604,13 @@ PRIVATE = "SECRET_SENTINEL"
             .is_none(),
         "the prospective next launch reads the edited extension configuration"
     );
-    assert_eq!(next_launch.config().model.model, b.model);
+    assert_eq!(next_launch.config().initial_model().clone().model, b.model);
     assert_eq!(
-        next_launch.config().model.reasoning_profile,
+        next_launch
+            .config()
+            .initial_model()
+            .clone()
+            .reasoning_profile,
         b.reasoning_profile
     );
     let fresh = super::LocalSessionProduct::compose(

@@ -11,8 +11,8 @@ Minimum project selection:
 [subagents]
 workflow = ["reviewer"]
 
-[workflows]
-main = ["specialized_agent"]
+[agent]
+workflows = ["specialized_agent"]
 ```
 
 ## What the override means

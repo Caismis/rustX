@@ -20,6 +20,7 @@
 //! is coordination infrastructure, not a generic process manager and not a
 //! public runtime API.
 
+pub mod agent_profile;
 pub mod cancellation;
 pub mod continuation;
 /// The conversation runtime coordinator (Issue #61): the semantic owner of

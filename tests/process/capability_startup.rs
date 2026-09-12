@@ -44,12 +44,14 @@ chat_reasoning_replay = "omit"
 
 const SESSION_TOML: &str = r#"agent_id = "agent-81"
 
-[model]
-model = "local/composed-model"
-
 [context]
 reserve_tokens = 1024
 keep_recent_tokens = 8192
+
+
+[agent]
+[agent.model]
+model = "local/composed-model"
 "#;
 
 /// Writes the startup files into a temporary root and returns the explicit
@@ -226,7 +228,7 @@ async fn a_python_capability_failure_is_isolated_from_runtime_startup() {
     let (_canonical, paths) = startup(
         &root,
         &format!(
-            "{SESSION_TOML}\n[tools]\nbuiltin = [\"read\", \"write\", \"edit\", \"glob\", \"grep\", \"bash\", \"execution\"]\n[tools.sources]\n\"python:broken-tool\" = \"all\"\n"
+            "{SESSION_TOML}\n[agent.tools]\nbuiltin = [\"read\", \"write\", \"edit\", \"glob\", \"grep\", \"bash\", \"execution\"]\n[agent.tools.sources]\n\"python:broken-tool\" = \"all\"\n"
         ),
     );
     // A package without `requirements.txt`: demanded preparation rejects it in place,
@@ -280,7 +282,7 @@ async fn python_store_initialization_failure_is_isolated_from_runtime_startup() 
     let (_, paths) = startup(
         &root,
         &format!(
-            "{SESSION_TOML}\n[tools]\nbuiltin = [\"read\", \"bash\"]\n[tools.sources]\n\"python:fixture-tool\" = \"all\"\n"
+            "{SESSION_TOML}\n[agent.tools]\nbuiltin = [\"read\", \"bash\"]\n[agent.tools.sources]\n\"python:fixture-tool\" = \"all\"\n"
         ),
     );
     // A valid Python package exists, so the failure cannot be attributed
@@ -359,7 +361,7 @@ fn base_only_capability_setup_is_structurally_independent_of_python_storage() {
             workspace: rustx::tools::Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            agent_activation: rustx::capabilities::AgentActivation::default(),
             skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: rustx::tools::environment::ToolEnvironment::new(),
@@ -437,12 +439,7 @@ mod mcp {
     /// A session with two stdio MCP servers: `good` (the real fixture) and
     /// `bad` (a program that does not exist).
     fn session_with_two_servers(program: &str, args: &[String]) -> String {
-        toml::to_string_pretty(&serde_json::json!({
-            "agent_id": "agent-81",
-            "model": {"model": "local/composed-model"},
-            "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},
-            "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"good": "all", "bad": "all"}},
-            "mcp_servers": {
+        toml::to_string_pretty(&serde_json::json!({"agent_id": "agent-81", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192}, "mcp_servers": {
                 "good": {
                     "enabled": true,
                     "type": "stdio",
@@ -456,8 +453,7 @@ mod mcp {
                     "command": "/nonexistent/rustx-issue81-absent-server",
                     "args": [],
                 },
-            },
-        }))
+            }, "agent": {"model": {"model": "local/composed-model"}, "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"good": "all", "bad": "all"}}}}))
         .unwrap()
     }
 
@@ -550,12 +546,7 @@ mod mcp {
         let args = fixture::fixture_spawn_args(
             "capability_startup::mcp::no_shared_mcp_revision_is_unavailable_not_fatal",
         );
-        let session = toml::to_string_pretty(&serde_json::json!({
-            "agent_id": "agent-81",
-            "model": {"model": "local/composed-model"},
-            "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},
-            "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"alien": "all"}},
-            "mcp_servers": {
+        let session = toml::to_string_pretty(&serde_json::json!({"agent_id": "agent-81", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192}, "mcp_servers": {
                 "alien": {
                     "enabled": true,
                     "type": "stdio",
@@ -566,8 +557,7 @@ mod mcp {
                         PROTOCOL_VERSIONS_ENV: "1999-01-01",
                     },
                 },
-            },
-        }))
+            }, "agent": {"model": {"model": "local/composed-model"}, "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"alien": "all"}}}}))
         .unwrap();
         let (_canonical, paths) = startup(&root, &session);
 
@@ -619,12 +609,7 @@ mod mcp {
         let args = fixture::fixture_spawn_args(
             "capability_startup::mcp::an_oversized_mcp_diagnostic_is_bounded_before_authoritative_state",
         );
-        let session = toml::to_string_pretty(&serde_json::json!({
-            "agent_id": "agent-81",
-            "model": {"model": "local/composed-model"},
-            "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},
-            "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"loud": "all"}},
-            "mcp_servers": {
+        let session = toml::to_string_pretty(&serde_json::json!({"agent_id": "agent-81", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192}, "mcp_servers": {
                 "loud": {
                     "enabled": true,
                     "type": "stdio",
@@ -635,8 +620,7 @@ mod mcp {
                         fixture::LIST_TOOLS_ERROR_BYTES_ENV: "65536",
                     },
                 },
-            },
-        }))
+            }, "agent": {"model": {"model": "local/composed-model"}, "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"loud": "all"}}}}))
         .unwrap();
         let (_canonical, paths) = startup(&root, &session);
 
@@ -757,20 +741,14 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
     .expect("server source without the required requirements.txt");
     std::fs::write(root.path().join("models.toml"), MODELS_TOML).expect("models.toml");
     // ... and an MCP server whose program does not exist.
-    let session = serde_json::json!({
-        "agent_id": "agent-81",
-        "model": {"model": "local/composed-model"},
-        "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},
-        "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"exa": "all", "python:broken-tool": "all"}},
-            "mcp_servers": {
+    let session = serde_json::json!({"agent_id": "agent-81", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192}, "mcp_servers": {
             "exa": {
                 "enabled": true,
                     "type": "stdio",
                 "command": "/nonexistent/rustx-issue81-absent-server",
                 "args": [],
             },
-        },
-    });
+        }, "agent": {"model": {"model": "local/composed-model"}, "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"exa": "all", "python:broken-tool": "all"}}}});
     crate::launch_fixture::write_documents(
         &root.path().join("rustx.toml"),
         &toml::to_string_pretty(&session).unwrap(),

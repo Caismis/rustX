@@ -364,7 +364,7 @@ fn session_json(setup: &Setup) -> String {
     }
     toml::to_string_pretty(&serde_json::json!({
         "agent_id": "agent-issue47",
-        "model": model,
+        "agent": {"model": model, "skills": [SKILL_NAME]},
         "context": {
             "reserve_tokens": setup.reserve_tokens,
             "keep_recent_tokens": setup.keep_recent_tokens,

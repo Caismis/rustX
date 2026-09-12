@@ -108,12 +108,21 @@ async fn recovery_capability(
         workspace: tool_runtime.workspace().clone(),
         base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
         extension_tools: tool_runtime.extension_tool_plane(),
-        tool_activation: rustx::capabilities::ToolActivationPolicy {
-            sources: [(
-                rustx::capabilities::ToolSourceId::Mcp(server_id.clone()),
-                rustx::capabilities::selection::SourceToolSelection::All,
-            )]
-            .into(),
+        agent_activation: rustx::capabilities::AgentActivation {
+            profile: rustx::local_runtime::config::AgentProfileDocument {
+                tools: rustx::capabilities::selection::ToolSelectionDocument {
+                    builtin: rustx::capabilities::AgentActivation::default()
+                        .profile
+                        .tools
+                        .builtin,
+                    sources: [(
+                        rustx::capabilities::ToolSourceId::Mcp(server_id.clone()),
+                        rustx::capabilities::selection::SourceToolSelection::All,
+                    )]
+                    .into(),
+                },
+                ..rustx::capabilities::AgentActivation::default().profile
+            },
             ..Default::default()
         },
         skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
@@ -1466,7 +1475,8 @@ async fn a_failed_capability_refresh_keeps_the_last_known_good_generation() {
         ],
         "G1 is the validated last-known-good catalog"
     );
-    let revision_before = capability.coordinator.current_snapshot().revision();
+    let before = capability.coordinator.current_snapshot();
+    let revision_before = before.revision();
 
     let candidate = capability
         .coordinator
@@ -1490,34 +1500,15 @@ async fn a_failed_capability_refresh_keeps_the_last_known_good_generation() {
         .expect("the carried-forward candidate commits");
 
     wait_for_journal_entry(&control, &format!("{}2", recovery::JOURNAL_REFUSED_PREFIX));
-    assert_eq!(
-        capability.definition_names(),
-        published,
-        "a failed refresh never replaces the authoritative catalog with an empty \
-         or partial one"
+    let after = capability.coordinator.current_snapshot();
+    assert!(
+        capability.definition_names().is_empty(),
+        "unavailable profile capabilities are suppressed for future admissions"
     );
-    assert_eq!(
-        capability.coordinator.current_snapshot().revision(),
-        revision_before,
-        "a failed refresh fabricates no capability revision"
-    );
-
-    // Transport availability and capability knowledge are different facts,
-    // and a failed refresh disturbs neither: the retained generation's live
-    // transport keeps serving calls.
-    let audit = run_mcp_call(
-        &fixture,
-        capability.coordinator.acquire_attempt_lease(),
-        "after-failed-refresh",
-        recovery::TOOL_ECHO,
-        ToolExecutionDeadlinePolicy {
-            hard_deadline: Duration::from_mins(1),
-            idle_liveness: None,
-        },
-        |_controls| async move {},
-    )
-    .await;
-    let result = single_tool_result(&audit);
+    assert_eq!(known_mcp_tools(&after, &capability.server_id), published);
+    assert_ne!(after.revision(), revision_before);
+    assert!(!after.resolved_profile().unwrap().diagnostics.is_empty());
+    let result = direct_mcp_call(&fixture, &before, recovery::TOOL_ECHO).await;
     assert!(
         matches!(result.status, ToolExecutionStatus::Success),
         "the carried-forward generation is still usable once a transport exists: {:?}",
@@ -1914,12 +1905,21 @@ async fn http_capability(
         workspace: tool_runtime.workspace().clone(),
         base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
         extension_tools: tool_runtime.extension_tool_plane(),
-        tool_activation: rustx::capabilities::ToolActivationPolicy {
-            sources: [(
-                rustx::capabilities::ToolSourceId::Mcp(server_id.clone()),
-                rustx::capabilities::selection::SourceToolSelection::All,
-            )]
-            .into(),
+        agent_activation: rustx::capabilities::AgentActivation {
+            profile: rustx::local_runtime::config::AgentProfileDocument {
+                tools: rustx::capabilities::selection::ToolSelectionDocument {
+                    builtin: rustx::capabilities::AgentActivation::default()
+                        .profile
+                        .tools
+                        .builtin,
+                    sources: [(
+                        rustx::capabilities::ToolSourceId::Mcp(server_id.clone()),
+                        rustx::capabilities::selection::SourceToolSelection::All,
+                    )]
+                    .into(),
+                },
+                ..rustx::capabilities::AgentActivation::default().profile
+            },
             ..Default::default()
         },
         skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
@@ -2254,12 +2254,21 @@ fn reload_inputs(
             rustx::runtime::resources::ManagedPythonCatalog::default(),
         ),
         base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
-        tool_activation: rustx::capabilities::ToolActivationPolicy {
-            sources: [(
-                rustx::capabilities::ToolSourceId::Mcp(server_id.clone()),
-                rustx::capabilities::selection::SourceToolSelection::All,
-            )]
-            .into(),
+        agent_activation: rustx::capabilities::AgentActivation {
+            profile: rustx::local_runtime::config::AgentProfileDocument {
+                tools: rustx::capabilities::selection::ToolSelectionDocument {
+                    builtin: rustx::capabilities::AgentActivation::default()
+                        .profile
+                        .tools
+                        .builtin,
+                    sources: [(
+                        rustx::capabilities::ToolSourceId::Mcp(server_id.clone()),
+                        rustx::capabilities::selection::SourceToolSelection::All,
+                    )]
+                    .into(),
+                },
+                ..rustx::capabilities::AgentActivation::default().profile
+            },
             ..Default::default()
         },
         skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
@@ -2275,6 +2284,24 @@ fn published_mcp_tools(
 ) -> Vec<String> {
     snapshot
         .tool_registry()
+        .definitions()
+        .into_iter()
+        .filter(|definition| {
+            matches!(
+                &definition.origin,
+                rustx::tools::types::ToolOrigin::Mcp { server_id: owner } if owner == server_id
+            )
+        })
+        .map(|definition| definition.name)
+        .collect()
+}
+
+fn known_mcp_tools(
+    snapshot: &Arc<rustx::capabilities::CapabilitySnapshot>,
+    server_id: &McpServerId,
+) -> Vec<String> {
+    snapshot
+        .available_tools()
         .definitions()
         .into_iter()
         .filter(|definition| {
@@ -2354,7 +2381,7 @@ async fn same_binding_carry_forward_keeps_the_published_binding_identity() {
 
     let after = capability.coordinator.current_snapshot();
     assert_eq!(
-        published_mcp_tools(&after, &capability.server_id),
+        known_mcp_tools(&after, &capability.server_id),
         published,
         "an unchanged binding may carry its last-known-good catalog forward verbatim"
     );
@@ -2377,7 +2404,8 @@ async fn same_binding_carry_forward_keeps_the_published_binding_identity() {
         "availability and capability knowledge stay separate facts"
     );
     // The retained generation's own live transport still serves calls.
-    let result = direct_mcp_call(&fixture, &after, recovery::TOOL_ECHO).await;
+    assert!(published_mcp_tools(&after, &capability.server_id).is_empty());
+    let result = direct_mcp_call(&fixture, &before, recovery::TOOL_ECHO).await;
     assert!(
         matches!(result.status, ToolExecutionStatus::Success),
         "the carried-forward executor is still usable: {:?}",

@@ -73,7 +73,7 @@ fn paths(root: &std::path::Path, config: &std::path::Path) -> LaunchFixture {
         models: root.join("models.toml"),
         config: config.to_path_buf(),
         skill_paths: Vec::new(),
-        no_skills: true,
+        no_skills: false,
         no_builtin_tools: false,
         no_tools: false,
         startup_session: rustx::local_runtime::StartupSession::Empty,
@@ -101,7 +101,7 @@ fn config_json(
     timezone: &str,
     environment_value: &str,
     skills_root: &std::path::Path,
-    default_tools: &[&str],
+    builtin_tools: &[&str],
     include_old_mcp: bool,
 ) -> String {
     let mcp_servers = if include_old_mcp {
@@ -115,23 +115,14 @@ fn config_json(
     } else {
         serde_json::json!({})
     };
-    toml::to_string_pretty(&serde_json::json!({
-        "schema_version": 8,
-        "agent_id": "agent-issue96",
-        "model": {"model": model},
-        "extensions": {
+    toml::to_string_pretty(&serde_json::json!({"schema_version": 8, "agent_id": "agent-issue96", "context": {"reserve_tokens": reserve_tokens, "keep_recent_tokens": 4096}, "mcp_servers": mcp_servers, "environment": {"ISSUE96_CURRENT": environment_value}, "agent": {"model": {"model": model}, "skills": std::fs::read_dir(skills_root).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>(), "extensions": {
+            "todo": {"enabled": true},
             "agent_status": {
                 "enabled": true,
                 "time": {"enabled": true, "timezone": timezone},
                 "background": {"enabled": true}
             }
-        },
-        "context": {"reserve_tokens": reserve_tokens, "keep_recent_tokens": 4096},
-        "default_tools": default_tools,
-        "skills": [skills_root],
-        "mcp_servers": mcp_servers,
-        "environment": {"ISSUE96_CURRENT": environment_value}
-    }))
+        }, "tools": {"builtin": builtin_tools}}}))
     .unwrap()
 }
 
@@ -154,7 +145,7 @@ fn model(reference: &str) -> SessionModelConfig {
 async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
     let root = tempfile::tempdir().expect("root");
     let config_path = root.path().join("rustx.toml");
-    let skills_root = root.path().join("workspace/configured-skills");
+    let skills_root = root.path().join("workspace/.agents/skills");
     write_skill(&skills_root, "old-skill", "Old current resource");
     std::fs::write(root.path().join("models.toml"), MODELS).expect("models");
     std::fs::write(
@@ -384,7 +375,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
 async fn invalid_current_config_is_rejected_even_when_a_catalog_exists() {
     let root = tempfile::tempdir().expect("root");
     let config_path = root.path().join("rustx.toml");
-    let skills_root = root.path().join("workspace/configured-skills");
+    let skills_root = root.path().join("workspace/.agents/skills");
     std::fs::create_dir_all(&skills_root).expect("Skill root");
     std::fs::write(root.path().join("models.toml"), MODELS).expect("models");
     std::fs::write(
@@ -409,12 +400,14 @@ async fn invalid_current_config_is_rejected_even_when_a_catalog_exists() {
     let invalid = br#"agent_id = "agent-issue96"
 conversation_id = "historical"
 
-[model]
-model = "local/model-a"
-
 [context]
 reserve_tokens = 1
 keep_recent_tokens = 1
+
+
+[agent]
+[agent.model]
+model = "local/model-a"
 "#;
     std::fs::write(&config_path, invalid).expect("invalid current config");
     assert!(startup.try_resolve().unwrap_err().contains("unknown field"));
@@ -424,7 +417,7 @@ keep_recent_tokens = 1
 async fn invalid_first_boot_model_does_not_publish_a_poisoned_session() {
     let root = tempfile::tempdir().expect("root");
     let config_path = root.path().join("rustx.toml");
-    let skills_root = root.path().join("workspace/configured-skills");
+    let skills_root = root.path().join("workspace/.agents/skills");
     std::fs::create_dir_all(&skills_root).expect("Skill root");
     std::fs::write(root.path().join("models.toml"), MODELS).expect("models");
     let startup = paths(root.path(), &config_path);
@@ -512,16 +505,23 @@ chat_reasoning_replay = "omit"
         &config_path,
         r#"schema_version = 8
 agent_id = "agent-issue96"
-default_tools = ["read"]
-
-[model]
-model = "local/model-a"
 
 [context]
 reserve_tokens = 11
 keep_recent_tokens = 4096
 
+
 [mcp_servers]
+
+
+
+[agent]
+[agent.model]
+model = "local/model-a"
+
+
+[agent.tools]
+builtin = ["read"]
 "#,
     )
     .expect("commented config");
@@ -571,20 +571,14 @@ model = "local/model-a"
 /// Writes a launch document whose only variable is the closed native Agent
 /// Extension composition.
 fn extension_config(enabled: bool, timezone: &str) -> String {
-    toml::to_string_pretty(&serde_json::json!({
-        "schema_version": 8,
-        "agent_id": "agent-ext256",
-        "model": {"model": "local/model-a"},
-        "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096},
-        "default_tools": ["read"],
-        "extensions": {
+    toml::to_string_pretty(&serde_json::json!({"schema_version": 8, "agent_id": "agent-ext256", "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096}, "agent": {"model": {"model": "local/model-a"}, "extensions": {
+            "todo": {"enabled": true},
             "agent_status": {
                 "enabled": enabled,
                 "time": {"enabled": true, "timezone": timezone},
                 "background": {"enabled": true}
             }
-        }
-    }))
+        }, "tools": {"builtin": ["read"]}}}))
     .unwrap()
 }
 
@@ -832,7 +826,7 @@ fn projected_extensions(
 /// `todo` member, and an unauthored member takes the closed document's own
 /// default — which since Issue #259 composes Todo. That is exactly the point
 /// of the migration: the default is owned by extension composition, not by
-/// `defaultTools`, whose fixtures here select only `read`.
+/// `agent.tools.builtin`, whose fixtures here select only `read`.
 fn composed(
     time: bool,
     timezone: Option<chrono_tz::Tz>,
@@ -902,18 +896,11 @@ async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition(
     // that quietly substituted built-in defaults could not pass.
     std::fs::write(
         &config_path,
-        toml::to_string_pretty(&serde_json::json!({
-            "schema_version": 8,
-            "agent_id": "agent-ext256",
-            "model": {"model": "local/model-a"},
-            "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096},
-            "default_tools": ["read"],
-            "extensions": {"agent_status": {
+        toml::to_string_pretty(&serde_json::json!({"schema_version": 8, "agent_id": "agent-ext256", "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096}, "agent": {"model": {"model": "local/model-a"}, "extensions": {"todo": {"enabled": true}, "agent_status": {
                 "enabled": true,
                 "time": {"enabled": true, "timezone": "Asia/Shanghai"},
                 "background": {"enabled": false}
-            }}
-        }))
+            }}, "tools": {"builtin": ["read"]}}}))
         .unwrap(),
     )
     .expect("config v1");
@@ -960,14 +947,7 @@ async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition(
     // The deliberate divergence with the prospective configuration surface.
     std::fs::write(
         &config_path,
-        toml::to_string_pretty(&serde_json::json!({
-            "schema_version": 8,
-            "agent_id": "agent-ext256",
-            "model": {"model": "local/model-a"},
-            "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096},
-            "default_tools": ["read"],
-            "extensions": {"agent_status": {"enabled": false}}
-        }))
+        toml::to_string_pretty(&serde_json::json!({"schema_version": 8, "agent_id": "agent-ext256", "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096}, "agent": {"model": {"model": "local/model-a"}, "extensions": {"todo": {"enabled": true}, "agent_status": {"enabled": false}}, "tools": {"builtin": ["read"]}}}))
         .unwrap(),
     )
     .expect("config v2");

@@ -59,7 +59,7 @@ use crate::runtime::workflow::WorkflowId;
 use crate::runtime::{MonotonicClock, RuntimeClock};
 
 use super::activity::{SubagentExecutionProfile, SubagentObservation};
-use super::catalog::{SubagentDefinitionDigest, SubagentExecutionDeadline, SubagentName};
+use super::catalog::{NamedAgentDefinitionDigest, SubagentExecutionDeadline, SubagentName};
 use super::ipc::DelegationFrame;
 use super::process::{PhysicalOutcome, PhysicalSettlement, StagedChild, SubagentSpawnPlan};
 use super::resolver::ResolvedSubagentSpec;
@@ -251,7 +251,7 @@ struct SubagentRecord {
     child_conversation_id: ConversationId,
     tool_call_id: ToolCallId,
     agent: SubagentName,
-    definition_digest: SubagentDefinitionDigest,
+    definition_digest: NamedAgentDefinitionDigest,
     /// The deterministic identity of the **effective execution profile** this
     /// child committed with (Issue #258): the definition plus whatever an
     /// authorized invocation override replaced.
@@ -919,7 +919,7 @@ pub struct PreparedSubagent {
     child_conversation_id: ConversationId,
     tool_call_id: ToolCallId,
     agent: SubagentName,
-    definition_digest: SubagentDefinitionDigest,
+    definition_digest: NamedAgentDefinitionDigest,
     profile_digest: SubagentExecutionProfileDigest,
     terminal: SubagentTerminalMode,
     task: String,
@@ -5525,7 +5525,10 @@ mod tests {
             project_instructions: Vec::new(),
             materialization:
                 crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
-            extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+            extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
+                crate::context::AgentStatusConfig::default(),
+            )
+            .and_todo(),
         }
     }
 
@@ -5696,7 +5699,7 @@ mod tests {
             "unexpected lifecycle dirty-parent diagnostic: {message}"
         );
         for leaked in [
-            "requireCleanParent",
+            "require_clean_parent",
             "subagent definition",
             "porcelain",
             "rev-parse",

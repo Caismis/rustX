@@ -1,8 +1,8 @@
-//! The one resolution boundary between a named definition and the runtime
-//! generation that admits it (Issue #144).
+//! Child authorization and freeze boundary consuming the shared Agent Profile
+//! resolved in the admitted resource generation.
 //!
 //! ```text
-//! SubagentDefinition
+//! NamedAgentDefinition
 //! + invoking RuntimeResourceSnapshot Rn
 //! + invoking attempt model authority
 //!        |
@@ -74,29 +74,14 @@
 //! trusted Workflow program carries its own typed authority and is bounded by
 //! the generation catalog instead; see [`SubagentOverrideAuthority`].
 //!
-//! # Optionality
+//! # Complete profiles and dynamic replacements
 //!
-//! Optionality belongs to *source availability*, never to a selection. Once
-//! a definition explicitly selects a capability, that capability is required
-//! for that invocation: an unavailable source makes the invocation fail
-//! before ownership commit, and an unknown selection whose source authority
-//! *is* present is a static configuration error that rejects
-//! resource-generation preparation.
-//!
-//! The two callers of the per-selector core are therefore asymmetric, and
-//! the asymmetry is the whole point:
-//!
-//! ```text
-//! resolve_tools                   (invocation)  fail fast on the first
-//!                                               unsatisfiable selector
-//! validate_selectors_for_admission (admission)  inspect EVERY selector;
-//!                                               tolerate an unavailable
-//!                                               source only for that one
-//! ```
-//!
-//! Admission may not stop at an unavailable source: an offline MCP server
-//! listed before a misspelled selector would otherwise let a statically
-//! invalid definition into a published generation.
+//! Complete named defaults consume the generation's shared resolved Agent
+//! Profile. Valid but unavailable selections have already been diagnosed and
+//! suppressed. Dynamic replacements are different: every requested capability
+//! must pass the typed invocation authorization boundary before the common
+//! profile resolver decides composition. An unauthorized override is refused,
+//! never silently suppressed into a different request.
 //!
 //! # The parent decides; the child materializes
 //!
@@ -128,7 +113,7 @@ use crate::tools::mcp::{McpServerBinding, McpServerBindings};
 use crate::tools::types::ToolDefinition;
 
 use super::catalog::{
-    AgentCatalog, SubagentDefinition, SubagentDefinitionDigest, SubagentExecutionDeadline,
+    AgentCatalog, NamedAgentDefinition, NamedAgentDefinitionDigest, SubagentExecutionDeadline,
     SubagentName,
 };
 use super::invocation::{SubagentInvocationOverride, SubagentOverrideError};
@@ -295,7 +280,7 @@ pub struct ResolvedSubagentSpec {
     /// The canonical agent name this child was started as.
     pub agent: SubagentName,
     /// The deterministic semantic identity of the definition at start.
-    pub definition_digest: SubagentDefinitionDigest,
+    pub definition_digest: NamedAgentDefinitionDigest,
     /// The optional whole-lifecycle execution deadline frozen by definition
     /// resolution. The registry starts its monotonic countdown only after
     /// durable ownership commits.
@@ -354,7 +339,7 @@ pub struct ResolvedSubagentSpec {
 /// > omitted.
 ///
 /// Both halves are load-bearing, and they are why this is not
-/// [`SubagentDefinitionDigest`]:
+/// [`NamedAgentDefinitionDigest`]:
 ///
 /// ```text
 /// definition_digest  identity of the SOURCE named definition
@@ -957,13 +942,19 @@ impl SubagentResolver {
     /// # Errors
     ///
     /// Returns the first typed [`SubagentResolutionError`].
+    /// # Panics
+    /// Panics if an internally constructed generation violates catalog/profile coherence.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one child authorization and freeze boundary"
+    )]
     pub fn resolve(
         request: &SubagentResolution<'_>,
     ) -> Result<ResolvedSubagentSpec, SubagentResolutionError> {
         let resources = request.resources;
         let catalog = resources.subagents();
         let admission = match request.domain {
-            SubagentDomain::Main => resources.subagent_main_admission(),
+            SubagentDomain::Main => resources.delegatable_agents(),
             SubagentDomain::Workflow => resources.subagent_workflow_admission(),
         };
         let definition = catalog
@@ -989,12 +980,69 @@ impl SubagentResolver {
         let selected_skills = invocation.effective_skills(definition);
         let extensions = invocation.effective_extensions(definition);
 
-        let tools = resolve_tools(
-            &selected_tools,
-            capability.available_tools(),
-            resources.capability_availability(),
-        )?;
-        let skills = resolve_skills(&selected_skills, capability.skills())?;
+        // A requested invocation replacement remains a strict contract. Profile
+        // suppression is never used to make an invalid/unauthorized override succeed.
+        if invocation.tools.is_some() {
+            resolve_tools(
+                &selected_tools,
+                capability.available_tools(),
+                resources.capability_availability(),
+            )?;
+        }
+        if invocation.skills.is_some() {
+            resolve_skills(&selected_skills, capability.skills())?;
+        }
+        if invocation.extensions.is_some()
+            && let Some(unsupported) = crate::extensions::unsupported_child_scope(&extensions)
+        {
+            return Err(SubagentResolutionError::ExtensionScopeUnsupported {
+                extension: unsupported.extension.into(),
+                reason: unsupported.reason.into(),
+            });
+        }
+        let mut profile = definition.profile().clone();
+        profile.tools = selected_tools;
+        profile.skills = selected_skills;
+        profile.extensions = extensions;
+        let resolved = if invocation.is_empty() {
+            resources
+                .resolved_agent(definition.name())
+                .expect("generation resolved its complete catalog")
+                .clone()
+        } else {
+            use crate::runtime::agent_profile::{
+                AgentProfileAuthority, AgentScope, resolve_agent_profile,
+            };
+            resolve_agent_profile(
+                &profile,
+                &AgentProfileAuthority {
+                    tools: capability.available_tools(),
+                    availability: resources.capability_availability(),
+                    skills: capability.skills(),
+                    agents: &catalog.names().into_iter().cloned().collect(),
+                    workflows: resources.workflows().admitted(),
+                    scope: AgentScope::OneShotChild,
+                },
+            )
+        };
+        let tools = resolved
+            .tools
+            .iter()
+            .map(|definition| {
+                let selector = definition.origin.source().map_or_else(
+                    || AgentToolSelection::Builtin {
+                        name: definition.name.clone(),
+                    },
+                    |source_id| AgentToolSelection::Source {
+                        source_id,
+                        name: definition.name.clone(),
+                    },
+                );
+                freeze_tool(&selector, definition)
+            })
+            .collect::<Vec<_>>();
+        let skills = resolve_skills(&resolved.skills, capability.skills())?;
+        let extensions = resolved.extensions;
 
         if request.authority == SubagentOverrideAuthority::DelegatedByModel {
             authorize_delegation(
@@ -1049,17 +1097,15 @@ impl SubagentResolver {
     /// Returns the first static violation, naming the offending agent.
     pub fn validate_catalog(
         catalog: &AgentCatalog,
-        available_tools: &AvailableToolCatalog,
-        availability: &CapabilityAvailability,
+        _available_tools: &AvailableToolCatalog,
+        _availability: &CapabilityAvailability,
         skills: &SkillSnapshot,
         models: &ModelBindingRegistry,
     ) -> Result<(), (SubagentName, SubagentResolutionError)> {
         for definition in catalog.definitions() {
             let named = |error: SubagentResolutionError| (definition.name().clone(), error);
-            validate_selectors_for_admission(definition, available_tools, availability)
-                .map_err(named)?;
             Self::validate_definition_local_references(definition, skills, &mut |model| {
-                FrozenModelSpec::freeze(models, &SessionModelConfig::of(model.clone()))
+                FrozenModelSpec::freeze(models, model)
                     .map(|_| ())
                     .map_err(|error| error.to_string())
             })
@@ -1072,7 +1118,7 @@ impl SubagentResolver {
     pub(crate) fn validate_local_references(
         catalog: &AgentCatalog,
         skills: &SkillSnapshot,
-        mut model_check: impl FnMut(&crate::model::catalog::ModelRef) -> Result<(), String>,
+        mut model_check: impl FnMut(&SessionModelConfig) -> Result<(), String>,
     ) -> Result<(), (SubagentName, SubagentResolutionError)> {
         for definition in catalog.definitions() {
             let named = |error: SubagentResolutionError| (definition.name().clone(), error);
@@ -1083,14 +1129,13 @@ impl SubagentResolver {
     }
 
     fn validate_definition_local_references(
-        definition: &SubagentDefinition,
-        skills: &SkillSnapshot,
-        model_check: &mut impl FnMut(&crate::model::catalog::ModelRef) -> Result<(), String>,
+        definition: &NamedAgentDefinition,
+        _skills: &SkillSnapshot,
+        model_check: &mut impl FnMut(&SessionModelConfig) -> Result<(), String>,
     ) -> Result<(), SubagentResolutionError> {
-        resolve_skills(definition.skills(), skills)?;
         if let Some(model) = definition.model() {
             model_check(model).map_err(|detail| SubagentResolutionError::UnknownModel {
-                model: model.to_string(),
+                model: model.model.to_string(),
                 detail,
             })?;
         }
@@ -1160,7 +1205,7 @@ fn resolve_tools(
 /// requesting that same selector fails earlier, at dependency resolution,
 /// with the source-availability fact rather than an authority verdict.
 fn role_tool_authority(
-    definition: &SubagentDefinition,
+    definition: &NamedAgentDefinition,
     available: &AvailableToolCatalog,
     availability: &CapabilityAvailability,
 ) -> BTreeSet<ToolId> {
@@ -1182,7 +1227,7 @@ fn role_tool_authority(
 
 /// The exact Skill identities the **named role** itself authorizes.
 fn role_skill_authority(
-    definition: &SubagentDefinition,
+    definition: &NamedAgentDefinition,
     skills: &SkillSnapshot,
 ) -> BTreeSet<(SkillId, SkillVersionId)> {
     definition
@@ -1226,7 +1271,7 @@ fn role_skill_authority(
 #[allow(clippy::too_many_arguments)] // one authorization boundary, three domains
 fn authorize_delegation(
     invocation: &SubagentInvocationOverride,
-    definition: &SubagentDefinition,
+    definition: &NamedAgentDefinition,
     tools: &[ResolvedSubagentTool],
     skills: &[ResolvedSubagentSkill],
     extensions: &crate::extensions::NativeAgentExtensions,
@@ -1308,46 +1353,6 @@ fn authorize_delegation(
 /// an offline MCP server listed before a misspelled Builtin selector or a
 /// `python:<folder>` id naming no managed package would otherwise smuggle a
 /// statically invalid definition into a published generation.
-fn validate_selectors_for_admission(
-    definition: &SubagentDefinition,
-    available: &AvailableToolCatalog,
-    availability: &CapabilityAvailability,
-) -> Result<(), SubagentResolutionError> {
-    validate_metadata_selectors(definition, &available.definitions(), availability)
-}
-
-pub(crate) fn validate_metadata_selectors(
-    definition: &SubagentDefinition,
-    available: &[crate::tools::types::ToolDefinition],
-    availability: &CapabilityAvailability,
-) -> Result<(), SubagentResolutionError> {
-    for selector in definition.tools() {
-        match crate::capabilities::selection::project(selector, available, availability) {
-            Ok(selected)
-                if selected.iter().all(|selected| {
-                    !selected
-                        .id
-                        .as_str()
-                        .starts_with(crate::runtime::workflow::WORKFLOW_TOOL_ID_PREFIX)
-                }) => {}
-            Err(crate::capabilities::selection::ToolSelectionError::SourceUnavailable {
-                reason,
-                ..
-            }) if !matches!(
-                reason,
-                crate::capabilities::selection::SourceResolutionFailure::Undefined
-            ) => {}
-            _ => {
-                return Err(SubagentResolutionError::UnknownCapability {
-                    selector: selector.canonical(),
-                });
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Freezes one admitted definition into its exact source-qualified identity.
 fn freeze_tool(
     _selector: &AgentToolSelection,
     definition: &ToolDefinition,
@@ -1477,13 +1482,13 @@ fn resolve_materialization(
 /// child can then have no opinion about a `models.toml` that changed in the
 /// meantime, because it never consults one.
 fn resolve_model(
-    definition: &SubagentDefinition,
+    definition: &NamedAgentDefinition,
     attempt_model: &SessionModelConfig,
     models: &ModelBindingRegistry,
 ) -> Result<FrozenModelSpec, SubagentResolutionError> {
     let configured = match definition.model() {
         None => attempt_model.clone(),
-        Some(model) => SessionModelConfig::of(model.clone()),
+        Some(model) => model.clone(),
     };
     FrozenModelSpec::freeze(models, &configured).map_err(|error| {
         SubagentResolutionError::UnknownModel {
@@ -1500,7 +1505,7 @@ fn resolve_model(
 /// files in configured order. `inherit = false` freezes the explicit files
 /// only. The child performs no ancestor discovery of its own in either case.
 fn resolve_project_instructions(
-    definition: &SubagentDefinition,
+    definition: &NamedAgentDefinition,
     resources: &RuntimeResourceSnapshot,
 ) -> Vec<ProjectContextFile> {
     let policy = definition.project_instructions();
@@ -1969,18 +1974,13 @@ pub(crate) fn render_agent_routing(catalog: &AgentCatalog) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ResolvedSubagentTool, SubagentResolutionError, freeze_tool, render_agent_routing,
-        validate_selectors_for_admission,
-    };
+    use super::{ResolvedSubagentTool, SubagentResolutionError, freeze_tool, render_agent_routing};
     use crate::capabilities::selection::AgentToolSelection;
     use crate::capabilities::{
         AvailableToolCatalog, CapabilityAvailability, CapabilitySourceState, ToolSourceId,
     };
     use crate::runtime::identity::{McpServerId, ToolId};
-    use crate::runtime::subagent::catalog::{
-        AgentCatalog, SubagentDefinition, SubagentName, SubagentProjectInstructionPolicy,
-    };
+    use crate::runtime::subagent::catalog::{AgentCatalog, NamedAgentDefinition, SubagentName};
     use crate::runtime::workspace::WorkspacePolicy;
     use crate::tools::types::{
         ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin,
@@ -2111,29 +2111,37 @@ mod tests {
     }
 
     fn resolve_tools(
-        definition: &SubagentDefinition,
+        definition: &NamedAgentDefinition,
         available: &AvailableToolCatalog,
         availability: &CapabilityAvailability,
     ) -> Result<Vec<ResolvedSubagentTool>, SubagentResolutionError> {
         super::resolve_tools(definition.tools(), available, availability)
     }
 
-    fn definition(tools: Vec<AgentToolSelection>) -> SubagentDefinition {
-        SubagentDefinition::new(
+    fn definition(tools: Vec<AgentToolSelection>) -> NamedAgentDefinition {
+        NamedAgentDefinition::new(
             SubagentName::parse("explore").expect("name"),
-            "description".to_owned(),
-            "instructions".to_owned(),
-            std::path::PathBuf::from("/w/explore.md"),
-            None,
-            None,
-            tools,
-            Vec::new(),
-            SubagentProjectInstructionPolicy {
-                inherit: true,
-                files: Vec::new(),
+            crate::runtime::agent_profile::AgentProfile {
+                description: "description".to_owned(),
+                instructions: "instructions".to_owned(),
+                model: None,
+                execution_deadline: None,
+                tools,
+                skills: Vec::new(),
+                project_instructions:
+                    crate::runtime::agent_profile::AgentProjectInstructionPolicy {
+                        inherit: true,
+                        files: Vec::new(),
+                    },
+                workspace_policy: WorkspacePolicy::SharedWorkspace,
+                extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
+                    crate::context::AgentStatusConfig::default(),
+                )
+                .and_todo(),
+                agents: std::collections::BTreeSet::default(),
+                workflows: std::collections::BTreeSet::default(),
             },
-            WorkspacePolicy::SharedWorkspace,
-            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+            std::path::PathBuf::from("/w/explore.md"),
         )
         .expect("definition")
     }
@@ -2400,22 +2408,27 @@ mod tests {
     fn role_with(
         tools: Vec<AgentToolSelection>,
         extensions: crate::extensions::NativeAgentExtensions,
-    ) -> SubagentDefinition {
-        SubagentDefinition::new(
+    ) -> NamedAgentDefinition {
+        NamedAgentDefinition::new(
             SubagentName::parse("reviewer").expect("name"),
-            "description".to_owned(),
-            "instructions".to_owned(),
-            std::path::PathBuf::from("/w/reviewer.md"),
-            None,
-            None,
-            tools,
-            Vec::new(),
-            SubagentProjectInstructionPolicy {
-                inherit: true,
-                files: Vec::new(),
+            crate::runtime::agent_profile::AgentProfile {
+                description: "description".to_owned(),
+                instructions: "instructions".to_owned(),
+                model: None,
+                execution_deadline: None,
+                tools,
+                skills: Vec::new(),
+                project_instructions:
+                    crate::runtime::agent_profile::AgentProjectInstructionPolicy {
+                        inherit: true,
+                        files: Vec::new(),
+                    },
+                workspace_policy: WorkspacePolicy::SharedWorkspace,
+                extensions,
+                agents: std::collections::BTreeSet::default(),
+                workflows: std::collections::BTreeSet::default(),
             },
-            WorkspacePolicy::SharedWorkspace,
-            extensions,
+            std::path::PathBuf::from("/w/reviewer.md"),
         )
         .expect("definition")
     }
@@ -2432,7 +2445,7 @@ mod tests {
 
     fn authorize(
         invocation: &super::SubagentInvocationOverride,
-        definition: &SubagentDefinition,
+        definition: &NamedAgentDefinition,
         available: &AvailableToolCatalog,
         invoking: &super::InvokingAgentAuthority,
     ) -> Result<(), SubagentResolutionError> {
@@ -2600,7 +2613,10 @@ mod tests {
             vec![AgentToolSelection::Builtin {
                 name: "read".to_owned(),
             }],
-            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+            crate::extensions::NativeAgentExtensions::with_agent_status(
+                crate::context::AgentStatusConfig::default(),
+            )
+            .and_todo(),
         );
         // A caller that holds nothing at all: the role's own defaults must
         // still resolve, because they are the role's authority by
@@ -2889,7 +2905,10 @@ mod tests {
     fn sub258_every_supported_extension_is_child_scope_supported() {
         for composition in [
             crate::extensions::NativeAgentExtensions::none(),
-            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+            crate::extensions::NativeAgentExtensions::with_agent_status(
+                crate::context::AgentStatusConfig::default(),
+            )
+            .and_todo(),
             crate::extensions::NativeAgentExtensions::with_agent_status(
                 crate::context::AgentStatusConfig {
                     time: crate::context::TimeStatusConfig {
@@ -2910,38 +2929,54 @@ mod tests {
     #[test]
     fn the_routing_description_is_deterministic_and_derived_from_the_catalog() {
         let catalog = AgentCatalog::new([
-            SubagentDefinition::new(
+            NamedAgentDefinition::new(
                 SubagentName::parse("research").expect("name"),
-                "Deep research.".to_owned(),
-                "instructions".to_owned(),
-                std::path::PathBuf::from("/w/research.md"),
-                None,
-                None,
-                Vec::new(),
-                Vec::new(),
-                SubagentProjectInstructionPolicy {
-                    inherit: true,
-                    files: Vec::new(),
+                crate::runtime::agent_profile::AgentProfile {
+                    description: "Deep research.".to_owned(),
+                    instructions: "instructions".to_owned(),
+                    model: None,
+                    execution_deadline: None,
+                    tools: Vec::new(),
+                    skills: Vec::new(),
+                    project_instructions:
+                        crate::runtime::agent_profile::AgentProjectInstructionPolicy {
+                            inherit: true,
+                            files: Vec::new(),
+                        },
+                    workspace_policy: WorkspacePolicy::SharedWorkspace,
+                    extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
+                        crate::context::AgentStatusConfig::default(),
+                    )
+                    .and_todo(),
+                    agents: std::collections::BTreeSet::default(),
+                    workflows: std::collections::BTreeSet::default(),
                 },
-                WorkspacePolicy::SharedWorkspace,
-                crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+                std::path::PathBuf::from("/w/research.md"),
             )
             .expect("definition"),
-            SubagentDefinition::new(
+            NamedAgentDefinition::new(
                 SubagentName::parse("explore").expect("name"),
-                "Read-only exploration.".to_owned(),
-                "instructions".to_owned(),
-                std::path::PathBuf::from("/w/explore.md"),
-                None,
-                None,
-                Vec::new(),
-                Vec::new(),
-                SubagentProjectInstructionPolicy {
-                    inherit: true,
-                    files: Vec::new(),
+                crate::runtime::agent_profile::AgentProfile {
+                    description: "Read-only exploration.".to_owned(),
+                    instructions: "instructions".to_owned(),
+                    model: None,
+                    execution_deadline: None,
+                    tools: Vec::new(),
+                    skills: Vec::new(),
+                    project_instructions:
+                        crate::runtime::agent_profile::AgentProjectInstructionPolicy {
+                            inherit: true,
+                            files: Vec::new(),
+                        },
+                    workspace_policy: WorkspacePolicy::SharedWorkspace,
+                    extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
+                        crate::context::AgentStatusConfig::default(),
+                    )
+                    .and_todo(),
+                    agents: std::collections::BTreeSet::default(),
+                    workflows: std::collections::BTreeSet::default(),
                 },
-                WorkspacePolicy::SharedWorkspace,
-                crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+                std::path::PathBuf::from("/w/explore.md"),
             )
             .expect("definition"),
         ])
@@ -2956,90 +2991,6 @@ mod tests {
         );
     }
 
-    /// Admission and invocation are asymmetric on purpose, and the
-    /// asymmetry must not degrade into "stop at the first unavailable
-    /// source".
-    ///
-    /// The definition below lists an offline MCP selector first in canonical
-    /// order followed by a statically invalid one against a *ready* source.
-    /// A validator that treated the unavailable source as sufficient would
-    /// never reach the invalid selector and would admit the definition.
-    #[test]
-    fn admission_validates_every_selector_past_an_unavailable_source() {
-        let mut availability = ready();
-        availability.insert(
-            ToolSourceId::Mcp(McpServerId::new("github")),
-            CapabilitySourceState::Unavailable {
-                reason: "the server did not start".to_owned(),
-            },
-        );
-        let definition = definition(vec![
-            AgentToolSelection::Source {
-                source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
-                    .unwrap(),
-                name: "get_issue".to_owned(),
-            },
-            AgentToolSelection::Source {
-                source_id: crate::capabilities::ToolSourceId::try_from(String::from(
-                    "python:symbols",
-                ))
-                .unwrap(),
-                name: "not_a_real_tool".to_owned(),
-            },
-        ]);
-        assert_eq!(
-            definition.tools().first(),
-            Some(&AgentToolSelection::Source {
-                source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
-                    .unwrap(),
-                name: "get_issue".to_owned(),
-            }),
-            "the unavailable selector really is inspected first"
-        );
-
-        // Invocation stays fail-fast: the first unsatisfiable selector wins.
-        assert!(matches!(
-            resolve_tools(&definition, &available(), &availability),
-            Err(SubagentResolutionError::SourceUnavailable { .. })
-        ));
-
-        // Admission keeps going and rejects the static invalidity.
-        assert!(matches!(
-            validate_selectors_for_admission(&definition, &available(), &availability),
-            Err(SubagentResolutionError::UnknownCapability { selector })
-                if selector == "source:python:symbols/not_a_real_tool"
-        ));
-    }
-
-    /// A definition whose *only* unsatisfiable selector is an unavailable
-    /// optional source stays admissible: the runtime is healthy and only an
-    /// invocation of that agent fails.
-    #[test]
-    fn an_unavailable_source_alone_never_rejects_admission() {
-        let mut availability = ready();
-        availability.insert(
-            ToolSourceId::Mcp(McpServerId::new("github")),
-            CapabilitySourceState::Unavailable {
-                reason: "the server did not start".to_owned(),
-            },
-        );
-        let definition = definition(vec![
-            AgentToolSelection::Builtin {
-                name: "read".to_owned(),
-            },
-            AgentToolSelection::Source {
-                source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
-                    .unwrap(),
-                name: "get_issue".to_owned(),
-            },
-        ]);
-        assert!(validate_selectors_for_admission(&definition, &available(), &availability).is_ok());
-        assert!(matches!(
-            resolve_tools(&definition, &available(), &availability),
-            Err(SubagentResolutionError::SourceUnavailable { .. })
-        ));
-    }
-
     // ---------------------------------------------------------------
     // Issue #258: the effective execution-profile digest.
     //
@@ -3050,7 +3001,6 @@ mod tests {
     // restating the defaults, the Tool and Workflow paths agreeing) are
     // proven against real composed generations in tests/subagent/overrides.rs.
     // ---------------------------------------------------------------
-
     use super::{FrozenModelSpec, ResolvedSubagentSkill, ResolvedSubagentSpec, SessionModelConfig};
     use crate::runtime::ProjectContextFile;
     use crate::runtime::identity::{SkillId, SkillVersionId};
@@ -3114,26 +3064,14 @@ mod tests {
     #[test]
     fn sub258_the_profile_digest_is_independent_of_the_source_definition_digest() {
         let spec = frozen_spec();
-        let other_definition = SubagentDefinition::new(
-            spec.agent.clone(),
-            // A completely different routing description, and defaults that
+        let other_definition = NamedAgentDefinition::new(spec.agent.clone(), crate::runtime::agent_profile::AgentProfile { description: // A completely different routing description, and defaults that
             // an override would have replaced away.
-            "An entirely different routing description.".to_owned(),
-            "instructions".to_owned(),
-            std::path::PathBuf::from("/w/reviewer.md"),
-            None,
-            None,
-            vec![AgentToolSelection::Builtin {
+            "An entirely different routing description.".to_owned(), instructions: "instructions".to_owned(), model: None, execution_deadline: None, tools: vec![AgentToolSelection::Builtin {
                 name: "read".to_owned(),
-            }],
-            vec!["some-skill".to_owned()],
-            SubagentProjectInstructionPolicy {
+            }], skills: vec!["some-skill".to_owned()], project_instructions: crate::runtime::agent_profile::AgentProjectInstructionPolicy {
                 inherit: true,
                 files: Vec::new(),
-            },
-            WorkspacePolicy::SharedWorkspace,
-            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
-        )
+            }, workspace_policy: WorkspacePolicy::SharedWorkspace, extensions: crate::extensions::NativeAgentExtensions::with_agent_status(crate::context::AgentStatusConfig::default()).and_todo(), agents: std::collections::BTreeSet::default(), workflows: std::collections::BTreeSet::default() }, std::path::PathBuf::from("/w/reviewer.md"))
         .expect("definition");
 
         let mut relabelled = spec.clone();
@@ -3205,7 +3143,10 @@ mod tests {
         variants.push(reguided);
 
         let mut composed = base.clone();
-        composed.extensions = crate::extensions::NativeAgentExtensionsDocument::default().resolve();
+        composed.extensions = crate::extensions::NativeAgentExtensions::with_agent_status(
+            crate::context::AgentStatusConfig::default(),
+        )
+        .and_todo();
         variants.push(composed);
 
         assert_distinct(&variants, "every behavior-affecting frozen field");

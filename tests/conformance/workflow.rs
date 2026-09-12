@@ -191,22 +191,27 @@ fn models_json(emulator: &ProviderEmulator) -> String {
 
 const CONFIG: &str = r#"schema_version = 8
 agent_id = "agent-issue83"
-default_tools = ["read"]
-
-[model]
-model = "emulator/workflow-model"
 
 [context]
 reserve_tokens = 0
 keep_recent_tokens = 0
 
+
 [subagents]
 max_concurrent = 4
-main = []
 workflow = ["reviewer"]
 
-[workflows]
-main = ["review_pr"]
+
+[agent]
+agents = []
+workflows = ["review_pr"]
+
+[agent.model]
+model = "emulator/workflow-model"
+
+
+[agent.tools]
+builtin = ["read"]
 "#;
 
 const WORKFLOW: &str = r"description: Review the request with a native child agent.
@@ -356,11 +361,11 @@ impl Driver {
         assert!(
             resources
                 .workflows()
-                .main()
+                .admitted()
                 .iter()
                 .any(|id| id.as_str() == "review_pr")
         );
-        assert!(resources.subagent_main_admission().is_empty());
+        assert!(resources.delegatable_agents().is_empty());
         assert_eq!(
             resources
                 .subagent_workflow_admission()
@@ -469,17 +474,19 @@ async fn workflow_selection_rejects_an_identity_outside_the_canonical_root() {
         workspace,
         runtime_root: root.path().join("private"),
     };
-    let detail = paths.try_resolve().expect_err(
-        "static analysis rejects the obsolete workspace Workflow path without composing a runtime",
-    );
-    assert!(
-        detail.contains("workflows.main") && detail.contains("review_pr"),
-        "{detail}"
-    );
-    assert!(
-        !detail.contains(".rustx/workflows/review_pr.yaml"),
-        "{detail}"
-    );
+    let core =
+        LocalConversationCore::compose(&paths.resolve(), &LocalRuntimeDependencies::default())
+            .await
+            .expect("missing selected Workflow leaves the Agent usable");
+    let resources = core.runtime().runtime_resources();
+    assert!(resources.workflows().definitions().is_empty());
+    let profile = resources.root_profile().unwrap();
+    assert!(profile.workflows.is_empty());
+    assert!(profile.diagnostics.iter().any(|diagnostic| matches!(
+        diagnostic,
+        rustx::runtime::agent_profile::AgentProfileDiagnostic::WorkflowUnavailable { id }
+            if id.as_str() == "review_pr"
+    )));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -495,7 +502,7 @@ async fn discovered_workflow_can_remain_out_of_main_model_admission() {
     .expect("models.toml");
     std::fs::write(
         root.path().join("rustx.toml"),
-        CONFIG.replace("main = [\"review_pr\"]", "main = []"),
+        CONFIG.replace("workflows = [\"review_pr\"]", "workflows = []"),
     )
     .expect("rustx.toml");
     std::fs::write(
@@ -532,7 +539,7 @@ async fn discovered_workflow_can_remain_out_of_main_model_admission() {
             .definitions()
             .contains_key(&WorkflowId::parse("review_pr").expect("workflow id"))
     );
-    assert!(resources.workflows().main().is_empty());
+    assert!(resources.root_profile().unwrap().workflows.is_empty());
     assert!(
         !resources
             .capability()
@@ -577,7 +584,7 @@ block:
     .expect("replace future profile");
     std::fs::write(
         driver.root.path().join("rustx.toml"),
-        CONFIG.replace("main = [\"review_pr\"]", "main = []"),
+        CONFIG.replace("workflows = [\"review_pr\"]", "workflows = []"),
     )
     .expect("replace future exposure");
     emulator.release_gate("workflow-child-admitted").await;
@@ -625,8 +632,9 @@ block:
             .runtime
             .runtime()
             .runtime_resources()
-            .workflows()
-            .main()
+            .root_profile()
+            .unwrap()
+            .workflows
             .is_empty()
     );
     assert_eq!(
@@ -851,7 +859,7 @@ impl Driver {
             .unwrap()
             .replace("example/demo-model", "emulator/workflow-model")
             .replace(
-                "[model.reasoning_profile]\nmode = \"profile\"\nname = \"off\"\n",
+                "[agent.model.reasoning_profile]\nmode = \"profile\"\nname = \"off\"\n",
                 "",
             );
         std::fs::write(root.path().join("rustx.toml"), config).unwrap();
@@ -866,10 +874,7 @@ impl Driver {
             no_tools: false,
             startup_session: rustx::local_runtime::StartupSession::Empty,
             session_name: None,
-            tools: Some(vec![
-                "parallel_review".into(),
-                "implement_and_review".into(),
-            ]),
+            tools: None,
             exclude_tools: vec![],
         };
         let dependencies = LocalRuntimeDependencies {

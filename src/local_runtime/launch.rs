@@ -282,11 +282,11 @@ impl ProspectiveLaunch {
         };
         LaunchSettings {
             model: ModelDefault {
-                model: self.config.model.model.clone(),
-                reasoning_profile: self.config.model.reasoning_profile.clone(),
+                model: self.config.initial_model().model.clone(),
+                reasoning_profile: self.config.initial_model().reasoning_profile.clone(),
             },
-            model_origin: origin("model.model"),
-            reasoning_origin: origin("model.reasoning_profile"),
+            model_origin: origin("agent.model.model"),
+            reasoning_origin: origin("agent.model.reasoning_profile"),
             approval_mode: self.config.approval_mode,
             approval_origin: origin("approval_mode"),
             runtime_root_origin: origin("runtime_root"),
@@ -297,7 +297,7 @@ impl ProspectiveLaunch {
             {
                 SettingOrigin::Cli
             } else {
-                origin("default_tools")
+                origin("agent.tools")
             },
         }
     }
@@ -336,11 +336,9 @@ impl ProspectiveLaunch {
             rebase_paths(&mut layer, origin, &self.workspace)?;
             merged.overlay(layer, origin, &mut provenance);
         }
-        if !self.skill_paths.is_empty() {
-            merged.skills = Some(self.skill_paths.clone());
-        }
-        merged.model = Some(ModelLayer {
-            model: Some(self.config.model.model.clone()),
+
+        merged.agent.get_or_insert_default().model = Some(ModelLayer {
+            model: Some(self.config.initial_model().model.clone()),
             ..Default::default()
         });
         let resources = merged.resolve()?;
@@ -377,7 +375,7 @@ pub fn resolve_locations(
     if let Some(names) = &request.exclude_tools {
         crate::capabilities::validate_tool_names(names, "exclusion")?;
     }
-    crate::capabilities::ToolActivationPolicy {
+    crate::capabilities::AgentActivation {
         no_tools: request.no_tools,
         no_builtin_tools: request.no_builtin_tools,
         tools: request.tools.clone(),
@@ -629,7 +627,6 @@ pub fn analyze(
         merged.overlay(layer, &origin, &mut provenance);
     }
     if !request.skill_paths.is_empty() {
-        merged.skills = Some(locations.skill_paths.clone());
         provenance.insert(
             "skills".into(),
             Origin::Cli {
@@ -638,26 +635,27 @@ pub fn analyze(
         );
     }
     if let Some(model) = &request.model {
-        merged.model = Some(ModelLayer {
+        merged.agent.get_or_insert_default().model = Some(ModelLayer {
             model: Some(crate::model::catalog::ModelRef::parse(model).map_err(|e| e.to_string())?),
             ..Default::default()
         });
-        provenance.retain(|key, _| !key.starts_with("model."));
+        provenance.retain(|key, _| !key.starts_with("agent.model."));
         provenance.insert(
-            "model.model".into(),
+            "agent.model.model".into(),
             Origin::Cli {
                 base: launch.clone(),
             },
         );
     }
     if merged
-        .model
+        .agent
         .as_ref()
+        .and_then(|agent| agent.model.as_ref())
         .is_none_or(|model| model.model.is_none())
     {
         let mut error = LaunchFailure::at(
             Some(user_path.clone()),
-            "model.model",
+            "agent.model.model",
             "no unambiguous default model selected",
             "set model.model in user settings.toml or pass --model provider/model",
             "no unambiguous default model selected".into(),
@@ -678,7 +676,7 @@ pub fn analyze(
         .map_err(|e| e.clone())?;
     config.tool_environment().map_err(|e| e.to_string())?;
     let (primary, summary) =
-        crate::model::session::analyze_session_model_config(&models, &config.model)
+        crate::model::session::analyze_session_model_config(&models, config.initial_model())
             .map_err(|e| e.to_string())?;
     let summary = summary.as_ref().unwrap_or(&primary);
     config
@@ -772,13 +770,8 @@ pub fn analyze(
         )
     };
     let workflows = if trusted {
-        super::workflow_resources::load(
-            &locations.workspace,
-            &config.workflows,
-            &config.subagents,
-            &subagents,
-        )
-        .map_err(LaunchFailure::resource)?
+        super::workflow_resources::load(&locations.workspace, &config.subagents, &subagents)
+            .map_err(LaunchFailure::resource)?
     } else {
         crate::runtime::workflow::WorkflowCatalog::empty()
     };
@@ -796,7 +789,7 @@ pub fn analyze(
             &workspace,
             crate::skills::SkillDiscoveryConfig {
                 automatic_roots: skill_roots.clone(),
-                explicit_paths: config.skills.clone(),
+                explicit_paths: locations.skill_paths.clone(),
             },
         )
         .discover()
@@ -827,8 +820,8 @@ pub fn analyze(
         &skills,
         |reference| {
             crate::model::invocation::analyze_selection(
-                models.model(reference).map_err(|e| e.to_string())?,
-                &crate::model::invocation::ModelSelection::of(reference.clone()),
+                models.model(&reference.model).map_err(|e| e.to_string())?,
+                &reference.selection(),
                 crate::model::invocation::RequestParamsLayer::SessionOverrides,
             )
             .map(|_| ())
@@ -845,9 +838,7 @@ pub fn analyze(
         )
     })?;
     let main_subagents = if trusted {
-        subagents
-            .admitted(&config.subagents.main.iter().cloned().collect())
-            .map_err(|e| e.to_string())?
+        subagents.selected_definitions(&config.agent.agents.iter().cloned().collect())
     } else {
         crate::runtime::subagent::AgentCatalog::empty()
     };
@@ -864,7 +855,7 @@ pub fn analyze(
         .collect();
     definitions.extend(
         workflows
-            .main()
+            .admitted()
             .iter()
             .filter_map(|id| workflows.get(id))
             .map(|program| crate::tools::native::workflow_definition(program)),
@@ -905,22 +896,6 @@ pub fn analyze(
             )
         })
         .collect();
-    for definition in subagents.definitions() {
-        crate::runtime::subagent::resolver::validate_metadata_selectors(
-            definition,
-            &definitions,
-            &availability,
-        )
-        .map_err(|e| {
-            LaunchFailure::at(
-                None,
-                &format!("agents.{}.tools", definition.name()),
-                "invalid local Tool reference",
-                "use a known source-qualified Tool selector",
-                e.to_string(),
-            )
-        })?;
-    }
     // Every Agent node's trusted static invocation override is validated
     // against the same prospective metadata, offline and side-effect free.
     // An unavailable source is tolerated per selector rather than ending the
@@ -962,19 +937,16 @@ pub fn analyze(
                 e.to_string(),
             )
         })?;
-    let mut defaults = config.default_tools.clone();
-    defaults.extend(workflows.main().iter().map(ToString::to_string));
     let online = config
         .mcp_servers
         .values()
         .any(|source| source.enabled == Some(true));
-    let policy = crate::capabilities::ToolActivationPolicy {
-        sources: config
-            .tools
-            .as_ref()
-            .map(|selection| selection.sources.clone())
-            .unwrap_or_default(),
-        default_tools: Some(defaults),
+    let policy = crate::capabilities::AgentActivation {
+        profile: config.agent.clone(),
+        admitted_agents: subagents.names().into_iter().cloned().collect(),
+        admitted_workflows: workflows.admitted().clone(),
+        project_files: super::agent_resources::load_profile_files(&config.agent.agents_md.files)
+            .map_err(LaunchFailure::resource)?,
         no_tools: locations.no_tools,
         no_builtin_tools: locations.no_builtin_tools,
         tools: locations.tools.clone(),
@@ -987,6 +959,8 @@ pub fn analyze(
             crate::capabilities::select_definitions(
                 &definitions.iter().collect::<Vec<_>>(),
                 &policy,
+                &skills,
+                &availability,
             )?
             .into_iter()
             .map(|definition| definition.name.clone())
@@ -1174,10 +1148,7 @@ pub(super) fn parse_layer(
         ));
     }
     if let Some(subagents) = &layer.subagents {
-        for (field, names) in [
-            ("subagents.main", &subagents.main),
-            ("subagents.workflow", &subagents.workflow),
-        ] {
+        for (field, names) in [("subagents.workflow", &subagents.workflow)] {
             if let Some(names) = names {
                 let unique: std::collections::BTreeSet<_> = names.iter().collect();
                 if unique.len() != names.len() {
@@ -1230,9 +1201,11 @@ fn rebase_paths(
         *value = resolved;
         Ok(())
     };
-    if let Some(skills) = &mut layer.skills {
-        for skill in skills {
-            path(skill)?;
+    if let Some(agent) = &mut layer.agent
+        && let Some(policy) = &mut agent.agents_md
+    {
+        for file in &mut policy.files {
+            path(file)?;
         }
     }
     if let Some(servers) = &mut layer.mcp_servers {

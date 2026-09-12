@@ -199,7 +199,7 @@ fn context_with_workspace_policy(
             capability,
         )
         .with_subagent_catalog(agents.resources().subagents().clone())
-        .with_subagent_admissions(BTreeSet::new(), BTreeSet::from([profile("reviewer")])),
+        .with_workflow_admission(BTreeSet::from([profile("reviewer")])),
     );
     let mut context = crate::runtime::subagent::AttemptSubagentContext::new(
         crate::runtime::identity::AttemptId::new("workflow-test-attempt"),

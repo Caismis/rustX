@@ -23,7 +23,7 @@ it does not refresh or replace the live snapshot.
 | Runtime root, model catalog/bindings, host startup policy | Launch resolver/composition | Host-owned paths and allowed CLI inputs | Restart required | Explicit authoring | Not reapplied; loader retains captured startup values | Re-resolved |
 | Saved primary model/profile or approval default | Rust `UserDefaults` document writer | Explicit `user` scope: `$XDG_CONFIG_HOME/rustx/settings.toml` (or `$HOME/.config/rustx/settings.toml`) | Same-directory rename publishes one validated document | Only the explicitly selected fields | Does not replace Session model or approval | Can affect a future launch; project/CLI precedence still applies |
 | Attempt model, resource revision, approval mode | Native admission | Actual frozen model/resource/policy snapshots | Frozen together at admission; never live-mutated | Retained execution/request evidence only | Retained admitted facts unchanged | No reconstruction from new defaults |
-| Effective native Agent Extension composition (Agent Status) | The composed `ConversationRuntime` itself; frozen at `LocalConversationCore::compose` (root) or in `ResolvedSubagentSpec.extensions` (child) | The launch's `extensions` document (root) or the named role's own `extensions` (child) | Immutable for the life of the Agent; there is no live setter and no install/uninstall | Authoring files only | Unchanged — reload republishes resources and cannot recompose extensions | New launch resolves the current document and may compose a different set |
+| Effective native Agent Extension composition (Agent Status) | The composed `ConversationRuntime` itself; frozen at `LocalConversationCore::compose` (root) or in `ResolvedSubagentSpec.extensions` (child) | The launch's `agent.extensions` profile dimension (root) or the named Agent profile's `extensions` dimension (child) | Immutable for the life of the Agent; there is no live setter and no install/uninstall | Authoring files only | Unchanged — reload republishes resources and cannot recompose extensions | New launch resolves the current document and may compose a different set |
 | Child model/profile/capabilities and compiled/admitted Workflow program/inputs | Existing Subagent and Workflow admission owners | Parent-frozen native specifications and compiled program | Immutable for admitted execution; no rediscovery in child workspace | Existing native evidence only | Already admitted specifications unchanged | No replay or automatic resume |
 | Show reasoning, expansion | TUI presentation preferences | Client-local preference | Immediate rendering change | Not saved through native settings API | No effect | Client presentation only |
 
@@ -54,13 +54,13 @@ persisted Session-local model selection.
   native Agent Extension composition, and frozen attempt facts.
 - `/defaults user` shows only the permitted saved fields, target document and its
   content revision. It does not resolve layers or claim the values win precedence.
-- `/save-default user model <revision>` writes exactly `model.model` and
-  `model.reasoning_profile` from the current native Session selection, captured by Rust
+- `/save-default user model <revision>` writes exactly `agent.model.model` and
+  `agent.model.reasoning_profile` from the current native Session selection, captured by Rust
   under the coordinator lock at the save operation. The TUI sends only a target,
   never a value from its asynchronous projection cache. A cleared profile
   is written as `{ mode = "catalog_default" }`, preserving unrelated TOML and
   comments. A selected profile uses `{ mode = "profile", name = "…" }`.
-- `/save-default user approval <revision>` writes exactly `approvalMode` from the
+- `/save-default user approval <revision>` writes exactly `approval_mode` from the
   authoritative desired runtime mode, captured under the coordinator lock. An
   active attempt can still retain a different frozen effective mode; for example,
   desired `full_access` is saved while current work remains on `policy`.
@@ -134,9 +134,11 @@ running.
   exactly that value, so a child frozen under resource generation R1 keeps
   reporting R1 after R2 publishes, and root extension configuration cannot
   reach it. Its lifetime is `frozen_admission` under `frozen_child` evidence.
-- **Resource reload does not recompose extensions.** `/reload` publishes a new
-  `RuntimeResourceSnapshot`; `extensions` is not a reload-owned field, and the
-  projection has no reload seam at all.
+- **Resource reload does not recompose extensions.** The root Agent's composed
+  `agent.extensions` is launch-scoped. `/reload` publishes a new
+  `RuntimeResourceSnapshot` but does not recompose the already-running root's
+  native Extension set or mutate a child's frozen `ResolvedSubagentSpec`.
+  The projection has no reload seam at all.
 - **Restart may change them.** A new launch resolves the current document
   through the ordinary resolver. That is the only way a root Agent's
   composition changes, and it rewrites no canonical Session history.
@@ -230,9 +232,11 @@ LaunchRequest, reopen project configuration, resolve trust, reload the catalog, 
 inspect resource files. Full prospective launch readiness remains the job of
 `rustx config check`, `rustx config show --sources`, and normal launch resolution.
 
-A model save changes only `model.model` and `model.reasoning_profile`, but validates
+A model save changes only `agent.model.model` and `agent.model.reasoning_profile`, but validates
 **the complete model object parsed from the staged bytes**, including preserved
-`requestParams`, `maxOutputTokens`, and `summaryModel`. The canonical
+`request_params_json` (the opaque JSON-object string authoring surface),
+`max_output_tokens` (the model output policy), and `summary_model` (the summary
+model policy). These are members of `agent.model` in `settings.toml`. The canonical
 `SessionModelConfig` schema supplies its defaults; `analyze_session_model_config`
 uses native `analyze_selection` semantics for the primary selection and any explicit
 summary, with their respective Session and summary request-parameter layers. The
@@ -297,7 +301,7 @@ Issue #259 Todo-extension regressions:
 | Test | Boundary/evidence |
 | --- | --- |
 | `ext259_ordinary_tool_selection_neither_adds_nor_removes_the_extension_tool` | Every ordinary activation shape, including `--no-tools` and `--no-builtin-tools`, against both compositions; the extension Tool is present or absent purely by composition, and never appears in the ordinary available catalog |
-| `ext259_todo_is_rejected_on_every_ordinary_selection_surface` | Root `defaultTools`, the CLI activation policy's three lists, and the shared source-qualified selection vocabulary all refuse `todo` by name |
+| `ext259_todo_is_rejected_on_every_ordinary_selection_surface` | Root `agent.tools.builtin`, the CLI activation policy's three lists, and the shared source-qualified selection vocabulary all refuse `todo` by name |
 | `ext259_a_workflow_cannot_admit_an_extension_tool` | A Workflow naming `builtin:todo` fails at compile time with the extension named |
 | `ext259_todo_is_not_an_ordinary_child_capability` | A frozen Builtin selection naming `todo` fails child materialization closed; the extension plane is the only seam that registers it |
 | `ext259_the_todo_tool_schema_is_stable_across_list_mutations` | Create/complete/clear through the real batch authority leave the Tool definition and the capability revision unchanged |

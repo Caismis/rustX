@@ -17,15 +17,14 @@ github = "all"
 "python:data-analysis" = ["run_python", "inspect_dataframe"]
 ```
 
-The main runtime configuration accepts the same `[tools]` document. When it is
-absent, existing native defaults apply, with no external source exposure. An
-explicit document replaces that main selection. Named Agent discovery does not
-select every discovered Agent; existing main/Workflow Agent admission lists
-remain responsible for which profiles create demand in this issue.
+Root uses `[agent.tools]` and `[agent.tools.sources]`; named files use the
+same profile directly. See [Agent Profiles](agent-profiles.md) for shared
+resolution, defaults, diagnostics and delegation authority. Catalog discovery
+never grants caller exposure; `agent.agents` and `agent.workflows` select the
+root's delegation and Workflow capabilities.
 
-`All` is coarse source trust: every eligible ordinary Tool published by that
-exact source in the admitted resource generation. `Exact` is fine-grained Tool
-trust: only the source-qualified names in the array. Arrays reject malformed and
+`All` selects every eligible ordinary Tool published by that
+exact source in the admitted resource generation. `Exact` selects only the source-qualified names in the array. Arrays reject malformed and
 duplicate names. There are no wildcard, exclusion, inheritance, or alternate
 Python selectors. Native Tools remain an explicit list. Extension-provided Tools
 belong solely to native Agent Extension composition. Extension ownership is
@@ -104,5 +103,6 @@ fail preparation; a later same-name Tool cannot replace a parent-authorized one.
 actual disabled/untrusted decision; unprepared source; materialization unavailable
 with a bounded reason; or a ready source with selected definitions and missing
 Exact names. Offline checks retain unprepared facts and never invent online Tool
-metadata. Agent warning/suppression policy and atomic Workflow disable policy
-remain owned by CFG2-04 and CFG2-05 respectively.
+metadata. The shared Agent Profile resolver records these facts as typed diagnostics and
+suppresses unavailable selections. Workflow whole-program disable remains a
+separate static admission concern.

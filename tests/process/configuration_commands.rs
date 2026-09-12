@@ -59,8 +59,8 @@ fn cfg237_binary_workflow_commands_share_json_exit_and_read_only_contract() {
     .unwrap();
     std::fs::write(
         workspace.join("rustx.toml"),
-        r"[workflows]
-main = []
+        r"[agent]
+workflows = []
 ",
     )
     .unwrap();

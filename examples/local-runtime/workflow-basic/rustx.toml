@@ -1,4 +1,3 @@
-# Project runtime configuration. Paths remain subject to project trust and containment.
-# TOML configuration; fixed Workflows use YAML and model-facing resources use Markdown.
-[workflows]
-main = ["read_file"]
+# One Agent Profile selects from admitted resources. It does not create them.
+[agent]
+workflows = ["read_file"]

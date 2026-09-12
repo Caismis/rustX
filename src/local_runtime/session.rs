@@ -2571,12 +2571,14 @@ mod tests {
 
     const CONFIG: &str = r#"agent_id = "agent-a"
 
-[model]
-model = "provider/model"
-
 [context]
 reserve_tokens = 1024
 keep_recent_tokens = 4096
+
+
+[agent]
+[agent.model]
+model = "provider/model"
 "#;
 
     fn config() -> CurrentRuntimeConfig {
@@ -2585,7 +2587,7 @@ keep_recent_tokens = 4096
 
     fn state() -> SessionPersistentState {
         SessionPersistentState {
-            model: config().model,
+            model: config().initial_model().clone(),
         }
     }
 
@@ -2808,7 +2810,7 @@ keep_recent_tokens = 4096
 
         // A Session-local model choice is metadata, not use.
         catalog
-            .persist_active_model(config().model)
+            .persist_active_model(config().initial_model().clone())
             .expect("persist Session model");
         assert!(catalog.active_is_unused().expect("model choice only"));
         assert!(
@@ -3443,7 +3445,7 @@ keep_recent_tokens = 4096
     #[test]
     fn accepted_model_configuration_is_catalog_metadata_for_runtime_replacement() {
         let (directory, mut catalog, _config) = open_catalog();
-        let mut model = config().model.clone();
+        let mut model = config().initial_model().clone().clone();
         model.model = serde_json::from_value(serde_json::json!("provider/next-model"))
             .expect("model reference");
         catalog
@@ -3458,7 +3460,7 @@ keep_recent_tokens = 4096
     #[test]
     fn resume_keeps_explicit_session_model_but_new_catalog_uses_current_default() {
         let directory = tempfile::tempdir().expect("temporary root");
-        let first = config().model;
+        let first = config().initial_model().clone();
         let mut explicit = first.clone();
         explicit.model = serde_json::from_value(serde_json::json!("provider/explicit"))
             .expect("explicit model reference");
@@ -3573,7 +3575,7 @@ keep_recent_tokens = 4096
             "approvalMode",
             "environment",
             "skills",
-            "default_tools",
+            "agent.tools",
         ] {
             assert!(
                 !json.contains(forbidden),

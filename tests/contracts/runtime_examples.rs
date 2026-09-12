@@ -88,33 +88,50 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
     let config = CurrentRuntimeConfig::from_toml_slice(&read_example("rustx.toml"))
         .expect("rustx.toml must parse through CurrentRuntimeConfig");
 
-    assert_eq!(config.model.model.to_string(), "example/demo-model");
+    assert_eq!(
+        config.initial_model().model.to_string(),
+        "example/demo-model"
+    );
     catalog
-        .model(&config.model.model)
+        .model(&config.initial_model().model)
         .expect("configured model must exist in the example catalog");
     assert_eq!(
-        config.model.reasoning_profile.as_ref().unwrap().as_str(),
+        config
+            .initial_model()
+            .reasoning_profile
+            .as_ref()
+            .unwrap()
+            .as_str(),
         "off"
     );
     assert_eq!(
-        config.model.request_params["temperature"],
+        config.initial_model().request_params["temperature"],
         serde_json::json!(0.1)
     );
-    assert_eq!(config.model.max_output_tokens, Some(2_048));
-    assert_eq!(config.model.summary_model, SummaryModelPolicy::Session);
+    assert_eq!(config.initial_model().max_output_tokens, Some(2_048));
+    assert_eq!(
+        config.initial_model().summary_model,
+        SummaryModelPolicy::Session
+    );
     assert_eq!(config.context.reserve_tokens, 4_096);
     assert_eq!(config.context.keep_recent_tokens, 12_000);
     assert_eq!(config.context.summary_output_cap, Some(1_024));
-    assert!(config.extensions.agent_status.time.enabled);
+    assert!(config.agent.extensions.agent_status.time.enabled);
     assert_eq!(
-        config.extensions.agent_status.time.timezone,
+        config.agent.extensions.agent_status.time.timezone,
         Some(chrono_tz::Asia::Tokyo)
     );
-    assert!(config.extensions.agent_status.background.enabled);
+    assert!(config.agent.extensions.agent_status.background.enabled);
     assert!(config.mcp_servers.is_empty());
     assert!(config.mcp_tool_policies.is_empty());
     assert_eq!(config.environment["RUSTX_EXAMPLE_MODE"], "local-runtime");
-    assert!(config.default_tools.iter().any(|name| name == "subagent"));
+    assert!(
+        config
+            .agent
+            .agents
+            .iter()
+            .any(|name| name.as_str() == "navigator")
+    );
     assert_eq!(
         std::fs::read_dir(examples_root().join("workspace/.agents/agents"))
             .unwrap()
@@ -129,8 +146,8 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
     );
     assert_eq!(
         config
-            .subagents
-            .main
+            .agent
+            .agents
             .iter()
             .map(rustx::runtime::subagent::SubagentName::as_str)
             .collect::<Vec<_>>(),
@@ -147,8 +164,8 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
     );
     assert_eq!(
         config
+            .agent
             .workflows
-            .main
             .iter()
             .map(rustx::runtime::workflow::WorkflowId::as_str)
             .collect::<Vec<_>>(),

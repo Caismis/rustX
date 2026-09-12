@@ -556,12 +556,14 @@ chat_reasoning_replay = "omit"
 
 const RUNTIME_CONFIG_TOML: &str = r#"agent_id = "agent-issue110"
 
-[model]
-model = "local/issue110-model"
-
 [context]
 reserve_tokens = 1024
 keep_recent_tokens = 8192
+
+
+[agent]
+[agent.model]
+model = "local/issue110-model"
 "#;
 
 fn startup(root: &Path) -> LaunchFixture {

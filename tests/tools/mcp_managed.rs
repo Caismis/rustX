@@ -658,15 +658,26 @@ async fn a_server_failing_at_startup_is_isolated_and_diagnosed() {
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            tool_activation: rustx::capabilities::ToolActivationPolicy {
-                sources: ["crasher", "exportless"]
-                    .map(|package| {
-                        (
-                            rustx::capabilities::ToolSourceId::ManagedPython(package.into()),
-                            rustx::capabilities::selection::SourceToolSelection::All,
-                        )
-                    })
-                    .into(),
+            agent_activation: rustx::capabilities::AgentActivation {
+                profile: rustx::local_runtime::config::AgentProfileDocument {
+                    tools: rustx::capabilities::selection::ToolSelectionDocument {
+                        builtin: rustx::capabilities::AgentActivation::default()
+                            .profile
+                            .tools
+                            .builtin,
+                        sources: ["crasher", "exportless"]
+                            .map(|package| {
+                                (
+                                    rustx::capabilities::ToolSourceId::ManagedPython(
+                                        package.into(),
+                                    ),
+                                    rustx::capabilities::selection::SourceToolSelection::All,
+                                )
+                            })
+                            .into(),
+                    },
+                    ..rustx::capabilities::AgentActivation::default().profile
+                },
                 ..Default::default()
             },
             // Keep this fixture independent of the developer's HOME.
@@ -815,15 +826,26 @@ def add(a: int, b: int) -> str:
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            tool_activation: rustx::capabilities::ToolActivationPolicy {
-                sources: ["calc"]
-                    .map(|package| {
-                        (
-                            rustx::capabilities::ToolSourceId::ManagedPython(package.into()),
-                            rustx::capabilities::selection::SourceToolSelection::All,
-                        )
-                    })
-                    .into(),
+            agent_activation: rustx::capabilities::AgentActivation {
+                profile: rustx::local_runtime::config::AgentProfileDocument {
+                    tools: rustx::capabilities::selection::ToolSelectionDocument {
+                        builtin: rustx::capabilities::AgentActivation::default()
+                            .profile
+                            .tools
+                            .builtin,
+                        sources: ["calc"]
+                            .map(|package| {
+                                (
+                                    rustx::capabilities::ToolSourceId::ManagedPython(
+                                        package.into(),
+                                    ),
+                                    rustx::capabilities::selection::SourceToolSelection::All,
+                                )
+                            })
+                            .into(),
+                    },
+                    ..rustx::capabilities::AgentActivation::default().profile
+                },
                 ..Default::default()
             },
             // Keep this fixture independent of the developer's HOME.
@@ -1135,15 +1157,23 @@ def ping() -> str:
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(base_tool_registry),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            tool_activation: rustx::capabilities::ToolActivationPolicy {
-                sources: ["healthy", "conflicting"]
-                    .map(|package| {
-                        (
-                            rustx::capabilities::ToolSourceId::ManagedPython(package.into()),
-                            rustx::capabilities::selection::SourceToolSelection::All,
-                        )
-                    })
-                    .into(),
+            agent_activation: rustx::capabilities::AgentActivation {
+                profile: rustx::local_runtime::config::AgentProfileDocument {
+                    tools: rustx::capabilities::selection::ToolSelectionDocument {
+                        builtin: vec!["unrelated_native".into()],
+                        sources: ["healthy", "conflicting"]
+                            .map(|package| {
+                                (
+                                    rustx::capabilities::ToolSourceId::ManagedPython(
+                                        package.into(),
+                                    ),
+                                    rustx::capabilities::selection::SourceToolSelection::All,
+                                )
+                            })
+                            .into(),
+                    },
+                    ..rustx::capabilities::AgentActivation::default().profile
+                },
                 ..Default::default()
             },
             // Keep this fixture independent of the developer's HOME.

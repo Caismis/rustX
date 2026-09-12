@@ -63,8 +63,8 @@ pub use composition::{
     StartupSession,
 };
 pub use config::{
-    CURRENT_RUNTIME_SCHEMA_VERSION, CurrentRuntimeConfig, CurrentRuntimeConfigError,
-    McpServerDocument, McpTransportType, ModelTimeoutPolicyDocument, SubagentWorktreeDocument,
+    AgentWorktreeDocument, CURRENT_RUNTIME_SCHEMA_VERSION, CurrentRuntimeConfig,
+    CurrentRuntimeConfigError, McpServerDocument, McpTransportType, ModelTimeoutPolicyDocument,
 };
 pub use launch::{
     HostEnvironment, LaunchLocations, LaunchRequest, ResolvedLaunch, TrustAction, resolve,

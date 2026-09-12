@@ -1,5 +1,4 @@
 //! Bounded trusted Workflow source resolution, shared by prospective analysis and reload.
-use super::config::WorkflowsDocument;
 use crate::runtime::resources::RuntimeResourceLoadError;
 use crate::runtime::workflow::{
     MAX_WORKFLOW_BYTES, WorkflowCatalog, WorkflowCompileError, WorkflowDefinition, WorkflowProgram,
@@ -10,7 +9,6 @@ use std::path::Path;
 #[allow(clippy::too_many_lines)] // One deterministic compile transaction with structured diagnostics.
 pub(crate) fn load(
     workspace: &Path,
-    document: &WorkflowsDocument,
     profiles: &super::config::SubagentsDocument,
     agents: &crate::runtime::subagent::AgentCatalog,
 ) -> Result<WorkflowCatalog, RuntimeResourceLoadError> {
@@ -122,7 +120,11 @@ pub(crate) fn load(
         })?;
         programs.push(program);
     }
-    WorkflowCatalog::new(programs, document.main.clone()).map_err(|error| {
+    WorkflowCatalog::new(
+        programs.clone(),
+        programs.iter().map(|program| program.id().clone()),
+    )
+    .map_err(|error| {
         RuntimeResourceLoadError::new(format!("cannot admit Workflow catalog: {error}"))
     })
 }
@@ -192,10 +194,9 @@ mod tests {
                 std::fs::write(root.join(format!("{name}.yaml")), PROGRAM).unwrap();
             }
             std::fs::write(root.join("incidental.txt"), "invalid YAML: [").unwrap();
-            let document = WorkflowsDocument::default();
             let profiles = super::super::config::SubagentsDocument::default();
             let agents = crate::runtime::subagent::AgentCatalog::empty();
-            let catalog = load(&workspace, &document, &profiles, &agents).unwrap();
+            let catalog = load(&workspace, &profiles, &agents).unwrap();
             assert_eq!(
                 catalog
                     .definitions()
@@ -204,16 +205,13 @@ mod tests {
                     .collect::<Vec<_>>(),
                 ["alpha", "zeta"]
             );
-            assert!(catalog.main().is_empty());
+            assert_eq!(catalog.admitted().len(), catalog.definitions().len());
             for name in names {
                 std::fs::write(root.join(format!("{name}.yaml")), "invalid: [").unwrap();
             }
-            let error = load(&workspace, &document, &profiles, &agents).unwrap_err();
+            let error = load(&workspace, &profiles, &agents).unwrap_err();
             assert_eq!(error.source_file, Some(root.join("alpha.yaml")));
-            assert_eq!(
-                error,
-                load(&workspace, &document, &profiles, &agents).unwrap_err()
-            );
+            assert_eq!(error, load(&workspace, &profiles, &agents).unwrap_err());
             assert_eq!(catalog.definitions().len(), 2);
         }
     }

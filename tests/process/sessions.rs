@@ -59,12 +59,14 @@ chat_reasoning_replay = "omit"
 
 const BOOTSTRAP: &str = r#"agent_id = "agent-issue88"
 
-[model]
-model = "local/test-model"
-
 [context]
 reserve_tokens = 1024
 keep_recent_tokens = 4096
+
+
+[agent]
+[agent.model]
+model = "local/test-model"
 "#;
 
 fn paths(root: &std::path::Path) -> LaunchFixture {

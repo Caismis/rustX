@@ -24,12 +24,6 @@ use super::super::super::support::fake::{
 use super::super::super::support::model::{FixtureModel, ScriptedAdapterFactory, fixture_registry};
 use crate::conversation::SurfaceRevision;
 use crate::events::types::RuntimeEvent;
-use crate::local_runtime::composition::{
-    HeadlessConversationRuntime, LocalConversationCore, LocalRuntimeDependencies,
-};
-use crate::local_runtime::config::CurrentRuntimeConfig;
-use crate::local_runtime::session::{SessionCatalog, SessionPersistentState};
-use crate::local_runtime::supervisor::LocalSessionSupervisor;
 use crate::message::content::TextBlock;
 use crate::message::types::{ContentBlockIndex, UserContentBlock};
 use crate::model::error::{ModelError, ModelErrorKind, ModelRetryDisposition};
@@ -43,6 +37,12 @@ use crate::runtime::interaction::InteractionResponse;
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
 use crate::runtime::process_death;
 use crate::tools::types::ToolCallStart;
+use rustx::local_runtime::composition::{
+    HeadlessConversationRuntime, LocalConversationCore, LocalRuntimeDependencies,
+};
+use rustx::local_runtime::config::CurrentRuntimeConfig;
+use rustx::local_runtime::session::{SessionCatalog, SessionPersistentState};
+use rustx::local_runtime::supervisor::LocalSessionSupervisor;
 
 use super::ROOT_ENV;
 use super::harness::{CONVERSATION, MODEL};
@@ -374,7 +374,7 @@ impl Child {
             registry,
             runtime_config.clone(),
             SessionPersistentState {
-                model: runtime_config.model.clone(),
+                model: runtime_config.initial_model().clone().clone(),
             },
             conversation_id,
             artifacts_root,
@@ -532,7 +532,7 @@ async fn compose_session_child(
     let runtime_config =
         CurrentRuntimeConfig::from_toml_slice(&config_bytes).expect("valid runtime config");
     let template = SessionPersistentState {
-        model: runtime_config.model.clone(),
+        model: runtime_config.initial_model().clone().clone(),
     };
     let catalog = match SessionCatalog::open_existing(&paths.runtime_root)
         .expect("open the native Session catalog")
@@ -1223,7 +1223,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 registry,
                 runtime_config.clone(),
                 SessionPersistentState {
-                    model: runtime_config.model.clone(),
+                    model: runtime_config.initial_model().clone().clone(),
                 },
                 ConversationId::new(CONVERSATION),
                 artifacts_root,

@@ -2803,6 +2803,10 @@ mod tests {
     /// real native tool plane. Skill projection tests opt into this variant
     /// so the fixture exercises the normal native composition and its
     /// default-enabled Read capability.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one complete deterministic fixture boundary"
+    )]
     async fn host_fixture_with_native_tools(
         scripts: Vec<Vec<GatedStep>>,
         mut tools: ToolRegistry,
@@ -2852,9 +2856,23 @@ mod tests {
                 source_demand: crate::capabilities::source::ToolSourceDemand::default(),
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
+                agent_activation: {
+                    let mut activation = crate::capabilities::AgentActivation::default();
+                    activation.profile.skills = vec![
+                        "probe-skill".into(),
+                        "generation-skill".into(),
+                        "lifetime-skill".into(),
+                    ];
+                    activation.profile.tools.builtin = tools
+                        .definitions()
+                        .into_iter()
+                        .filter(|tool| tool.origin.source().is_none())
+                        .map(|tool| tool.name.clone())
+                        .collect();
+                    activation
+                },
                 base_tool_registry: Arc::new(tools),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig {
                     automatic_roots: vec![workspace.join(".agents/skills")],
                     explicit_paths: Vec::new(),
@@ -2954,7 +2972,7 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(ToolRegistry::new()),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                agent_activation: crate::capabilities::AgentActivation::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig {
                     automatic_roots: vec![workspace.join(".agents/skills")],
                     explicit_paths: Vec::new(),
@@ -6842,6 +6860,10 @@ mod tests {
     }
 
     /// Probe fixture variant with the real native tool plane activated.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one complete deterministic fixture boundary"
+    )]
     async fn host_fixture_probe_with_native_tools(
         probe: Arc<crate::runtime_client::test_sync::ProjectionProbe>,
         scripts: Vec<Vec<GatedStep>>,
@@ -6891,9 +6913,23 @@ mod tests {
                 source_demand: crate::capabilities::source::ToolSourceDemand::default(),
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
+                agent_activation: {
+                    let mut activation = crate::capabilities::AgentActivation::default();
+                    activation.profile.skills = vec![
+                        "probe-skill".into(),
+                        "generation-skill".into(),
+                        "lifetime-skill".into(),
+                    ];
+                    activation.profile.tools.builtin = tools
+                        .definitions()
+                        .into_iter()
+                        .filter(|tool| tool.origin.source().is_none())
+                        .map(|tool| tool.name.clone())
+                        .collect();
+                    activation
+                },
                 base_tool_registry: Arc::new(tools),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig {
                     automatic_roots: vec![workspace.join(".agents/skills")],
                     explicit_paths: Vec::new(),
@@ -6992,7 +7028,7 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(ToolRegistry::new()),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                agent_activation: crate::capabilities::AgentActivation::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig {
                     automatic_roots: vec![workspace.join(".agents/skills")],
                     explicit_paths: Vec::new(),
@@ -7122,9 +7158,23 @@ mod tests {
                 source_demand: crate::capabilities::source::ToolSourceDemand::default(),
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
+                agent_activation: {
+                    let mut activation = crate::capabilities::AgentActivation::default();
+                    activation.profile.skills = vec![
+                        "probe-skill".into(),
+                        "generation-skill".into(),
+                        "lifetime-skill".into(),
+                    ];
+                    activation.profile.tools.builtin = tools
+                        .definitions()
+                        .into_iter()
+                        .filter(|tool| tool.origin.source().is_none())
+                        .map(|tool| tool.name.clone())
+                        .collect();
+                    activation
+                },
                 base_tool_registry: Arc::new(tools),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig {
                     automatic_roots: vec![workspace.join(".agents/skills")],
                     explicit_paths: Vec::new(),
@@ -7203,23 +7253,28 @@ mod tests {
         let config = CurrentRuntimeConfig::from_toml_slice(
             br#"agent_id = "agent-a"
 
-[model]
-model = "scripted/scripted"
-
 [context]
 reserve_tokens = 0
 keep_recent_tokens = 0
+
+
+[agent]
+[agent.model]
+model = "scripted/scripted"
 "#,
         )
         .expect("current runtime config");
         let catalog = SessionCatalog::create(
             catalog_root.path(),
             &SessionPersistentState {
-                model: config.model.clone(),
+                model: config.initial_model().clone().clone(),
             },
         )
         .expect("catalog");
-        let supervisor = Arc::new(LocalSessionSupervisor::new(catalog, config.model.clone()));
+        let supervisor = Arc::new(LocalSessionSupervisor::new(
+            catalog,
+            config.initial_model().clone().clone(),
+        ));
         let host = RuntimeClientHost::new_with_session_control(
             RuntimeClientHostConfig {
                 runtime: fixture.runtime.clone(),
@@ -8362,9 +8417,23 @@ keep_recent_tokens = 0
                 source_demand: crate::capabilities::source::ToolSourceDemand::default(),
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
+                agent_activation: {
+                    let mut activation = crate::capabilities::AgentActivation::default();
+                    activation.profile.skills = vec![
+                        "probe-skill".into(),
+                        "generation-skill".into(),
+                        "lifetime-skill".into(),
+                    ];
+                    activation.profile.tools.builtin = tools
+                        .definitions()
+                        .into_iter()
+                        .filter(|tool| tool.origin.source().is_none())
+                        .map(|tool| tool.name.clone())
+                        .collect();
+                    activation
+                },
                 base_tool_registry: Arc::new(tools),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig {
                     automatic_roots: vec![workspace.join(".agents/skills")],
                     explicit_paths: Vec::new(),

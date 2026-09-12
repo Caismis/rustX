@@ -2,7 +2,7 @@
 //! shared by both child launch sites (Issue #258).
 //!
 //! ```text
-//! SubagentDefinition            the canonical DEFAULT child profile
+//! NamedAgentDefinition            the canonical DEFAULT child profile
 //!         +
 //! SubagentInvocationOverride    replacement of selected dimensions
 //!         +
@@ -49,7 +49,7 @@ use serde::{Deserialize, Serialize};
 use crate::capabilities::selection::{AgentToolSelection, ToolSelectionDocument};
 use crate::extensions::{NativeAgentExtensionSelection, NativeAgentExtensions};
 
-use super::catalog::{CHILD_UNSAFE_BUILTIN_TOOLS, SubagentDefinition};
+use super::catalog::{CHILD_UNSAFE_BUILTIN_TOOLS, NamedAgentDefinition};
 
 /// The maximum number of Skills one invocation override may select.
 ///
@@ -125,7 +125,7 @@ impl SubagentInvocationOverride {
     /// "an override restating the defaults" produce one identical effective
     /// profile rather than two profiles that merely look alike.
     #[must_use]
-    pub fn effective_tools(&self, definition: &SubagentDefinition) -> Vec<AgentToolSelection> {
+    pub fn effective_tools(&self, definition: &NamedAgentDefinition) -> Vec<AgentToolSelection> {
         match &self.tools {
             None => definition.tools().to_vec(),
             Some(selection) => canonical_selectors(selection.selectors()),
@@ -135,7 +135,7 @@ impl SubagentInvocationOverride {
     /// The effective Skill selection of this invocation, canonically ordered
     /// and deduplicated exactly as a definition's own selection is.
     #[must_use]
-    pub fn effective_skills(&self, definition: &SubagentDefinition) -> Vec<String> {
+    pub fn effective_skills(&self, definition: &NamedAgentDefinition) -> Vec<String> {
         match &self.skills {
             None => definition.skills().to_vec(),
             Some(selection) => canonical_skills(selection.clone()),
@@ -151,7 +151,7 @@ impl SubagentInvocationOverride {
     /// participate: `"extensions": {}` is the empty composition, never the
     /// document default that composes Agent Status.
     #[must_use]
-    pub fn effective_extensions(&self, definition: &SubagentDefinition) -> NativeAgentExtensions {
+    pub fn effective_extensions(&self, definition: &NamedAgentDefinition) -> NativeAgentExtensions {
         match &self.extensions {
             None => definition.extensions().clone(),
             Some(selection) => selection.resolve(),
@@ -162,7 +162,7 @@ impl SubagentInvocationOverride {
     /// availability question is asked.
     ///
     /// These are the definition-boundary rules of
-    /// [`SubagentDefinition::new`], applied to the same vocabulary at the
+    /// [`NamedAgentDefinition::new`], applied to the same vocabulary at the
     /// invocation boundary: nested delegation and child-unsafe lifecycle
     /// owners stay structurally unreachable, Skill selectors stay nonempty,
     /// and both selections stay bounded. Duplicates are normalized rather
@@ -175,9 +175,6 @@ impl SubagentInvocationOverride {
     /// from it without parsing prose.
     pub fn validate_spelling(&self) -> Result<(), SubagentOverrideError> {
         if let Some(selection) = &self.tools {
-            selection
-                .validate_spelling()
-                .map_err(|detail| SubagentOverrideError::InvalidTools { detail })?;
             let selectors = selection.selectors();
             if selectors.len() > MAX_OVERRIDE_TOOLS {
                 return Err(SubagentOverrideError::TooManyTools {
@@ -198,6 +195,9 @@ impl SubagentInvocationOverride {
                     }
                 }
             }
+            selection
+                .validate_spelling()
+                .map_err(|detail| SubagentOverrideError::InvalidTools { detail })?;
         }
         if let Some(skills) = &self.skills {
             if skills.len() > MAX_OVERRIDE_SKILLS {
@@ -321,7 +321,7 @@ impl std::error::Error for SubagentOverrideError {}
 #[cfg(test)]
 mod tests {
     use super::{SubagentInvocationOverride, SubagentOverrideError};
-    use crate::extensions::{NativeAgentExtensions, NativeAgentExtensionsDocument};
+    use crate::extensions::NativeAgentExtensions;
 
     fn parse(value: serde_json::Value) -> Result<SubagentInvocationOverride, String> {
         serde_json::from_value(value).map_err(|error| error.to_string())
@@ -331,27 +331,32 @@ mod tests {
         tools: Vec<crate::capabilities::selection::AgentToolSelection>,
         skills: Vec<String>,
         extensions: NativeAgentExtensions,
-    ) -> crate::runtime::subagent::SubagentDefinition {
-        crate::runtime::subagent::SubagentDefinition::new(
+    ) -> crate::runtime::subagent::NamedAgentDefinition {
+        crate::runtime::subagent::NamedAgentDefinition::new(
             crate::runtime::subagent::SubagentName::parse("reviewer").expect("name"),
-            "description".to_owned(),
-            "instructions".to_owned(),
-            std::path::PathBuf::from("/w/reviewer.md"),
-            None,
-            None,
-            tools,
-            skills,
-            crate::runtime::subagent::SubagentProjectInstructionPolicy {
-                inherit: true,
-                files: Vec::new(),
+            crate::runtime::agent_profile::AgentProfile {
+                description: "description".to_owned(),
+                instructions: "instructions".to_owned(),
+                model: None,
+                execution_deadline: None,
+                tools,
+                skills,
+                project_instructions:
+                    crate::runtime::agent_profile::AgentProjectInstructionPolicy {
+                        inherit: true,
+                        files: Vec::new(),
+                    },
+                workspace_policy: crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
+                extensions,
+                agents: std::collections::BTreeSet::default(),
+                workflows: std::collections::BTreeSet::default(),
             },
-            crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
-            extensions,
+            std::path::PathBuf::from("/w/reviewer.md"),
         )
         .expect("definition")
     }
 
-    fn role() -> crate::runtime::subagent::SubagentDefinition {
+    fn role() -> crate::runtime::subagent::NamedAgentDefinition {
         definition(
             vec![
                 crate::capabilities::selection::AgentToolSelection::Builtin {
@@ -359,7 +364,10 @@ mod tests {
                 },
             ],
             vec!["code-review".to_owned()],
-            NativeAgentExtensionsDocument::default().resolve(),
+            crate::extensions::NativeAgentExtensions::with_agent_status(
+                crate::context::AgentStatusConfig::default(),
+            )
+            .and_todo(),
         )
     }
 
@@ -411,7 +419,10 @@ mod tests {
             "an explicit empty extension selection composes no extension at all"
         );
         assert_eq!(
-            NativeAgentExtensionsDocument::default().resolve(),
+            crate::extensions::NativeAgentExtensions::with_agent_status(
+                crate::context::AgentStatusConfig::default()
+            )
+            .and_todo(),
             *role.extensions(),
             "the authored document default is unchanged by the override vocabulary"
         );

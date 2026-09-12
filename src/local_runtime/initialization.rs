@@ -157,8 +157,11 @@ pub(super) fn documents(arguments: &[String]) -> Result<[Vec<u8>; 2], String> {
         .into_bytes();
     let parsed = ModelCatalog::from_toml_slice(&bytes).map_err(|_| "invalid model declaration; check protocol, limits, capabilities, and compatibility fields")?;
     let settings = super::authoring::RuntimeLayer {
-        model: Some(super::authoring::ModelLayer {
-            model: Some(selected),
+        agent: Some(super::authoring::AgentProfileLayer {
+            model: Some(super::authoring::ModelLayer {
+                model: Some(selected),
+                ..Default::default()
+            }),
             ..Default::default()
         }),
         ..Default::default()
@@ -170,9 +173,9 @@ pub(super) fn documents(arguments: &[String]) -> Result<[Vec<u8>; 2], String> {
         .map_err(|_| "invalid model selection")?;
     let view = crate::model::invocation::analyze_selection(
         parsed
-            .model(&config.model.model)
+            .model(&config.initial_model().model)
             .map_err(|_| "invalid model reference")?,
-        &config.model.selection(),
+        &config.initial_model().selection(),
         crate::model::invocation::RequestParamsLayer::SessionOverrides,
     )
     .map_err(|_| "invalid model selection")?;
@@ -414,7 +417,10 @@ mod tests {
         assert!(!launch.trusted);
         assert!(launch.config.mcp_servers.is_empty());
         assert!(launch.managed_python.packages().is_empty());
-        assert_eq!(launch.config.model.model.to_string(), "local/declared");
+        assert_eq!(
+            launch.config.initial_model().model.to_string(),
+            "local/declared"
+        );
         assert!(!workspace.join("rustx.toml").exists());
         assert!(!host.state_directory.exists());
         let repeated = initialize(&host, &documents);

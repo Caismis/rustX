@@ -98,7 +98,7 @@ Initialization writes exactly:
 - `<user configuration directory>/models.toml`: one explicitly declared
   provider and model, endpoint, protocol, credential reference, limits, and
   capabilities;
-- `<user configuration directory>/settings.toml`: only `model.model`.
+- `<user configuration directory>/settings.toml`: only `agent.model.model`.
 
 It does not serialize runtime defaults. It never writes project `rustx.toml`;
 a normal project needs no configuration file. Runtime state remains under
@@ -226,7 +226,7 @@ capabilities are not claimed. Results are individually `skipped`, `unavailable`,
 
 ## Schema authority and example layers
 
-`schemas/{models,settings,rustx,workflow,subagent}.schema.json` are generated from native
+`schemas/{models,settings,rustx,workflow,agent}.schema.json` are generated from native
 Rust authoring types and metadata with schemars. Partial settings describe omitted
 fields, not fully resolved runtime structs. Project schemas exclude structurally
 host-owned fields. Serde names, enum tags, nullability and unknown-field rejection

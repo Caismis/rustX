@@ -54,10 +54,15 @@ async fn new_bundle(conversation: &str) -> Bundle {
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
-    let runtime = ConversationToolRuntime::new(
+    let runtime = ConversationToolRuntime::from_config(
         rustx::runtime::identity::ConversationId::new(conversation),
-        &workspace,
-        dir.path().join("artifacts"),
+        rustx::tools::runtime::ConversationRuntimeConfig::new(
+            &workspace,
+            dir.path().join("artifacts"),
+        )
+        .with_extensions(rustx::extensions::NativeAgentExtensions::with_agent_status(
+            rustx::context::AgentStatusConfig::default(),
+        )),
     )
     .expect("tool runtime");
     let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
@@ -66,7 +71,7 @@ async fn new_bundle(conversation: &str) -> Bundle {
         workspace: runtime.workspace().clone(),
         base_tool_registry: Arc::new(ToolRegistry::new()),
         extension_tools: runtime.extension_tool_plane(),
-        tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+        agent_activation: rustx::capabilities::AgentActivation::default(),
         skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
         mcp_servers: std::collections::BTreeMap::new(),
         base_environment: runtime.environment().clone(),

@@ -698,12 +698,7 @@ chat_reasoning_replay = "omit"
         let args = fixture::fixture_spawn_args(
             "mcp_runtime::unix_tests::a_named_map_entry_composes_into_exactly_one_runtime_server",
         );
-        let session = serde_json::json!({
-            "agent_id": "agent-46",
-            "tools": {"sources": {"exa-local": "all"}},
-            "model": {"model": "local/composed-model"},
-            "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},
-            "mcp_servers": {
+        let session = serde_json::json!({"agent_id": "agent-46", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192}, "mcp_servers": {
                 "exa-local": {
                     "enabled": true,
                     "type": "stdio",
@@ -711,11 +706,9 @@ chat_reasoning_replay = "omit"
                     "args": args,
                     "env": {fixture::FIXTURE_MODE_ENV: "1"},
                 },
-            },
-            "mcp_tool_policies": {
+            }, "mcp_tool_policies": {
                 "exa-local": {"execution": "background_only", "concurrency": "parallel"},
-            },
-        });
+            }, "agent": {"model": {"model": "local/composed-model"}, "tools": {"sources": {"exa-local": "all"}}}});
         let models_path = root.path().join("models.toml");
         let config_path = root.path().join("rustx.toml");
         std::fs::write(&models_path, MODELS_TOML).expect("models.toml");
@@ -1133,7 +1126,7 @@ chat_reasoning_replay = "omit"
                 workspace: rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace"),
                 base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
                 extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-                tool_activation: rustx::capabilities::ToolActivationPolicy { sources: [(rustx::capabilities::ToolSourceId::Mcp(server_id.clone()), rustx::capabilities::selection::SourceToolSelection::All)].into(), ..Default::default() },
+                agent_activation: rustx::capabilities::AgentActivation {profile: rustx::local_runtime::config::AgentProfileDocument { tools: rustx::capabilities::selection::ToolSelectionDocument { builtin: rustx::capabilities::AgentActivation::default().profile.tools.builtin, sources: [(rustx::capabilities::ToolSourceId::Mcp(server_id.clone()), rustx::capabilities::selection::SourceToolSelection::All)].into() }, ..rustx::capabilities::AgentActivation::default().profile }, ..Default::default()},
                 skill_discovery: rustx::skills::SkillDiscoveryConfig {
                     automatic_roots: vec![workspace_dir.path().join(".agents/skills")],
                     explicit_paths: Vec::new(),

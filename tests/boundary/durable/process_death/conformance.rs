@@ -24,8 +24,8 @@ use crate::tools::types::ToolExecutionStatus;
 
 use super::child;
 use super::harness::{Durable, Lab};
-use crate::local_runtime::session::SessionId;
 use crate::runtime::identity::ConversationId;
+use rustx::local_runtime::session::SessionId;
 
 // ---------------------------------------------------------------------------
 // Shared assertions

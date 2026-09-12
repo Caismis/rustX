@@ -62,14 +62,22 @@ macro_rules! partial {
 // never a TOML null value.
 partial!(RuntimeLayer {
     models: PathBuf, runtime_root: PathBuf, schema_version: u32,
-    agent_id: crate::runtime::identity::AgentId, model: ModelLayer,
-    approval_mode: crate::runtime::ApprovalMode, extensions: ExtensionsLayer,
+    agent_id: crate::runtime::identity::AgentId,
+    approval_mode: crate::runtime::ApprovalMode, agent: AgentProfileLayer,
     context: ContextLayer, model_timeout_policy: TimeoutLayer, tool_deadline_policy: ToolDeadlineLayer,
     mcp_servers: BTreeMap<crate::runtime::identity::McpServerId, McpAuthoring>,
     mcp_tool_policies: BTreeMap<crate::runtime::identity::McpServerId, InvocationPolicyDocument>,
-    native_tools: NativeToolsLayer, environment: BTreeMap<String,String>, default_tools: Vec<String>,
+    native_tools: NativeToolsLayer, environment: BTreeMap<String,String>,
+    subagents: SubagentsLayer
+});
+partial!(AgentProfileLayer {
+    description: String, instructions: String, model: ModelLayer, timeout_ms: u64,
     tools: crate::capabilities::selection::ToolSelectionDocument,
-    skills: Vec<PathBuf>, subagents: SubagentsLayer, workflows: WorkflowsLayer
+    skills: Vec<String>, extensions: crate::extensions::NativeAgentExtensionsDocument,
+    agents: Vec<crate::runtime::subagent::SubagentName>,
+    workflows: Vec<crate::runtime::workflow::WorkflowId>,
+    agents_md: super::config::AgentProjectInstructionsDocument,
+    worktree: super::config::AgentWorktreeDocument
 });
 partial!(ModelLayer {
     model: ModelRef,
@@ -91,8 +99,8 @@ partial!(ToolDeadlineLayer {
     hard_deadline_ms: u64,
     idle_liveness_ms: IdleLiveness
 });
-partial!(SubagentsLayer { max_concurrent: usize, main: Vec<crate::runtime::subagent::SubagentName>, workflow: Vec<crate::runtime::subagent::SubagentName> });
-partial!(WorkflowsLayer { main: Vec<crate::runtime::workflow::WorkflowId> });
+partial!(SubagentsLayer { max_concurrent: usize, workflow: Vec<crate::runtime::subagent::SubagentName> });
+
 partial!(NativeToolsLayer {
     read: NativePolicyOverrideDocument,
     write: NativePolicyOverrideDocument,
@@ -101,25 +109,6 @@ partial!(NativeToolsLayer {
     grep: NativePolicyOverrideDocument,
     bash: NativePolicyOverrideDocument
 });
-partial!(ExtensionsLayer {
-    agent_status: StatusLayer,
-    todo: crate::extensions::TodoExtensionDocument,
-    goal: crate::extensions::GoalExtensionDocument
-});
-partial!(StatusLayer {
-    enabled: bool,
-    time: TimeLayer,
-    background: BackgroundLayer
-});
-partial!(TimeLayer {
-    enabled: bool,
-    timezone: Timezone
-});
-partial!(BackgroundLayer { enabled: bool });
-#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(transparent)]
-pub(super) struct Timezone(#[schemars(with = "String")] chrono_tz::Tz);
-
 #[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum ReasoningSelection {
@@ -270,19 +259,14 @@ merge_record!(
         runtime_root,
         schema_version,
         agent_id,
-        approval_mode,
-        default_tools,
-        tools,
-        skills
+        approval_mode
     ],
     [
-        model,
-        extensions,
+        agent,
         context,
         model_timeout_policy,
         tool_deadline_policy,
         subagents,
-        workflows,
         native_tools
     ],
     [mcp_servers, mcp_tool_policies, environment]
@@ -317,8 +301,24 @@ merge_record!(
     [],
     []
 );
-merge_record!(SubagentsLayer, [max_concurrent, main, workflow], [], []);
-merge_record!(WorkflowsLayer, [main], [], []);
+merge_record!(SubagentsLayer, [max_concurrent, workflow], [], []);
+merge_record!(
+    AgentProfileLayer,
+    [
+        description,
+        instructions,
+        timeout_ms,
+        tools,
+        skills,
+        extensions,
+        agents,
+        workflows,
+        agents_md,
+        worktree
+    ],
+    [model],
+    []
+);
 impl Copy for NativeToolsLayer {}
 
 impl NativeToolsLayer {
@@ -338,13 +338,58 @@ impl NativeToolsLayer {
         entry!(read, write, edit, glob, grep, bash);
     }
 }
-merge_record!(ExtensionsLayer, [todo, goal], [agent_status], []);
-merge_record!(StatusLayer, [enabled], [time, background], []);
-merge_record!(TimeLayer, [enabled, timezone], [], []);
-merge_record!(BackgroundLayer, [enabled], [], []);
 
 macro_rules! apply {
     ($layer:ident, $target:ident, $($field:ident),* $(,)?) => { $(if let Some(value) = $layer.$field { $target.$field = value; })* }
+}
+#[allow(
+    clippy::ref_option,
+    reason = "serde serialize_with requires a reference to the field type"
+)]
+pub(super) fn serialize_profile_model<S: serde::Serializer>(
+    model: &Option<SessionModelConfig>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    model
+        .as_ref()
+        .map(|model| ModelLayer {
+            model: Some(model.model.clone()),
+            reasoning_profile: model
+                .reasoning_profile
+                .clone()
+                .map(|name| ReasoningSelection::Profile { name }),
+            request_params_json: Some(RequestParamsJson(model.request_params.clone())),
+            max_output_tokens: model
+                .max_output_tokens
+                .map(|tokens| ModelOutput::Limit { tokens }),
+            summary_model: Some(match &model.summary_model {
+                SummaryModelPolicy::Session => SummaryAuthoring::Session {},
+                SummaryModelPolicy::Explicit {
+                    model,
+                    reasoning_profile,
+                    request_params,
+                    max_output_tokens,
+                } => SummaryAuthoring::Explicit {
+                    model: model.clone(),
+                    reasoning_profile: reasoning_profile
+                        .clone()
+                        .map(|name| ReasoningSelection::Profile { name }),
+                    request_params_json: RequestParamsJson(request_params.clone()),
+                    max_output_tokens: max_output_tokens
+                        .map(|tokens| ModelOutput::Limit { tokens }),
+                },
+            }),
+        })
+        .serialize(serializer)
+}
+
+pub(super) fn deserialize_profile_model<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<SessionModelConfig>, D::Error> {
+    ModelLayer::deserialize(deserializer)?
+        .resolve()
+        .map(Some)
+        .map_err(serde::de::Error::custom)
 }
 impl ModelLayer {
     pub fn resolve(self) -> Result<SessionModelConfig, String> {
@@ -391,13 +436,13 @@ impl RuntimeLayer {
             "schema_version",
             "agent_id",
             "approval_mode",
-            "default_tools",
-            "skills",
-            "model.model",
-            "model.reasoning_profile",
-            "model.request_params_json",
-            "model.max_output_tokens",
-            "model.summary_model",
+            "agent.tools",
+            "agent.skills",
+            "agent.model.model",
+            "agent.model.reasoning_profile",
+            "agent.model.request_params_json",
+            "agent.model.max_output_tokens",
+            "agent.model.summary_model",
             "context.reserve_tokens",
             "context.keep_recent_tokens",
             "context.summary_output_cap",
@@ -405,16 +450,16 @@ impl RuntimeLayer {
             "model_timeout_policy.stream_idle_timeout_ms",
             "tool_deadline_policy.hard_deadline_ms",
             "tool_deadline_policy.idle_liveness_ms",
-            "extensions.agent_status.enabled",
-            "extensions.agent_status.time.enabled",
-            "extensions.agent_status.time.timezone",
-            "extensions.agent_status.background.enabled",
-            "extensions.todo",
-            "extensions.goal",
+            "agent.extensions.agent_status.enabled",
+            "agent.extensions.agent_status.time.enabled",
+            "agent.extensions.agent_status.time.timezone",
+            "agent.extensions.agent_status.background.enabled",
+            "agent.extensions.todo",
+            "agent.extensions.goal",
             "subagents.max_concurrent",
-            "subagents.main",
+            "agent.agents",
             "subagents.workflow",
-            "workflows.main",
+            "agent.workflows",
             "native_tools.read",
             "native_tools.write",
             "native_tools.edit",
@@ -438,25 +483,53 @@ impl RuntimeLayer {
     }
     pub fn model_sections(self) -> Result<(SessionModelConfig, ContextPolicyDocument), String> {
         Ok((
-            self.model.ok_or("missing user model")?.resolve()?,
+            self.agent
+                .and_then(|agent| agent.model)
+                .ok_or("missing agent.model")?
+                .resolve()?,
             self.context.unwrap_or_default().resolve(),
         ))
     }
     pub fn resolve(self) -> Result<CurrentRuntimeConfig, String> {
-        let mut config =
-            CurrentRuntimeConfig::defaults(self.model.ok_or("missing model.model")?.resolve()?);
+        let mut config = CurrentRuntimeConfig::defaults(
+            self.agent
+                .as_ref()
+                .and_then(|agent| agent.model.clone())
+                .ok_or("missing agent.model.model")?
+                .resolve()?,
+        );
         apply!(
             self,
             config,
             schema_version,
             agent_id,
             approval_mode,
-            default_tools,
-            skills,
             mcp_tool_policies,
             environment
         );
-        config.tools = self.tools;
+        if let Some(layer) = self.agent {
+            let mut profile = config.agent;
+            apply!(
+                layer,
+                profile,
+                description,
+                instructions,
+                tools,
+                skills,
+                extensions,
+                agents,
+                workflows,
+                agents_md,
+                worktree
+            );
+            if let Some(model) = layer.model {
+                profile.model = Some(model.resolve()?);
+            }
+            if let Some(timeout) = layer.timeout_ms {
+                profile.timeout_ms = Some(timeout);
+            }
+            config.agent = profile;
+        }
         config.context = self.context.unwrap_or_default().resolve();
         if let Some(layer) = self.model_timeout_policy {
             let mut policy = config.model_timeout_policy;
@@ -478,13 +551,8 @@ impl RuntimeLayer {
         }
         if let Some(layer) = self.subagents {
             let mut subagents = config.subagents;
-            apply!(layer, subagents, max_concurrent, main, workflow);
+            apply!(layer, subagents, max_concurrent, workflow);
             config.subagents = subagents;
-        }
-        if let Some(layer) = self.workflows {
-            let mut workflows = config.workflows;
-            apply!(layer, workflows, main);
-            config.workflows = workflows;
         }
         if let Some(layer) = self.native_tools {
             let mut policies = config.native_tools;
@@ -497,29 +565,6 @@ impl RuntimeLayer {
             .into_iter()
             .map(|(id, entry)| (id, entry.resolve()))
             .collect();
-        if let Some(layer) = self.extensions {
-            let mut extensions = config.extensions;
-            apply!(layer, extensions, todo, goal);
-            if let Some(layer) = layer.agent_status {
-                let mut status = extensions.agent_status;
-                apply!(layer, status, enabled);
-                if let Some(layer) = layer.time {
-                    if let Some(enabled) = layer.enabled {
-                        status.time.enabled = enabled;
-                    }
-                    if let Some(timezone) = layer.timezone {
-                        status.time.timezone = Some(timezone.0);
-                    }
-                }
-                if let Some(layer) = layer.background
-                    && let Some(enabled) = layer.enabled
-                {
-                    status.background.enabled = enabled;
-                }
-                extensions.agent_status = status;
-            }
-            config.extensions = extensions;
-        }
         Ok(config)
     }
     pub fn resources_only(&mut self) {
@@ -527,9 +572,12 @@ impl RuntimeLayer {
         self.runtime_root = None;
         self.schema_version = None;
         self.agent_id = None;
-        self.model = None;
+        if let Some(agent) = &mut self.agent {
+            agent.model = None;
+            agent.extensions = None;
+        }
         self.approval_mode = None;
-        self.extensions = None;
+
         self.context = None;
         self.model_timeout_policy = None;
         self.tool_deadline_policy = None;
@@ -539,11 +587,10 @@ impl RuntimeLayer {
         config.mcp_tool_policies = resources.mcp_tool_policies;
         config.native_tools = resources.native_tools;
         config.environment = resources.environment;
-        config.default_tools = resources.default_tools;
-        config.tools = resources.tools;
-        config.skills = resources.skills;
+        let extensions = config.agent.extensions.clone();
+        config.agent = resources.agent;
+        config.agent.extensions = extensions;
         config.subagents = resources.subagents;
-        config.workflows = resources.workflows;
     }
 }
 
@@ -566,56 +613,102 @@ mod tests {
         );
         (merged.resolve().unwrap(), origins)
     }
-    const LOWER: &str = r#"
-[model]
-model = "p/m"
-reasoning_profile = { mode = "profile", name = "custom" }
-max_output_tokens = { mode = "limit", tokens = 512 }
-[context]
-summary_output_cap = { mode = "limit", tokens = 256 }
+    const LOWER: &str = r#"[context]
+[context.summary_output_cap]
+mode = "limit"
+tokens = 256
+
+
 [tool_deadline_policy]
-idle_liveness_ms = { mode = "window", milliseconds = 100 }
-[extensions.agent_status.time]
+[tool_deadline_policy.idle_liveness_ms]
+mode = "window"
+milliseconds = 100
+
+
+[agent]
+[agent.model]
+model = "p/m"
+
+[agent.model.reasoning_profile]
+mode = "profile"
+name = "custom"
+
+
+[agent.model.max_output_tokens]
+mode = "limit"
+tokens = 512
+
+
+[agent.extensions]
+[agent.extensions.agent_status]
+[agent.extensions.agent_status.time]
 timezone = "Asia/Shanghai"
 "#;
     #[test]
     fn omission_inherits_and_each_domain_can_explicitly_reset() {
         let (inherited, _) = resolve(LOWER, "");
         assert_eq!(
-            inherited.model.reasoning_profile.unwrap().as_str(),
+            inherited
+                .initial_model()
+                .clone()
+                .reasoning_profile
+                .unwrap()
+                .as_str(),
             "custom"
         );
-        assert_eq!(inherited.model.max_output_tokens, Some(512));
+        assert_eq!(
+            inherited.initial_model().clone().max_output_tokens,
+            Some(512)
+        );
         assert_eq!(inherited.context.summary_output_cap, Some(256));
         assert_eq!(inherited.tool_deadline_policy.idle_liveness_ms, Some(100));
         let (reset, origins) = resolve(
             LOWER,
-            r#"
-[model]
-reasoning_profile = { mode = "catalog_default" }
-max_output_tokens = { mode = "catalog_default" }
-[context]
-summary_output_cap = { mode = "model_limit" }
+            r#"[context]
+[context.summary_output_cap]
+mode = "model_limit"
+
+
 [tool_deadline_policy]
-idle_liveness_ms = { mode = "disabled" }
-[extensions.agent_status.time]
+[tool_deadline_policy.idle_liveness_ms]
+mode = "disabled"
+
+
+[agent]
+[agent.model]
+[agent.model.reasoning_profile]
+mode = "catalog_default"
+
+
+[agent.model.max_output_tokens]
+mode = "catalog_default"
+
+
+[agent.extensions]
+[agent.extensions.agent_status]
+[agent.extensions.agent_status.time]
 timezone = "UTC"
 "#,
         );
-        assert_eq!(reset.model.reasoning_profile, None);
-        assert_eq!(reset.model.max_output_tokens, None);
+        assert_eq!(reset.initial_model().clone().reasoning_profile, None);
+        assert_eq!(reset.initial_model().clone().max_output_tokens, None);
         assert_eq!(reset.context.summary_output_cap, None);
         assert_eq!(reset.tool_deadline_policy.idle_liveness_ms, None);
         assert_eq!(
-            reset.extensions.agent_status.time.effective_timezone(),
+            reset
+                .agent
+                .extensions
+                .agent_status
+                .time
+                .effective_timezone(),
             chrono_tz::UTC
         );
         for field in [
-            "model.reasoning_profile",
-            "model.max_output_tokens",
+            "agent.model.reasoning_profile",
+            "agent.model.max_output_tokens",
             "context.summary_output_cap",
             "tool_deadline_policy.idle_liveness_ms",
-            "extensions.agent_status.time.timezone",
+            "agent.extensions",
         ] {
             assert!(matches!(origins[field], Origin::Project { .. }));
         }
@@ -624,21 +717,40 @@ timezone = "UTC"
     fn concrete_replacements_and_profile_names_do_not_collide_with_reset_modes() {
         let (config, _) = resolve(
             LOWER,
-            r#"
-[model]
-reasoning_profile = { mode = "profile", name = "catalog_default" }
-max_output_tokens = { mode = "limit", tokens = 1024 }
-[context]
-summary_output_cap = { mode = "limit", tokens = 512 }
+            r#"[context]
+[context.summary_output_cap]
+mode = "limit"
+tokens = 512
+
+
 [tool_deadline_policy]
-idle_liveness_ms = { mode = "window", milliseconds = 200 }
+[tool_deadline_policy.idle_liveness_ms]
+mode = "window"
+milliseconds = 200
+
+
+[agent]
+[agent.model]
+[agent.model.reasoning_profile]
+mode = "profile"
+name = "catalog_default"
+
+
+[agent.model.max_output_tokens]
+mode = "limit"
+tokens = 1024
 "#,
         );
         assert_eq!(
-            config.model.reasoning_profile.unwrap().as_str(),
+            config
+                .initial_model()
+                .clone()
+                .reasoning_profile
+                .unwrap()
+                .as_str(),
             "catalog_default"
         );
-        assert_eq!(config.model.max_output_tokens, Some(1024));
+        assert_eq!(config.initial_model().clone().max_output_tokens, Some(1024));
         assert_eq!(config.context.summary_output_cap, Some(512));
         assert_eq!(config.tool_deadline_policy.idle_liveness_ms, Some(200));
     }
@@ -647,10 +759,10 @@ idle_liveness_ms = { mode = "window", milliseconds = 200 }
         for text in [
             "typo = true",
             "approvalMode = 'policy'",
-            "[model]\nmodel = 'p/m'\nrequest_params = {}",
-            "[model]\nmodel = 'p/m'\nreasoning_profile = { mode = 'catalog_default', name = 'hidden' }",
-            "[model]\nmodel = 'p/m'\n[unterminated",
-            "[model]\nmodel = 'p/m'\nmodel = 'p/other'",
+            "[agent]\n[agent.model]\nmodel = \"p/m\"\n\n[agent.model.request_params]\n",
+            "[agent]\n[agent.model]\nmodel = \"p/m\"\n\n[agent.model.reasoning_profile]\nmode = \"catalog_default\"\nname = \"hidden\"\n",
+            "[agent.model]\nmodel = 'p/m'\n[unterminated",
+            "[agent.model]\nmodel = 'p/m'\nmodel = 'p/other'",
         ] {
             assert!(
                 crate::toml_authoring::parse::<RuntimeLayer>(text.as_bytes()).is_err(),
@@ -691,29 +803,37 @@ idle_liveness_ms = { mode = "window", milliseconds = 200 }
     }
     #[test]
     fn opaque_json_string_is_the_only_overlay_form_including_explicit_summary() {
-        let config = layer(r#"
-[model]
+        let config = layer(r#"[agent]
+[agent.model]
 model = "p/m"
-request_params_json = '''{"future":{"nested":[1,null,{"new":true}]},"text":"x","flag":false,"temperature":0.7}'''
-[model.summary_model]
+request_params_json = "{\"future\":{\"nested\":[1,null,{\"new\":true}]},\"text\":\"x\",\"flag\":false,\"temperature\":0.7}"
+
+[agent.model.summary_model]
 mode = "explicit"
 model = "p/s"
-request_params_json = '''{"vendor":[null,[1,2],{"arbitrary":"yes"}]}'''
+request_params_json = "{\"vendor\":[null,[1,2],{\"arbitrary\":\"yes\"}]}"
 "#).resolve().unwrap();
         assert_eq!(
-            config.model.request_params["future"]["nested"][1],
+            config.initial_model().clone().request_params["future"]["nested"][1],
             serde_json::Value::Null
         );
         assert_eq!(
-            config.model.request_params["future"]["nested"][2]["new"],
+            config.initial_model().clone().request_params["future"]["nested"][2]["new"],
             true
         );
         assert_eq!(
-            config.model.summary_selection().unwrap().request_params["vendor"][0],
+            config
+                .initial_model()
+                .clone()
+                .summary_selection()
+                .unwrap()
+                .request_params["vendor"][0],
             serde_json::Value::Null
         );
         for json in ["null", "[]", "[1]", "42", "true", "\"string\"", "{broken"] {
-            let text = format!("[model]\nmodel = 'p/m'\nrequest_params_json = '{json}'");
+            let text = format!(
+                "[agent]\n[agent.model]\nmodel = \"p/m\"\nrequest_params_json = '{json}'\n"
+            );
             let error = crate::toml_authoring::parse::<RuntimeLayer>(text.as_bytes()).unwrap_err();
             assert!(error.contains("request_params_json must contain a valid JSON object"));
         }

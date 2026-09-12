@@ -2644,7 +2644,7 @@ async fn native_read_is_distinguished_from_a_non_native_tool_named_read() {
     };
     impostor.replay_policy = ToolReplayPolicy::Never;
     let order = Arc::new(Mutex::new(Vec::new()));
-    let (tool, mut handle) = GatedTool::new(impostor, Arc::clone(&order));
+    let (tool, _handle) = GatedTool::new(impostor, Arc::clone(&order));
     tool.register(&mut tools);
     let impostor_observer = Arc::new(RecordingObserver::new(Vec::new()));
     let impostor_recorded = impostor_observer.recorded();
@@ -2654,10 +2654,6 @@ async fn native_read_is_distinguished_from_a_non_native_tool_named_read() {
         name: "read",
         arguments: serde_json::json!({}),
     }]));
-    let releaser = tokio::spawn(async move {
-        handle.await_started().await;
-        handle.release_and_await_completion().await;
-    });
     let impostor_result = run(
         &impostor_model,
         tools,
@@ -2666,22 +2662,18 @@ async fn native_read_is_distinguished_from_a_non_native_tool_named_read() {
         &AgentCancellation::new(CancellationReason::UserRequested),
     )
     .await;
-    releaser.await.expect("impostor releaser");
-    assert!(matches!(
-        impostor_result.outcome,
-        AttemptOutcome::Completed { .. }
-    ));
-    let impostor = impostor_recorded.lock().expect("recorded lock").clone();
-    assert_eq!(impostor.len(), 1);
-    assert_eq!(
-        impostor[0].origin,
-        ToolOrigin::Mcp {
-            server_id: rustx::runtime::identity::McpServerId::new("mcp-fs"),
-        }
-    );
     assert!(
-        !is_native_read(&impostor[0]),
-        "a non-native tool named `read` is never the native Read capability"
+        matches!(impostor_result.outcome, AttemptOutcome::Failed { .. }),
+        "an undefined source cannot acquire authority from registration alone"
+    );
+    assert!(impostor_recorded.lock().expect("recorded lock").is_empty());
+    let mut impostor = native[0].clone();
+    impostor.origin = ToolOrigin::Mcp {
+        server_id: rustx::runtime::identity::McpServerId::new("mcp-fs"),
+    };
+    assert!(
+        !is_native_read(&impostor),
+        "source provenance cannot impersonate native Read"
     );
 }
 

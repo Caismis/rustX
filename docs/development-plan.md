@@ -1391,8 +1391,8 @@ cross-conversation children, or recursion were added.
 M9.5 adds the bounded native Workflow layer over named SubagentRuntime. The
 authoring surface is `.agents/workflows/<configured-id>.yaml`, but YAML is only
 serialization. Configuration registers exact ids and separately admits
-`workflows.main`; the discovered Agent catalog remains the one profile source of
-truth, with independent `subagents.main` and `subagents.workflow` domains.
+`agent.workflows`; the discovered Agent catalog remains the one profile source of
+truth, with independent `agent.agents` and `subagents.workflow` domains.
 
 The loader compiles each registered definition into an immutable
 `WorkflowProgram`. The compiler enforces an explicit-entry acyclic graph within each block,
@@ -1417,7 +1417,7 @@ Workflow Agent success is exclusively the reserved
 `workflow_output` protocol: schema validation, exactly-once commit,
 same-turn exclusivity, bounded correction feedback, and cancellation/output
 linearization are all deterministic. A Workflow is exposed as one concrete
-Tool per `workflows.main` id, with no generic dispatcher and no intermediate
+Tool per `agent.workflows` id, with no generic dispatcher and no intermediate
 parent-history injection.
 
 Reload builds the complete capability/subagent/Workflow candidate off-side

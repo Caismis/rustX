@@ -96,7 +96,8 @@ pub(super) fn inspect(
                     workflow_admitted: launch.config.subagents.workflow.contains(name),
                     selected_model: definition
                         .model()
-                        .unwrap_or(&launch.config.model.model)
+                        .unwrap_or(launch.config.initial_model())
+                        .model
                         .to_string(),
                     configured_timeout_ms: definition
                         .execution_deadline()
@@ -210,7 +211,7 @@ pub(super) fn inspect(
         source,
         source_layer: "trusted_project",
         discovered: true,
-        configured_main_admission: launch.workflows.main().contains(id),
+        configured_main_admission: launch.config.agent.workflows.contains(id),
         prospective_main_exposure: launch
             .selected_tools
             .as_ref()

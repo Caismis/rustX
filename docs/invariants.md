@@ -1475,9 +1475,10 @@ RemoteTaskActive
 > extension-provided `todo` Tool.
 
 Todo is an optional **Native Agent Extension** (Issue #259), not an ordinary
-execution capability like Read or Bash. `extensions.todo.enabled` is its one
-switch, and it composes all four faces above or none of them. It is enabled by
-default; `defaultTools`, `--tools`, `--exclude-tools`, a role's
+execution capability like Read or Bash. `agent.extensions.todo.enabled` is its one
+switch in root authoring, and it composes all four faces above or none of them.
+The explicit lower-priority root product profile enables it; complete-profile
+omission composes none; `agent.tools.builtin`, `--tools`, `--exclude-tools`, a role's
 `tools.builtin`, and a Workflow's admitted capability set all reject the name
 `todo` outright, because they address the ordinary capability plane and Todo is
 not in it. `--no-tools` therefore leaves an enabled Todo's Tool in place: a
@@ -2070,7 +2071,7 @@ before restart.
   every normal one-shot child's `AgentProfile` System authority is the
   definition's user-authored instruction document composed with the
   runtime-owned final-report handoff instruction at the child composition
-  boundary, so no user-authored role Markdown body has to repeat it and no
+  boundary, so user-authored Agent TOML instructions need not repeat it and no
   provider adapter learns it. Workflow-owned children are exempt: their
   terminal protocol is the structured schema-validated `workflow_output`
   commit, which a free-form final-report instruction would contradict.
@@ -2595,7 +2596,7 @@ after ChildGuidanceOutcome::Accepted:
   `{agent, task, context?, override?}`, and the override is bounded by an
   explicit delegation ceiling rather than by the generation alone; see
   *Issue #258* below.
-- **A named definition's optional `timeoutMs` is a validated static policy.**
+- **A named definition's optional `timeout_ms` is a validated static policy.**
   The value is a positive integer number of milliseconds, bounded at
   86,400,000 (24 hours); absence means no whole-lifecycle deadline, and zero,
   malformed, or above-maximum values reject configuration admission without
@@ -2606,25 +2607,28 @@ after ChildGuidanceOutcome::Accepted:
   settlement; it is separate from model request/stream-idle and tool timeout
   policies. The model-facing `subagent` and `execution` schemas expose no
   deadline or deadline-control parameter.
-- **Optionality belongs to source availability, never to a selection.** A
-  configured source that is unavailable in this generation keeps the runtime
-  healthy and blocks only the agents that explicitly require it
-  (`SourceUnavailable`, decided before ownership commit). A selector whose
-  source authority *is* present but that names an unknown capability, model,
-  or Skill rejects resource-generation preparation, so a failed reload
-  leaves the previous complete generation authoritative in every half —
-  catalog, capability state, project instructions, Skills, model selection,
-  and the active generation identity.
-- **Optional-source tolerance never short-circuits admission.** Admission
-  inspects *every* selector of a definition: an unavailable source is
-  tolerated for that individual selector and validation continues, so an
-  offline MCP server listed before a misspelled Builtin/source selector
-  cannot smuggle a statically invalid definition into a published
-  generation. Invocation-time resolution stays fail-fast on the first
-  unsatisfiable selector. Both callers share one per-selector,
-  source-qualified matching core.
+- **Complete Agent Profiles share generation-scoped warning and suppression.**
+  `AgentProfileDocument` lowers to `AgentProfile`; `resolve_agent_profile`
+  produces `ResolvedAgentProfile` and canonically ordered typed diagnostics.
+  An unavailable builtin, undefined/inactive/unprepared/failed source, Exact
+  Tool absent from a ready source, or missing Skill, named Agent or admitted
+  Workflow suppresses only that selection. The remaining Agent stays usable.
+  Known scope-ineligible capabilities in a complete one-shot child profile
+  follow the same documented suppression policy.
+- **Malformed authoring remains a hard error.** Unknown fields, wrong types,
+  malformed identities, duplicate exact selections, unknown Extensions, invalid
+  extension configuration and invalid native bounds reject preparation.
+  Child worktree/deadline requests in root scope are invalid. Explicit model
+  configuration/reference errors remain model-owner failures. A failed
+  candidate leaves the previous complete generation authoritative.
+- **Dynamic overrides retain strict authorization.** Model-authored and
+  Workflow-authored replacements must satisfy their typed authority and
+  validity contracts; unauthorized or invalid requests fail, never silently
+  become a narrower successful override. Absent dimensions retain named
+  defaults; present dimensions replace completely, including explicit empty.
+  Complete-profile suppression does not weaken Workflow static admission.
 - **Project instructions and Skills are parent-resolved frozen resources;
-  the child does not rediscover them.** `agentsMd.inherit = true` freezes the
+  the child does not rediscover them.** `agents_md.inherit = true` freezes the
   generation's exact chain followed by the definition's explicit files in
   configured order; `inherit = false` freezes only the explicit files. The
   child's Skill allowlist crosses as the immutable
@@ -2658,8 +2662,8 @@ after ChildGuidanceOutcome::Accepted:
   different semantics under the same tool name. `subagent`, `ask_user`, and
   `execution` have no child-plane implementation at all.
 - **Committed child identity is `(agent, definition_digest)`.**
-  `SubagentDefinitionDigest` is SHA-256 over a rustX-owned versioned
-  canonical framing (`rustx-subagent-definition-v4`) of the normalized
+  `NamedAgentDefinitionDigest` is SHA-256 over a rustX-owned versioned
+  canonical framing (`rustx-agent-definition-v5`) of the normalized
   semantic definition — never raw TOML bytes — so comments, whitespace, key
   order, and selector listing order cannot change it while every semantic
   change does. It is the identity of the **named definition itself**, not of
@@ -3008,12 +3012,14 @@ after ChildGuidanceOutcome::Accepted:
   native extension. Because all three dimensions have a legitimate empty value,
   *presence* rather than emptiness is the inheritance signal, and an explicit
   `null` is rejected rather than folded into absence.
-- **An override's extension selection carries no authoring defaults.**
-  `NativeAgentExtensionsDocument` supplies launch/role defaults, including an
-  enabled Agent Status; `NativeAgentExtensionSelection` is a separate
-  presence-aware closed record whose absent members compose nothing. The
-  vocabulary and the composition owner are the same closed EXT-01 ones: no open
-  registry and no generic merge engine appear.
+- **Complete profiles and override selections share Extension omission semantics.**
+  Omitted members in `NativeAgentExtensionsDocument` and
+  `NativeAgentExtensionSelection` compose nothing. Root Agent Status and Todo
+  defaults come from an explicit lower-priority product profile layer.
+  The outer invocation dimension is presence-aware: absence retains named
+  defaults; a present empty object replaces with none. The wire selection
+  retains its camelCase spelling; the complete TOML profile uses snake_case.
+  Both use the same closed composition owner, with no generic merge engine.
 - **No override reaches anything else.** Model, instructions/body, timeout,
   workspace/worktree policy, `AGENTS.md` policy, approval mode, credentials,
   source enablement, and arbitrary external configuration have no per-call
@@ -3114,7 +3120,7 @@ after ChildGuidanceOutcome::Accepted:
 
 ### Effective execution-profile identity
 
-- **`SubagentDefinitionDigest` identifies the source definition;
+- **`NamedAgentDefinitionDigest` identifies the source definition;
   `ResolvedSubagentSpec::profile_digest()` identifies the effective child
   execution profile.** They are separate identities and neither is derived from
   the other. Materially different effective tools, Skills, or extensions change
@@ -3249,13 +3255,13 @@ after ChildGuidanceOutcome::Accepted:
   discovery, Skill discovery, Python-package discovery, or arbitrary
   configuration rediscovery from the worktree.
 - **Isolated execution is strict by default (Issue #188).** An enabled
-  worktree resolves an omitted `requireCleanParent` to `true` at the
+  worktree resolves an omitted `require_clean_parent` to `true` at the
   configuration/domain boundary. A dirty ordinary source workspace — tracked
   unstaged, staged/index, or untracked non-ignored changes — rejects the
   start before durable ownership and before worktree creation; the typed
   rejection retains the exact committed `HEAD` captured before the dirty
   observation. Ignored-only build/cache artifacts never make the source
-  workspace dirty. `requireCleanParent = false` is the only explicit opt-out:
+  workspace dirty. `require_clean_parent = false` is the only explicit opt-out:
   the child then sees the committed tree at `C` only, while parent-local
   dirty bytes are intentionally excluded and never copied.
 - **Local overlays are explicit, bounded, and manager-owned (Issue #189).**
@@ -3304,7 +3310,7 @@ after ChildGuidanceOutcome::Accepted:
   distinguishable from generic Git/worktree failure, settlement/rollback, and
   cancellation without parsing prose. The native `subagent` tool is the one
   boundary that renders the actionable public remediation — commit or clean
-  the parent, or set `requireCleanParent: false` to run from the committed
+  the parent, or set `require_clean_parent = false` to run from the committed
   `HEAD` snapshot while ignoring local changes — because that is where an
   internal failure becomes model-visible output.
 - **Runtime worktree identity is deterministic and bounded.** For semantic
@@ -3492,7 +3498,7 @@ the launch-boundary policy inheritance.
   including empty objects and execution/concurrency-only policies. These are
   host/user-owned complete policy objects.
 - **Project resource authority follows provenance, not absolute spelling.**
-  Project-origin Skills, Subagent instruction/agentsMd files and path-valued
+  Project-origin Skills, Subagent instruction/agents_md files and path-valued
   MCP command/cwd must resolve within the canonical trusted workspace. Traversal,
   absolute paths, symlink targets and external `--config` cannot widen that
   authority. Initial preparation rechecks frozen path authority; reload rechecks
@@ -3505,9 +3511,11 @@ the launch-boundary policy inheritance.
   produce deterministic generation-scoped catalogs. Settings never repeat their
   existence. Invalid canonical Agent, Skill or Workflow content rejects the candidate.
 - **Discovery and admission are independent.** Whole project Agents replace user
-  Agents without merging instructions or capabilities. `subagents.main`,
-  `subagents.workflow` and `workflows.main` select discovered identities. Discovery
-  never prepares Python packages or grants execution or approval authority.
+  Agents without merging instructions or capabilities. `agent.agents` and
+  `agent.workflows` select delegation and Workflow invocation capabilities from
+  admitted resources, warning and suppressing unavailable selections.
+  `subagents.workflow` separately owns static Workflow Agent-node admission.
+  Discovery never prepares Python packages or grants execution or approval authority.
 - **One candidate publishes atomically.** Exact YAML loading, program
   compilation, profile admission, capability validation, and concrete
   Workflow Tool registration occur off-side. One publication boundary makes
@@ -3560,7 +3568,7 @@ the launch-boundary policy inheritance.
   committed output. Workflow terminal settlement waits for all owned child
   work to reach native quiescence, and runtime drain proves zero owned active
   work.
-- **Tool exposure is per Workflow.** Every `workflows.main` id is one
+- **Tool exposure is per Workflow.** Every `agent.workflows` id is one
   independent concrete Tool named by the configured id, with its description
   and input schema. There is no generic dispatcher and no implicit exposure
   of discovered Workflows or Subagents. Parent canonical history receives one
@@ -3609,7 +3617,7 @@ the launch-boundary policy inheritance.
   it does not reread `rustx.toml` or change the native Agent Extension
   composition.
 - **A running `ConversationRuntime` executes against the native Agent
-  Extension composition frozen for that launch (Issue #256).** `extensions` is
+  Extension composition frozen for that launch (Issue #256).** `agent.extensions` is
   the one closed, launch-scoped surface for optional Agent augmentation;
   Agent Status is the first extension migrated under it and the obsolete
   top-level `agentStatus` contract is removed with no alias, fallback parse,
@@ -3623,11 +3631,11 @@ the launch-boundary policy inheritance.
   registration, event-hook registry, or third-party extension mechanism.
 - **Root Agent extensions and named-Subagent extensions are independently
   authored compositions (Issue #256).** A child never implicitly inherits the
-  root's extension set: `SubagentResolver` freezes the *definition's* own
-  composition into `ResolvedSubagentSpec::extensions` before process staging
-  and durable ownership commit, and the root's document is not an input to
-  resolution. Role extension settings participate in
-  `SubagentDefinitionDigest`. The child materializes that frozen decision and
+  root's extension set: `SubagentResolver` consumes the shared resolved profile's
+  scope-eligible composition or an authorized replacement and freezes it into
+  `ResolvedSubagentSpec::extensions` before process staging and durable ownership
+  commit. The caller's frozen composition supplies override authority only. Role extension settings participate in
+  `NamedAgentDefinitionDigest`. The child materializes that frozen decision and
   never rereads `rustx.toml`, host or project configuration, role files, or a
   later resource generation to reinterpret which extensions it owns.
 - **Runtime Client reports the extension composition owned by the attached
@@ -3697,17 +3705,20 @@ the launch-boundary policy inheritance.
   `ToolRegistry`. Inactive definitions remain available for truthful
   inspection but their schemas never enter provider requests.
 - **Startup Tool selection is deterministic.** The base selection applies
-  `defaultTools` to built-ins, `--no-builtin-tools` removes all built-ins,
+  `agent.tools.builtin` to built-ins, `--no-builtin-tools` removes all built-ins,
   `--no-tools` selects zero ordinary Tools, `--tools` selects exactly its
   names, and exclusions subtract last. Read has no activation exception.
-  Empty, unknown/ineligible, ambiguous or duplicate explicit entries fail.
+  Empty, unknown/ineligible, ambiguous or duplicate explicit CLI entries fail.
+  Complete-profile empty dimensions are valid, and unavailable selections warn
+  and suppress through the shared resolver.
   Contradictory flags fail; no insertion order resolves identity collisions.
-- **Skill visibility is separate from discovery.** Current user/global,
-  project, configured, and explicit CLI roots are collected in deterministic
-  order. Duplicate logical identities fail explicitly. A validated Skill
+- **Skill visibility is separate from discovery.** Canonical user/project
+  resources and explicit CLI roots are collected in deterministic order.
+  Agent Profiles select exact admitted names; selections never discover paths. Duplicate logical identities fail explicitly. A validated Skill
   with `disable-model-invocation: true` remains in the immutable Skill
   snapshot but is omitted from the model-visible catalog. A discovered Skill
-  is model-visible only when that domain's frozen registry also admits native
+  is model-visible only when the resolved Agent Profile selects it and that
+  domain's frozen registry also admits native
   Read. Missing Read hides lazy guidance without changing discovery or child
   admission and without eagerly injecting bodies. The catalog and Runtime
   Client projection expose the same host `SKILL.md` path. The model reads
@@ -8366,3 +8377,22 @@ A source-owned `todo` remains selectable by its source under All or Exact;
 `builtin = ["todo"]` cannot select the Todo extension. A selected source Tool and
 an enabled extension with the same model-facing name fail at final ToolRegistry
 composition, without filtering, shadowing or renaming either registration.
+
+
+### Agent Profile authority (CFG2-04)
+
+- Root and named Agents share one strict authoring model and semantic resolver.
+- Resource existence, source activation, Agent exposure and invocation approval
+  are separate authority decisions. Profile selection changes only exposure.
+- Named defaults use admitted generation authority; root delegation never grants
+  root direct access to child-only capabilities.
+- Valid unavailable selections produce typed ordered diagnostics and suppression.
+  Malformed authoring and unauthorized dynamic overrides remain hard failures.
+- Tools, Skills and Extensions override by whole-dimension replacement. An
+  explicitly empty dimension is distinct from absence.
+- Omitted Extensions select none in a complete profile. Root product composition
+  is an explicit lower-priority profile layer.
+- Published resource generations own resolved profiles. Later publication cannot
+  mutate admitted attempt leases or frozen child execution specifications.
+
+See [Agent Profiles](agent-profiles.md) for the exact scope and ownership rules.

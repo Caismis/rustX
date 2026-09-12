@@ -71,7 +71,8 @@ fn minimal_start_uses_host_defaults_without_python_mcp_or_path_flags() {
     .unwrap();
     std::fs::write(
         config.join("settings.toml"),
-        r#"[model]
+        r#"[agent]
+[agent.model]
 model = "fixture/process-model"
 "#,
     )
@@ -111,18 +112,15 @@ fn untrusted_real_process_never_activates_project_content_or_publishes_a_session
     .unwrap();
     std::fs::write(
         config.join("settings.toml"),
-        r#"[model]
+        r#"[agent]
+[agent.model]
 model = "fixture/process-model"
 "#,
     )
     .unwrap();
     std::fs::write(
         workspace.join("rustx.toml"),
-        toml::to_string_pretty(&serde_json::json!({
-            "mcp_servers":{"project":{"command":"touch","args":[sentinel]}},
-            "subagents":{"main":["child"]},
-            "workflows":{"main":["must_not_load"]}
-        }))
+        toml::to_string_pretty(&serde_json::json!({"mcp_servers": {"project":{"command":"touch","args":[sentinel]}}, "subagents": {}, "agent": {"agents": ["child"], "workflows": ["must_not_load"]}}))
         .unwrap(),
     )
     .unwrap();
@@ -177,12 +175,14 @@ chat_reasoning_replay = "omit"
 
 const SESSION_TOML: &str = r#"agent_id = "agent-process"
 
-[model]
-model = "fixture/process-model"
-
 [context]
 reserve_tokens = 1024
 keep_recent_tokens = 8192
+
+
+[agent]
+[agent.model]
+model = "fixture/process-model"
 "#;
 
 /// One spawned `rustx` process wired to its stdio JSONL transport.

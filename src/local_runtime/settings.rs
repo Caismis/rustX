@@ -118,10 +118,18 @@ fn update(bytes: &[u8], value: &DefaultValue) -> Result<Vec<u8>, RuntimeClientEr
     let mut root = tree(bytes)?;
     match value {
         DefaultValue::ModelSelection { selection } => {
-            if !root.contains_key("model") {
-                root["model"] = Item::Table(toml_edit::Table::new());
+            if !root.contains_key("agent") {
+                root["agent"] = Item::Table(toml_edit::Table::new());
             }
-            let model = root["model"]
+            let agent = root["agent"]
+                .as_table_like_mut()
+                .ok_or_else(|| invalid(()))?;
+            if !agent.contains_key("model") {
+                agent.insert("model", Item::Table(toml_edit::Table::new()));
+            }
+            let model = agent
+                .get_mut("model")
+                .expect("model table inserted")
                 .as_table_like_mut()
                 .ok_or_else(|| invalid(()))?;
             set(
@@ -188,7 +196,7 @@ impl UserDefaults {
         } else {
             super::authoring::RuntimeLayer::default()
         };
-        let selection = layer.model.and_then(|model| {
+        let selection = layer.agent.and_then(|agent| agent.model).and_then(|model| {
             model.model.map(|selected| ModelDefault {
                 model: selected,
                 reasoning_profile: model
@@ -321,17 +329,20 @@ mod tests {
         std::fs::write(
             host.config_directory.join("settings.toml"),
             br#"# preserve my reason
-# keep profile comment
-default_tools = ["read"]
-
-[model]
-model = "example/demo-model"
-
-[model.reasoning_profile]
-mode = "catalog_default"
-
 [environment]
 PRIVATE = "SECRET_SENTINEL"
+
+
+[agent]
+[agent.model]
+model = "example/demo-model"
+
+[agent.model.reasoning_profile] # keep profile comment
+mode = "catalog_default"
+
+
+[agent.tools]
+builtin = ["read"]
 "#,
         )
         .unwrap();
@@ -374,7 +385,8 @@ PRIVATE = "SECRET_SENTINEL"
         let project = workspace.join("project.toml");
         std::fs::write(
             &project,
-            br#"[model]
+            br#"[agent]
+[agent.model]
 model = "example/demo-model"
 "#,
         )
@@ -420,7 +432,7 @@ model = "example/demo-model"
             owner.target(),
             format!(
                 r#"# preserved settings
-[model]
+[agent.model]
 model = "example/a"
 {preserved}
 "#
@@ -497,11 +509,13 @@ model = "example/a"
         let (_root, owner) = model_change_fixture(r"request_params_json = '{}'");
         // Valid for A/128000; B/8192 cannot fit this reserve plus its 2048
         // output budget. Other context fields use the canonical built-in defaults.
-        let bytes = br#"[model]
-model = "example/a"
-
-[context]
+        let bytes = br#"[context]
 reserve_tokens = 6144
+
+
+[agent]
+[agent.model]
+model = "example/a"
 "#;
         std::fs::write(owner.target(), bytes).unwrap();
         let expected = current(&owner);
@@ -528,14 +542,17 @@ reserve_tokens = 6144
     #[test]
     fn cfg238_approval_save_does_not_validate_unrelated_model_semantics() {
         let (_root, owner) = fixture();
-        let bytes = br#"[model]
-model = "example/missing"
-
-[model.max_output_tokens]
+        let bytes = br#"[context]
+[context.summary_output_cap]
 mode = "limit"
 tokens = 0
 
-[context.summary_output_cap]
+
+[agent]
+[agent.model]
+model = "example/missing"
+
+[agent.model.max_output_tokens]
 mode = "limit"
 tokens = 0
 "#;
@@ -546,7 +563,7 @@ tokens = 0
         let after: serde_json::Value =
             crate::toml_authoring::parse(&std::fs::read(owner.target()).unwrap()).unwrap();
         let before: serde_json::Value = crate::toml_authoring::parse(bytes).unwrap();
-        assert_eq!(after["model"], before["model"]);
+        assert_eq!(after["agent"]["model"], before["agent"]["model"]);
         assert_eq!(after["context"], before["context"]);
         assert_eq!(after["approval_mode"], "full_access");
         assert_eq!(current(&owner), result.revision);
@@ -624,10 +641,11 @@ tokens = 0
             br"[context]
 unexpected = true
 ",
-            br#"[model]
+            br#"[agent]
+[agent.model]
 model = "example/demo-model"
 
-[model.max_output_tokens]
+[agent.model.max_output_tokens]
 mode = "limit"
 tokens = "wrong-type"
 "#,
@@ -777,12 +795,13 @@ tokens = "wrong-type"
     fn cfg238_external_edit_before_final_check_is_rejected() {
         let (_root, owner) = fixture();
         let a = current(&owner);
-        let external = br#"
-[model]
-model = "example/demo-model"
-
-[environment]
+        let external = br#"[environment]
 PRIVATE = "EXTERNAL_SECRET"
+
+
+[agent]
+[agent.model]
+model = "example/demo-model"
 "#;
         let error = owner
             .save_at(DefaultScope::User, &a, approval(), |point| {
@@ -862,7 +881,7 @@ PRIVATE = "EXTERNAL_SECRET"
     fn cfg238_duplicate_keys_and_symlinks_are_refused() {
         let (_root, owner) = fixture();
         let duplicate = br#"
-[model]
+[agent.model]
 model = "example/demo-model"
 
 [environment]

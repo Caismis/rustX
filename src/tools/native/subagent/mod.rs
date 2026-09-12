@@ -121,7 +121,7 @@ fn start_failure_result(error: &SubagentStartError) -> ToolExecutionResult {
         SubagentStartError::WorkspaceDirtyParent { .. } => failed_result(
             "the isolated subagent was not started because the parent workspace has \
              uncommitted changes. Commit or clean those changes, or explicitly set \
-             \"requireCleanParent\": false for this subagent to run from the committed \
+             worktree.require_clean_parent = false in the named Agent profile to run from the committed \
              HEAD snapshot while intentionally ignoring the local changes.",
         ),
         other => failed_result(other.to_string()),
@@ -130,6 +130,9 @@ fn start_failure_result(error: &SubagentStartError) -> ToolExecutionResult {
 
 /// The canonical model-facing name of the intrinsic.
 pub const SUBAGENT_TOOL_NAME: &str = "subagent";
+pub(crate) fn tool_id() -> crate::runtime::identity::ToolId {
+    crate::runtime::identity::ToolId::new("tool-subagent")
+}
 
 /// The tool-owned registration of the `subagent` runtime intrinsic.
 ///
@@ -159,7 +162,7 @@ pub(super) fn definition(catalog: &AgentCatalog) -> Option<ToolDefinition> {
         return None;
     }
     Some(ToolDefinition {
-        id: crate::runtime::identity::ToolId::new("tool-subagent"),
+        id: tool_id(),
         name: SUBAGENT_TOOL_NAME.to_owned(),
         description: format!(
             "Delegate a bounded task to a one-shot child agent runtime. The child runs \
@@ -352,46 +355,56 @@ impl ToolExecutor for SubagentExecutor {
 #[cfg(test)]
 mod tests {
     use super::{SUBAGENT_TOOL_NAME, SubagentExecutor, SubagentInput, ToolInvocation, definition};
-    use crate::runtime::subagent::catalog::{
-        AgentCatalog, SubagentDefinition, SubagentName, SubagentProjectInstructionPolicy,
-    };
+    use crate::runtime::subagent::catalog::{AgentCatalog, NamedAgentDefinition, SubagentName};
     use crate::runtime::workspace::WorkspacePolicy;
     use crate::tools::types::{ToolExecutionStatus, ToolResultContent};
 
     fn catalog() -> AgentCatalog {
         AgentCatalog::new([
-            SubagentDefinition::new(
+            NamedAgentDefinition::new(
                 SubagentName::parse("research").expect("name"),
-                "Deep multi-source research.".to_owned(),
-                "instructions".to_owned(),
-                std::path::PathBuf::from("/w/research.md"),
-                None,
-                None,
-                Vec::new(),
-                Vec::new(),
-                SubagentProjectInstructionPolicy {
-                    inherit: true,
-                    files: Vec::new(),
+                crate::runtime::agent_profile::AgentProfile {
+                    description: "Deep multi-source research.".to_owned(),
+                    instructions: "instructions".to_owned(),
+                    model: None,
+                    execution_deadline: None,
+                    tools: Vec::new(),
+                    skills: Vec::new(),
+                    project_instructions:
+                        crate::runtime::agent_profile::AgentProjectInstructionPolicy {
+                            inherit: true,
+                            files: Vec::new(),
+                        },
+                    workspace_policy: WorkspacePolicy::SharedWorkspace,
+                    extensions: crate::extensions::NativeAgentExtensionsDocument::default()
+                        .resolve(),
+                    agents: std::collections::BTreeSet::default(),
+                    workflows: std::collections::BTreeSet::default(),
                 },
-                WorkspacePolicy::SharedWorkspace,
-                crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+                std::path::PathBuf::from("/w/research.md"),
             )
             .expect("definition"),
-            SubagentDefinition::new(
+            NamedAgentDefinition::new(
                 SubagentName::parse("explore").expect("name"),
-                "Read-only repository exploration.".to_owned(),
-                "instructions".to_owned(),
-                std::path::PathBuf::from("/w/explore.md"),
-                None,
-                None,
-                Vec::new(),
-                Vec::new(),
-                SubagentProjectInstructionPolicy {
-                    inherit: true,
-                    files: Vec::new(),
+                crate::runtime::agent_profile::AgentProfile {
+                    description: "Read-only repository exploration.".to_owned(),
+                    instructions: "instructions".to_owned(),
+                    model: None,
+                    execution_deadline: None,
+                    tools: Vec::new(),
+                    skills: Vec::new(),
+                    project_instructions:
+                        crate::runtime::agent_profile::AgentProjectInstructionPolicy {
+                            inherit: true,
+                            files: Vec::new(),
+                        },
+                    workspace_policy: WorkspacePolicy::SharedWorkspace,
+                    extensions: crate::extensions::NativeAgentExtensionsDocument::default()
+                        .resolve(),
+                    agents: std::collections::BTreeSet::default(),
+                    workflows: std::collections::BTreeSet::default(),
                 },
-                WorkspacePolicy::SharedWorkspace,
-                crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+                std::path::PathBuf::from("/w/explore.md"),
             )
             .expect("definition"),
         ])
@@ -668,23 +681,28 @@ chat_reasoning_replay = "omit"
 
         let isolated = SubagentName::parse("isolated").expect("name");
         let model = ModelRef::parse("local/model").expect("model");
-        let definition = SubagentDefinition::new(
+        let definition = NamedAgentDefinition::new(
             isolated.clone(),
-            "Isolated worktree agent.".to_owned(),
-            "instructions".to_owned(),
+            crate::runtime::agent_profile::AgentProfile {
+                description: "Isolated worktree agent.".to_owned(),
+                instructions: "instructions".to_owned(),
+                model: Some(SessionModelConfig::of(model.clone())),
+                execution_deadline: None,
+                tools: Vec::new(),
+                skills: Vec::new(),
+                project_instructions:
+                    crate::runtime::agent_profile::AgentProjectInstructionPolicy {
+                        inherit: false,
+                        files: Vec::new(),
+                    },
+                workspace_policy: WorkspacePolicy::GitWorktree {
+                    require_clean_parent: true,
+                },
+                extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+                agents: std::collections::BTreeSet::default(),
+                workflows: std::collections::BTreeSet::default(),
+            },
             workspace_root.join("isolated.md"),
-            Some(model.clone()),
-            None,
-            Vec::new(),
-            Vec::new(),
-            SubagentProjectInstructionPolicy {
-                inherit: false,
-                files: Vec::new(),
-            },
-            WorkspacePolicy::GitWorktree {
-                require_clean_parent: true,
-            },
-            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
         )
         .expect("definition");
 
@@ -717,7 +735,7 @@ chat_reasoning_replay = "omit"
                 capabilities,
             )
             .with_subagent_catalog(AgentCatalog::new([definition]).expect("catalog"))
-            .with_subagent_admissions(BTreeSet::from([isolated]), BTreeSet::new()),
+            .with_test_root_agents(BTreeSet::from([isolated])),
         );
 
         DirtyParentPlane {
@@ -860,23 +878,28 @@ chat_reasoning_replay = "omit"
 
         let reviewer = SubagentName::parse("reviewer").expect("name");
         let model = ModelRef::parse("local/model").expect("model");
-        let definition = SubagentDefinition::new(
+        let definition = NamedAgentDefinition::new(
             reviewer.clone(),
-            "Read-only reviewer.".to_owned(),
-            "instructions".to_owned(),
-            workspace_root.join("reviewer.md"),
-            Some(model.clone()),
-            None,
-            vec![AgentToolSelection::Builtin {
-                name: "read".to_owned(),
-            }],
-            Vec::new(),
-            SubagentProjectInstructionPolicy {
-                inherit: false,
-                files: Vec::new(),
+            crate::runtime::agent_profile::AgentProfile {
+                description: "Read-only reviewer.".to_owned(),
+                instructions: "instructions".to_owned(),
+                model: Some(SessionModelConfig::of(model.clone())),
+                execution_deadline: None,
+                tools: vec![AgentToolSelection::Builtin {
+                    name: "read".to_owned(),
+                }],
+                skills: Vec::new(),
+                project_instructions:
+                    crate::runtime::agent_profile::AgentProjectInstructionPolicy {
+                        inherit: false,
+                        files: Vec::new(),
+                    },
+                workspace_policy: WorkspacePolicy::SharedWorkspace,
+                extensions: crate::extensions::NativeAgentExtensions::none(),
+                agents: std::collections::BTreeSet::default(),
+                workflows: std::collections::BTreeSet::default(),
             },
-            WorkspacePolicy::SharedWorkspace,
-            crate::extensions::NativeAgentExtensions::none(),
+            workspace_root.join("reviewer.md"),
         )
         .expect("definition");
 
@@ -928,7 +951,7 @@ chat_reasoning_replay = "omit"
                 capabilities,
             )
             .with_subagent_catalog(AgentCatalog::new([definition]).expect("catalog"))
-            .with_subagent_admissions(BTreeSet::from([reviewer]), BTreeSet::new()),
+            .with_test_root_agents(BTreeSet::from([reviewer])),
         );
 
         DelegationPlane {
@@ -1150,7 +1173,7 @@ chat_reasoning_replay = "omit"
             "isolated subagent was not started",
             "uncommitted changes",
             "Commit or clean",
-            "requireCleanParent",
+            "worktree.require_clean_parent = false",
             "committed HEAD",
             "ignoring the local changes",
         ] {

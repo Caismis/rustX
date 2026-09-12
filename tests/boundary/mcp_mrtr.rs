@@ -272,7 +272,7 @@ impl Harness {
         }
         let binding = McpServerBinding {
             credentials: crate::credentials::SourceCredentials::default(),
-            activation: crate::capabilities::activation::SourceActivation::Enabled,
+            activation: rustx::capabilities::activation::SourceActivation::Enabled,
             resource_workspace: None,
             transport: McpTransportConfig::Stdio {
                 program: std::env::current_exe()

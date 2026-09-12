@@ -427,7 +427,7 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
         classification: "warning",
         category: "unresolved",
         file: None,
-        path: format!("providers.{}", launch.config.model.model.provider()),
+        path: format!("providers.{}", launch.config.initial_model().model.provider()),
         reason: "provider credential availability, endpoint connectivity and model compatibility were not verified".into(),
         correction: "supply credentials at runtime; static validation does not verify provider execution".into(),
         line: None,
@@ -518,11 +518,11 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
     report.launch = Some(LaunchProjection {
         roles: launch.role_sources.clone(),
         local_skills: launch.skill_names.clone(),
-        provider: launch.models.providers().find(|provider| &provider.id == launch.config.model.model.provider()).map_or(Value::Null, |provider| json!({"id":provider.id, "endpoint":provider.base_url, "credential":provider.api_key.view(), "verification":"deferred; no credential value or connectivity was checked"})),
+        provider: launch.models.providers().find(|provider| &provider.id == launch.config.initial_model().model.provider()).map_or(Value::Null, |provider| json!({"id":provider.id, "endpoint":provider.base_url, "credential":provider.api_key.view(), "verification":"deferred; no credential value or connectivity was checked"})),
         workspace: launch.workspace.clone(),
         runtime_root: launch.runtime_root.clone(),
         trusted: launch.trusted,
-        selected_model: launch.config.model.model.to_string(),
+        selected_model: launch.config.initial_model().model.to_string(),
         configuration,
         provenance: launch.provenance.iter().map(|(field, origin)| {
             let (authority, reason) = match origin {
@@ -536,7 +536,7 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
         }).collect(),
         sources,
         tool_selection: json!({"selected": launch.selected_tools, "noTools":launch.no_tools, "noBuiltinTools":launch.no_builtin_tools,
-            "allowlist":launch.tools, "exclusions":launch.exclude_tools, "defaults":launch.config.default_tools,
+            "allowlist":launch.tools, "exclusions":launch.exclude_tools, "defaults":launch.config.agent.tools.builtin,
             "exclusionReason": if launch.no_tools { "--no-tools removes every ordinary main-model Tool" } else { "exact allowlist/default selection followed by final exclusions; no mandatory Read insertion" },
             // The second authority plane (Issue #259). Everything above
             // describes ordinary execution capabilities; a Tool contributed by
@@ -547,7 +547,7 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
             "extensionTools": crate::extensions::composed_extension_tool_names(
                 &launch.config.extension_composition(),
             ),
-            "extensionToolsReason":"provided by composed Native Agent Extensions; not selectable through default_tools/--tools/--exclude-tools, and not removed by --no-tools",
+            "extensionToolsReason":"provided by composed Native Agent Extensions; not selectable through builtin_tools/--tools/--exclude-tools, and not removed by --no-tools",
             "onlineIdentities":"unresolved until source discovery"}),
         discovered_workflows: launch.workflows.definitions().keys().map(ToString::to_string)
             .collect(),
