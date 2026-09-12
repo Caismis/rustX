@@ -23,7 +23,7 @@ it does not refresh or replace the live snapshot.
 | Runtime root, model catalog/bindings, host startup policy | Launch resolver/composition | Host-owned paths and allowed CLI inputs | Restart required | Explicit authoring | Not reapplied; loader retains captured startup values | Re-resolved |
 | Saved primary model/profile or approval default | Rust `UserDefaults` document writer | Explicit `user` scope: `$XDG_CONFIG_HOME/rustx/settings.toml` (or `$HOME/.config/rustx/settings.toml`) | Same-directory rename publishes one validated document | Only the explicitly selected fields | Does not replace Session model or approval | Can affect a future launch; project/CLI precedence still applies |
 | Attempt model, resource revision, approval mode | Native admission | Actual frozen model/resource/policy snapshots | Frozen together at admission; never live-mutated | Retained execution/request evidence only | Retained admitted facts unchanged | No reconstruction from new defaults |
-| Effective native Agent Extension composition (Agent Status) | The composed `ConversationRuntime` itself; frozen at `LocalConversationCore::compose` (root) or in `ResolvedSubagentSpec.extensions` (child) | The launch's `extensions` document (root) or the named role's own `extensions` (child) | Immutable for the life of the Agent; there is no live setter and no install/uninstall | Authoring files only | Unchanged — reload republishes resources and cannot recompose extensions | New launch resolves the current document and may compose a different set |
+| Effective native Agent Extension composition (Agent Status) | The composed `ConversationRuntime` itself; frozen at `LocalConversationCore::compose` (root) or in `ResolvedSubagentSpec.extensions` (child) | The launch's `agent.extensions` profile dimension (root) or the named Agent profile's `extensions` dimension (child) | Immutable for the life of the Agent; there is no live setter and no install/uninstall | Authoring files only | Unchanged — reload republishes resources and cannot recompose extensions | New launch resolves the current document and may compose a different set |
 | Child model/profile/capabilities and compiled/admitted Workflow program/inputs | Existing Subagent and Workflow admission owners | Parent-frozen native specifications and compiled program | Immutable for admitted execution; no rediscovery in child workspace | Existing native evidence only | Already admitted specifications unchanged | No replay or automatic resume |
 | Show reasoning, expansion | TUI presentation preferences | Client-local preference | Immediate rendering change | Not saved through native settings API | No effect | Client presentation only |
 
@@ -134,9 +134,11 @@ running.
   exactly that value, so a child frozen under resource generation R1 keeps
   reporting R1 after R2 publishes, and root extension configuration cannot
   reach it. Its lifetime is `frozen_admission` under `frozen_child` evidence.
-- **Resource reload does not recompose extensions.** `/reload` publishes a new
-  `RuntimeResourceSnapshot`; `extensions` is not a reload-owned field, and the
-  projection has no reload seam at all.
+- **Resource reload does not recompose extensions.** The root Agent's composed
+  `agent.extensions` is launch-scoped. `/reload` publishes a new
+  `RuntimeResourceSnapshot` but does not recompose the already-running root's
+  native Extension set or mutate a child's frozen `ResolvedSubagentSpec`.
+  The projection has no reload seam at all.
 - **Restart may change them.** A new launch resolves the current document
   through the ordinary resolver. That is the only way a root Agent's
   composition changes, and it rewrites no canonical Session history.
@@ -232,7 +234,9 @@ inspect resource files. Full prospective launch readiness remains the job of
 
 A model save changes only `agent.model.model` and `agent.model.reasoning_profile`, but validates
 **the complete model object parsed from the staged bytes**, including preserved
-`requestParams`, `maxOutputTokens`, and `summaryModel`. The canonical
+`request_params_json` (the opaque JSON-object string authoring surface),
+`max_output_tokens` (the model output policy), and `summary_model` (the summary
+model policy). These are members of `agent.model` in `settings.toml`. The canonical
 `SessionModelConfig` schema supplies its defaults; `analyze_session_model_config`
 uses native `analyze_selection` semantics for the primary selection and any explicit
 summary, with their respective Session and summary request-parameter layers. The

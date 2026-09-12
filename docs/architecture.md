@@ -3787,10 +3787,11 @@ think before answering, but "may think without bound" does not follow from
 much".
 
 The provider-neutral output limit already exists and is already configured —
-`maxOutputTokens` in the catalog, overridable per session, resolved into
+`max_output_tokens` in catalog TOML, overridable per Session, resolved into
 `ResolvedModelInvocation` before the adapter boundary — and provider-native
 reasoning controls already have a home in a model's declared reasoning
-profiles, whose `requestParams` an adapter maps to its own API. Issue #203
+profiles, authored through `request_params_json`, whose decoded parameters an
+adapter maps to its own API. Issue #203
 adds no second output-limit mechanism and no new configuration.
 
 What it adds is a runtime-side *safeguard*, because correctness must not
@@ -8111,8 +8112,8 @@ reach `McpServerRuntime`, the `CapabilityCoordinator`, the Agent Loop, or the
 TUI.
 
 A session override may not declare a key the selected reasoning profile owns
-(`temperature` above belongs to the `on` profile, so `requestParams` declares
-`top_p` instead) and may not declare a runtime-protected wire key.
+(`temperature` above belongs to the `on` profile, so the root profile's
+`agent.model.request_params_json` declares `top_p` instead) and may not declare a runtime-protected wire key.
 
 **Process output contract.**
 
