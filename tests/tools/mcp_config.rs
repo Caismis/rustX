@@ -423,7 +423,7 @@ mcp_tool_policies = { "typo" = { "execution" = "background_only" } }"#,
     assert!(
         error
             .to_string()
-            .contains("mcpToolPolicies names typo, which mcpServers does not declare"),
+            .contains("mcp_tool_policies names typo, which mcp_servers does not declare"),
         "unexpected error: {error}"
     );
 }

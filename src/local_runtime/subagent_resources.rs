@@ -158,7 +158,7 @@ pub(crate) fn load(
             return Err(error("canonical role file must not be a symlink".into())
                 .because("canonical role identity cannot be redirected by a file symlink"));
         }
-        let bytes = crate::toml_authoring::read_bounded(path).map_err(|e| {
+        let bytes = crate::bounded_file::read_bounded(path).map_err(|e| {
             error(e).because(
                 "canonical role file is missing, oversized, or not a readable regular file",
             )
@@ -181,7 +181,7 @@ pub(crate) fn load(
             let resolved = boundary.join(file);
             validate_project_resource_path(boundary, &resolved)
                 .map_err(|e| e.at(path, format!("{field}.agentsMd.files")))?;
-            let bytes = crate::toml_authoring::read_bounded(&resolved).map_err(error)?;
+            let bytes = crate::bounded_file::read_bounded(&resolved).map_err(error)?;
             let content = String::from_utf8(bytes).map_err(|e| error(e.to_string()))?;
             files.push(ProjectContextFile {
                 path: resolved,

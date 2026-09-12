@@ -98,10 +98,10 @@ pub enum RequestParamsLayer {
 impl fmt::Display for RequestParamsLayer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::ModelDefaults => "model default requestParams",
-            Self::ReasoningProfile => "reasoning profile requestParams",
-            Self::SessionOverrides => "session requestParams overrides",
-            Self::SummaryOverrides => "explicit summary requestParams overrides",
+            Self::ModelDefaults => "model default request_params_json",
+            Self::ReasoningProfile => "reasoning profile request_params_json",
+            Self::SessionOverrides => "session request_params_json overrides",
+            Self::SummaryOverrides => "explicit summary request_params_json overrides",
             Self::EffectiveRequest => "effective requestParams",
         })
     }

@@ -1,7 +1,7 @@
 //! One host-owned launch boundary. No provider, Session, or runtime is composed here.
 
+use crate::bounded_file::read_bounded;
 use crate::capabilities::activation::{SourceActivation, SourceEnablement};
-use crate::toml_authoring::read_bounded;
 use std::collections::BTreeMap;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};

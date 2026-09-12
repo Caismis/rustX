@@ -1,37 +1,6 @@
-//! Bounded TOML authoring input and structured parser diagnostics.
+//! Typed TOML parsing and structured authoring diagnostics.
 
 use serde::de::DeserializeOwned;
-use std::io::Read;
-use std::os::unix::fs::OpenOptionsExt;
-use std::path::Path;
-
-const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
-pub(crate) fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
-    if !std::fs::metadata(path)
-        .map_err(|e| format!("cannot read {}: {e}", path.display()))?
-        .is_file()
-    {
-        return Err(format!("{} must be a regular file", path.display()));
-    }
-    // A regular file replaced by a FIFO between metadata and open must not block.
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(path)
-        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
-        return Err(format!("{} must be a regular file", path.display()));
-    }
-    let mut bytes = Vec::new();
-    file.take(MAX_CONFIG_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > MAX_CONFIG_BYTES {
-        return Err(format!("{} exceeds 1 MiB", path.display()));
-    }
-    Ok(bytes)
-}
-
 /// Parse TOML directly into a typed authoring document.
 ///
 /// # Errors

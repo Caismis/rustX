@@ -289,7 +289,7 @@
       "type": "object"
     },
     "ReasoningProfileId": {
-      "description": "The identity of one reasoning profile declared by a model.\n\nThe runtime assigns no meaning to the name: `off`, `on`, `low`,\n`thinking-32k`, and `deep` are all just names whose wire behaviour is\nexactly the profile's configured `requestParams`.",
+      "description": "The identity of one reasoning profile declared by a model.\n\nThe runtime assigns no meaning to the name: `off`, `on`, `low`,\n`thinking-32k`, and `deep` are all just names whose wire behaviour is\nexactly the profile's configured `request_params_json`.",
       "type": "string"
     },
     "RequestParamsJson": {

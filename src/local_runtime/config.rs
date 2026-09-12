@@ -359,10 +359,12 @@ impl ModelTimeoutPolicyDocument {
     #[must_use = "the validated policy must be used by runtime composition"]
     pub fn to_policy(self) -> Result<ModelTimeoutPolicy, String> {
         if self.response_start_timeout_ms == 0 {
-            return Err("modelTimeoutPolicy.responseStartTimeoutMs must be positive".to_owned());
+            return Err(
+                "model_timeout_policy.response_start_timeout_ms must be positive".to_owned(),
+            );
         }
         if self.stream_idle_timeout_ms == 0 {
-            return Err("modelTimeoutPolicy.streamIdleTimeoutMs must be positive".to_owned());
+            return Err("model_timeout_policy.stream_idle_timeout_ms must be positive".to_owned());
         }
         Ok(ModelTimeoutPolicy::new(
             Duration::from_millis(self.response_start_timeout_ms),
@@ -416,12 +418,12 @@ impl ToolDeadlinePolicyDocument {
     #[must_use = "the validated policy must be used by runtime composition"]
     pub fn to_policy(self) -> Result<crate::tools::deadline::ToolExecutionDeadlinePolicy, String> {
         if self.hard_deadline_ms == 0 {
-            return Err("toolDeadlinePolicy.hardDeadlineMs must be positive".to_owned());
+            return Err("tool_deadline_policy.hard_deadline_ms must be positive".to_owned());
         }
         if let Some(idle) = self.idle_liveness_ms
             && idle == 0
         {
-            return Err("toolDeadlinePolicy.idleLivenessMs must be positive".to_owned());
+            return Err("tool_deadline_policy.idle_liveness_ms must be positive".to_owned());
         }
         Ok(crate::tools::deadline::ToolExecutionDeadlinePolicy::new(
             Duration::from_millis(self.hard_deadline_ms),
@@ -770,7 +772,7 @@ impl CurrentRuntimeConfig {
             if !self.mcp_servers.contains_key(server_id) {
                 return Err(CurrentRuntimeConfigError::Invalid {
                     detail: format!(
-                        "mcpToolPolicies names {server_id}, which mcpServers does not declare"
+                        "mcp_tool_policies names {server_id}, which mcp_servers does not declare"
                     ),
                 });
             }
@@ -1225,7 +1227,7 @@ impl McpServerDocument {
         for key in self.sensitive_env.keys() {
             if !crate::credentials::valid_environment_name(key) || self.env.contains_key(key) {
                 return Err(
-                    "sensitiveEnv requires valid environment names disjoint from env".into(),
+                    "sensitive_env requires valid environment names disjoint from env".into(),
                 );
             }
         }
@@ -1239,7 +1241,7 @@ impl McpServerDocument {
                     .any(|name| name.eq_ignore_ascii_case(key))
             {
                 return Err(
-                    "sensitiveHeaders requires unique valid header names disjoint from headers"
+                    "sensitive_headers requires unique valid header names disjoint from headers"
                         .into(),
                 );
             }
@@ -1345,7 +1347,7 @@ impl std::fmt::Display for CurrentRuntimeConfigError {
             }
             Self::UnsupportedSchemaVersion { supported, found } => write!(
                 f,
-                "unsupported current runtime schemaVersion {found}; this runtime speaks {supported}"
+                "unsupported current runtime schema_version {found}; this runtime speaks {supported}"
             ),
             Self::Invalid { detail } => {
                 write!(f, "invalid current runtime config: {detail}")
@@ -1536,7 +1538,11 @@ model_timeout_policy = { "response_start_timeout_ms" = 0, "stream_idle_timeout_m
         );
         let error = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect_err("must fail");
         assert!(matches!(error, CurrentRuntimeConfigError::Invalid { .. }));
-        assert!(error.to_string().contains("responseStartTimeoutMs"));
+        assert!(
+            error
+                .to_string()
+                .contains("model_timeout_policy.response_start_timeout_ms")
+        );
     }
 
     /// A policy read for one admission remains unchanged when current
@@ -1626,7 +1632,11 @@ tool_deadline_policy = { "hard_deadline_ms" = 0, "idle_liveness_ms" = { "mode" =
             .tool_deadline_policy()
             .expect_err("zero hard deadline must fail");
         assert!(matches!(error, CurrentRuntimeConfigError::Invalid { .. }));
-        assert!(error.to_string().contains("hardDeadlineMs"));
+        assert!(
+            error
+                .to_string()
+                .contains("tool_deadline_policy.hard_deadline_ms")
+        );
     }
 
     /// A zero idle-liveness window is rejected at the policy boundary
@@ -1643,7 +1653,11 @@ tool_deadline_policy = { "hard_deadline_ms" = 7000, "idle_liveness_ms" = { "mode
             .tool_deadline_policy()
             .expect_err("zero idle liveness must fail");
         assert!(matches!(error, CurrentRuntimeConfigError::Invalid { .. }));
-        assert!(error.to_string().contains("idleLivenessMs"));
+        assert!(
+            error
+                .to_string()
+                .contains("tool_deadline_policy.idle_liveness_ms")
+        );
     }
 
     /// A policy read for one admission stays frozen when current
@@ -1693,8 +1707,7 @@ approval_mode = "full_access""#,
     /// Unknown fields fail rather than silently changing semantics.
     #[test]
     fn unknown_fields_are_rejected() {
-        let json = r#"conversation_id = "c"
-agent_id = "a"
+        let json = r#"agent_id = "a"
 future_knob = true
 
 [model]
@@ -1704,10 +1717,12 @@ model = "p/m"
 reserve_tokens = 0
 keep_recent_tokens = 0
 "#;
-        assert!(matches!(
-            CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect_err("must fail"),
-            CurrentRuntimeConfigError::Syntax { .. }
-        ));
+        json.parse::<toml_edit::DocumentMut>().expect("valid TOML");
+        let error = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect_err("must fail");
+        assert!(
+            error.to_string().contains("unknown field `future_knob`"),
+            "{error}"
+        );
     }
 
     /// Schema v3 owns timezone under the Time status module; the obsolete
@@ -1755,25 +1770,41 @@ timezone = "UTC""#,
     /// extension both fail at launch rather than being ignored.
     #[test]
     fn ext256_unknown_extension_names_and_fields_are_rejected() {
-        for unknown in [
-            r#""extensions": {"futureGoal": {}}"#,
-            r#""extensions": {"todo": {"future": true}}"#,
-            r#""extensions": {"todo": {"enabled": "true"}}"#,
-            r#""extensions": {"agentStatus": {"future": true}}"#,
-            r#""extensions": {"agentStatus": {"time": {"future": true}}}"#,
-            r#""extensions": {"agentStatus": {"background": {"future": true}}}"#,
+        for (fragment, expected) in [
+            ("future = true", "unknown field `future`"),
+            (
+                "[extensions.future_goal]\nenabled = true",
+                "unknown field `future_goal`",
+            ),
+            (
+                "[extensions.todo]\nenabled = true\nfuture = true",
+                "unknown field `future`",
+            ),
+            ("[extensions.todo]\nenabled = 'true'", "expected a boolean"),
+            (
+                "[extensions.agent_status]\nfuture = true",
+                "unknown field `future`",
+            ),
+            (
+                "[extensions.agent_status.time]\nenabled = true\nfuture = true",
+                "unknown field `future`",
+            ),
+            (
+                "[extensions.agent_status.background]\nfuture = true",
+                "unknown field `future`",
+            ),
         ] {
-            let json = MINIMAL.replace(
-                r#"agent_id = "agent-a""#,
-                &format!(r#""agentId": "agent-a", {unknown}"#),
-            );
-            assert!(
-                matches!(
-                    CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect_err("must fail"),
-                    CurrentRuntimeConfigError::Syntax { .. }
-                ),
-                "accepted {unknown}"
-            );
+            let text = if fragment.starts_with('[') {
+                format!("{MINIMAL}\n{fragment}\n")
+            } else {
+                format!("{fragment}\n{MINIMAL}")
+            };
+            text.parse::<toml_edit::DocumentMut>()
+                .expect("valid TOML must reach the typed schema");
+            let error = CurrentRuntimeConfig::from_toml_slice(text.as_bytes())
+                .expect_err("strict schema rejects the field or type");
+            assert!(matches!(error, CurrentRuntimeConfigError::Syntax { .. }));
+            assert!(error.to_string().contains(expected), "{fragment}: {error}");
         }
     }
 

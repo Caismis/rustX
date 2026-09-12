@@ -569,7 +569,7 @@ fn discover_package(root: &Path, directory_name: &str) -> Result<SkillPackage, S
             directory: directory_name.to_owned(),
         });
     }
-    let markdown_bytes = crate::toml_authoring::read_bounded(&skill_markdown).map_err(|error| {
+    let markdown_bytes = crate::bounded_file::read_bounded(&skill_markdown).map_err(|error| {
         SkillPackageError::Io {
             path: skill_markdown.display().to_string(),
             detail: error,

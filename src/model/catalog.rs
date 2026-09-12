@@ -12,7 +12,7 @@
 //!
 //! # Explicit provider binding
 //!
-//! A provider declares its `baseUrl` and its `apiKey` source explicitly. A
+//! A provider declares its `base_url` and its `api_key` source explicitly. A
 //! provider *name* carries no endpoint semantics: naming a provider
 //! `openai` or `anthropic` never selects an official endpoint, and no
 //! adapter constructor can reach the network without a base URL that came
@@ -34,7 +34,7 @@
 //! Provider wire parameters are opaque ([`crate::model::invocation`] owns
 //! the overlay and protected-key contract). Reasoning is expressed as
 //! model-declared named profiles whose behaviour is exactly their configured
-//! `requestParams`; the runtime assigns no meaning to a profile name.
+//! `request_params_json`; the runtime assigns no meaning to a profile name.
 //! Structural translation behaviour lives in the bounded [`ModelCompat`],
 //! which is deliberately *not* a strategy framework and is never inferred
 //! from a hostname. Historical Chat reasoning replay is an explicit
@@ -72,7 +72,7 @@ pub struct ModelId(String);
 ///
 /// The runtime assigns no meaning to the name: `off`, `on`, `low`,
 /// `thinking-32k`, and `deep` are all just names whose wire behaviour is
-/// exactly the profile's configured `requestParams`.
+/// exactly the profile's configured `request_params_json`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 #[derive(schemars::JsonSchema)]
@@ -235,7 +235,7 @@ impl CredentialSource {
         if value.is_empty() {
             return Err(ModelCatalogError::InvalidCredentialSource {
                 provider: provider.clone(),
-                detail: "the apiKey source must not be empty".to_owned(),
+                detail: "the api_key source must not be empty".to_owned(),
             });
         }
         let Some(name) = value.strip_prefix('$') else {
@@ -1240,14 +1240,14 @@ fn validate_model(
     if document.context_window == 0 || document.max_output_tokens == 0 {
         return Err(ModelCatalogError::InvalidLimits {
             model: reference,
-            detail: "contextWindow and maxOutputTokens must both be positive".to_owned(),
+            detail: "context_window and max_output_tokens must both be positive".to_owned(),
         });
     }
     if u64::from(document.max_output_tokens) >= document.context_window {
         return Err(ModelCatalogError::InvalidLimits {
             model: reference,
             detail: format!(
-                "maxOutputTokens {} must be smaller than contextWindow {}",
+                "max_output_tokens {} must be smaller than context_window {}",
                 document.max_output_tokens, document.context_window
             ),
         });
@@ -1257,8 +1257,9 @@ fn validate_model(
     {
         return Err(ModelCatalogError::InvalidCapabilities {
             model: reference,
-            detail: "inputModalities and outputModalities must each declare at least one modality"
-                .to_owned(),
+            detail:
+                "input_modalities and output_modalities must each declare at least one modality"
+                    .to_owned(),
         });
     }
     if !document.capabilities.supports_text_conversation() {
@@ -1309,7 +1310,7 @@ fn validate_compat(
 ) -> Result<(), ModelCatalogError> {
     let invalid_detail = match protocol {
         ModelProtocol::OpenAiChatCompletions if compat.chat_reasoning_replay.is_none() => Some(
-            "compat.chatReasoningReplay is required for openai_chat_completions and must be one of reasoning, reasoning_content, or omit"
+            "compat.chat_reasoning_replay is required for openai_chat_completions and must be one of reasoning, reasoning_content, or omit"
                 .to_owned(),
         ),
         ModelProtocol::OpenAiChatCompletions if compat.responses_storage_is_explicit() => Some(
@@ -1365,7 +1366,7 @@ fn validate_reasoning(
         return Err(ModelCatalogError::InvalidReasoning {
             model: reference.clone(),
             detail: format!(
-                "defaultProfile {:?} is not declared in profiles",
+                "default_profile {:?} is not declared in profiles",
                 reasoning.default_profile.as_str()
             ),
         });
@@ -1404,7 +1405,7 @@ fn validate_reasoning(
 /// credential is identified by its variable name only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelCatalogError {
-    /// The catalog file is not valid JSON for the catalog schema.
+    /// The catalog input is malformed or does not satisfy its typed schema.
     Syntax {
         /// The parser detail.
         detail: String,
@@ -1521,7 +1522,7 @@ impl fmt::Display for ModelCatalogError {
             Self::Syntax { detail } => write!(f, "malformed model catalog: {detail}"),
             Self::UnsupportedSchemaVersion { supported, found } => write!(
                 f,
-                "unsupported model catalog schemaVersion {found}; this runtime speaks {supported}"
+                "unsupported model catalog schema_version {found}; this runtime speaks {supported}"
             ),
             Self::EmptyCatalog => f.write_str("the model catalog declares no provider"),
             Self::InvalidIdentity { kind, value } => {
@@ -1533,11 +1534,11 @@ impl fmt::Display for ModelCatalogError {
             ),
             Self::InvalidBaseUrl { provider, base_url } => write!(
                 f,
-                "provider {provider} declares an invalid baseUrl {base_url:?}; \
+                "provider {provider} declares an invalid base_url {base_url:?}; \
                  an explicit absolute http(s) endpoint is mandatory"
             ),
             Self::InvalidCredentialSource { provider, detail } => {
-                write!(f, "provider {provider} apiKey source is invalid: {detail}")
+                write!(f, "provider {provider} api_key source is invalid: {detail}")
             }
             Self::ProviderWithoutModels { provider } => {
                 write!(f, "provider {provider} declares no model")
@@ -1961,7 +1962,7 @@ mod tests {
         ));
         let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
         assert!(matches!(error, ModelCatalogError::InvalidReasoning { .. }));
-        assert!(error.to_string().contains("defaultProfile"));
+        assert!(error.to_string().contains("default_profile"));
     }
 
     /// A model that declares `capabilities.reasoning = false` may not
@@ -2069,7 +2070,7 @@ mod tests {
         );
         let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
         assert!(matches!(error, ModelCatalogError::InvalidCompat { .. }));
-        assert!(error.to_string().contains("chatReasoningReplay"));
+        assert!(error.to_string().contains("compat.chat_reasoning_replay"));
         assert!(error.to_string().contains("p/m"));
     }
 

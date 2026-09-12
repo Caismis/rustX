@@ -5,6 +5,7 @@
 //! agent kernel.
 
 pub mod agent;
+mod bounded_file;
 pub mod capabilities;
 pub mod context;
 pub mod conversation;

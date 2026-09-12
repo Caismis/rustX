@@ -1953,7 +1953,7 @@ fn forbidden_authority_fails_through_discovery_and_relative_config_override() {
 }
 
 #[test]
-fn optional_explicit_malformed_unknown_and_null_are_distinct() {
+fn optional_explicit_malformed_and_typed_rejections_are_distinct() {
     let mut f = Fixture::new();
     assert_eq!(f.resolve().config.agent_id.as_str(), "rustx");
     f.request.config = Some("missing.toml".into());
@@ -1963,15 +1963,20 @@ fn optional_explicit_malformed_unknown_and_null_are_distinct() {
             .contains("cannot read")
     );
     f.request.config = None;
-    for value in [
-        "{",
-        "{\"unknown\":1}",
-        "{\"skills\":null}",
-        "{\"context\":{\"typo\":1}}",
-        "{\"defaultTools\":false}",
+    std::fs::write(f.host.launch_directory.join("rustx.toml"), "[unterminated").unwrap();
+    let malformed = analyze(&f.request, &f.host).unwrap_err();
+    assert!(malformed.diagnostic.reason.contains("malformed TOML"));
+    for (text, expected) in [
+        ("unknown = 1", "unknown field `unknown`"),
+        ("[context]\ntypo = 1", "unknown field `typo`"),
+        ("default_tools = false", "expected a sequence"),
+        ("skills = 'null'", "expected a sequence"),
     ] {
-        std::fs::write(f.host.launch_directory.join("rustx.toml"), value).unwrap();
-        assert!(resolve(&f.request, &f.host).is_err(), "{value}");
+        text.parse::<toml_edit::DocumentMut>()
+            .expect("syntactically valid TOML");
+        std::fs::write(f.host.launch_directory.join("rustx.toml"), text).unwrap();
+        let error = resolve(&f.request, &f.host).unwrap_err();
+        assert!(error.contains(expected), "{text}: {error}");
     }
     f.project(json!({"context":{"summary_output_cap":{"mode":"model_limit"}},"skills":[]}));
     assert_eq!(f.resolve().config.context.summary_output_cap, None);

@@ -71,7 +71,7 @@ fn read_document(path: &Path) -> Result<Option<Vec<u8>>, RuntimeClientError> {
         Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => Err(failure(
             "default document must be a regular file, not a symlink",
         )),
-        Ok(_) => crate::toml_authoring::read_bounded(path)
+        Ok(_) => crate::bounded_file::read_bounded(path)
             .map(Some)
             .map_err(io_failure),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -243,7 +243,7 @@ impl UserDefaults {
         staged.write_all(&candidate).map_err(io_failure)?;
         staged.as_file().sync_all().map_err(io_failure)?;
         frontier(Frontier::Staged)?;
-        let bytes = crate::toml_authoring::read_bounded(staged.path()).map_err(io_failure)?;
+        let bytes = crate::bounded_file::read_bounded(staged.path()).map_err(io_failure)?;
         // Reuse the canonical user-layer schema/ownership parser. This validates
         // the document, not readiness of any mutable project or resource files.
         let layer = super::launch::parse_layer(&target, &bytes, false).map_err(invalid)?;

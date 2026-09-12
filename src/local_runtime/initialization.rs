@@ -79,7 +79,7 @@ pub(super) fn documents(arguments: &[String]) -> Result<[Vec<u8>; 2], String> {
         }) {
             return Err("custom uses --model-document for the complete model declaration".into());
         }
-        crate::toml_authoring::parse(&crate::toml_authoring::read_bounded(Path::new(required(
+        crate::toml_authoring::parse(&crate::bounded_file::read_bounded(Path::new(required(
             "--model-document",
         )?))?)
         .map_err(|_| "invalid custom model document".to_owned())?

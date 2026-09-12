@@ -213,20 +213,65 @@ request_params_json = '''{"vendor_reasoning":[null,{"enabled":false}]}'''
         );
     }
     #[test]
+    fn semantic_toml_diagnostics_use_authoring_field_names() {
+        for (old, new, expected) in [
+            ("https://example.invalid/v1", "relative", "base_url"),
+            ("$NOT_CAPTURED", "", "api_key"),
+            (
+                "context_window = 128000",
+                "context_window = 0",
+                "context_window",
+            ),
+            (
+                "max_output_tokens = 4096",
+                "max_output_tokens = 128000",
+                "max_output_tokens",
+            ),
+            (
+                "default_profile = \"off\"",
+                "default_profile = \"missing\"",
+                "default_profile",
+            ),
+            (
+                "chat_reasoning_replay = \"omit\"",
+                "",
+                "compat.chat_reasoning_replay",
+            ),
+        ] {
+            let text = CATALOG.replace(old, new);
+            assert_ne!(text, CATALOG);
+            text.parse::<toml_edit::DocumentMut>().expect("valid TOML");
+            let error = ModelCatalog::from_toml_slice(text.as_bytes()).unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
+    #[test]
     fn invalid_json_unknown_toml_and_protected_keys_fail_at_their_owned_boundaries() {
         for replacement in ["[]", "null", "42", "true", "{bad"] {
             let text = CATALOG.replace(
                 r#"{"future":{"nested":[1,null,{"new":true}]},"temperature":0.1}"#,
                 replacement,
             );
-            assert!(ModelCatalog::from_toml_slice(text.as_bytes()).is_err());
-        }
-        for field in ["unknown = true\n", "request_params = {}\n"] {
-            let text = CATALOG.replace(
-                "schema_version = 1",
-                &format!("schema_version = 1\n{field}"),
+            text.parse::<toml_edit::DocumentMut>()
+                .expect("valid outer TOML");
+            let error = ModelCatalog::from_toml_slice(text.as_bytes()).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("request_params_json must contain a valid JSON object"),
+                "{error}"
             );
-            assert!(ModelCatalog::from_toml_slice(text.as_bytes()).is_err());
+        }
+        for field in ["unknown", "request_params"] {
+            let text = format!("{field} = {{}}\n{CATALOG}");
+            text.parse::<toml_edit::DocumentMut>().expect("valid TOML");
+            let error = ModelCatalog::from_toml_slice(text.as_bytes()).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("unknown field `{field}`")),
+                "{error}"
+            );
         }
         for key in ["model", "messages", "stream"] {
             let protected = format!("{{\"{key}\":null}}");
@@ -234,10 +279,13 @@ request_params_json = '''{"vendor_reasoning":[null,{"enabled":false}]}'''
                 r#"{"future":{"nested":[1,null,{"new":true}]},"temperature":0.1}"#,
                 &protected,
             );
-            assert!(
-                ModelCatalog::from_toml_slice(text.as_bytes()).is_err(),
-                "{key}"
-            );
+            text.parse::<toml_edit::DocumentMut>().expect("valid TOML");
+            let error = ModelCatalog::from_toml_slice(text.as_bytes()).unwrap_err();
+            assert!(matches!(
+                error,
+                crate::model::catalog::ModelCatalogError::ProtectedKey { .. }
+            ));
+            assert!(error.to_string().contains("request_params_json"), "{error}");
         }
     }
 }
