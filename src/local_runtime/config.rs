@@ -1717,7 +1717,7 @@ mod tests {
     #[test]
     fn ext256_unknown_extension_names_and_fields_are_rejected() {
         for unknown in [
-            r#""extensions": {"goal": {}}"#,
+            r#""extensions": {"futureGoal": {}}"#,
             r#""extensions": {"todo": {"future": true}}"#,
             r#""extensions": {"todo": {"enabled": "true"}}"#,
             r#""extensions": {"agentStatus": {"future": true}}"#,

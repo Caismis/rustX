@@ -316,7 +316,7 @@ mod tests {
             // Issue #256: the closed extension surface is strict in role
             // frontmatter too — an unknown extension name and an unknown
             // knob inside a known extension both fail.
-            "---\ndescription: x\nextensions: {goal: {enabled: true}}\n---\nbody",
+            "---\ndescription: x\nextensions: {futureGoal: {enabled: true}}\n---\nbody",
             "---\ndescription: x\nextensions: {todo: {future: true}}\n---\nbody",
             "---\ndescription: x\nextensions: {agentStatus: {future: true}}\n---\nbody",
             "---\ndescription: x\nextensions: {agentStatus: {time: {future: true}}}\n---\nbody",

@@ -1,5 +1,12 @@
 # Canonical named Subagent resources
 
+Goal belongs only to the root conversation in v1. The shared closed extension
+syntax accepts Goal in role definitions and invocation selections, but the
+effective composition is rejected by `unsupported_child_scope` during resolution,
+before staging/spawn/ownership commit. It is never silently dropped or inherited.
+Workflow overrides use the same scope check. [Goal extension](goal-extension.md)
+does not change one-shot Subagent terminal semantics.
+
 ## Session ownership and local lifecycle exclusion (Issue #254)
 
 Session deletion cascades along durable ownership, never provenance. `/tree`

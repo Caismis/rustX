@@ -152,6 +152,7 @@ pub struct ToolExecutionContext<'a> {
     ///
     /// [`TodoBatch`]: crate::tools::todo::TodoBatch
     pub(crate) todos: Option<TodoWriter>,
+    pub(crate) goal: Option<Box<crate::goal::GoalToolContext<'a>>>,
     /// The attempt-scoped subagent resolution view (Issue #144).
     ///
     /// This is intentionally *not* a runtime handle and intentionally not
@@ -190,6 +191,7 @@ impl<'a> ToolExecutionContext<'a> {
                 .as_ref()
                 .map(|requester| requester.with_cancellation(cancellation)),
             todos: self.todos.clone(),
+            goal: self.goal.clone(),
             subagent: self.subagent.clone(),
         }
     }
@@ -223,6 +225,7 @@ impl<'a> ToolExecutionContext<'a> {
             environment,
             questionnaire_requester: None,
             todos: None,
+            goal: None,
             subagent: None,
         }
     }
@@ -1960,6 +1963,7 @@ mod tests {
     /// [`ToolExecutor::start`] directly through the registry.
     ///
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn executor_receives_no_synthetic_runtime_fields() {
         use super::{ToolExecutionContext, ToolExecutor};
         struct Capturing;
@@ -2036,6 +2040,7 @@ mod tests {
         .expect("managed tool output");
         let reporter = Capturing;
         let context = ToolExecutionContext {
+            goal: None,
             conversation_id: &ConversationId::new("conv-1"),
             execution_id: None,
             cancellation: crate::runtime::cancellation::ExecutionCancellation::detached(

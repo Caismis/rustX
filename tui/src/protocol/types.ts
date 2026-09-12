@@ -83,7 +83,11 @@
 // the same way as "Todo composed over an empty task list" (an empty snapshot).
 // Both follow from one frozen composition and cannot disagree. There is no v28
 // decoding and no compatibility shim.
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 29;
+// Version 30: root Goal controls and snapshot member.
+// Version 31: Goal joins coherent projection bootstrap and the bounded
+// `goal_changed` stream. Activation-only changes advance the client cursor
+// while preserving the independent durable Goal revision.
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 31;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -166,10 +170,12 @@ export type UserSource =
   | { agent: { agent_id: AgentId } };
 
 export type InboundKind =
+  | { goal_continuation: GoalRef }
   | "message"
   | { compaction_summary: CompactionSummaryMetadata }
   | {
       context:
+        | { goal_status: GoalSnapshot }
         | "runtime_tool_observation"
         | "extension_environment"
         | {
@@ -1472,6 +1478,7 @@ export interface SettingsLifetimes {
  * attached to it.
  */
 export interface EffectiveNativeAgentExtensions {
+  goal: Record<string, never> | null;
   agent_status: EffectiveAgentStatusExtension | null;
   /**
    * The composed Todo extension, or `null` when this Agent composes none.
@@ -1503,7 +1510,25 @@ export interface SaveDefaultResult {
   live_unchanged: boolean; applies_at: SettingsBoundary;
 }
 
+export interface GoalRef { id: string; revision: number }
+export interface GoalSnapshot {
+  reference: GoalRef;
+  objective: string;
+  phase: "active" | "paused" | "blocked" | "complete";
+  blocked_reason: string | null;
+  autonomous_round_budget: number;
+  autonomous_rounds_consumed: number;
+  origin: { kind: "runtime_control" } | { kind: "human_attempt"; message_id: MessageId; attempt_id: AttemptId };
+  last_round_message_id: MessageId | null;
+}
+export interface GoalView { current: GoalSnapshot | null; armed: boolean }
+export type GoalMutation = { action: "pause" | "resume" | "complete" }
+  | { action: "block"; reason: string } | { action: "edit"; objective: string } | { action: "budget"; rounds: number };
+export type GoalControl = { action: "show" } | { action: "create"; objective: string; budget: number }
+  | { action: "mutate"; expected: GoalRef; mutation: GoalMutation };
+
 export interface RuntimeClientSnapshot {
+  goal: GoalView | null;
   settings_evidence: "live_session" | "frozen_child" | "historical_partial";
   launch_settings: LaunchSettings | null;
   /**
@@ -1636,6 +1661,7 @@ export interface PublicationAudit {
 }
 
 export type RuntimeClientEvent =
+  | { type: "goal_changed"; view: GoalView }
   | { type: "workflows_updated"; workflows: WorkflowSnapshot }
   | {
       type: "attempt_started";
@@ -1934,6 +1960,7 @@ export interface RuntimeClientProtocolEvent {
 // ---------------------------------------------------------------------------
 
 export type RuntimeClientRequest =
+  | { method: "goal"; id: RequestId; control: GoalControl }
   | SessionDeletionRequest
   | { method: "initialize"; id: RequestId; protocol_version: number }
   | { method: "submit_inbound"; id: RequestId; content: UserContentBlock[] }
@@ -2033,6 +2060,7 @@ export type RuntimeClientMethod = RuntimeClientRequest["method"];
 
 /** A request without its id: the connection is the sole id allocator. */
 export type RuntimeClientRequestBody =
+  | { method: "goal"; control: GoalControl }
   | Omit<Extract<SessionDeletionRequest, { method: "session_delete_preview" }>, "id">
   | Omit<Extract<SessionDeletionRequest, { method: "session_delete" }>, "id">
   | Omit<Extract<SessionDeletionRequest, { method: "session_delete_recover" }>, "id">
@@ -2079,6 +2107,7 @@ export type RuntimeClientRequestBody =
   | Omit<Extract<RuntimeClientRequest, { method: "shutdown" }>, "id">;
 
 export type RuntimeClientResult =
+  | { type: "goal"; view: GoalView }
   | SessionDeletionResponse
   | {
       type: "initialized";
@@ -2263,6 +2292,7 @@ export function isKnownRuntimeClientEvent(
     case "tool_call_assembled":
     case "assistant_publication_settled":
     case "tool_execution_started":
+    case "goal_changed":
     case "workflows_updated":
     case "tool_execution_progress":
     case "tool_execution_settled":

@@ -396,6 +396,8 @@ pub enum ConversationRuntimeError {
         /// Whether the composition's Agent Status engine materialization
         /// matches the frozen composition.
         agent_status_agrees: bool,
+        /// Whether Goal state and the complete exact command surface agree.
+        goal_agrees: bool,
     },
     /// The context engine configuration is impossible.
     Context(String),
@@ -498,12 +500,13 @@ impl core::fmt::Display for ConversationRuntimeError {
                 configured_todo_tool,
                 active_todo_tool,
                 agent_status_agrees,
+                goal_agrees,
             } => write!(
                 f,
                 "the native Agent Extension facets of conversation {conversation_id} do not follow from one frozen composition: \
                  composed todo={composed_todo}, materialized todo state={materialized_todo_state}, \
                  configured todo Tool={configured_todo_tool}, active todo Tool={active_todo_tool}, \
-                 agent status agrees={agent_status_agrees}"
+                 agent status agrees={agent_status_agrees}, Goal facets agree={goal_agrees}"
             ),
             Self::Context(message) => write!(f, "context configuration failed: {message}"),
             Self::InvalidModelTimeoutPolicy => write!(
@@ -1460,6 +1463,9 @@ impl RuntimeInner {
                             .request_cancel(CancellationReason::RuntimeShutdown);
                         interaction_cancel_reason = current.cancellation.reason();
                     }
+                    if let Some(goal) = self.tool_runtime.goal() {
+                        goal.disarm();
+                    }
                     if let Some(compaction) = &state.manual_compaction {
                         let _ = compaction
                             .cancellation
@@ -2026,6 +2032,12 @@ impl RuntimeInner {
         // one of those commits. Reading the committed list inside the same
         // freeze keeps the seed and the live stream on one cut.
         let todos = self.tool_runtime.todo_snapshot();
+        let goal = self
+            .tool_runtime
+            .goal()
+            .map(crate::goal::GoalDomain::view)
+            .transpose()
+            .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
         self.interaction.install_observer(observer.clone());
         // ---- T1: the mailbox (frozen: an inactive conversation refuses
         //          inbound) ----
@@ -2033,6 +2045,9 @@ impl RuntimeInner {
             .mailbox
             .install_observer_and_pending(observer.clone())
             .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
+        if let Some(domain) = self.tool_runtime.goal() {
+            domain.install_observer(observer.clone());
+        }
         // ---- T2: the background registry (frozen: the registry refuses
         //          commits while its mailbox is bound inactive) ----
         let background = self
@@ -2076,6 +2091,7 @@ impl RuntimeInner {
             subagents,
             pending_interactions,
             todos,
+            goal,
             capabilities,
             capability_availability,
             resources,
@@ -2637,6 +2653,34 @@ impl RuntimeInner {
                 if state.recovered_continuation {
                     state.recovered_continuation = false;
                     self.admit_continuation(state);
+                    return;
+                }
+                if let Some(goal) = self.tool_runtime.goal() {
+                    let admission = self
+                        .tool_runtime
+                        .background()
+                        .with_goal_idle(|| {
+                            let request = || {
+                                crate::goal::GoalRoundDriver::request(
+                                    goal,
+                                    &self.mailbox,
+                                    self.clock.now(),
+                                )
+                            };
+                            match &self.subagents {
+                                Some(registry) => registry.with_goal_idle(request),
+                                None => Some(request()),
+                            }
+                        })
+                        .flatten();
+                    if let Some(Err(error)) = admission {
+                        goal.disarm();
+                        self.record_durability_failure(
+                            &mut state,
+                            DurableOperation::GoalRoundAdmission,
+                            error.to_string(),
+                        );
+                    }
                 }
                 return;
             }
@@ -3138,6 +3182,7 @@ impl ConversationRuntime {
         let materialized = crate::extensions::NativeAgentExtensions::from_materialized(
             config.context.status_engine.as_ref(),
             config.tool_runtime.todos(),
+            config.tool_runtime.goal(),
         );
         let required = composition.expected_tool_plane();
         let configured_plane = config.capability.extension_tool_plane_shape();
@@ -3153,6 +3198,11 @@ impl ConversationRuntime {
                 configured_todo_tool: configured_plane.todo,
                 active_todo_tool: active_plane.todo,
                 agent_status_agrees: materialized.agent_status() == composition.agent_status(),
+                goal_agrees: materialized.goal() == composition.goal()
+                    && configured_plane.goal == required.goal
+                    && active_plane.goal == required.goal
+                    && !configured_plane.invalid_goal
+                    && !active_plane.invalid_goal,
             });
         }
         // The subagent registry is a conversation-owned logical plane: the
@@ -3548,6 +3598,18 @@ impl ConversationRuntime {
             .lock()
             .expect("coordinator probe lock poisoned") = Some(probe);
         Ok(runtime)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_drain_signals(
+        &self,
+        arrival: Arc<tokio::sync::Notify>,
+        linearization: Arc<tokio::sync::Notify>,
+    ) {
+        let mut probe = self.inner.probe.lock().expect("probe lock");
+        let probe = probe.get_or_insert_with(CoordinatorProbe::default);
+        probe.shutdown_arrival = Some(arrival);
+        probe.drain_linearization = Some(linearization);
     }
 
     #[cfg(test)]
@@ -4566,7 +4628,75 @@ impl ConversationRuntime {
         let _ = current
             .cancellation
             .request_cancel(CancellationReason::UserRequested);
+        if let Some(goal) = self.inner.tool_runtime.goal() {
+            goal.disarm();
+        }
         Ok(current.attempt_id.clone())
+    }
+
+    /// Explicit cancellation disarms even when there is no current attempt to cancel.
+    pub(crate) fn disarm_goal(&self) {
+        let _state = self.inner.lock_state();
+        if let Some(goal) = self.inner.tool_runtime.goal() {
+            goal.disarm();
+        }
+    }
+
+    /// Authoritative root Goal read. Disabled composition does not read durable Goal facts.
+    ///
+    /// # Errors
+    /// Returns a durable Goal read failure.
+    pub fn goal_view(
+        &self,
+    ) -> Result<Option<crate::goal::GoalView>, crate::durable::ConversationStoreError> {
+        self.inner
+            .tool_runtime
+            .goal()
+            .map(crate::goal::GoalDomain::view)
+            .transpose()
+    }
+
+    /// User control uses the existing coordinator and lifecycle commit boundary.
+    ///
+    /// # Errors
+    /// Returns disabled, inactive, storage, transition, or stale-revision diagnostics.
+    ///
+    /// # Panics
+    /// Panics only if a runtime synchronization lock was poisoned.
+    pub fn control_goal(
+        &self,
+        control: crate::goal::GoalControl,
+    ) -> Result<crate::goal::GoalView, String> {
+        let _state = self.inner.lock_state();
+        let domain = self
+            .inner
+            .tool_runtime
+            .goal()
+            .ok_or("Goal extension is disabled; enable extensions.goal.enabled and restart")?;
+        let write = match control {
+            crate::goal::GoalControl::Show => {
+                return domain.view().map_err(|error| error.to_string());
+            }
+            crate::goal::GoalControl::Create { objective, budget } => {
+                crate::goal::GoalWrite::Create {
+                    objective,
+                    budget,
+                    origin: crate::goal::GoalOrigin::RuntimeControl,
+                }
+            }
+            crate::goal::GoalControl::Mutate { expected, mutation } => {
+                crate::goal::GoalWrite::Mutate { expected, mutation }
+            }
+        };
+        self.inner
+            .mailbox
+            .with_running_commit(|| domain.write(write))
+            .map_err(|error| error.to_string())?
+            .map_err(|error| error.to_string())?
+            .map_err(|rejection| {
+                serde_json::to_string(&rejection).expect("Goal rejection serializes")
+            })?;
+        domain.view().map_err(|error| error.to_string())
     }
 
     /// Commits a one-shot child cancellation intent into the runtime-owned
@@ -5213,6 +5343,7 @@ impl std::error::Error for RuntimeBootstrapError {}
 /// Every one of those facts arrives through the live observation stream.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeBootstrapSnapshot {
+    pub goal: Option<crate::goal::GoalView>,
     /// The conversation identity.
     pub conversation_id: ConversationId,
     /// Whether runtime drain has begun and new admission is closed.
@@ -5715,6 +5846,15 @@ impl RuntimeObserver {
     }
 }
 
+impl crate::goal::GoalObserver for RuntimeObserver {
+    fn changed(&self, view: crate::goal::GoalView) {
+        self.push(ConversationObservation::GoalChanged(view));
+    }
+    fn disarmed(&self) {
+        self.push(ConversationObservation::GoalDisarmed);
+    }
+}
+
 impl AgentExecutionObserver for RuntimeObserver {
     fn observe_event(&self, attempt_id: &AttemptId, event: &RuntimeEvent) {
         self.push(ConversationObservation::Event {
@@ -5910,6 +6050,11 @@ impl InteractionObserver for RuntimeObserver {
 
 #[cfg(test)]
 impl ConversationRuntime {
+    /// Runs the ordinary coordinator admission boundary synchronously in a test.
+    pub(crate) fn admit_now_for_test(&self) {
+        self.inner.admit_next_attempt();
+    }
+
     /// Commits a synthetic durable-authority failure through the exact
     /// production `record_durability_failure` path (Issue #60 regression
     /// seam).

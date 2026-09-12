@@ -248,6 +248,8 @@ export class CommandDispatcher {
             "Todos",
             renderTodoInspection(selectTodos(state), isTodoComposed(state)),
           );
+        case "/goal":
+          return await this.#goal(session, argument);
         case "/status":
           return inspect("Agent Status", renderStatus(state));
         case "/compact":
@@ -404,6 +406,26 @@ export class CommandDispatcher {
       "info",
       `context compacted to generation ${latest.generation}: ${latest.tokens_before.input_tokens} → ${latest.estimated_tokens_after} tokens`,
     );
+  }
+
+  async #goal(session: RuntimeClientAttachment, argument: string): Promise<CommandOutcome> {
+    const [action = "show", ...words] = argument.trim().split(/\s+/);
+    const text = words.join(" ");
+    if (action === "create") {
+      if (!text) return transient("error", "usage: /goal create <objective>");
+      const view = await session.goal({ action: "create", objective: text, budget: 10 });
+      return inspect("Goal", JSON.stringify(view, null, 2));
+    }
+    const view = await session.goal({ action: "show" });
+    if (!action || action === "show") return inspect("Goal", JSON.stringify(view, null, 2));
+    if (!view.current) return transient("error", "No current Goal. Use /goal create <objective>.");
+    let mutation: import("../protocol/types.ts").GoalMutation;
+    if ((action === "pause" || action === "resume") && !text) mutation = { action };
+    else if (action === "edit" && text) mutation = { action: "edit", objective: text };
+    else if (action === "budget" && /^\d+$/.test(text)) mutation = { action: "budget", rounds: Number(text) };
+    else return transient("error", "usage: /goal [show | create <objective> | pause | resume | edit <objective> | budget <rounds>]");
+    const updated = await session.goal({ action: "mutate", expected: view.current.reference, mutation });
+    return inspect("Goal", JSON.stringify(updated, null, 2));
   }
 
   async #reload(

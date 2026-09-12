@@ -1,5 +1,12 @@
 # Launch configuration and project trust
 
+`extensions.goal.enabled` defaults to `false`. Enabling it for a root launch
+composes GoalDomain, the stable `get_goal`/`create_goal`/`update_goal` Tool surface,
+typed current context, controls and the round driver. Ordinary Tool selection
+cannot filter these Tools. Disabling it preserves durable Goal records; re-enabling
+restores state disarmed. [Goal extension](goal-extension.md) defines the scope and
+control contract. Effective child compositions with Goal enabled are refused.
+
 See [canonical named Subagent resources](subagent-resources.md) for schema 8
 role files, registration/admission, bounded roots, source provenance, and frozen
 reload/child contracts.
@@ -261,14 +268,14 @@ optional Agent augmentation:
 A Native Agent Extension is optional Agent behavior or context that belongs to
 one concrete Agent/Conversation composition. Agent Status was the first
 extension migrated under this boundary; **Todo** is the second, and the first
-that is stateful and contributes a model-facing Tool. Goal is a later, separate
-issue and is **not** part of it today. The obsolete top-level `agentStatus`
+that is stateful and contributes a model-facing Tool. Goal is the third,
+root-only extension over durable revisioned state. The obsolete top-level `agentStatus`
 field is removed outright: there is no alias, no fallback parse, no
 deprecation warning, and no compatibility mode — an obsolete document fails the
 ordinary strict-field boundary, naming the offending field.
 
 The record is *closed*, not an open registry. Its members are typed Rust fields,
-so an unknown extension name (`extensions.goal`) and an unknown knob inside a
+so an unknown extension name (`extensions.futureGoal`) and an unknown knob inside a
 known extension (`extensions.agentStatus.future`, `extensions.todo.future`) both
 fail at launch exactly like any other unknown field. rustX deliberately provides no generic plugin or
 runtime-hook system: there is no dynamic registration, no lifecycle trait, no

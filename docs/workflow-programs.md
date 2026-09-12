@@ -1,5 +1,11 @@
 # Fixed scoped Workflow programs
 
+Goal answers WHAT persists; Workflow answers HOW finite work executes. A Goal
+round can invoke Workflow Tools normally, but Workflow completion never completes
+Goal, and WorkflowRun never owns Goal state or continuation. Workflow Agent-node
+overrides cannot enable root-only Goal for one-shot children. Scheduler owns future
+WHEN semantics; Todo remains bounded working state. See [Goal extension](goal-extension.md).
+
 For small executable starting points and offline `workflow check` / `workflow explain`,
 see [Workflow authoring](workflow-authoring.md). The complete reference workflows
 remain native execution and settlement conformance evidence.

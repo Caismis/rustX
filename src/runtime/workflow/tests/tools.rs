@@ -227,6 +227,43 @@ fn context_with_workspace_policy(
 }
 
 #[tokio::test]
+async fn goal84_workflow_completion_and_goal_completion_are_independent() {
+    let plane = workflow_test_plane(1);
+    let domain =
+        crate::goal::GoalDomain::new(plane.store.clone(), Arc::new(tokio::sync::Notify::new()));
+    let created = domain
+        .write(crate::goal::GoalWrite::Create {
+            objective: "Deliver the whole objective".into(),
+            budget: 2,
+            origin: crate::goal::GoalOrigin::RuntimeControl,
+        })
+        .unwrap()
+        .unwrap();
+    let context = context(
+        &plane,
+        Probe::new(ToolExecutionStatus::Success),
+        crate::agent::AttemptLifecycle::default(),
+    );
+    let (_, cancellation) = workflow_cancellation();
+    let value = workflow_runtime(&plane)
+        .run_foreground(
+            program(),
+            ToolCallId::new("goal-workflow"),
+            context,
+            json!({"passed": true}),
+            cancellation,
+        )
+        .await
+        .unwrap();
+    assert_eq!(value, json!({"passed": true}));
+    assert_eq!(
+        domain.view().unwrap().current,
+        Some(created),
+        "successful finite work does not mutate Goal authority"
+    );
+}
+
+#[tokio::test]
 async fn tool_only_inactive_capability_has_no_provider_or_canonical_history_and_business_false_survives()
  {
     let plane = workflow_test_plane(1);

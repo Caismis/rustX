@@ -12,6 +12,7 @@
 //! Native Agent Extensions
 //!   Agent Status        <- the first migrated extension (Issue #256)
 //!   Todo                <- the first STATEFUL, Tool-providing one (#259)
+//!   Goal                <- revisioned durable root state and ordinary admission (#84)
 //! ```
 //!
 //! # What a Native Agent Extension is
@@ -138,7 +139,23 @@ pub struct NativeAgentExtensionsDocument {
     /// model-facing `todo` Tool, and its bounded status presentation
     /// (Issue #259).
     pub todo: TodoExtensionDocument,
+    /// Root-only persistent Goal pursuit, disabled by default.
+    pub goal: GoalExtensionDocument,
 }
+
+/// Authored opt-in Goal composition.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+pub struct GoalExtensionDocument {
+    pub enabled: bool,
+}
+
+/// Frozen Goal composition; domain bounds are native, not launch settings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GoalExtensionConfig {}
 
 /// The authored Agent Status extension.
 ///
@@ -234,6 +251,7 @@ impl NativeAgentExtensionsDocument {
                 background: self.agent_status.background.clone(),
             }),
             todo: self.todo.enabled.then(TodoExtensionConfig::default),
+            goal: self.goal.enabled.then(GoalExtensionConfig::default),
         }
     }
 }
@@ -293,6 +311,13 @@ pub struct NativeAgentExtensionSelection {
     )]
     #[schemars(with = "TodoExtensionDocument")]
     pub todo: Option<TodoExtensionDocument>,
+    #[serde(
+        default,
+        deserialize_with = "crate::extensions::present_and_not_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "GoalExtensionDocument")]
+    pub goal: Option<GoalExtensionDocument>,
 }
 
 /// Deserializes a field that may be **absent**, but never explicitly `null`.
@@ -336,6 +361,10 @@ impl NativeAgentExtensionSelection {
                 .todo
                 .filter(|todo| todo.enabled)
                 .map(|_| TodoExtensionConfig::default()),
+            goal: self
+                .goal
+                .filter(|goal| goal.enabled)
+                .map(|_| GoalExtensionConfig {}),
         }
     }
 
@@ -357,6 +386,9 @@ impl NativeAgentExtensionSelection {
             todo: frozen
                 .todo()
                 .map(|_| TodoExtensionDocument { enabled: true }),
+            goal: frozen
+                .goal()
+                .map(|_| GoalExtensionDocument { enabled: true }),
         }
     }
 }
@@ -382,6 +414,14 @@ pub fn unsupported_child_scope(
     // The exhaustive match is the guarantee: adding a member to the closed
     // composition without deciding its child scope does not compile.
     match composition {
+        NativeAgentExtensions {
+            goal: Some(GoalExtensionConfig {}),
+            agent_status: _,
+            todo: _,
+        } => Some(UnsupportedChildScope {
+            extension: "goal",
+            reason: "Goal requires a root conversation; one-shot children cannot continue across turns",
+        }),
         // Agent Status contributes one bounded structured fact that Context
         // Assembly admits at request time. A one-shot child owns Context
         // Assembly exactly like a root Agent and needs no multi-round or
@@ -396,6 +436,7 @@ pub fn unsupported_child_scope(
         NativeAgentExtensions {
             agent_status: None | Some(AgentStatusConfig { .. }),
             todo: None | Some(TodoExtensionConfig { .. }),
+            goal: None,
         } => None,
     }
 }
@@ -407,13 +448,20 @@ pub fn unsupported_child_scope(
 /// does not actually hold — and adding a member updates every caller at once.
 #[must_use]
 pub fn composed_extension_names(composition: &NativeAgentExtensions) -> Vec<&'static str> {
-    let NativeAgentExtensions { agent_status, todo } = composition;
+    let NativeAgentExtensions {
+        agent_status,
+        todo,
+        goal,
+    } = composition;
     let mut names = Vec::new();
     if agent_status.is_some() {
         names.push(AGENT_STATUS_EXTENSION);
     }
     if todo.is_some() {
         names.push(TODO_EXTENSION);
+    }
+    if goal.is_some() {
+        names.push("goal");
     }
     names
 }
@@ -473,6 +521,8 @@ pub struct NativeAgentExtensions {
     /// includes the extension (Issue #259).
     #[serde(default)]
     todo: Option<TodoExtensionConfig>,
+    #[serde(default)]
+    goal: Option<GoalExtensionConfig>,
 }
 
 impl NativeAgentExtensions {
@@ -482,6 +532,7 @@ impl NativeAgentExtensions {
         Self {
             agent_status: None,
             todo: None,
+            goal: None,
         }
     }
 
@@ -492,6 +543,7 @@ impl NativeAgentExtensions {
         Self {
             agent_status: Some(agent_status),
             todo: None,
+            goal: None,
         }
     }
 
@@ -501,6 +553,7 @@ impl NativeAgentExtensions {
         Self {
             agent_status: None,
             todo: Some(TodoExtensionConfig {}),
+            goal: None,
         }
     }
 
@@ -539,10 +592,23 @@ impl NativeAgentExtensions {
         self.todo.as_ref()
     }
 
+    /// The root-only Goal extension configuration.
+    #[must_use]
+    pub const fn goal(&self) -> Option<&GoalExtensionConfig> {
+        self.goal.as_ref()
+    }
+
+    /// Compose Goal explicitly.
+    #[must_use]
+    pub const fn and_goal(mut self) -> Self {
+        self.goal = Some(GoalExtensionConfig {});
+        self
+    }
+
     /// Whether this composition contains no native Agent Extension.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.agent_status.is_none() && self.todo.is_none()
+        self.agent_status.is_none() && self.todo.is_none() && self.goal.is_none()
     }
 
     /// Reads this composition back out of the runtime extension owners a
@@ -570,10 +636,12 @@ impl NativeAgentExtensions {
     pub(crate) fn from_materialized(
         status_engine: Option<&AgentStatusEngine>,
         todos: Option<&crate::tools::todo::ConversationTodoList>,
+        goal: Option<&crate::goal::GoalDomain>,
     ) -> Self {
         Self {
             agent_status: status_engine.map(|engine| engine.config().clone()),
             todo: todos.map(|_| TodoExtensionConfig {}),
+            goal: goal.map(|_| GoalExtensionConfig {}),
         }
     }
 
@@ -620,10 +688,14 @@ impl NativeAgentExtensions {
             // Agent Status contributes context, never a Tool.
             agent_status: _,
             todo,
+            goal,
         } = self;
         let mut names = Vec::new();
         if todo.is_some() {
             names.push(crate::tools::native::TODO_TOOL_NAME);
+        }
+        if goal.is_some() {
+            names.extend(crate::tools::native::GOAL_TOOL_NAMES);
         }
         names
     }
@@ -640,6 +712,8 @@ impl NativeAgentExtensions {
     pub(crate) fn expected_tool_plane(&self) -> ExtensionToolPlaneShape {
         ExtensionToolPlaneShape {
             todo: self.todo.is_some(),
+            goal: self.goal.is_some(),
+            invalid_goal: false,
         }
     }
 
@@ -686,7 +760,11 @@ impl NativeAgentExtensions {
                 config.background.enabled,
             ),
         };
-        format!("{agent_status}|{}", self.todo_digest_framing())
+        format!(
+            "{agent_status}|{}|goal={}",
+            self.todo_digest_framing(),
+            self.goal.is_some()
+        )
     }
 
     /// The framing of the Todo member, shared by both digests.
@@ -754,7 +832,11 @@ impl NativeAgentExtensions {
                 config.background.enabled,
             ),
         };
-        format!("{agent_status}|{}", self.todo_digest_framing())
+        format!(
+            "{agent_status}|{}|goal={}",
+            self.todo_digest_framing(),
+            self.goal.is_some()
+        )
     }
 }
 
@@ -828,7 +910,11 @@ impl ExtensionToolPlane {
     pub const fn none() -> Self {
         Self {
             registrations: Vec::new(),
-            shape: ExtensionToolPlaneShape { todo: false },
+            shape: ExtensionToolPlaneShape {
+                todo: false,
+                goal: false,
+                invalid_goal: false,
+            },
         }
     }
 
@@ -843,15 +929,21 @@ impl ExtensionToolPlane {
     #[must_use]
     pub(crate) fn of_materialized_owners(
         todos: Option<&crate::tools::todo::ConversationTodoList>,
+        goal: Option<&crate::goal::GoalDomain>,
     ) -> Self {
         let mut registrations = Vec::new();
         if todos.is_some() {
             registrations.push(crate::tools::native::todo_tool_registration());
         }
+        if goal.is_some() {
+            registrations.extend(crate::tools::native::goal_tool_registrations());
+        }
         Self {
             registrations,
             shape: ExtensionToolPlaneShape {
                 todo: todos.is_some(),
+                goal: goal.is_some(),
+                invalid_goal: false,
             },
         }
     }
@@ -952,6 +1044,9 @@ impl ExtensionToolPlane {
 pub(crate) struct ExtensionToolPlaneShape {
     /// Whether the surface carries the `todo` Tool.
     pub(crate) todo: bool,
+    pub(crate) goal: bool,
+    /// Partial or altered Goal commands are neither an absent nor a complete surface.
+    pub(crate) invalid_goal: bool,
 }
 
 impl ExtensionToolPlaneShape {
@@ -982,8 +1077,21 @@ impl ExtensionToolPlaneShape {
         let carries = |canonical: &crate::tools::types::ToolDefinition| {
             published.iter().any(|definition| definition == canonical)
         };
+        let goal_tools = crate::tools::native::goal_tool_registrations();
+        let goal = goal_tools.iter().all(|tool| carries(&tool.definition));
+        let claims_goal = |definition: &crate::tools::types::ToolDefinition| {
+            goal_tools.iter().any(|tool| {
+                tool.definition.id == definition.id || tool.definition.name == definition.name
+            })
+        };
+        let invalid_goal = published.iter().any(|definition| {
+            claims_goal(definition)
+                && (!goal || !goal_tools.iter().any(|tool| tool.definition == *definition))
+        });
         Self {
             todo: carries(&crate::tools::native::todo_tool_registration().definition),
+            goal,
+            invalid_goal,
         }
     }
 }
@@ -1079,7 +1187,17 @@ pub fn authorize_delegated_extensions(
     let NativeAgentExtensions {
         agent_status: requested_agent_status,
         todo: requested_todo,
+        goal: requested_goal,
     } = requested;
+    if requested_goal.is_some()
+        && role_authority.goal.is_none()
+        && invoking_authority.goal.is_none()
+    {
+        return Err(ExtensionDelegationRefusal {
+            extension: "goal",
+            detail: "No authority source composes Goal".to_owned(),
+        });
+    }
 
     // ---- Todo (Issue #259) ----
     //
@@ -1279,7 +1397,7 @@ mod tests {
     #[test]
     fn ext256_unknown_extension_names_and_fields_are_rejected() {
         for value in [
-            serde_json::json!({"goal": {"enabled": true}}),
+            serde_json::json!({"futureGoal": {"enabled": true}}),
             serde_json::json!({"agentStatus": {"future": true}}),
             serde_json::json!({"agentStatus": {"time": {"future": true}}}),
             serde_json::json!({"agentStatus": {"background": {"future": true}}}),
@@ -1347,7 +1465,7 @@ mod tests {
                 )
             });
             assert_eq!(
-                NativeAgentExtensions::from_materialized(engine.as_ref(), todos.as_ref()),
+                NativeAgentExtensions::from_materialized(engine.as_ref(), todos.as_ref(), None),
                 composition,
                 "the materialized owners recover exactly what was frozen"
             );

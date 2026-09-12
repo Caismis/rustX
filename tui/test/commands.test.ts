@@ -81,6 +81,34 @@ async function harness(initial = snapshot()) {
   return { peer, connection, session, dispatcher };
 }
 
+describe("Goal commands", () => {
+  it("creates through the typed control without an inbound turn", async () => {
+    const { peer, dispatcher } = await harness();
+    const creating = dispatcher.submit("/goal create finish delivery");
+    await peer.awaitRequests(3);
+    assert.deepEqual(peer.requests[2], { method: "goal", id: 3, control: { action: "create", objective: "finish delivery", budget: 10 } });
+    peer.respond(3, { type: "goal", view: { current: null, armed: true } });
+    assert.equal((await creating).kind, "inspect");
+    assert.equal(peer.requests.length, 3);
+  });
+
+  it("uses the observed revision for pause and never retries stale state", async () => {
+    const { peer, dispatcher } = await harness();
+    const pausing = dispatcher.submit("/goal pause");
+    await peer.awaitRequests(3);
+    const current = { reference: { id: "goal-1", revision: 7 }, objective: "deliver", phase: "active" as const,
+      autonomous_round_budget: 10, autonomous_rounds_consumed: 2, blocked_reason: null,
+      origin: { kind: "runtime_control" as const }, last_round_message_id: null };
+    peer.respond(3, { type: "goal", view: { current, armed: true } });
+    await peer.awaitRequests(4);
+    assert.deepEqual(peer.requests[3], { method: "goal", id: 4, control: { action: "mutate", expected: current.reference, mutation: { action: "pause" } } });
+    peer.respondError(4, { type: "invalid_request", message: "Stale GoalRef; current revision is 8" });
+    const outcome = await pausing;
+    assert.equal(outcome.kind, "transient");
+    assert.equal(peer.requests.length, 4);
+  });
+});
+
 describe("command registry", () => {
   it("declares exactly the bounded command surface", () => {
     assert.deepEqual(
@@ -90,6 +118,7 @@ describe("command registry", () => {
         "/defaults",
         "/save-default",
         "/help",
+        "/goal",
         "/model",
         "/new",
         "/resume",

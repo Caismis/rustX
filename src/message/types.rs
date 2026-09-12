@@ -59,7 +59,9 @@ impl MessageBlock {
         match self {
             Self::User(user) => match &user.kind {
                 InboundKind::Context(kind) => kind.agent_status_metadata(),
-                InboundKind::Message | InboundKind::CompactionSummary(_) => None,
+                InboundKind::Message
+                | InboundKind::GoalContinuation(_)
+                | InboundKind::CompactionSummary(_) => None,
             },
             Self::Assistant(_) | Self::Tool(_) => None,
         }
@@ -392,6 +394,8 @@ fn validate_ordered_unique(paths: &[String]) -> Result<(), CompactionSummaryMeta
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InboundKind {
+    /// Ordinary autonomous inbound, tied to the pre-admission Goal revision.
+    GoalContinuation(crate::goal::GoalRef),
     /// An ordinary inbound message.
     #[default]
     Message,
@@ -600,6 +604,8 @@ impl AgentStatusGenerationMetadata {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextKind {
+    /// Frozen current Goal observation; objective text remains user data.
+    GoalStatus(Box<crate::goal::GoalSnapshot>),
     /// The rustX runtime's own observation of a structurally settled tool
     /// batch (Issue #56).
     ///

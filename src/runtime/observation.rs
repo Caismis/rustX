@@ -119,6 +119,10 @@ use crate::tools::types::ToolProgress;
 // allocation to the hot observation path. The size spread is by design.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ConversationObservation {
+    /// Bounded authoritative replacement, ordered under the Goal mutex.
+    GoalChanged(crate::goal::GoalView),
+    /// Activation-only transition; the durable read-model copy is unchanged.
+    GoalDisarmed,
     /// One canonical internal runtime fact of an attempt.
     Event {
         /// The emitting attempt.

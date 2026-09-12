@@ -2997,6 +2997,7 @@ mod subagent_child_tests {
         .expect("the role extension document parses")
         .resolve();
         let expected_r1 = EffectiveNativeAgentExtensions {
+            goal: None,
             agent_status: Some(EffectiveAgentStatusExtension {
                 time: EffectiveTimeStatus {
                     enabled: true,
@@ -3080,6 +3081,7 @@ mod subagent_child_tests {
         assert_eq!(
             child_projection(&bare),
             Some(EffectiveNativeAgentExtensions {
+                goal: None,
                 agent_status: None,
                 todo: None,
             }),

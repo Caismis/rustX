@@ -1330,3 +1330,22 @@ describe("presentation projection", () => {
     assert.equal(repaired.attempt?.model!.primary.model, "alpha/model-a");
   });
 });
+
+
+it("goal84 folds live Goal and activation changes at their stream cursors", () => {
+  const goal: import("../src/protocol/types.ts").GoalSnapshot = {
+    reference: { id: "goal-1", revision: 1 }, objective: "Deliver", phase: "active",
+    blocked_reason: null, autonomous_round_budget: 2, autonomous_rounds_consumed: 0,
+    origin: { kind: "runtime_control" }, last_round_message_id: null,
+  };
+  const seed = snapshot({ goal: { current: null, armed: false } });
+  const initialState = replaceFromSnapshot(seed, runtimeCursor(0));
+  const created = fold(initialState, [{ type: "goal_changed", view: { current: goal, armed: true } }]);
+  const disarmed = fold(created, [{ type: "goal_changed", view: { current: goal, armed: false } }]);
+  assert.equal(initialState.goal?.current, null);
+  assert.equal(created.goal?.armed, true);
+  assert.equal(disarmed.goal?.armed, false);
+  assert.deepEqual(disarmed.goal?.current, created.goal?.current);
+  assert.ok(disarmed.cursor > created.cursor);
+  assert.deepEqual(replaceFromSnapshot(snapshot({ goal: disarmed.goal }), disarmed.cursor).goal, disarmed.goal);
+});

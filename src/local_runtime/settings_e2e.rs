@@ -168,6 +168,7 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
     // Issue #256: the frozen effective extension composition of this exact
     // launch, projected through the ordinary Runtime Client snapshot.
     let frozen_extensions = crate::runtime_client::settings::EffectiveNativeAgentExtensions {
+        goal: None,
         agent_status: Some(
             crate::runtime_client::settings::EffectiveAgentStatusExtension {
                 time: crate::runtime_client::settings::EffectiveTimeStatus {

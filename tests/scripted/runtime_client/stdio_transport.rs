@@ -479,7 +479,7 @@ async fn run_session(
 
 /// One `initialize` record.
 fn initialize_record(id: u64) -> Vec<u8> {
-    format!("{{\"method\":\"initialize\",\"id\":{id},\"protocol_version\":29}}\n").into_bytes()
+    format!("{{\"method\":\"initialize\",\"id\":{id},\"protocol_version\":31}}\n").into_bytes()
 }
 
 /// Parses one captured record as a response.
@@ -555,7 +555,7 @@ async fn crlf_records_are_accepted() {
     let outcome = run_session(
         host.endpoint(),
         &[
-            b"{\"method\":\"initialize\",\"id\":1,\"protocol_version\":29}\r\n",
+            b"{\"method\":\"initialize\",\"id\":1,\"protocol_version\":31}\r\n",
             b"{\"method\":\"snapshot_get\",\"id\":2}\r\n",
         ],
         PIPE_BYTES,
@@ -659,7 +659,7 @@ async fn invalid_records_are_fatal_and_write_nothing() {
         ),
         (
             "wrong-type",
-            br#"{"method":"initialize","id":"two","protocol_version":29}"#,
+            br#"{"method":"initialize","id":"two","protocol_version":31}"#,
         ),
     ];
     for (name, record) in cases {
@@ -1477,6 +1477,14 @@ async fn a_blocked_consumer_stalls_the_transport_not_the_runtime() {
         .await
         .expect("the first attempt must run to settlement under the stall")
         .expect("the emitted channel stays open");
+    // Provider emission is not runtime settlement. Freeze the actual terminal
+    // frontier before admitting the second turn or repairing a replay cursor.
+    tokio::time::timeout(
+        LIVENESS_GUARD,
+        fixture.runtime.settlement_signal().notified(),
+    )
+    .await
+    .expect("the first attempt settles while its consumer is blocked");
     fixture
         .host
         .submit_inbound(vec![UserContentBlock::Text(TextBlock {
@@ -1495,6 +1503,12 @@ async fn a_blocked_consumer_stalls_the_transport_not_the_runtime() {
     .await
     .expect("the runtime must keep executing while the transport is stalled")
     .expect("the emitted channel stays open");
+    tokio::time::timeout(
+        LIVENESS_GUARD,
+        fixture.runtime.settlement_signal().notified(),
+    )
+    .await
+    .expect("the second attempt settles before taking a repair cursor");
     let (progressed, _) = fixture.host.snapshot().expect("snapshot");
     assert!(
         progressed.messages.len() >= 3,

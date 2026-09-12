@@ -429,6 +429,9 @@ pub struct AgentExecution<'a> {
     /// invocation has observed it. One pending fresh inbound turn produces
     /// at most one Agent Status generation.
     pending_fresh_inbound: Option<FreshInboundTurn>,
+    /// One consumable authorization owned by the current Human request.
+    /// Foreground Goal Tools borrow it to consume only after create commits.
+    goal_creation_authorization: std::sync::Mutex<Option<crate::goal::GoalOrigin>>,
     /// The attempt-local marker installed after one complete canonical
     /// `ToolResult` batch settles, together with the durable transcript
     /// position that batch committed at. It is consumed by the next
@@ -1240,6 +1243,7 @@ impl<'a> AgentExecution<'a> {
             pending_continuation: None,
             continuation_owner: None,
             pending_fresh_inbound: None,
+            goal_creation_authorization: std::sync::Mutex::new(None),
             pending_post_tool_batch: None,
             context_runtime,
             subagent_context: runtime_policy.subagent_context,
@@ -2303,6 +2307,31 @@ impl<'a> AgentExecution<'a> {
         if let Err(error) = self.validate_pending_fresh_inbound() {
             return Err(Self::context_failure_terminal(&error));
         }
+        // Native inbound sequence order is retained by FreshInboundTurn.
+        // The most recent Human Message replaces the current request's unused
+        // Goal-create authorization. No Human in this batch leaves it intact:
+        // ordinary steps and Runtime input do not end the Human request.
+        if let Some(origin) = self.pending_fresh_inbound.as_ref().and_then(|fresh| {
+            fresh.message_ids().iter().rev().find_map(|id| {
+                match self.conversation.ledger().get(id) {
+                    Some(MessageBlock::User(user))
+                        if user.source == crate::message::UserSource::Human
+                            && user.kind == crate::message::InboundKind::Message =>
+                    {
+                        Some(crate::goal::GoalOrigin::HumanAttempt {
+                            message_id: id.clone(),
+                            attempt_id: self.request.attempt_id.clone(),
+                        })
+                    }
+                    _ => None,
+                }
+            })
+        }) {
+            *self
+                .goal_creation_authorization
+                .get_mut()
+                .expect("Goal authorization mutex poisoned") = Some(origin);
+        }
         let status_generation = match self.compose_status() {
             Ok(status) => status,
             Err(error) => return Err(Self::context_failure_terminal(&error)),
@@ -2319,6 +2348,12 @@ impl<'a> AgentExecution<'a> {
         // privileged committer role and cannot bypass the policy below.
         let deferred = core::mem::take(&mut self.deferred_context);
         let mut native = self.context_runtime.native_system.clone();
+        native.goal = self.tool_runtime.goal_context().map_err(|error| {
+            Self::context_failure_terminal(&ContextError::new(
+                ContextErrorKind::Internal,
+                error.to_string(),
+            ))
+        })?;
         native.agent_status = status_generation
             .as_ref()
             .map(|generation| render_agent_status(&generation.status));
@@ -4967,6 +5002,14 @@ impl<'a> AgentExecution<'a> {
             Some(requester) => context.with_questionnaire_requester(requester),
             None => context,
         };
+        let mut context = context;
+        if let Some(goal) = self.tool_runtime.goal() {
+            context.goal = Some(Box::new(crate::goal::GoalToolContext {
+                domain: goal.clone(),
+                creation_authorization: &self.goal_creation_authorization,
+                mailbox: self.tool_runtime.mailbox(),
+            }));
+        }
         // The task-list authority of *this* batch, named rather than
         // ambient: an invocation that is not part of a batch never receives
         // one, and therefore never writes provisional list state.

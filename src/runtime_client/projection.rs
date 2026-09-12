@@ -87,6 +87,9 @@
 //! mechanics stay internal unless they express a client-relevant semantic
 //! fact. The mapping is defined here, in one place, so internal
 //! `RuntimeEvent` evolution cannot silently break the Runtime Client protocol.
+//! Goal is seeded at the same runtime bootstrap cut and all live Goal changes
+//! fold through this owner. Goal journal facts stay audit-only; activation-only
+//! changes advance the client cursor without changing a durable Goal revision.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -263,6 +266,7 @@ impl RuntimeClientProjection {
                 resources: super::snapshot::RuntimeClientResourcesView::default(),
                 model: initial_model,
                 todos: None,
+                goal: None,
             },
             replay: VecDeque::new(),
             replay_sizes: VecDeque::new(),
@@ -366,6 +370,7 @@ impl RuntimeClientProjection {
         // composes no Todo extension, and the live fold below deliberately
         // cannot turn that back into a list.
         self.snapshot.todos.clone_from(&seed.todos);
+        self.snapshot.goal.clone_from(&seed.goal);
         // An inactive runtime has never admitted an attempt, composed an
         // Agent Status, or compacted, so `attempt`, `statuses`, and
         // `context` keep their empty initial values by construction.
@@ -486,6 +491,20 @@ impl RuntimeClientProjection {
     #[allow(clippy::too_many_lines)]
     fn fold(&mut self, observation: ConversationObservation) -> Vec<RuntimeClientEvent> {
         match observation {
+            ConversationObservation::GoalChanged(view) => {
+                if self.snapshot.goal.as_ref() == Some(&view) {
+                    return Vec::new();
+                }
+                self.snapshot.goal = Some(view.clone());
+                vec![RuntimeClientEvent::GoalChanged { view }]
+            }
+            ConversationObservation::GoalDisarmed => {
+                let Some(view) = self.snapshot.goal.as_mut().filter(|view| view.armed) else {
+                    return Vec::new();
+                };
+                view.armed = false;
+                vec![RuntimeClientEvent::GoalChanged { view: view.clone() }]
+            }
             ConversationObservation::Event { attempt_id, event } => {
                 self.fold_event(&attempt_id, &event)
             }
@@ -1238,6 +1257,9 @@ impl RuntimeClientProjection {
             RuntimeEvent::InteractionRequested { .. } | RuntimeEvent::InteractionSettled { .. } => {
                 Vec::new()
             }
+            // Goal journal facts are audit-only. The authoritative bounded
+            // view enters through GoalChanged/GoalDisarmed, never replay.
+            RuntimeEvent::Goal { .. } => Vec::new(),
             // Workflow lifecycle/join facts are best-effort observability;
             // the successful child value and native terminal pair are the
             // separate durable authority. The Runtime Client continues to

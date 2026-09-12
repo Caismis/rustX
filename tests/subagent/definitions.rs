@@ -2190,6 +2190,7 @@ async fn ext256_a_child_frozen_on_r1_keeps_r1_extensions_after_r2_publishes() {
     assert_eq!(
         EffectiveNativeAgentExtensions::project(&next.extensions),
         EffectiveNativeAgentExtensions {
+            goal: None,
             agent_status: None,
             todo: None,
         },

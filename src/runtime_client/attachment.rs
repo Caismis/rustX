@@ -106,6 +106,7 @@ impl RuntimeAttachment {
             );
         }
         let result = match request {
+            RuntimeClientRequest::Goal { control, .. } => self.inner.goal_control(control),
             RuntimeClientRequest::Initialize { .. } => Err(RuntimeClientError::InvalidRequest {
                 message: "the attachment is already initialized".to_owned(),
             }),

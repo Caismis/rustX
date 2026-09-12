@@ -133,6 +133,8 @@ pub struct EffectiveNativeAgentExtensions {
     /// `todo` results in the transcript, which are historical facts of the
     /// conversation rather than facts about the runtime attached to it.
     pub todo: Option<EffectiveTodoExtension>,
+    /// Root Goal capability, frozen for this launch.
+    pub goal: Option<crate::extensions::GoalExtensionConfig>,
 }
 
 /// The frozen Todo extension of a composition that includes it.
@@ -196,6 +198,7 @@ impl EffectiveNativeAgentExtensions {
                     },
                 }),
             todo: frozen.todo().map(|_| EffectiveTodoExtension {}),
+            goal: frozen.goal().copied(),
         }
     }
 }
@@ -406,7 +409,7 @@ mod tests {
         // The closed record rejects an unknown extension name and an
         // unknown contributor field: the vocabulary grows only in Rust.
         for invalid in [
-            serde_json::json!({"agent_status": null, "todo": null, "goal": {}}),
+            serde_json::json!({"agent_status": null, "todo": null, "futureGoal": {}}),
             // The Todo member carries no contributor at all: the closed
             // record refuses an invented one rather than ignoring it.
             serde_json::json!({"agent_status": null, "todo": {"enabled": true}}),

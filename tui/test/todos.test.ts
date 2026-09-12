@@ -82,7 +82,7 @@ function todoDisabled(messages: MessageBlock[] = []): PresentationState {
     clientSnapshot({
       messages,
       todos: null,
-      effective_extensions: {
+      effective_extensions: { goal: null,
         agent_status: {
           time: { enabled: true, timezone: null },
           background: { enabled: true },

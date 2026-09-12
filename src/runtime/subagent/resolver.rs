@@ -2803,10 +2803,7 @@ mod tests {
         );
     }
 
-    /// The whole closed extension vocabulary is supported in one-shot child
-    /// scope today. The assertion is deliberately exhaustive so that adding a
-    /// member without deciding its scope is caught here rather than in
-    /// production.
+    /// Agent Status and Todo support one-shot child scope; Goal is root-only.
     #[test]
     fn sub258_every_supported_extension_is_child_scope_supported() {
         for composition in [

@@ -38,6 +38,17 @@
       },
       "type": "object"
     },
+    "GoalExtensionDocument": {
+      "additionalProperties": false,
+      "description": "Authored opt-in Goal composition.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "McpServerId": {
       "description": "Identifies an MCP server bound to the runtime.",
       "type": "string"
@@ -49,6 +60,9 @@
         "agentStatus": {
           "$ref": "#/$defs/AgentStatusExtensionDocument",
           "description": "The requested Agent Status extension, when this selection composes it.\n\n`null` is not accepted: the field is either absent (not composed) or a\ncomplete authored configuration. Collapsing an explicit `null` into\n\"absent\" would give one wire spelling two meanings."
+        },
+        "goal": {
+          "$ref": "#/$defs/GoalExtensionDocument"
         },
         "todo": {
           "$ref": "#/$defs/TodoExtensionDocument",

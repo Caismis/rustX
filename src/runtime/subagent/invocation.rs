@@ -446,7 +446,7 @@ mod tests {
             serde_json::json!({"worktree": {"enabled": true}}),
             serde_json::json!({"addTools": {"builtin": ["bash"]}}),
             serde_json::json!({"tools": {"builtin": ["read"], "future": []}}),
-            serde_json::json!({"extensions": {"goal": {"enabled": true}}}),
+            serde_json::json!({"extensions": {"futureGoal": {"enabled": true}}}),
             serde_json::json!({"extensions": {"todo": {"future": true}}}),
             serde_json::json!({"extensions": {"todo": null}}),
             serde_json::json!({"extensions": {"agentStatus": {"future": true}}}),

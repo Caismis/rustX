@@ -1,5 +1,34 @@
 # Agent Loop (M3 + Issue #22 + Issue #55 + Issue #56 + Issue #130 + Issue #136 + Issue #137 + Issue #201 + Issue #203)
 
+The current Human request owns one consumable model Goal-creation authorization
+in `AgentExecution::goal_creation_authorization`. After validating a fresh inbound
+batch, preparation installs its newest Human ordinary Message identity in native
+order with the current AttemptId, replacing the previous authorization. A
+safe-boundary Human batch can authorize later steps even in a continuation attempt.
+Runtime/background input alone does not replace or erase Human authority.
+
+Request retries preserve frozen request state; logical model steps consume their
+fresh-inbound context; the Human request's authorization survives ordinary model
+and Tool steps. These are different lifetimes. Only successful model `create_goal`
+consumes the authorization, immediately after its authoritative commit; failed
+creation retains it. Goal completion cannot restore it. Tool execution never
+searches history or reuses the attempt's initial trigger.
+
+Recovery adopts pending Human input through the same fresh-batch path. An
+already-adopted continuation has only a recovered answer obligation, without a
+trusted current Human identity/unused authorization in the recovery report or
+Request Snapshot. It therefore starts unauthorized and needs newer Human input
+or explicit client Goal creation. This bounded restart limitation is detailed in
+[Goal extension](goal-extension.md); no Goal-specific recovery log is introduced.
+
+
+Goal rounds enter as `InboundKind::GoalContinuation(GoalRef)` through ordinary
+durable Pending Inbound. The existing coordinator selects/adopts them and admits
+the ordinary Agent Loop. At idle, its synchronous GoalRoundDriver may request one
+round only when armed, Active, under budget, and without pending inbound or owned
+background/Subagent work. [Goal extension](goal-extension.md) specifies the atomic
+acceptance/accounting transaction and recovery/cancellation/drain behavior.
+
 This document describes the runtime boundary implemented by the M3
 deterministic agent loop, mirroring the M2 model-plane documentation in
 `docs/architecture.md`, including the Issue #22 conversation inbound

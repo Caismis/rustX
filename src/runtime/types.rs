@@ -442,6 +442,8 @@ pub(crate) enum DurableOperation {
     SelectPendingBatch,
     /// Adopting the selected batch into the durable canonical ledger.
     AdoptPendingBatch,
+    /// Atomic Goal accounting/inbound failure seals admission rather than silently retrying.
+    GoalRoundAdmission,
     /// Preparing the canonical adoption transition (in-memory validation):
     /// a semantic contract failure, not a transient storage failure.
     PrepareAdoption,
@@ -485,6 +487,7 @@ impl DurableOperation {
         match self {
             Self::SelectPendingBatch => "select_pending_batch",
             Self::AdoptPendingBatch => "adopt_pending_batch",
+            Self::GoalRoundAdmission => "goal_round_admission",
             Self::PrepareAdoption => "prepare_adoption",
             Self::IncompleteToolTurn => "incomplete_tool_turn",
             Self::CanonicalCommit => "canonical_commit",

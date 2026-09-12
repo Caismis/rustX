@@ -1,5 +1,24 @@
 # Runtime Invariants
 
+`RuntimeClientProjection` exclusively owns externally visible Goal snapshot state
+and its cursor: bootstrap includes Goal at the inactive runtime cut; all live
+Goal changes, including activation-only disarm, fold through the observation
+bridge and publish bounded `goal_changed` events. Goal revision and client cursor
+remain distinct. Goal journal facts are audit-only, atomically committed with
+durable writes/admissions; neither state nor activation is reconstructed from them.
+Model creation uses the current Human request's consumable AgentExecution
+authorization. Newer fresh Human inbound replaces it; ordinary steps and Runtime
+input retain it; only a successful create consumes it. Completion never restores it.
+Foreground Goal writes share the existing lifecycle commit guard with drain.
+
+
+Goal mutations require an observed `GoalRef`; stale actions are rejected without
+retry. Autonomous accounting and ordinary Pending Inbound acceptance commit in
+one SQLite transaction. Process-local activation is never inferred from durable
+phase or Event Journal. Recovery starts disarmed; cancellation disarms without
+changing phase or refunding accepted rounds. [Goal invariants](goal-extension.md)
+also define Human priority, root-only scope, and the drain frontier.
+
 Canonical `ProductRoot` is the sole authority for rustX-owned product storage
 paths. Session, Conversation and child allocations are derived from that identity
 before any private path is authored. Equivalent root aliases converge; symlinks

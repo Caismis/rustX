@@ -243,7 +243,8 @@ use super::inbox::{
 /// `events.event_json`.
 /// Version 33 requires rollback journaling for non-creating management reads
 /// and the separated local product workspace allocation contract.
-pub const SQLITE_SCHEMA_VERSION: i64 = 33;
+/// Version 34 adds native revisioned Goal state and atomic Goal/inbound accounting.
+pub const SQLITE_SCHEMA_VERSION: i64 = 34;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -994,11 +995,122 @@ impl ConversationStore for SqliteConversationStore {
         &self.conversation_id
     }
 
-    #[allow(clippy::too_many_lines)]
+    fn load_goal(&self) -> Result<Option<crate::goal::GoalSnapshot>, ConversationStoreError> {
+        read_goal(&*self.lock()?)
+    }
+
+    fn write_goal(
+        &self,
+        write: crate::goal::GoalWrite,
+    ) -> Result<crate::goal::GoalResult, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("Goal transaction: {error}")))?;
+        let previous = read_goal(&tx)?;
+        let change = write.change();
+        let result = crate::goal::transition(previous.as_ref(), write);
+        if let Ok(goal) = &result {
+            save_goal(&tx, goal)?;
+            #[cfg(test)]
+            if Self::consume(&self.fail_event_remaining) {
+                return Err(storage("fault injected: Goal journal commit"));
+            }
+            persist_event_tx(
+                &tx,
+                &self.conversation_id,
+                crate::goal::journal_envelope(
+                    &self.conversation_id,
+                    crate::goal::GoalFact::Written {
+                        previous: previous.map(|g| g.reference),
+                        current: goal.reference.clone(),
+                        phase: goal.phase,
+                        change,
+                    },
+                ),
+            )?;
+            tx.commit()
+                .map_err(|error| storage(format!("Goal commit: {error}")))?;
+        }
+        Ok(result)
+    }
+
+    fn accept_goal_round(
+        &self,
+        expected: &crate::goal::GoalRef,
+        draft: InboundDraft,
+    ) -> Result<Option<AcceptedInbound>, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("Goal admission transaction: {error}")))?;
+        let Some(mut goal) = read_goal(&tx)? else {
+            return Ok(None);
+        };
+        if &goal.reference != expected
+            || goal.phase != crate::goal::GoalPhase::Active
+            || goal.autonomous_rounds_consumed >= goal.autonomous_round_budget
+        {
+            return Ok(None);
+        }
+        let pending: bool = tx
+            .query_row("SELECT EXISTS(SELECT 1 FROM pending_inbound)", [], |row| {
+                row.get(0)
+            })
+            .map_err(|error| storage(format!("Goal pending probe: {error}")))?;
+        if pending {
+            return Ok(None);
+        }
+        if draft.source != UserSource::Runtime
+            || draft.kind != InboundKind::GoalContinuation(expected.clone())
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "Goal admission requires its exact typed runtime trigger".to_owned(),
+            ));
+        }
+        let accepted = accept_inbound_tx(self, &tx, draft)?;
+        if accepted.retried {
+            return Err(ConversationStoreError::InvalidReference(
+                "Goal round identity already accepted".to_owned(),
+            ));
+        }
+        goal.autonomous_rounds_consumed += 1;
+        goal.reference.revision = goal
+            .reference
+            .revision
+            .checked_add(1)
+            .ok_or(ConversationStoreError::SequenceExhausted)?;
+        goal.last_round_message_id = Some(accepted.message_id.clone());
+        save_goal(&tx, &goal)?;
+        persist_event_tx(
+            &tx,
+            &self.conversation_id,
+            crate::goal::journal_envelope(
+                &self.conversation_id,
+                crate::goal::GoalFact::RoundAdmitted {
+                    previous: expected.clone(),
+                    current: goal.reference.clone(),
+                    round: goal.autonomous_rounds_consumed,
+                    message_id: accepted.message_id.clone(),
+                },
+            ),
+        )?;
+        #[cfg(test)]
+        if Self::consume(&self.fail_accept_remaining) {
+            return Err(storage("fault injected: Goal accept commit"));
+        }
+        process_death::reach("before:accept_goal_round");
+        tx.commit()
+            .map_err(|error| storage(format!("Goal admission commit: {error}")))?;
+        process_death::reach("after:accept_goal_round");
+        Ok(Some(accepted))
+    }
+
     fn accept_inbound(
         &self,
         draft: InboundDraft,
     ) -> Result<AcceptedInbound, ConversationStoreError> {
+        reject_unaccounted_goal(&draft)?;
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1021,6 +1133,7 @@ impl ConversationStore for SqliteConversationStore {
         draft: InboundDraft,
         mut event: RuntimeEventEnvelope,
     ) -> Result<(AcceptedInbound, RuntimeEventEnvelope), ConversationStoreError> {
+        reject_unaccounted_goal(&draft)?;
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -3766,6 +3879,41 @@ fn validate_approval_subject_against_canonical(
     Ok(())
 }
 
+fn reject_unaccounted_goal(draft: &InboundDraft) -> Result<(), ConversationStoreError> {
+    if matches!(draft.kind, InboundKind::GoalContinuation(_)) {
+        return Err(ConversationStoreError::InvalidReference(
+            "Goal continuation must cross accept_goal_round with atomic accounting".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn read_goal(
+    connection: &Connection,
+) -> Result<Option<crate::goal::GoalSnapshot>, ConversationStoreError> {
+    let json: Option<String> = connection
+        .query_row(
+            "SELECT snapshot_json FROM goal_state WHERE singleton = 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| storage(format!("read Goal: {error}")))?;
+    json.map(|json| {
+        serde_json::from_str(&json).map_err(|error| storage(format!("decode Goal: {error}")))
+    })
+    .transpose()
+}
+
+fn save_goal(
+    tx: &Transaction<'_>,
+    goal: &crate::goal::GoalSnapshot,
+) -> Result<(), ConversationStoreError> {
+    tx.execute("INSERT INTO goal_state(singleton, snapshot_json) VALUES(1, ?1) ON CONFLICT(singleton) DO UPDATE SET snapshot_json = excluded.snapshot_json",
+        [encode(goal, "Goal")?]).map_err(|error| storage(format!("write Goal: {error}")))?;
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)] // One acceptance transaction validates the full inbound contract.
 fn accept_inbound_tx(
     store: &SqliteConversationStore,
@@ -4385,6 +4533,10 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 next_transcript_position INTEGER NOT NULL CHECK(next_transcript_position >= 0),
                 todo_progress_sequence INTEGER NOT NULL CHECK(todo_progress_sequence >= 0),
                 pending_unresolved_output_stream_id TEXT
+            );
+            CREATE TABLE IF NOT EXISTS goal_state (
+                singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                snapshot_json TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS pending_inbound (
                 sequence INTEGER PRIMARY KEY,
@@ -8003,7 +8155,10 @@ fn load_user_notification_tx(
 fn requires_specialized_transition(event: &RuntimeEvent) -> bool {
     matches!(
         event,
-        RuntimeEvent::InboundTurnAdopted { .. }
+        RuntimeEvent::Goal {
+            fact: crate::goal::GoalFact::Written { .. }
+                | crate::goal::GoalFact::RoundAdmitted { .. }
+        } | RuntimeEvent::InboundTurnAdopted { .. }
             | RuntimeEvent::AssistantMessageCommitted { .. }
             | RuntimeEvent::ToolMessageCommitted { .. }
             | RuntimeEvent::CompactionCompleted { .. }
@@ -9973,7 +10128,7 @@ mod tests {
                 result,
                 Err(ConversationStoreError::SchemaVersionMismatch {
                     stored: 32,
-                    expected: 33
+                    expected: 34
                 })
             ));
         }
@@ -12447,7 +12602,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 33);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 34);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -12516,7 +12671,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 33);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 34);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -12551,7 +12706,7 @@ mod tests {
                 )
                 .unwrap()
         };
-        assert_eq!(stored, 33);
+        assert_eq!(stored, 34);
         assert_eq!(stored, SQLITE_SCHEMA_VERSION);
         SqliteConversationStore::open(conversation_id, &path).expect("a current store reopens");
     }

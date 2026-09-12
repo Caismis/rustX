@@ -29,6 +29,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: "/defaults", description: "Read the user default document and its revision (separate from live settings).", argumentHint: "user" },
   { name: "/save-default", description: "Explicitly save selected model/profile or desired approval to user defaults; live state is unchanged.", argumentHint: "user <model|approval> <revision>" },
   { name: "/help", description: "List the available commands." },
+  { name: "/goal", description: "Show, create, pause, resume, edit, or budget a persistent Goal." },
   {
     name: "/model",
     description:
