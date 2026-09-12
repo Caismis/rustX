@@ -1386,14 +1386,14 @@ extension never adds a Tool to the model-facing registry by itself.
   once, in `LocalConversationCore::compose`, and its result is materialized
   through the single seam `NativeAgentExtensions::agent_status_engine`, which
   produces the `Option<AgentStatusEngine>` the `ConversationRuntime` carries.
-  Nothing downstream reads the configuration document again. `extensions` is
+  Nothing downstream reads the configuration document again. `agent.extensions` is
   not a reload-owned field, so an explicit resource reload republishes a whole
   new `RuntimeResourceSnapshot` without reaching the composed extension set.
   Restart/resume is a new launch: it resolves the current document through the
   same resolver and rewrites no canonical Session history.
 - **Child.** `SubagentResolver::resolve` freezes the **effective** composition
   into `ResolvedSubagentSpec::extensions`, before process staging and durable
-  ownership commit. That is the role's own `definition.extensions()`, or the
+  ownership commit. That is the shared resolved profile's scope-eligible extension set, or the
   composition an authorized invocation override replaced it with (SUB-OVR /
   Issue #258). Root and named-role compositions remain independently authored:
   the root's composition is never *inherited*, and participates only as one
@@ -6769,7 +6769,7 @@ does not define identity semantics for unsupported platforms.
 Project trust and Tool approval are independent: `approvalMode`, `nativeTools`
 and `mcpToolPolicies` are host-only objects, rejected at the project layer before
 merge. Projects cannot configure execution/concurrency within these objects
-either. Project-origin Skills, Subagent instruction/agentsMd files, and path-valued
+either. Project-origin Skills, Subagent instruction/agents_md files, and path-valued
 MCP command/cwd must remain inside the canonical trusted workspace, including
 symlink targets. `--config` grants no external-resource authority. The resolved
 launch retains project path authority for pre-composition rechecks; reload checks
@@ -6932,7 +6932,7 @@ physical teardown owners at their respective phases.
 
 ##### Whole-lifecycle execution deadline (Issue #191)
 
-The named definition may admit one optional `timeoutMs` value, in positive
+The named definition may admit one optional `timeout_ms` value, in positive
 milliseconds, with a rustX-owned maximum of 86,400,000 milliseconds (24
 hours). Configuration admission validates the value without clamping it;
 absence means that the definition has no whole-lifecycle deadline. The
@@ -7199,7 +7199,7 @@ the worktree or from a worktree ancestor.
 The source snapshot is one committed `HEAD = C`; parent dirty bytes, the
 index, untracked files, stashes, and patches are never copied. Isolated
 execution is strict by default (Issue #188): an enabled worktree resolves
-an omitted `requireCleanParent` to `true`, so a dirty ordinary source
+an omitted `require_clean_parent` to `true`, so a dirty ordinary source
 workspace (tracked unstaged, staged/index, or untracked non-ignored
 changes) rejects acquisition before any child worktree is created, and the
 immutable workspace snapshot records whether the parent was dirty. Only an
@@ -7218,7 +7218,7 @@ that configuration lives. The registry preserves the semantic identity as
 generic Git/worktree failure, settlement/rollback, and cancellation. The
 native `subagent` tool — the boundary at which an internal failure becomes
 model-visible output — renders the actionable remediation naming
-`requireCleanParent`. That split is why no layer below the tool parses or
+`require_clean_parent`. That split is why no layer below the tool parses or
 formats configuration guidance.
 
 Terminal workspace settlement is ordered after the direct child is reaped
@@ -8407,14 +8407,22 @@ Tool Plane, Subagent runtime, Workflow scheduler, or approval authority.
 
 Canonical `.agents/agents/<name>.toml` resources establish named Agent identities;
 see [canonical Agent resources](subagent-resources.md). Project Agent overrides
-user Agent as a whole resource, with no field-level merge. `agent.agents` and
-`subagents.workflow` retain independent admission domains resolved against discovery.
-Canonical `.agents/workflows/<id>.yaml` resources establish Workflow identities;
-`agent.workflows` selects the model-facing subset. Unknown selected identities fail
-candidate validation. All discovery is bounded, deterministic and off-side, and
-only one complete resource-generation publication changes future admission.
+user Agent as a whole resource, with no field-level merge. The shared Agent Profile
+resolver uses `agent.agents` for delegation selection and `agent.workflows` for
+Workflow invocation selection. A valid selection of a currently unavailable
+Agent or Workflow produces a typed generation-scoped diagnostic and is suppressed;
+the remaining profile stays usable. Malformed identities, unknown fields and
+invalid authoring remain hard errors.
 
-authoritative `name` field. A Tool is an invocation surface, a Workflow is a
+`subagents.workflow` separately owns static Workflow Agent-node admission.
+Canonical `.agents/workflows/<id>.yaml` resources establish Workflow identities.
+Workflow program parsing, compilation and static admission errors remain owned
+by the Workflow subsystem; profile suppression does not relax those contracts.
+All discovery is bounded, deterministic and off-side, and only one complete
+resource-generation publication changes future admission.
+
+Canonical Agent and Workflow filenames establish their identities; those
+documents have no independent authoritative `name` field. A Tool is an invocation surface, a Workflow is a
 compiled bounded program, and a Skill is reusable resource/instruction
 content; these are separate domains.
 

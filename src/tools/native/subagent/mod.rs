@@ -121,7 +121,7 @@ fn start_failure_result(error: &SubagentStartError) -> ToolExecutionResult {
         SubagentStartError::WorkspaceDirtyParent { .. } => failed_result(
             "the isolated subagent was not started because the parent workspace has \
              uncommitted changes. Commit or clean those changes, or explicitly set \
-             \"requireCleanParent\": false for this subagent to run from the committed \
+             worktree.require_clean_parent = false in the named Agent profile to run from the committed \
              HEAD snapshot while intentionally ignoring the local changes.",
         ),
         other => failed_result(other.to_string()),
@@ -1173,7 +1173,7 @@ chat_reasoning_replay = "omit"
             "isolated subagent was not started",
             "uncommitted changes",
             "Commit or clean",
-            "requireCleanParent",
+            "worktree.require_clean_parent = false",
             "committed HEAD",
             "ignoring the local changes",
         ] {

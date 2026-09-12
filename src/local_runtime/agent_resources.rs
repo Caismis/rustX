@@ -106,14 +106,14 @@ pub(crate) fn load(
             > crate::runtime::subagent::catalog::MAX_SUBAGENT_PROJECT_FILES
         {
             return Err(error(
-                "agentsMd.files exceeds the native file-count bound".into(),
+                "agents_md.files exceeds the native file-count bound".into(),
             ));
         }
         let mut files = Vec::new();
         for file in &agent.agents_md.files {
             let resolved = boundary.join(file);
             validate_project_resource_path(boundary, &resolved)
-                .map_err(|e| e.at(path, format!("{field}.agentsMd.files")))?;
+                .map_err(|e| e.at(path, format!("{field}.agents_md.files")))?;
             let bytes = crate::bounded_file::read_bounded(&resolved).map_err(error)?;
             let content = String::from_utf8(bytes).map_err(|e| error(e.to_string()))?;
             files.push(ProjectContextFile {
@@ -289,6 +289,28 @@ mod tests {
             .unwrap_err()
         );
     }
+    #[test]
+    fn agent_profile_file_diagnostics_use_current_toml_field_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().canonicalize().unwrap();
+        let root = workspace.join(".agents/agents");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("alpha.toml"),
+            "description = 'Alpha'\ninstructions = 'Inspect'\n[agents_md]\nfiles = ['../outside.md']\n",
+        ).unwrap();
+        let error = load(
+            &workspace,
+            &workspace.join("user"),
+            &SubagentsDocument::default(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.field_path.as_deref(),
+            Some("agents.alpha.agents_md.files")
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn agent_discovery_rejects_redirected_files_before_reading() {

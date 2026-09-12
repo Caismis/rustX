@@ -54,13 +54,13 @@ persisted Session-local model selection.
   native Agent Extension composition, and frozen attempt facts.
 - `/defaults user` shows only the permitted saved fields, target document and its
   content revision. It does not resolve layers or claim the values win precedence.
-- `/save-default user model <revision>` writes exactly `model.model` and
-  `model.reasoning_profile` from the current native Session selection, captured by Rust
+- `/save-default user model <revision>` writes exactly `agent.model.model` and
+  `agent.model.reasoning_profile` from the current native Session selection, captured by Rust
   under the coordinator lock at the save operation. The TUI sends only a target,
   never a value from its asynchronous projection cache. A cleared profile
   is written as `{ mode = "catalog_default" }`, preserving unrelated TOML and
   comments. A selected profile uses `{ mode = "profile", name = "…" }`.
-- `/save-default user approval <revision>` writes exactly `approvalMode` from the
+- `/save-default user approval <revision>` writes exactly `approval_mode` from the
   authoritative desired runtime mode, captured under the coordinator lock. An
   active attempt can still retain a different frozen effective mode; for example,
   desired `full_access` is saved while current work remains on `policy`.
@@ -230,7 +230,7 @@ LaunchRequest, reopen project configuration, resolve trust, reload the catalog, 
 inspect resource files. Full prospective launch readiness remains the job of
 `rustx config check`, `rustx config show --sources`, and normal launch resolution.
 
-A model save changes only `model.model` and `model.reasoning_profile`, but validates
+A model save changes only `agent.model.model` and `agent.model.reasoning_profile`, but validates
 **the complete model object parsed from the staged bytes**, including preserved
 `requestParams`, `maxOutputTokens`, and `summaryModel`. The canonical
 `SessionModelConfig` schema supplies its defaults; `analyze_session_model_config`

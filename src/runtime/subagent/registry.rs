@@ -5699,7 +5699,7 @@ mod tests {
             "unexpected lifecycle dirty-parent diagnostic: {message}"
         );
         for leaked in [
-            "requireCleanParent",
+            "require_clean_parent",
             "subagent definition",
             "porcelain",
             "rev-parse",
