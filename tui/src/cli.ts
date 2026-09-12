@@ -38,7 +38,7 @@
  * resolves an identity it was given.
  *
  * Optional runtime path overrides are passed straight through to the Rust binary. This
- * client never opens, parses, validates, or defaults any of them: `models.jsonc`
+ * client never opens, parses, validates, or defaults any of them: `models.toml`
  * and the current runtime config are Rust-owned authorities, and
  * reading them here would create a second one. Discovery, trust and defaults
  * belong exclusively to Rust.
@@ -49,8 +49,8 @@ import type {
   RuntimeStartupOptions,
 } from "./runtime/child-process.ts";
 
-export const USAGE = `usage: rustx-tui --binary <rustx> [--models <models.jsonc>] \\
-                 [--config <rustx.jsonc>] [--workspace <dir>] [--runtime-root <dir>] \\
+export const USAGE = `usage: rustx-tui --binary <rustx> [--models <models.toml>] \\
+                 [--config <rustx.toml>] [--workspace <dir>] [--runtime-root <dir>] \\
                  [--model <provider/model>] [--trust grant|revoke] \\
                  [--inspect-conversation <conversation-id> | --continue | --resume | --session <id> [--node <id>]] \\
                  [--name <text>] [--skill <path>] [--no-skills] [--no-builtin-tools] [--no-tools] \\

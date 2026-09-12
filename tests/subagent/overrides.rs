@@ -71,24 +71,25 @@ async fn goal84_root_only_scope_is_enforced_for_definition_model_and_workflow_ov
     product.runtime().shutdown().await.unwrap();
 }
 
-const MODELS: &str = r#"{
-  "providers": {
-    "local": {
-      "baseUrl": "http://127.0.0.1:9/v1",
-      "apiKey": "$RUSTX_ISSUE258_KEY",
-      "models": [
-        {
-          "id": "model-a",
-          "protocol": "openai_chat_completions",
-          "contextWindow": 128000,
-          "maxOutputTokens": 512,
-          "capabilities": {"inputModalities": ["text"], "outputModalities": ["text"], "toolCalls": true, "reasoning": false},
-          "compat": {"chatReasoningReplay": "omit"}
-        }
-      ]
-    }
-  }
-}"#;
+const MODELS: &str = r#"[providers.local]
+base_url = "http://127.0.0.1:9/v1"
+api_key = "$RUSTX_ISSUE258_KEY"
+
+[[providers.local.models]]
+id = "model-a"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 512
+
+[providers.local.models.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[providers.local.models.compat]
+chat_reasoning_replay = "omit"
+"#;
 
 fn dependencies() -> LocalRuntimeDependencies {
     LocalRuntimeDependencies {
@@ -101,7 +102,7 @@ fn dependencies() -> LocalRuntimeDependencies {
 }
 
 fn model_registry() -> ModelBindingRegistry {
-    let catalog = ModelCatalog::from_jsonc_slice(MODELS.as_bytes()).expect("model catalog");
+    let catalog = ModelCatalog::from_toml_slice(MODELS.as_bytes()).expect("model catalog");
     let resolved = catalog
         .resolve(dependencies().credentials.as_deref().unwrap())
         .expect("resolved catalog");
@@ -200,7 +201,7 @@ impl Lab {
         std::fs::create_dir_all(lab.workspace().join(".agents/subagents")).expect("role directory");
         std::fs::create_dir_all(lab.workspace().join(".agents/workflows"))
             .expect("workflow directory");
-        std::fs::write(lab.root().join("models.jsonc"), MODELS).expect("models.jsonc");
+        std::fs::write(lab.root().join("models.toml"), MODELS).expect("models.toml");
         std::fs::write(lab.workspace().join("AGENTS.md"), "workspace guidance\n")
             .expect("AGENTS.md");
         lab
@@ -241,7 +242,7 @@ impl Lab {
     /// available catalog: the difference between the two is what makes
     /// "generation-only authority" a real, testable state.
     fn write_config(&self, roles: &serde_json::Value, default_tools: &[&str], workflows: &[&str]) {
-        let mut subagents = serde_json::json!({"maxConcurrent": 4, "roles": roles});
+        let mut subagents = serde_json::json!({"max_concurrent": 4, "roles": roles});
         let names = subagents["roles"]
             .as_object()
             .expect("roles")
@@ -252,11 +253,11 @@ impl Lab {
         subagents["workflow"] = serde_json::Value::Array(names);
         crate::launch_fixture::write_roles(&self.workspace(), &mut subagents);
         let document = serde_json::json!({
-            "schemaVersion": 8,
-            "agentId": "agent-issue258",
+            "schema_version": 8,
+            "agent_id": "agent-issue258",
             "model": {"model": "local/model-a"},
-            "context": {"reserveTokens": 0, "keepRecentTokens": 0},
-            "defaultTools": default_tools,
+            "context": {"reserve_tokens": 0, "keep_recent_tokens": 0},
+            "default_tools": default_tools,
             "subagents": subagents,
             "workflows": {
                 "definitions": workflows,
@@ -264,16 +265,16 @@ impl Lab {
             },
         });
         std::fs::write(
-            self.root().join("rustx.jsonc"),
-            serde_json::to_string_pretty(&document).expect("config document"),
+            self.root().join("rustx.toml"),
+            toml::to_string_pretty(&document).expect("config document"),
         )
-        .expect("rustx.jsonc");
+        .expect("rustx.toml");
     }
 
     fn paths(&self) -> LaunchFixture {
         LaunchFixture {
-            models: self.root().join("models.jsonc"),
-            config: self.root().join("rustx.jsonc"),
+            models: self.root().join("models.toml"),
+            config: self.root().join("rustx.toml"),
             skill_paths: Vec::new(),
             no_skills: false,
             no_builtin_tools: false,

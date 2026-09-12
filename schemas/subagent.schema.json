@@ -55,7 +55,7 @@
     },
     "NativeAgentExtensionsDocument": {
       "additionalProperties": false,
-      "description": "The closed authored composition surface of native Agent Extensions.\n\nEvery member is a concrete named extension. The map-like spelling in\nJSONC (`\"extensions\": { \"agentStatus\": { ... } }`) is a *closed* record,\nnot an open registry: an unknown extension name is rejected by the\nsurrounding strict serde boundary exactly like any other unknown field.",
+      "description": "The closed authored composition surface of native Agent Extensions.\n\nEvery member is a concrete named extension in a closed record.\nUnknown extension names are rejected. Runtime TOML layers use the separate\n`snake_case` authoring boundary; resource and wire documents retain their\nown serialization contract.",
       "properties": {
         "agentStatus": {
           "$ref": "#/$defs/AgentStatusExtensionDocument",
@@ -109,7 +109,7 @@
     },
     "SubagentWorktreeDocument": {
       "additionalProperties": false,
-      "description": "The JSONC representation of a named subagent's optional Git worktree\nisolation. An omitted or disabled value is the existing shared-workspace\nbehavior; there is no model-facing per-call override.\n\nIssue #188: when enabled, isolation runs the child from the committed\nparent `HEAD` snapshot. `require_clean_parent` defaults to `true`\n(strict): the parent source workspace must be clean, otherwise the child\nis rejected rather than silently dropping parent-local changes. Only an\nexplicit `\"requireCleanParent\": false` permits a dirty parent while the\nchild still receives exactly the committed snapshot.",
+      "description": "The resource representation of a named subagent's optional Git worktree\nisolation. An omitted or disabled value is the existing shared-workspace\nbehavior; there is no model-facing per-call override.\n\nIssue #188: when enabled, isolation runs the child from the committed\nparent `HEAD` snapshot. `require_clean_parent` defaults to `true`\n(strict): the parent source workspace must be clean, otherwise the child\nis rejected rather than silently dropping parent-local changes. Only an\nexplicit `\"requireCleanParent\": false` permits a dirty parent while the\nchild still receives exactly the committed snapshot.",
       "properties": {
         "enabled": {
           "default": false,

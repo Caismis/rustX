@@ -29,7 +29,7 @@
  * `current` could mean either configured or effective.
  *
  * Every value shown is a `CatalogModelView` field the runtime published
- * through `model_catalog_get`. This component does not read `models.jsonc`,
+ * through `model_catalog_get`. This component does not read `models.toml`,
  * does not contact a provider, does not know what "sonnet" means, and does
  * not invent a reasoning scale: a reasoning-capable model that declares no
  * profiles is shown as exactly that, because there is no universal

@@ -7,7 +7,7 @@
  * and never inspects a byte of stdout.
  *
  * The startup paths pass straight through to the binary. This client never
- * reads or interprets `models.jsonc`, the current runtime config, the
+ * reads or interprets `models.toml`, the current runtime config, the
  * workspace, or the runtime root: those are Rust-owned configuration, and
  * reading them here would create a second model/Session authority.
  *

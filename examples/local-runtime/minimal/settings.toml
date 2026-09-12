@@ -1,0 +1,4 @@
+# Host-owned defaults and policies. Relative paths start at this document.
+# TOML configuration; fixed Workflows use YAML and model-facing resources use Markdown.
+[model]
+model = "example/demo-model"

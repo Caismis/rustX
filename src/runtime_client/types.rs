@@ -555,7 +555,7 @@ pub enum RuntimeClientRequest {
     /// Read the safe public model catalog: which models and reasoning
     /// profiles this runtime can select.
     ///
-    /// This exists so a client never reads `models.jsonc` itself. The result
+    /// This exists so a client never reads `models.toml` itself. The result
     /// carries no credential, no adapter internal, and no compat
     /// implementation object.
     ModelCatalogGet {

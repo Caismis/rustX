@@ -463,8 +463,8 @@ mod tests {
 
     #[test]
     fn analyze_session_model_config_validates_primary_and_explicit_summary() {
-        let catalog = ModelCatalog::from_jsonc_slice(include_bytes!(
-            "../../examples/local-runtime/minimal/models.jsonc"
+        let catalog = ModelCatalog::from_toml_slice(include_bytes!(
+            "../../examples/local-runtime/minimal/models.toml"
         ))
         .unwrap();
         let mut config = SessionModelConfig::of(ModelRef::parse("example/demo-model").unwrap());
@@ -503,8 +503,8 @@ mod tests {
 
     #[test]
     fn analyze_session_model_config_validates_complete_summary_selection() {
-        let catalog = ModelCatalog::from_jsonc_slice(include_bytes!(
-            "../../examples/local-runtime/minimal/models.jsonc"
+        let catalog = ModelCatalog::from_toml_slice(include_bytes!(
+            "../../examples/local-runtime/minimal/models.toml"
         ))
         .unwrap();
         let mut config = SessionModelConfig::of(ModelRef::parse("example/demo-model").unwrap());

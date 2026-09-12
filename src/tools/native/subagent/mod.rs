@@ -558,27 +558,25 @@ mod tests {
     }
 
     #[cfg(unix)]
-    const DIRTY_PARENT_MODELS: &str = r#"{
-      "providers": {
-        "local": {
-          "baseUrl": "http://127.0.0.1:9/v1",
-          "apiKey": "test-only-secret",
-          "models": [{
-            "id": "model",
-            "protocol": "openai_chat_completions",
-            "contextWindow": 128000,
-            "maxOutputTokens": 512,
-            "capabilities": {
-              "inputModalities": ["text"],
-              "outputModalities": ["text"],
-              "toolCalls": true,
-              "reasoning": false
-            },
-            "compat": {"chatReasoningReplay": "omit"}
-          }]
-        }
-      }
-    }"#;
+    const DIRTY_PARENT_MODELS: &str = r#"[providers.local]
+base_url = "http://127.0.0.1:9/v1"
+api_key = "test-only-secret"
+
+[[providers.local.models]]
+id = "model"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 512
+
+[providers.local.models.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[providers.local.models.compat]
+chat_reasoning_replay = "omit"
+"#;
 
     #[cfg(unix)]
     fn git(cwd: &std::path::Path, args: &[&str]) {
@@ -691,7 +689,7 @@ mod tests {
         .expect("definition");
 
         let models = ModelBindingRegistry::new(
-            ModelCatalog::from_jsonc_slice(DIRTY_PARENT_MODELS.as_bytes())
+            ModelCatalog::from_toml_slice(DIRTY_PARENT_MODELS.as_bytes())
                 .expect("model catalog")
                 .resolve(&MapCredentialEnvironment::default())
                 .expect("model resolution"),
@@ -883,7 +881,7 @@ mod tests {
         .expect("definition");
 
         let models = ModelBindingRegistry::new(
-            ModelCatalog::from_jsonc_slice(DIRTY_PARENT_MODELS.as_bytes())
+            ModelCatalog::from_toml_slice(DIRTY_PARENT_MODELS.as_bytes())
                 .expect("model catalog")
                 .resolve(&MapCredentialEnvironment::default())
                 .expect("model resolution"),

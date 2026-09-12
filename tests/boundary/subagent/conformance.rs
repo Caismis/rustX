@@ -4758,8 +4758,8 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
         )
         .expect("child live inspection endpoint");
     let inspection_paths = LaunchFixture {
-        models: dir.path().join("unused-models.jsonc"),
-        config: dir.path().join("unused-config.jsonc"),
+        models: dir.path().join("unused-models.toml"),
+        config: dir.path().join("unused-config.toml"),
         skill_paths: Vec::new(),
         no_skills: true,
         no_builtin_tools: false,

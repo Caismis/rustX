@@ -46,29 +46,25 @@ mod unix_tests {
 
     /// A model catalog whose only model is never invoked: these tests
     /// compose the runtime, they do not run an attempt.
-    const MODELS_JSON: &str = r#"{
-  "providers": {
-    "local": {
-      "baseUrl": "https://local.fixture.invalid/v1",
-      "apiKey": "$RUSTX_ISSUE46_KEY",
-      "models": [
-        {
-          "id": "composed-model",
-          "protocol": "openai_chat_completions",
-          "contextWindow": 128000,
-          "maxOutputTokens": 4096,
-          "capabilities": {
-            "inputModalities": ["text"],
-            "outputModalities": ["text"],
-            "toolCalls": true,
-            "reasoning": false
-          },
-          "compat": {"chatReasoningReplay": "omit"}
-        }
-      ]
-    }
-  }
-}"#;
+    const MODELS_TOML: &str = r#"[providers.local]
+base_url = "https://local.fixture.invalid/v1"
+api_key = "$RUSTX_ISSUE46_KEY"
+
+[[providers.local.models]]
+id = "composed-model"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 4096
+
+[providers.local.models.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[providers.local.models.compat]
+chat_reasoning_replay = "omit"
+"#;
 
     /// A stdio binding that re-runs this test binary as its own MCP server,
     /// with the given fixture protocol behavior.
@@ -703,10 +699,10 @@ mod unix_tests {
             "mcp_runtime::unix_tests::a_named_map_entry_composes_into_exactly_one_runtime_server",
         );
         let session = serde_json::json!({
-            "agentId": "agent-46",
+            "agent_id": "agent-46",
             "model": {"model": "local/composed-model"},
-            "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
-            "mcpServers": {
+            "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},
+            "mcp_servers": {
                 "exa-local": {
                     "enabled": true,
                     "type": "stdio",
@@ -715,17 +711,17 @@ mod unix_tests {
                     "env": {fixture::FIXTURE_MODE_ENV: "1"},
                 },
             },
-            "mcpToolPolicies": {
+            "mcp_tool_policies": {
                 "exa-local": {"execution": "background_only", "concurrency": "parallel"},
             },
         });
-        let models_path = root.path().join("models.jsonc");
-        let config_path = root.path().join("rustx.jsonc");
-        std::fs::write(&models_path, MODELS_JSON).expect("models.jsonc");
+        let models_path = root.path().join("models.toml");
+        let config_path = root.path().join("rustx.toml");
+        std::fs::write(&models_path, MODELS_TOML).expect("models.toml");
         crate::launch_fixture::write_documents(
             &config_path,
-            &session.to_string(),
-            &["mcpServers", "mcpToolPolicies"],
+            &toml::to_string_pretty(&session).unwrap(),
+            &["mcp_servers", "mcp_tool_policies"],
         );
 
         let runtime = rustx::local_runtime::composition::LocalConversationRuntime::compose(

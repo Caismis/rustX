@@ -1,7 +1,7 @@
 //! The ecosystem-compatible MCP configuration contract (Issue #46).
 //!
-//! `mcpServers` is a named map keyed by MCP server identity, spelled exactly
-//! the way mainstream MCP clients spell it. This suite pins the complete
+//! `mcp_servers` is a named map keyed by MCP server identity, spelled exactly
+//! in the canonical TOML authoring contract. This suite pins the complete
 //! accepted syntax surface, every rejection, the rustX policy overlay, and
 //! the determinism of the normalized runtime bindings.
 
@@ -13,26 +13,23 @@ use rustx::tools::mcp::{McpServerBinding, McpServerBindings, McpTransportConfig}
 use rustx::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy};
 
 /// Wraps an MCP configuration fragment in an otherwise minimal session.
-fn session_json(fragment: &str) -> String {
+fn session_toml(fragment: &str) -> String {
     format!(
-        r#"{{
-            "agentId": "agent-46",
-            "model": {{"model": "p/m"}},
-            "context": {{"reserveTokens": 1024, "keepRecentTokens": 4096}},
-            {fragment}
-        }}"#
+        "agent_id = \"agent-46\"\n{fragment}\n[model]\nmodel = \"p/m\"\n[context]\nreserve_tokens = 1024\nkeep_recent_tokens = 4096\n"
     )
 }
 
 fn bindings(fragment: &str) -> McpServerBindings {
-    CurrentRuntimeConfig::from_jsonc_slice(session_json(fragment).as_bytes())
+    CurrentRuntimeConfig::from_toml_slice(session_toml(fragment).as_bytes())
         .expect("the configuration must parse")
         .mcp_bindings()
         .expect("the configuration must normalize")
 }
 
 fn rejection(fragment: &str) -> CurrentRuntimeConfigError {
-    CurrentRuntimeConfig::from_jsonc_slice(session_json(fragment).as_bytes())
+    let text = session_toml(fragment);
+    text.parse::<toml_edit::DocumentMut>().expect("valid TOML");
+    CurrentRuntimeConfig::from_toml_slice(text.as_bytes())
         .expect_err("the configuration must be rejected")
 }
 
@@ -46,8 +43,9 @@ fn single(bindings: &McpServerBindings) -> (&McpServerId, &McpServerBinding) {
 /// The canonical remote form: an explicit `type` and a `url`.
 #[test]
 fn canonical_http_entry_normalizes_to_the_streamable_http_transport() {
-    let bindings =
-        bindings(r#""mcpServers": {"exa": {"type": "http", "url": "https://mcp.exa.ai/mcp"}}"#);
+    let bindings = bindings(
+        r#"mcp_servers = { "exa" = { "type" = "http", "url" = "https://mcp.exa.ai/mcp" } }"#,
+    );
     let (server_id, binding) = single(&bindings);
     assert_eq!(server_id.as_str(), "exa");
     assert_eq!(
@@ -62,9 +60,10 @@ fn canonical_http_entry_normalizes_to_the_streamable_http_transport() {
 /// The shorthand every remote MCP README uses: a bare `url`.
 #[test]
 fn url_only_entry_infers_the_same_http_transport() {
-    let canonical =
-        bindings(r#""mcpServers": {"exa": {"type": "http", "url": "https://mcp.exa.ai/mcp"}}"#);
-    let inferred = bindings(r#""mcpServers": {"exa": {"url": "https://mcp.exa.ai/mcp"}}"#);
+    let canonical = bindings(
+        r#"mcp_servers = { "exa" = { "type" = "http", "url" = "https://mcp.exa.ai/mcp" } }"#,
+    );
+    let inferred = bindings(r#"mcp_servers = { "exa" = { "url" = "https://mcp.exa.ai/mcp" } }"#);
     assert_eq!(
         canonical, inferred,
         "the canonical and inferred HTTP forms normalize identically"
@@ -75,11 +74,7 @@ fn url_only_entry_infers_the_same_http_transport() {
 #[test]
 fn http_headers_survive_normalization_exactly() {
     let bindings = bindings(
-        r#""mcpServers": {"exa": {
-            "type": "http",
-            "url": "https://mcp.exa.ai/mcp",
-            "headers": {"x-api-key": "secret-value", "X-Trace": "on"}
-        }}"#,
+        r#"mcp_servers = { "exa" = { "type" = "http", "url" = "https://mcp.exa.ai/mcp", "headers" = { "x-api-key" = "secret-value", "X-Trace" = "on" } } }"#,
     );
     let (_, binding) = single(&bindings);
     let McpTransportConfig::StreamableHttp { headers, .. } = &binding.transport else {
@@ -100,7 +95,7 @@ fn http_headers_survive_normalization_exactly() {
 fn empty_or_blank_http_url_is_rejected() {
     for url in ["", "   "] {
         let error = rejection(&format!(
-            r#""mcpServers": {{"exa": {{"type": "http", "url": "{url}"}}}}"#
+            r#"mcp_servers = {{ "exa" = {{ "type" = "http", "url" = "{url}" }} }}"#
         ));
         assert!(
             error.to_string().contains("url must be a non-empty"),
@@ -113,10 +108,10 @@ fn empty_or_blank_http_url_is_rejected() {
 #[test]
 fn http_entry_with_command_fields_is_rejected() {
     for fragment in [
-        r#""mcpServers": {"exa": {"type": "http", "url": "https://x", "command": "npx"}}"#,
-        r#""mcpServers": {"exa": {"type": "http", "url": "https://x", "args": ["-y"]}}"#,
-        r#""mcpServers": {"exa": {"type": "http", "url": "https://x", "env": {"K": "v"}}}"#,
-        r#""mcpServers": {"exa": {"type": "http", "url": "https://x", "cwd": "sub"}}"#,
+        r#"mcp_servers = { "exa" = { "type" = "http", "url" = "https://x", "command" = "npx" } }"#,
+        r#"mcp_servers = { "exa" = { "type" = "http", "url" = "https://x", "args" = ["-y"] } }"#,
+        r#"mcp_servers = { "exa" = { "type" = "http", "url" = "https://x", "env" = { "K" = "v" } } }"#,
+        r#"mcp_servers = { "exa" = { "type" = "http", "url" = "https://x", "cwd" = "sub" } }"#,
     ] {
         let error = rejection(fragment);
         assert!(
@@ -130,7 +125,7 @@ fn http_entry_with_command_fields_is_rejected() {
 /// silently reinterpreted.
 #[test]
 fn http_entry_without_url_is_rejected() {
-    let error = rejection(r#""mcpServers": {"exa": {"type": "http"}}"#);
+    let error = rejection(r#"mcp_servers = { "exa" = { "type" = "http" } }"#);
     assert!(
         error.to_string().contains("declares no url"),
         "unexpected error: {error}"
@@ -143,13 +138,7 @@ fn http_entry_without_url_is_rejected() {
 #[test]
 fn canonical_stdio_entry_normalizes_to_the_stdio_transport() {
     let bindings = bindings(
-        r#""mcpServers": {"exa": {
-            "type": "stdio",
-            "command": "npx",
-            "args": ["-y", "exa-mcp-server"],
-            "env": {"EXA_API_KEY": "key"},
-            "cwd": "servers/exa"
-        }}"#,
+        r#"mcp_servers = { "exa" = { "type" = "stdio", "command" = "npx", "args" = ["-y", "exa-mcp-server"], "env" = { "EXA_API_KEY" = "key" }, "cwd" = "servers/exa" } }"#,
     );
     let (server_id, binding) = single(&bindings);
     assert_eq!(server_id.as_str(), "exa");
@@ -169,10 +158,11 @@ fn canonical_stdio_entry_normalizes_to_the_stdio_transport() {
 #[test]
 fn command_only_entry_infers_the_same_stdio_transport() {
     let canonical = bindings(
-        r#""mcpServers": {"exa": {"type": "stdio", "command": "npx", "args": ["-y", "mcp-remote"]}}"#,
+        r#"mcp_servers = { "exa" = { "type" = "stdio", "command" = "npx", "args" = ["-y", "mcp-remote"] } }"#,
     );
-    let inferred =
-        bindings(r#""mcpServers": {"exa": {"command": "npx", "args": ["-y", "mcp-remote"]}}"#);
+    let inferred = bindings(
+        r#"mcp_servers = { "exa" = { "command" = "npx", "args" = ["-y", "mcp-remote"] } }"#,
+    );
     assert_eq!(
         canonical, inferred,
         "the canonical and inferred stdio forms normalize identically"
@@ -184,7 +174,7 @@ fn command_only_entry_infers_the_same_stdio_transport() {
 fn empty_or_blank_stdio_command_is_rejected() {
     for command in ["", "   "] {
         let error = rejection(&format!(
-            r#""mcpServers": {{"exa": {{"type": "stdio", "command": "{command}"}}}}"#
+            r#"mcp_servers = {{ "exa" = {{ "type" = "stdio", "command" = "{command}" }} }}"#
         ));
         assert!(
             error.to_string().contains("command must be a non-empty"),
@@ -197,8 +187,8 @@ fn empty_or_blank_stdio_command_is_rejected() {
 #[test]
 fn stdio_entry_with_http_fields_is_rejected() {
     for fragment in [
-        r#""mcpServers": {"exa": {"type": "stdio", "command": "npx", "url": "https://x"}}"#,
-        r#""mcpServers": {"exa": {"type": "stdio", "command": "npx", "headers": {"k": "v"}}}"#,
+        r#"mcp_servers = { "exa" = { "type" = "stdio", "command" = "npx", "url" = "https://x" } }"#,
+        r#"mcp_servers = { "exa" = { "type" = "stdio", "command" = "npx", "headers" = { "k" = "v" } } }"#,
     ] {
         let error = rejection(fragment);
         assert!(
@@ -211,7 +201,7 @@ fn stdio_entry_with_http_fields_is_rejected() {
 /// An explicit stdio entry with no `command` at all is rejected.
 #[test]
 fn stdio_entry_without_command_is_rejected() {
-    let error = rejection(r#""mcpServers": {"exa": {"type": "stdio"}}"#);
+    let error = rejection(r#"mcp_servers = { "exa" = { "type" = "stdio" } }"#);
     assert!(
         error.to_string().contains("declares no command"),
         "unexpected error: {error}"
@@ -224,7 +214,8 @@ fn stdio_entry_without_command_is_rejected() {
 /// resolves to a guess.
 #[test]
 fn command_and_url_together_are_rejected() {
-    let error = rejection(r#""mcpServers": {"exa": {"url": "https://x", "command": "npx"}}"#);
+    let error =
+        rejection(r#"mcp_servers = { "exa" = { "url" = "https://x", "command" = "npx" } }"#);
     assert!(
         error.to_string().contains("declares both url and command"),
         "unexpected error: {error}"
@@ -234,7 +225,7 @@ fn command_and_url_together_are_rejected() {
 /// An entry carrying neither transport is incomplete.
 #[test]
 fn entry_without_url_or_command_is_rejected() {
-    let error = rejection(r#""mcpServers": {"exa": {}}"#);
+    let error = rejection(r#"mcp_servers = { "exa" = {  } }"#);
     assert!(
         error.to_string().contains("declares neither url"),
         "unexpected error: {error}"
@@ -253,7 +244,7 @@ fn unsupported_transport_types_are_rejected_with_the_accepted_set() {
         "streamable_http",
     ] {
         let error = rejection(&format!(
-            r#""mcpServers": {{"exa": {{"type": "{transport_type}", "url": "https://x"}}}}"#
+            r#"mcp_servers = {{ "exa" = {{ "type" = "{transport_type}", "url" = "https://x" }} }}"#
         ));
         let message = error.to_string();
         assert!(
@@ -270,10 +261,14 @@ fn unsupported_transport_types_are_rejected_with_the_accepted_set() {
 /// A typo must fail startup rather than silently change runtime semantics.
 #[test]
 fn unknown_entry_fields_are_rejected() {
-    let error = rejection(r#""mcpServers": {"exa": {"url": "https://x", "timeoutMs": 5000}}"#);
+    let error = rejection(r#"mcp_servers = { exa = { url = "https://x", timeout_ms = 5000 } }"#);
     assert!(
         matches!(error, CurrentRuntimeConfigError::Syntax { .. }),
         "unexpected error: {error}"
+    );
+    assert!(
+        error.to_string().contains("unknown field `timeout_ms`"),
+        "{error}"
     );
 }
 
@@ -281,7 +276,7 @@ fn unknown_entry_fields_are_rejected() {
 #[test]
 fn the_obsolete_array_schema_is_rejected() {
     let error = rejection(
-        r#""mcpServers": [{"serverId": "exa", "transport": {"type": "streamable_http", "endpoint": "https://x"}}]"#,
+        r#"mcp_servers = [{ "server_id" = "exa", "transport" = { "type" = "streamable_http", "endpoint" = "https://x" } }]"#,
     );
     assert!(
         matches!(error, CurrentRuntimeConfigError::Syntax { .. }),
@@ -293,7 +288,8 @@ fn the_obsolete_array_schema_is_rejected() {
 /// authoritative identity.
 #[test]
 fn the_obsolete_server_id_field_is_rejected() {
-    let error = rejection(r#""mcpServers": {"exa": {"serverId": "exa", "url": "https://x"}}"#);
+    let error =
+        rejection(r#"mcp_servers = { "exa" = { "server_id" = "exa", "url" = "https://x" } }"#);
     assert!(
         matches!(error, CurrentRuntimeConfigError::Syntax { .. }),
         "unexpected error: {error}"
@@ -304,7 +300,7 @@ fn the_obsolete_server_id_field_is_rejected() {
 #[test]
 fn the_obsolete_nested_transport_field_is_rejected() {
     let error = rejection(
-        r#""mcpServers": {"exa": {"transport": {"type": "streamable_http", "endpoint": "https://x"}}}"#,
+        r#"mcp_servers = { "exa" = { "transport" = { "type" = "streamable_http", "endpoint" = "https://x" } } }"#,
     );
     assert!(
         matches!(error, CurrentRuntimeConfigError::Syntax { .. }),
@@ -317,7 +313,7 @@ fn the_obsolete_nested_transport_field_is_rejected() {
 #[test]
 fn embedded_policy_inside_a_connection_entry_is_rejected() {
     let error = rejection(
-        r#""mcpServers": {"exa": {"url": "https://x", "policy": {"execution": "foreground_only"}}}"#,
+        r#"mcp_servers = { "exa" = { "url" = "https://x", "policy" = { "execution" = "foreground_only" } } }"#,
     );
     assert!(
         matches!(error, CurrentRuntimeConfigError::Syntax { .. }),
@@ -327,28 +323,32 @@ fn embedded_policy_inside_a_connection_entry_is_rejected() {
 
 // ----------------------------------------------------- identity/policy ----
 
-/// Duplicate MCP identity is structurally impossible: a JSON object cannot
-/// yield two entries under one key, so no duplicate check exists anywhere.
+/// Duplicate TOML tables fail before semantic composition can produce bindings.
 #[test]
-fn duplicate_server_identity_cannot_produce_two_bindings() {
-    let bindings = bindings(
-        r#""mcpServers": {"exa": {"url": "https://first"}, "exa": {"url": "https://second"}}"#,
+fn duplicate_server_tables_are_rejected_before_binding_composition() {
+    let text = session_toml(
+        r#"[mcp_servers.exa]
+url = "https://first"
+
+[mcp_servers.exa]
+url = "https://second""#,
     );
-    let (server_id, binding) = single(&bindings);
-    assert_eq!(server_id.as_str(), "exa");
-    assert_eq!(
-        binding.transport,
-        McpTransportConfig::StreamableHttp {
-            endpoint: "https://second".to_owned(),
-            headers: BTreeMap::new(),
-        }
-    );
+    let syntax = text
+        .parse::<toml_edit::DocumentMut>()
+        .expect_err("duplicate table");
+    assert!(syntax.message().contains("duplicate"), "{syntax}");
+    let error = CurrentRuntimeConfig::from_toml_slice(text.as_bytes())
+        .and_then(|config| config.mcp_bindings())
+        .expect_err("duplicate identities must produce no bindings");
+    assert!(matches!(error, CurrentRuntimeConfigError::Syntax { .. }));
+    assert!(error.to_string().contains("duplicate"), "{error}");
+    assert!(error.to_string().contains("exa"), "{error}");
 }
 
 /// An empty map key is not a usable server identity.
 #[test]
 fn empty_server_identity_is_rejected() {
-    let error = rejection(r#""mcpServers": {"": {"url": "https://x"}}"#);
+    let error = rejection(r#"mcp_servers = { "" = { "url" = "https://x" } }"#);
     assert!(
         error.to_string().contains("non-empty server identities"),
         "unexpected error: {error}"
@@ -357,15 +357,15 @@ fn empty_server_identity_is_rejected() {
 
 /// The `python:` MCP server namespace is structurally reserved for
 /// rustX-managed Python tool packages (Issue #174): a configured
-/// `mcpServers` entry claiming it is rejected at configuration validation,
+/// `mcp_servers` entry claiming it is rejected at configuration validation,
 /// before any capability preparation — one `McpServerId` can never have two
 /// owners. The diagnostic explains the reservation actionably.
 #[test]
 fn the_reserved_python_namespace_is_rejected_for_configured_servers() {
     for fragment in [
-        r#""mcpServers": {"python:foo": {"command": "python", "args": ["-m", "demo"]}}"#,
-        r#""mcpServers": {"python:demo": {"url": "https://demo"}}"#,
-        r#""mcpServers": {"python:": {"url": "https://x"}}"#,
+        r#"mcp_servers = { "python:foo" = { "command" = "python", "args" = ["-m", "demo"] } }"#,
+        r#"mcp_servers = { "python:demo" = { "url" = "https://demo" } }"#,
+        r#"mcp_servers = { "python:" = { "url" = "https://x" } }"#,
     ] {
         let error = rejection(fragment);
         let message = error.to_string();
@@ -374,7 +374,7 @@ fn the_reserved_python_namespace_is_rejected_for_configured_servers() {
             "the rejection names the reserved namespace: {message}"
         );
         assert!(
-            message.contains("mcpServers"),
+            message.contains("mcp_servers"),
             "the rejection names the configuration surface: {message}"
         );
     }
@@ -385,9 +385,9 @@ fn the_reserved_python_namespace_is_rejected_for_configured_servers() {
 #[test]
 fn normal_configured_server_ids_remain_accepted() {
     for fragment in [
-        r#""mcpServers": {"github": {"command": "npx"}}"#,
-        r#""mcpServers": {"python-tools": {"command": "npx"}}"#,
-        r#""mcpServers": {"py-demo": {"url": "https://py-demo"}}"#,
+        r#"mcp_servers = { "github" = { "command" = "npx" } }"#,
+        r#"mcp_servers = { "python-tools" = { "command" = "npx" } }"#,
+        r#"mcp_servers = { "py-demo" = { "url" = "https://py-demo" } }"#,
     ] {
         let bindings = bindings(fragment);
         assert_eq!(bindings.len(), 1, "a normal id binds: {fragment}");
@@ -397,7 +397,7 @@ fn normal_configured_server_ids_remain_accepted() {
 /// A server with no policy entry gets the deterministic default policy.
 #[test]
 fn absent_policy_entry_uses_the_deterministic_default() {
-    let bindings = bindings(r#""mcpServers": {"exa": {"url": "https://x"}}"#);
+    let bindings = bindings(r#"mcp_servers = { "exa" = { "url" = "https://x" } }"#);
     let (_, binding) = single(&bindings);
     assert_eq!(
         binding.policy.execution,
@@ -413,13 +413,8 @@ fn absent_policy_entry_uses_the_deterministic_default() {
 #[test]
 fn policy_overlay_applies_to_exactly_the_named_server() {
     let bindings = bindings(
-        r#""mcpServers": {
-            "exa": {"url": "https://exa"},
-            "local": {"command": "npx"}
-        },
-        "mcpToolPolicies": {
-            "exa": {"execution": "background_only", "concurrency": "parallel"}
-        }"#,
+        r#"mcp_servers = { "exa" = { "url" = "https://exa" }, "local" = { "command" = "npx" } }
+mcp_tool_policies = { "exa" = { "execution" = "background_only", "concurrency" = "parallel" } }"#,
     );
     let exa = &bindings[&McpServerId::new("exa")];
     assert_eq!(exa.policy.execution, ToolExecutionPolicy::BackgroundOnly);
@@ -434,36 +429,28 @@ fn policy_overlay_applies_to_exactly_the_named_server() {
 #[test]
 fn policy_for_an_unknown_server_is_rejected() {
     let error = rejection(
-        r#""mcpServers": {"exa": {"url": "https://x"}},
-           "mcpToolPolicies": {"typo": {"execution": "background_only"}}"#,
+        r#"mcp_servers = { "exa" = { "url" = "https://x" } }
+mcp_tool_policies = { "typo" = { "execution" = "background_only" } }"#,
     );
     assert!(
         error
             .to_string()
-            .contains("mcpToolPolicies names typo, which mcpServers does not declare"),
+            .contains("mcp_tool_policies names typo, which mcp_servers does not declare"),
         "unexpected error: {error}"
     );
 }
 
 // --------------------------------------------------------- determinism ----
 
-/// JSON object insertion order never reaches the normalized binding set: the
+/// TOML declaration order never reaches the normalized binding set: the
 /// keyed representation is the ordering authority.
 #[test]
-fn json_insertion_order_does_not_affect_the_binding_order() {
+fn toml_insertion_order_does_not_affect_the_binding_order() {
     let forward = bindings(
-        r#""mcpServers": {
-            "alpha": {"url": "https://alpha"},
-            "beta": {"command": "beta-server"},
-            "gamma": {"url": "https://gamma"}
-        }"#,
+        r#"mcp_servers = { "alpha" = { "url" = "https://alpha" }, "beta" = { "command" = "beta-server" }, "gamma" = { "url" = "https://gamma" } }"#,
     );
     let reversed = bindings(
-        r#""mcpServers": {
-            "gamma": {"url": "https://gamma"},
-            "beta": {"command": "beta-server"},
-            "alpha": {"url": "https://alpha"}
-        }"#,
+        r#"mcp_servers = { "gamma" = { "url" = "https://gamma" }, "beta" = { "command" = "beta-server" }, "alpha" = { "url" = "https://alpha" } }"#,
     );
     assert_eq!(forward, reversed);
     assert_eq!(

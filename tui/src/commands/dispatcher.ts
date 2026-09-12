@@ -15,7 +15,7 @@
  * touching the terminal itself. That keeps it testable without a real
  * terminal and keeps Pi at the outermost layer.
  *
- * What it must never do: read `models.jsonc`, resolve a credential, execute a
+ * What it must never do: read `models.toml`, resolve a credential, execute a
  * tool, read a `SKILL.md`, compose an Agent Status, drain a mailbox, or reach
  * a provider. Every one of those is Rust-owned, and several are reachable
  * only through operations this file calls.

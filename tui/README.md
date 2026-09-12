@@ -123,7 +123,7 @@ All path flags are optional overrides passed straight through. `--config`
 replaces the project-config slot without bypassing trust. After startup the native
 SessionCatalog/SessionGraph under `--runtime-root` owns durable user sessions
 and lineages. **The client never opens,
-parses, or interprets any of them** — `models.jsonc` is a runtime-owned model
+parses, or interprets any of them** — `models.toml` is a runtime-owned model
 authority, and reading it here would create a second one. Provider credentials
 are resolved by the Rust process from the environment it inherits. For the
 complete copyable configuration and Python-tool example, see
@@ -526,7 +526,7 @@ The selector searches the model reference *and* useful metadata the catalog
 publishes — protocol, modalities, capabilities, reasoning profiles, and
 limits. It preserves configured, effective, and attempt-frozen identities and
 shows the highlighted row's effective facts exactly as published. The client
-does not read `models.jsonc`, infer provider behavior from a model prefix, or
+does not read `models.toml`, infer provider behavior from a model prefix, or
 invent a reasoning scale. Selecting a row calls the canonical dispatcher
 `model_set` path; a `replacement_required` result is interpreted by the same
 `#handleOutcome` flow as `/model` and Session commands.

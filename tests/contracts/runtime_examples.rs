@@ -19,25 +19,25 @@ fn read_example(name: &str) -> Vec<u8> {
 }
 
 #[test]
-fn committed_configuration_examples_are_commented_jsonc() {
-    for name in ["models.jsonc", "rustx.jsonc"] {
+fn committed_configuration_examples_are_commented_toml() {
+    for name in ["models.toml", "rustx.toml"] {
         let bytes = read_example(name);
         let text = String::from_utf8(bytes.clone()).expect("committed example is UTF-8");
         assert!(
-            text.contains("//"),
+            text.contains("# "),
             "{name} must explain its fields in place"
         );
         assert!(
             serde_json::from_slice::<serde_json::Value>(&bytes).is_err(),
-            "{name} must exercise the JSONC reader, not merely be valid JSON"
+            "{name} must exercise the TOML reader, not merely be valid JSON"
         );
     }
 }
 
 #[test]
 fn committed_model_example_uses_the_production_catalog_contract() {
-    let catalog = ModelCatalog::from_jsonc_slice(&read_example("models.jsonc"))
-        .expect("models.jsonc must parse through ModelCatalog");
+    let catalog = ModelCatalog::from_toml_slice(&read_example("models.toml"))
+        .expect("models.toml must parse through ModelCatalog");
     let model_ref = ModelRef::parse("example/demo-model").expect("canonical model reference");
     let model = catalog.model(&model_ref).expect("example model exists");
     assert_eq!(model.protocol, ModelProtocol::OpenAiChatCompletions);
@@ -83,10 +83,10 @@ fn committed_model_example_uses_the_production_catalog_contract() {
 
 #[test]
 fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_policy() {
-    let catalog = ModelCatalog::from_jsonc_slice(&read_example("models.jsonc"))
-        .expect("models.jsonc must parse through ModelCatalog");
-    let config = CurrentRuntimeConfig::from_jsonc_slice(&read_example("rustx.jsonc"))
-        .expect("rustx.jsonc must parse through CurrentRuntimeConfig");
+    let catalog = ModelCatalog::from_toml_slice(&read_example("models.toml"))
+        .expect("models.toml must parse through ModelCatalog");
+    let config = CurrentRuntimeConfig::from_toml_slice(&read_example("rustx.toml"))
+        .expect("rustx.toml must parse through CurrentRuntimeConfig");
 
     assert_eq!(config.model.model.to_string(), "example/demo-model");
     catalog
@@ -145,7 +145,7 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
     );
     assert_eq!(config.workflows.main, config.workflows.definitions);
 
-    let host = CurrentRuntimeConfig::from_jsonc_slice(&read_example("settings.jsonc")).unwrap();
+    let host = CurrentRuntimeConfig::from_toml_slice(&read_example("settings.toml")).unwrap();
     let policies = host.native_tools.to_policies();
     assert_eq!(policies.read.execution, ToolExecutionPolicy::ForegroundOnly);
     assert_eq!(policies.read.concurrency, ToolConcurrencyPolicy::Parallel);
@@ -210,7 +210,7 @@ fn committed_example_skill_is_found_by_project_agents_discovery() {
 #[test]
 fn every_shipped_workflow_is_registered_and_compiles() {
     use rustx::runtime::workflow::{WorkflowDefinition, WorkflowProgram};
-    let config = CurrentRuntimeConfig::from_jsonc_slice(&read_example("rustx.jsonc")).unwrap();
+    let config = CurrentRuntimeConfig::from_toml_slice(&read_example("rustx.toml")).unwrap();
     let profiles = config.subagents.workflow.iter().cloned().collect();
     let directory = examples_root().join("workspace/.agents/workflows");
     assert_eq!(
@@ -236,7 +236,7 @@ fn every_shipped_workflow_is_registered_and_compiles() {
 #[test]
 fn reference_authoring_errors_fail_before_execution() {
     use rustx::runtime::workflow::{WorkflowDefinition, WorkflowId, WorkflowProgram};
-    let config = CurrentRuntimeConfig::from_jsonc_slice(&read_example("rustx.jsonc")).unwrap();
+    let config = CurrentRuntimeConfig::from_toml_slice(&read_example("rustx.toml")).unwrap();
     let profiles = config.subagents.workflow.iter().cloned().collect();
     let source: serde_json::Value = serde_yaml::from_slice(&read_example(
         "workspace/.agents/workflows/implement_and_review.yaml",

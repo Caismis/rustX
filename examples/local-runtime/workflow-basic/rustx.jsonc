@@ -1,3 +1,0 @@
-{
-  "workflows": {"definitions": ["read_file"], "main": ["read_file"]}
-}

@@ -15,9 +15,9 @@ The intended layout is:
 ```text
 examples/local-runtime/
 ├── README.md
-├── models.jsonc
-├── settings.jsonc
-├── rustx.jsonc
+├── models.toml
+├── settings.toml
+├── rustx.toml
 ├── workspace/
 │   ├── AGENTS.md
 │   ├── greeting.py
@@ -41,12 +41,12 @@ examples/local-runtime/
 
 | Path | Owner and purpose |
 | --- | --- |
-| `models.jsonc` | The runtime's provider/model authority: endpoint, credential source, model limits, capabilities, opaque request parameters, reasoning profiles, and protocol compatibility. |
-| `settings.jsonc` | Copy to the host configuration directory: user model selection and host-only Tool approval/invocation policies. |
-| `rustx.jsonc` | Project configuration: default model selection, context, Agent Status modules/timezone, tool activation, project MCP sources, contained Skill roots, and tool environment. It cannot set Tool approval/invocation policies. |
+| `models.toml` | The runtime's provider/model authority: endpoint, credential source, model limits, capabilities, opaque request parameters, reasoning profiles, and protocol compatibility. |
+| `settings.toml` | Copy to the host configuration directory: user model selection and host-only Tool approval/invocation policies. |
+| `rustx.toml` | Project configuration: default model selection, context, Agent Status modules/timezone, tool activation, project MCP sources, contained Skill roots, and tool environment. It cannot set Tool approval/invocation policies. |
 | `workspace/` | The authoritative execution cwd and conventional project/source tree, including Skills and editable custom Python tool packages. Relative native file-tool paths resolve here. This is not a general filesystem sandbox for Read/Write/Edit/Grep/Glob. |
 | `workspace/.agents/skills/*` | Canonical project Skills, automatically discovered through the Skill plane's own semantics; a directory does not register a Workflow or Subagent. |
-| `workspace/.agents/tools/*` | Inertly discovered managed Python packages. Explicit `pythonSources` enablement is required before preparing their ordinary MCP servers. |
+| `workspace/.agents/tools/*` | Inertly discovered managed Python packages. Explicit `python_sources` enablement is required before preparing their ordinary MCP servers. |
 | `workspace/.agents/subagents/*` | Explicitly defined/admitted Subagent instruction and project-guidance sources. The config controls admission; filesystem presence alone does not expose a profile. |
 | `workspace/.agents/workflows/*` | Explicitly registered native Workflow YAML sources. The config controls both registration and model visibility; the directory is never scanned. |
 | User state `workspaces/<identity>/` | Runtime-owned generated artifacts, prepared Python environments and Session storage, disjoint from `workspace/`. |
@@ -67,21 +67,16 @@ file-tool paths are not implicitly confined to either tree.
 
 ## Configuration format
 
-`models.jsonc` and `rustx.jsonc` are JSONC — ordinary JSON plus `//` and
-`/* */` comments and trailing commas. Editors already understand the dialect
-(`tsconfig.json`, VS Code settings); associating `*.jsonc` with "JSON with
-Comments" is all the setup needed.
+TOML is the only rustX settings, runtime configuration, and model catalog
+format. Author `settings.toml`, `rustx.toml`, and `models.toml` with snake_case
+keys and `#` comments. Unknown fields, duplicate keys, and malformed TOML fail
+before composition. See [launch configuration](../../docs/launch-configuration.md)
+for typed reset values and the `request_params_json` string boundary.
 
-Nothing beyond comments and trailing commas is relaxed. Single-quoted
-strings, unquoted property names, hexadecimal numbers, unary plus, missing
-commas, and unknown fields all fail startup, because a configuration typo
-must never parse into something the author did not write. A syntax failure
-names the line and column; a schema failure names the field.
+YAML authors fixed Workflow programs. Markdown authors model-facing resources.
+JSON remains the wire, generated-schema, and provider-native opaque data format.
 
-The relaxation is surface syntax only. Runtime-owned generated state under
-`runtime-root` is unaffected and remains strict JSON.
-
-## `models.jsonc`
+## `models.toml`
 
 The provider identity `example` is only a local name. The explicit
 `https://api.example.invalid/v1` endpoint must be replaced with the real
@@ -96,11 +91,11 @@ The catalog demonstrates the current `openai_chat_completions` protocol, a
 `example/demo-model` model with structured text/tool/reasoning capabilities,
 model limits, and `compat` metadata. A model ID may contain `/`, so a model
 such as `Qwen/Qwen3` is referenced as `example/Qwen/Qwen3` in the session.
-`requestParams.temperature` is a
+`request_params_json.temperature` is a
 model-level provider wire parameter. It is opaque to rustX and is not a
 universal sampling-parameter schema; adapt it to the selected provider.
 
-`compat.chatReasoningReplay` selects the assistant-history spelling required
+`compat.chat_reasoning_replay` selects the assistant-history spelling required
 by the concrete OpenAI-compatible service:
 
 | Value | Typical services | Behavior |
@@ -119,7 +114,7 @@ Generation-time reasoning remains owned by the selected reasoning profile and
 its provider request parameters. In particular, the `off` profile does not
 implicitly select `omit`.
 
-`compat.chatToolProtocol` declares the model's *in-band* tool protocol, if it
+`compat.chat_tool_protocol` declares the model's *in-band* tool protocol, if it
 has one:
 
 | Value | Typical services | Behavior |
@@ -137,10 +132,10 @@ hostname, or model ID.
 
 The named `off` and `on` reasoning profiles likewise have no built-in meaning
 from their names. Their exact `enabled` state and provider-owned
-`requestParams` are the contract. The illustrative `reasoning_effort` value
+`request_params_json` are the contract. The illustrative `reasoning_effort` value
 must be changed if the real provider uses a different reasoning parameter.
 
-## `rustx.jsonc`
+## `rustx.toml`
 
 All project-origin local resource paths must resolve inside the selected
 workspace, including symlink targets. This includes Skills, Subagent instruction
@@ -150,24 +145,24 @@ User/CLI resources retain separate host authority. Reload repeats containment
 checks and rejects the whole candidate on failure.
 
 The baseline runtime config selects `example/demo-model` using the canonical
-`provider/model` identity. `models.jsonc` supplies the available model and its
-defaults; `rustx.jsonc.model` supplies the default for a brand-new Session.
+`provider/model` identity. `models.toml` supplies the available model and its
+defaults; `rustx.toml.model` supplies the default for a brand-new Session.
 An existing Session's explicitly selected model is persisted separately in
 the runtime-owned catalog and is never overwritten by this default.
 
-`rustx.jsonc.model` chooses the starting model for a new Session and
+`rustx.toml.model` chooses the starting model for a new Session and
 overrides its `temperature` and output budget. The baseline uses the simpler
-`summaryModel.mode = "session"` policy, so summaries follow the admitted
+`summary_model.mode = "session"` policy, so summaries follow the admitted
 attempt's primary model.
 
-`context` contains current runtime policy values (`reserveTokens`,
-`keepRecentTokens`, and `summaryOutputCap`). The selected model's
-`contextWindow` remains in `models.jsonc`.
+`context` contains current runtime policy values (`reserve_tokens`,
+`keep_recent_tokens`, and `summary_output_cap`). The selected model's
+`context_window` remains in `models.toml`.
 
-`modelTimeoutPolicy` contains the two finite elapsed-time deadlines shared by
+`model_timeout_policy` contains the two finite elapsed-time deadlines shared by
 primary provider requests and compaction summary requests:
-`responseStartTimeoutMs` defaults to 30 seconds and
-`streamIdleTimeoutMs` defaults to 15 seconds. The policy is frozen for each
+`response_start_timeout_ms` defaults to 30 seconds and
+`stream_idle_timeout_ms` defaults to 15 seconds. The policy is frozen for each
 admitted request and is not part of Session history or the provider model
 input.
 
@@ -176,14 +171,14 @@ Each canonical `workspace/.agents/subagents/<name>.md` frontmatter may set an op
 milliseconds, bounded at 86,400,000 (24 hours); when omitted, no
 definition-level deadline is installed. This limit covers the whole owned
 child lifecycle — startup, model streaming, tools, and physical/workspace
-settlement — and is separate from `modelTimeoutPolicy`. Expiration uses the
+settlement — and is separate from `model_timeout_policy`. Expiration uses the
 ordinary cancellation path with a deadline-specific reason; there is no
 `TimedOut` subagent state. The model chooses only the named agent and its
 task/context, and cannot set or extend this deadline per invocation.
 
-`toolDeadlinePolicy` bounds each admitted foreground tool call:
-`hardDeadlineMs` is the total execution lifetime (default 2 minutes) and the
-optional `idleLivenessMs` cancels a started call that produces no progress
+`tool_deadline_policy` bounds each admitted foreground tool call:
+`hard_deadline_ms` is the total execution lifetime (default 2 minutes) and the
+optional `idle_liveness_ms` cancels a started call that produces no progress
 for that long. The idle window applies only to executors that declare
 meaningful progress capability; executors without honest progress evidence
 run under the hard deadline only. Executor progress refreshes only the idle
@@ -193,18 +188,18 @@ the executor's physical settlement, bounded by a confirmation window —
 committing `TimedOut` only when terminal settlement is proven, and
 `OutcomeUnknown` when the executor cannot prove it.
 
-Host `settings.jsonc` owns `approvalMode`, `nativeTools`, and `mcpToolPolicies`.
-Project `rustx.jsonc` rejects all three objects, including execution/concurrency
+Host `settings.toml` owns `approval_mode`, `native_tools`, and `mcp_tool_policies`.
+Project `rustx.toml` rejects all three objects, including execution/concurrency
 members. Copy the optional policies from the host settings example if desired;
 project trust never grants Tool approval authority.
 
-`approvalMode` is the current runtime-wide HITL mode. It defaults to `policy`;
+`approval_mode` is the current runtime-wide HITL mode. It defaults to `policy`;
 `full_access` suppresses only approval prompts for the current runtime and is
 never restored from Session history. The runtime applies it at attempt
 boundaries, so a busy attempt keeps its admitted mode while the latest request
 waits as `pending`.
 
-`nativeTools` can override three independent policy axes for `read`, `write`,
+`native_tools` can override three independent policy axes for `read`, `write`,
 `edit`, `glob`, `grep`, and `bash`: `execution` is one of
 `foreground_only`, `background_only`, or `model_selectable`; `concurrency` is
 one of `sequential` or `parallel`; and `approval` is `never` or `always`.
@@ -230,7 +225,7 @@ subschema instead. Apart from references, nested subschemas are unrestricted.
 Rename the tool's field or flatten its root, or configure `foreground_only` or
 `background_only`, which inject nothing and therefore accept any schema —
 composed roots and `execution_mode` included. The same rule applies to
-`mcpToolPolicies`, which is worth knowing before
+`mcp_tool_policies`, which is worth knowing before
 switching an MCP server's tools to `model_selectable`: their schemas come from
 the server verbatim, and a server that ships a composed root will be rejected
 until you pick a fixed policy for it. Managed Python tool packages are exempt
@@ -259,11 +254,11 @@ protocol versions superseded by the current one and development schemas before
 version 18 are explicitly rejected rather than migrated.
 
 The harmless `RUSTX_EXAMPLE_MODE` entry demonstrates the authorized runtime
-environment. Keep provider credentials in `models.jsonc`'s `apiKey` reference,
+environment. Keep provider credentials in `models.toml`'s `api_key` reference,
 not in this table.
 
-`defaultTools` selects ordinary built-ins; Read is default-enabled.
-`defaultTools: []` selects no ordinary built-ins, while explicitly admitted
+`default_tools` selects ordinary built-ins; Read is default-enabled.
+`default_tools: []` selects no ordinary built-ins, while explicitly admitted
 main Workflows remain default-eligible. `--no-builtin-tools` removes all
 built-ins, including generated dispatchers, from default selection.
 `--tools a,b` is an exact allowlist; `--exclude-tools a,b` subtracts last.
@@ -273,7 +268,7 @@ flags; `--tools` also conflicts with `--no-builtin-tools`.
 
 Every control in this paragraph addresses the *ordinary* capability plane.
 A Tool contributed by a Native Agent Extension — `todo` — is composed under
-`extensions` and is unnameable here: listing it in `defaultTools`, `--tools`
+`extensions` and is unnameable here: listing it in `default_tools`, `--tools`
 or `--exclude-tools` is a validation error, and `--no-tools` does not remove
 it. A model request with no Tools at all therefore needs `--no-tools` *and*
 `"extensions": { "todo": { "enabled": false } }`.
@@ -285,7 +280,7 @@ Exposure controls do not disable enabled source preparation; use the source's
 `enabled: false` for that. The TUI forwards these controls to Rust.
 
 The product policy table is published in
-[`settings.jsonc`](settings.jsonc) and
+[`settings.toml`](settings.toml) and
 [runtime resources](../../docs/runtime-resources.md#exact-tool-authority-and-native-defaults).
 The example inherits those defaults rather than demonstrating unusual overrides.
 Partial native policy objects override only explicitly supplied axes over
@@ -307,7 +302,7 @@ the child's independently frozen tool admission.
 
 ## Native YAML Workflows
 
-Workflows are registered explicitly in `rustx.jsonc`; the runtime does not
+Workflows are registered explicitly in `rustx.toml`; the runtime does not
 discover every YAML file under the workspace. A registered id such as
 `parallel_review` resolves exactly to:
 
@@ -352,57 +347,42 @@ Unfinished runs are not replayed after a crash.
 
 ## MCP servers
 
-The copyable baseline intentionally keeps `"mcpServers": {}`, so it does not
-require an external MCP process or endpoint at startup. `rustx.jsonc` carries
+The copyable baseline intentionally keeps `"mcp_servers": {}`, so it does not
+require an external MCP process or endpoint at startup. `rustx.toml` carries
 one http and one stdio entry commented out next to it; uncommenting one is
 the whole edit.
 
-`mcpServers` is a named map keyed by MCP server identity. Every entry needs
+`mcp_servers` is a named map keyed by MCP server identity. Every entry needs
 explicit `enabled: true` under host project trust. Credential-bearing entries
 belong entirely in user settings, and replace as whole entries. See
 [source activation](../../docs/source-activation.md). Three canonical entries:
 
-```jsonc
-{
-  "mcpServers": {
-    "exa": {
-      "enabled": true,
-      "type": "http",
-      "url": "https://mcp.exa.ai/mcp"
-    }
-  }
-}
+```toml
+[mcp_servers.exa]
+enabled = true
+type = "http"
+url = "https://mcp.exa.ai/mcp"
 ```
 
-```jsonc
-{
-  "mcpServers": {
-    "exa": {
-      "enabled": true,
-      "type": "http",
-      "url": "https://mcp.exa.ai/mcp",
-      "sensitiveHeaders": {
-        "x-api-key": "$RUSTX_EXA_API_KEY"
-      }
-    }
-  }
-}
+```toml
+[mcp_servers.exa]
+enabled = true
+type = "http"
+url = "https://mcp.exa.ai/mcp"
+
+[mcp_servers.exa.sensitive_headers]
+x-api-key = "$RUSTX_EXA_API_KEY"
 ```
 
-```jsonc
-{
-  "mcpServers": {
-    "exa": {
-      "enabled": true,
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "exa-mcp-server"],
-      "sensitiveEnv": {
-        "EXA_API_KEY": "$RUSTX_EXA_API_KEY"
-      }
-    }
-  }
-}
+```toml
+[mcp_servers.exa]
+enabled = true
+type = "stdio"
+command = "npx"
+args = ["-y", "exa-mcp-server"]
+
+[mcp_servers.exa.sensitive_env]
+EXA_API_KEY = "$RUSTX_EXA_API_KEY"
 ```
 
 A stdio entry may also set `"cwd"`, relative to its configuration document.
@@ -423,24 +403,19 @@ alias, no `sse`, and no `ws`. An entry that is ambiguous or contradictory
 `command`, an unknown field) fails startup rather than being guessed at.
 
 **Tool policy.** rustX's own invocation policy for a server's tools lives in
-the host settings `mcpToolPolicies` map, keyed by the same identity, so an
-`mcpServers` entry stays ordinary MCP configuration:
+the host settings `mcp_tool_policies` map, keyed by the same identity, so an
+`mcp_servers` entry stays ordinary MCP configuration:
 
-```jsonc
-{
-  "mcpToolPolicies": {
-    "exa": {
-      "execution": "foreground_only",
-      "concurrency": "parallel",
-      "approval": "never"
-    }
-  }
-}
+```toml
+[mcp_tool_policies.exa]
+execution = "foreground_only"
+concurrency = "parallel"
+approval = "never"
 ```
 
 A server without an entry gets the deterministic default (`foreground_only`
-and `sequential`). An `mcpToolPolicies` entry naming a server that
-`mcpServers` does not declare is invalid and fails startup.
+and `sequential`). An `mcp_tool_policies` entry naming a server that
+`mcp_servers` does not declare is invalid and fails startup.
 
 rustX connects on whichever MCP protocol revision it and the server actually
 share, so there is no protocol-version setting here.
@@ -452,7 +427,7 @@ interpret, or configure MCP independently.
 ## Custom Python tool
 
 The `echo` package is discovered inertly from its folder. The example disables
-it; set `"pythonSources": {"python:echo": "enabled"}` to authorize preparation
+it; set `"python_sources": {"python:echo": "enabled"}` to authorize preparation
 in a trusted project. `--no-tools` does not disable this preparation.
 
 ```text
@@ -496,7 +471,7 @@ capability activations; a running generation keeps the frozen server it
 started with. The server process must keep stdout reserved for the MCP wire —
 diagnostics belong on stderr; arbitrary stdout output is not a supported
 logging channel. The `python:` MCP server namespace is reserved for these
-discovered packages: a configured `mcpServers` entry may not declare a server
+discovered packages: a configured `mcp_servers` entry may not declare a server
 id starting with `python:` (rejected at startup with an actionable
 diagnostic), so a package's synthesized identity can never collide with a
 configured server.
@@ -517,10 +492,10 @@ configuration guide.
 
 ## Run it from the repository root
 
-First configure the host catalog at `$XDG_CONFIG_HOME/rustx/models.jsonc`, or
-`$HOME/.config/rustx/models.jsonc` when XDG_CONFIG_HOME is unset. Use the adjacent
-`models.jsonc` as a manual reference, replacing its endpoint and credentials.
-The adjacent `settings.jsonc` is the minimal host model-selection example.
+First configure the host catalog at `$XDG_CONFIG_HOME/rustx/models.toml`, or
+`$HOME/.config/rustx/models.toml` when XDG_CONFIG_HOME is unset. Use the adjacent
+`models.toml` as a manual reference, replacing its endpoint and credentials.
+The adjacent `settings.toml` is the minimal host model-selection example.
 Ordinary startup needs no project file or path flags; this advanced example uses
 `--config` to select its resource-rich project document outside `workspace/`.
 That slot remains project authority and requires trust. See the complete
@@ -541,12 +516,12 @@ cargo build --bin rustx
 ./target/debug/rustx --workspace ./examples/local-runtime/workspace --trust grant
 
 ./target/debug/rustx \
-  --config ./examples/local-runtime/rustx.jsonc \
+  --config ./examples/local-runtime/rustx.toml \
   --workspace ./examples/local-runtime/workspace \
   --tools parallel_review,implement_and_review
 ```
 
-The endpoint in `models.jsonc` is an example URL, so replace it before making
+The endpoint in `models.toml` is an example URL, so replace it before making
 a model request. The binary remains a runtime process until its input closes;
 its stdout is reserved for protocol records and diagnostics go to stderr.
 
@@ -558,7 +533,7 @@ pnpm --dir tui install --frozen-lockfile
 
 pnpm --dir tui start \
   --binary "$PWD/target/debug/rustx" \
-  --config "$PWD/examples/local-runtime/rustx.jsonc" \
+  --config "$PWD/examples/local-runtime/rustx.toml" \
   --workspace "$PWD/examples/local-runtime/workspace" \
   --tools parallel_review,implement_and_review
 ```
@@ -582,7 +557,7 @@ The optional `echo` package is disabled by default and illustrates managed Pytho
 Ask the parent to call the named Tool with these inputs. It makes one foreground
 call; fixed child work and human interactions require no parent continuation.
 For an interactive model, replace the placeholder endpoint, model id and credential
-reference in `models.jsonc`, and the matching model references in `rustx.jsonc`.
+reference in `models.toml`, and the matching model references in `rustx.toml`.
 Use a tool-capable Chat Completions provider. No paid service is needed for CI:
 the provider emulator scripts ordinary model requests and native tools do the work.
 Install Rust, the TUI's locked Node/pnpm dependencies, Git, `python3` and `uv` on PATH (the optional discovered echo package uses uv).
@@ -673,7 +648,7 @@ process restart never resumes old nodes or recreates actionable human decisions.
 
 ## Canonical role files
 
-`rustx.jsonc` registers `navigator`, `planner`, `implementer`, and `reviewer`
+`rustx.toml` registers `navigator`, `planner`, `implementer`, and `reviewer`
 by identity and independently admits the main and Workflow subsets. Their
 metadata and primary instructions live together in
 `workspace/.agents/subagents/{navigator,planner,implementer,reviewer}.md`.

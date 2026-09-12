@@ -109,7 +109,7 @@
 //! [`authorize_delegated_extensions`] covered every contributor. Nothing
 //! travels from root to child on its own. Only the effective authorized
 //! composition enters `ResolvedSubagentSpec`, and the child process
-//! materializes exactly that value without rereading `rustx.jsonc`, project
+//! materializes exactly that value without rereading `rustx.toml`, project
 //! configuration, host configuration, role files, or any later resource
 //! generation.
 
@@ -124,10 +124,10 @@ use crate::context::{
 
 /// The closed authored composition surface of native Agent Extensions.
 ///
-/// Every member is a concrete named extension. The map-like spelling in
-/// JSONC (`"extensions": { "agentStatus": { ... } }`) is a *closed* record,
-/// not an open registry: an unknown extension name is rejected by the
-/// surrounding strict serde boundary exactly like any other unknown field.
+/// Every member is a concrete named extension in a closed record.
+/// Unknown extension names are rejected. Runtime TOML layers use the separate
+/// `snake_case` authoring boundary; resource and wire documents retain their
+/// own serialization contract.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 #[derive(schemars::JsonSchema)]

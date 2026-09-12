@@ -36,7 +36,7 @@ pub fn write_roles(workspace: &Path, subagents: &mut serde_json::Value) {
 /// Author the two fixture authorities explicitly. Callers name which fixture
 /// members belong to the host; the production resolver never relocates fields.
 pub fn write_documents(config: &Path, source: &str, host_fields: &[&str]) {
-    let mut project: serde_json::Value = rustx::config_format::parse(source.as_bytes()).unwrap();
+    let mut project: serde_json::Value = rustx::toml_authoring::parse(source.as_bytes()).unwrap();
     if let Some(subagents) = project.get_mut("subagents") {
         write_roles(&config.parent().unwrap().join("workspace"), subagents);
     }
@@ -47,11 +47,11 @@ pub fn write_documents(config: &Path, source: &str, host_fields: &[&str]) {
         }
     }
     std::fs::write(
-        config.parent().unwrap().join("settings.jsonc"),
-        serde_json::to_vec(&user).unwrap(),
+        config.parent().unwrap().join("settings.toml"),
+        toml::to_string_pretty(&user).unwrap(),
     )
     .unwrap();
-    std::fs::write(config, serde_json::to_vec(&project).unwrap()).unwrap();
+    std::fs::write(config, toml::to_string_pretty(&project).unwrap()).unwrap();
 }
 
 pub fn grant(root: &std::path::Path, workspace: &std::path::Path) -> PathBuf {

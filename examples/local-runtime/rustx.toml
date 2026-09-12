@@ -1,0 +1,64 @@
+# Project runtime configuration. Paths remain subject to project trust and containment.
+# TOML configuration; fixed Workflows use YAML and model-facing resources use Markdown.
+schema_version = 8
+agent_id = "default-agent"
+default_tools = ["execution", "ask_user", "read", "write", "edit", "glob", "grep", "bash", "subagent"]
+skills = []
+
+[model]
+model = "example/demo-model"
+request_params_json = "{\"temperature\": 0.1}"
+
+[model.reasoning_profile]
+mode = "profile"
+name = "off"
+
+[model.max_output_tokens]
+mode = "limit"
+tokens = 2048
+
+[model.summary_model]
+mode = "session"
+
+[extensions.agent_status]
+enabled = true
+
+[extensions.agent_status.time]
+enabled = true
+timezone = "Asia/Tokyo"
+
+[extensions.agent_status.background]
+enabled = true
+
+[extensions.todo]
+enabled = true
+
+[context]
+reserve_tokens = 4096
+keep_recent_tokens = 12000
+
+[context.summary_output_cap]
+mode = "limit"
+tokens = 1024
+
+[model_timeout_policy]
+response_start_timeout_ms = 30000
+stream_idle_timeout_ms = 15000
+
+[mcp_servers]
+
+[python_sources]
+"python:echo" = "disabled"
+
+[subagents]
+max_concurrent = 4
+definitions = ["navigator", "planner", "implementer", "reviewer"]
+main = ["navigator"]
+workflow = ["reviewer", "planner", "implementer"]
+
+[workflows]
+definitions = ["parallel_review", "implement_and_review"]
+main = ["parallel_review", "implement_and_review"]
+
+[environment]
+RUSTX_EXAMPLE_MODE = "local-runtime"

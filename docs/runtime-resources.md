@@ -14,7 +14,7 @@ runtime registration selection, not a checker-specific Tool interpreter. See
 
 External discovery is inert until host trust and explicit source activation
 admit preparation. See [source activation and credentials](source-activation.md)
-for JSONC settings, whole-source replacement, secret authority, and the exact
+for TOML settings, whole-source replacement, secret authority, and the exact
 publication/retirement/reconnect frontiers. `--no-tools` is model exposure
 control and does not disable external preparation.
 
@@ -271,8 +271,8 @@ admitted
 `ToolDefinition` of each, the selected Skills' immutable
 `SkillId` + `SkillVersionId` bindings with their model-visible catalog
 metadata, and the exact project-instruction chain. The child consumes that
-value and reinterprets nothing — it never reads `rustx.jsonc`, never reopens
-`models.jsonc`, never runs the ancestor discovery described below, never
+value and reinterprets nothing — it never reads `rustx.toml`, never reopens
+`models.toml`, never runs the ancestor discovery described below, never
 rediscovers Skills, and never widens or substitutes Tool identity.
 
 Parent resolution is **semantic authority**; child composition is **physical

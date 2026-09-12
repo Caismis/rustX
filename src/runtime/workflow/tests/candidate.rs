@@ -526,7 +526,7 @@ async fn agent_dirty_bytes_reach_exact_tool_context_after_child_settlement_with_
     std::fs::create_dir_all(parent.join(".agents/skills/new")).unwrap();
     std::fs::write(parent.join(".agents/skills/new/SKILL.md"), b"new skill").unwrap();
     std::fs::write(
-        parent.join("rustx.jsonc"),
+        parent.join("rustx.toml"),
         b"replacement tool and profile definitions",
     )
     .unwrap();

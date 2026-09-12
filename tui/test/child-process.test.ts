@@ -23,8 +23,8 @@ const FAKE_RUNTIME = fileURLToPath(
 chmodSync(FAKE_RUNTIME, 0o755);
 
 const PATHS: RuntimePaths = {
-  models: "/models.jsonc",
-  config: "/rustx.jsonc",
+  models: "/models.toml",
+  config: "/rustx.toml",
   workspace: "/ws",
   runtimeRoot: "/private",
 };
@@ -64,9 +64,9 @@ describe("ChildRuntimeProcess", () => {
     // parsed, validated, or defaulted any of them.
     assert.deepEqual(JSON.parse((await output).trim()), [
       "--models",
-      "/models.jsonc",
+      "/models.toml",
       "--config",
-      "/rustx.jsonc",
+      "/rustx.toml",
       "--workspace",
       "/ws",
       "--runtime-root",
@@ -97,9 +97,9 @@ describe("ChildRuntimeProcess", () => {
 
     assert.deepEqual(JSON.parse((await output).trim()), [
       "--models",
-      "/models.jsonc",
+      "/models.toml",
       "--config",
-      "/rustx.jsonc",
+      "/rustx.toml",
       "--workspace",
       "/ws",
       "--runtime-root",
@@ -143,9 +143,9 @@ describe("ChildRuntimeProcess", () => {
 
     assert.deepEqual(JSON.parse((await output).trim()), [
       "--models",
-      "/models.jsonc",
+      "/models.toml",
       "--config",
-      "/rustx.jsonc",
+      "/rustx.toml",
       "--workspace",
       "/ws",
       "--runtime-root",

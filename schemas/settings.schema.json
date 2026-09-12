@@ -4,32 +4,6 @@
       "description": "Identifies an agent.",
       "type": "string"
     },
-    "AgentStatusExtensionDocument": {
-      "additionalProperties": false,
-      "description": "The authored Agent Status extension.\n\n`enabled` composes the extension in or out of the runtime as a whole;\n`time` and `background` remain the two bounded status contributors, with\nexactly the semantics they had before the migration.",
-      "properties": {
-        "background": {
-          "$ref": "#/$defs/BackgroundStatusConfig",
-          "default": {
-            "enabled": true
-          },
-          "description": "The Background contributor configuration."
-        },
-        "enabled": {
-          "default": true,
-          "description": "Whether this composition includes the Agent Status extension at all.\n\nWith `false` the runtime composes no status engine: the Agent Loop\nemits no Agent Status and is otherwise a completely ordinary\n`ConversationRuntime`.",
-          "type": "boolean"
-        },
-        "time": {
-          "$ref": "#/$defs/TimeStatusConfig",
-          "default": {
-            "enabled": true
-          },
-          "description": "The Time contributor configuration."
-        }
-      },
-      "type": "object"
-    },
     "ApprovalMode": {
       "description": "The runtime-wide control state for tool approval behavior.\n\n`Policy` consults each resolved Tool's\n[`ToolApprovalPolicy`](crate::tools::types::ToolApprovalPolicy).\n`FullAccess` changes only the effective approval result to `Never`; it\nnever changes availability, activation, execution ownership, concurrency,\nor tool authority.",
       "oneOf": [
@@ -60,14 +34,13 @@
         }
       ]
     },
-    "BackgroundStatusConfig": {
+    "BackgroundLayer": {
       "additionalProperties": false,
-      "description": "Configuration of the bounded Background status contributor.",
       "properties": {
         "enabled": {
-          "default": true,
-          "description": "Whether Background participates in an available Agent Status opportunity.",
-          "type": "boolean"
+          "type": [
+            "boolean"
+          ]
         }
       },
       "type": "object"
@@ -86,6 +59,33 @@
           "type": "string"
         }
       ]
+    },
+    "ContextLayer": {
+      "additionalProperties": false,
+      "properties": {
+        "keep_recent_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer"
+          ]
+        },
+        "reserve_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer"
+          ]
+        },
+        "summary_output_cap": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SummaryOutput"
+            }
+          ]
+        }
+      },
+      "type": "object"
     },
     "EnvironmentReference": {
       "description": "A validated reference, written as `$ENV_VAR` only in declared secret fields.",
@@ -112,6 +112,33 @@
         }
       ]
     },
+    "ExtensionsLayer": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StatusLayer"
+            }
+          ]
+        },
+        "goal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GoalExtensionDocument"
+            }
+          ]
+        },
+        "todo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TodoExtensionDocument"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "GoalExtensionDocument": {
       "additionalProperties": false,
       "description": "Authored opt-in Goal composition.",
@@ -122,6 +149,42 @@
         }
       },
       "type": "object"
+    },
+    "IdleLiveness": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "disabled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "milliseconds": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "mode": {
+              "const": "window",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "milliseconds"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "InvocationPolicyDocument": {
       "additionalProperties": false,
@@ -145,82 +208,72 @@
       },
       "type": "object"
     },
-    "McpServerDocument": {
+    "McpAuthoring": {
       "additionalProperties": false,
-      "description": "One `mcpServers` entry, in the shape mainstream MCP clients use.\n\nThe document is deliberately flat and permissive at the *field* level and\nstrict at the *combination* level: every accepted field is declared here,\nunknown fields fail, and [`Self::to_transport`] rejects every ambiguous or\ncontradictory combination rather than guessing.\n\nTwo entry shapes are accepted per transport — the canonical one with an\nexplicit `type`, and the shorthand the ecosystem's own READMEs use:\n\n- `{\"type\": \"http\", \"url\": ..., \"headers\": {...}}` / `{\"url\": ...}`;\n- `{\"type\": \"stdio\", \"command\": ..., \"args\": [...], \"env\": {...},\n  \"cwd\": ...}` / `{\"command\": ..., \"args\": [...]}`.\n\nNo other spellings are accepted. There is no `streamable-http` alias, no\n`sse`, and no `ws`: rustX has exactly two runtime transports.",
+      "description": "Secret-field presence is retained even for empty tables, so project authority\ncannot be widened by replacing an authored empty table with a default map.",
       "properties": {
         "args": {
-          "description": "The stdio server arguments.",
+          "default": [],
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "command": {
-          "description": "The stdio server executable path or explicit executable name.",
           "type": [
-            "string",
-            "null"
+            "string"
           ]
         },
         "cwd": {
-          "description": "The stdio document-relative working directory; absent means the\nworkspace root. The runtime keeps enforcing that it stays inside the\nworkspace.",
           "type": [
-            "string",
-            "null"
+            "string"
           ]
         },
         "enabled": {
-          "description": "Omission is discovery only; true explicitly admits preparation under host trust.",
           "type": [
-            "boolean",
-            "null"
+            "boolean"
           ]
         },
         "env": {
           "additionalProperties": {
             "type": "string"
           },
-          "description": "The explicit stdio child environment.",
+          "default": {},
           "type": "object"
         },
         "headers": {
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Static request headers sent with every HTTP request.",
+          "default": {},
           "type": "object"
         },
-        "sensitiveEnv": {
+        "sensitive_env": {
           "additionalProperties": {
             "$ref": "#/$defs/EnvironmentReference"
           },
-          "description": "Host-only explicit secret references; ordinary `env` is literal.",
-          "type": "object"
+          "type": [
+            "object"
+          ]
         },
-        "sensitiveHeaders": {
+        "sensitive_headers": {
           "additionalProperties": {
             "$ref": "#/$defs/EnvironmentReference"
           },
-          "description": "Host-only explicit secret references; ordinary `headers` is literal.",
-          "type": "object"
+          "type": [
+            "object"
+          ]
         },
         "type": {
           "anyOf": [
             {
               "$ref": "#/$defs/McpTransportType"
-            },
-            {
-              "type": "null"
             }
-          ],
-          "description": "The explicit transport selector, when the entry declares one."
+          ]
         },
         "url": {
-          "description": "The Streamable HTTP endpoint URL.",
           "type": [
-            "string",
-            "null"
+            "string"
           ]
         }
       },
@@ -241,43 +294,86 @@
         }
       ]
     },
-    "ModelRef": {
-      "description": "A fully qualified catalog model reference: `provider-id/model-id`.\n\nThe first `/` separates the provider from the model. The model ID itself\nmay contain additional `/` characters, as is common for Hugging Face\nidentities such as `Qwen/Qwen3`, but no model-ID segment may be empty.\n\nThis is the explicit model-identity domain of the runtime. Concatenated\nstrings never travel through the runtime in its place: a reference either\nresolves to exactly one catalog model or it fails.",
-      "type": "string"
-    },
-    "NativeAgentExtensionsDocument": {
+    "ModelLayer": {
       "additionalProperties": false,
-      "description": "The closed authored composition surface of native Agent Extensions.\n\nEvery member is a concrete named extension. The map-like spelling in\nJSONC (`\"extensions\": { \"agentStatus\": { ... } }`) is a *closed* record,\nnot an open registry: an unknown extension name is rejected by the\nsurrounding strict serde boundary exactly like any other unknown field.",
       "properties": {
-        "agentStatus": {
-          "$ref": "#/$defs/AgentStatusExtensionDocument",
-          "default": {
-            "background": {
-              "enabled": true
-            },
-            "enabled": true,
-            "time": {
-              "enabled": true
+        "max_output_tokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelOutput"
             }
-          },
-          "description": "The Agent Status extension: optional provider-independent runtime\ncontext for an already-established model step."
+          ]
         },
-        "goal": {
-          "$ref": "#/$defs/GoalExtensionDocument",
-          "default": {
-            "enabled": false
-          },
-          "description": "Root-only persistent Goal pursuit, disabled by default."
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelRef"
+            }
+          ]
         },
-        "todo": {
-          "$ref": "#/$defs/TodoExtensionDocument",
-          "default": {
-            "enabled": true
-          },
-          "description": "The Todo extension: the conversation-owned task list, its\nmodel-facing `todo` Tool, and its bounded status presentation\n(Issue #259)."
+        "reasoning_profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningSelection"
+            }
+          ]
+        },
+        "request_params_json": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequestParamsJson"
+            }
+          ]
+        },
+        "summary_model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SummaryAuthoring"
+            }
+          ]
         }
       },
       "type": "object"
+    },
+    "ModelOutput": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "catalog_default",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "limit",
+              "type": "string"
+            },
+            "tokens": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "mode",
+            "tokens"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ModelRef": {
+      "description": "A fully qualified catalog model reference: `provider-id/model-id`.\n\nThe first `/` separates the provider from the model. The model ID itself\nmay contain additional `/` characters, as is common for Hugging Face\nidentities such as `Qwen/Qwen3`, but no model-ID segment may be empty.\n\nThis is the explicit model-identity domain of the runtime. Concatenated\nstrings never travel through the runtime in its place: a reference either\nresolves to exactly one catalog model or it fails.",
+      "type": "string"
     },
     "NativePolicyOverrideDocument": {
       "additionalProperties": false,
@@ -298,185 +394,94 @@
       },
       "type": "object"
     },
-    "NativeToolPoliciesDocument": {
+    "NativeToolsLayer": {
       "additionalProperties": false,
-      "description": "The per-tool execution, concurrency, and approval policies of the native\ntool plane.\n\n`execution` and `ask_user` are deliberately outside this set: they own\nfixed foreground-only, sequential, approval-never policies, and the\nregistry enforces the intrinsic ones itself. The extension-provided `todo`\nTool is outside it for a stronger reason — it is not an ordinary native\ncapability at all (Issue #259).",
       "properties": {
         "bash": {
-          "$ref": "#/$defs/NativePolicyOverrideDocument",
-          "default": {},
-          "description": "The policy of the native Bash tool."
-        },
-        "edit": {
-          "$ref": "#/$defs/NativePolicyOverrideDocument",
-          "default": {},
-          "description": "The policy of the native Edit tool."
-        },
-        "glob": {
-          "$ref": "#/$defs/NativePolicyOverrideDocument",
-          "default": {},
-          "description": "The policy of the native Glob tool."
-        },
-        "grep": {
-          "$ref": "#/$defs/NativePolicyOverrideDocument",
-          "default": {},
-          "description": "The policy of the native Grep tool."
-        },
-        "read": {
-          "$ref": "#/$defs/NativePolicyOverrideDocument",
-          "default": {},
-          "description": "The policy of the native Read tool."
-        },
-        "write": {
-          "$ref": "#/$defs/NativePolicyOverrideDocument",
-          "default": {},
-          "description": "The policy of the native Write tool."
-        }
-      },
-      "type": "object"
-    },
-    "PartialContext": {
-      "additionalProperties": false,
-      "properties": {
-        "keepRecentTokens": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "reserveTokens": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "summaryOutputCap": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "PartialModel": {
-      "additionalProperties": false,
-      "properties": {
-        "maxOutputTokens": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "model": {
-          "$ref": "#/$defs/ModelRef"
-        },
-        "reasoningProfile": {
           "anyOf": [
             {
-              "$ref": "#/$defs/ReasoningProfileId"
-            },
-            {
-              "type": "null"
+              "$ref": "#/$defs/NativePolicyOverrideDocument"
             }
           ]
         },
-        "requestParams": {
-          "additionalProperties": true,
-          "type": "object"
-        },
-        "summaryModel": {
-          "$ref": "#/$defs/SummaryModelPolicy"
-        }
-      },
-      "type": "object"
-    },
-    "PartialSubagents": {
-      "additionalProperties": false,
-      "properties": {
-        "definitions": {
-          "items": {
-            "$ref": "#/$defs/SubagentName"
-          },
-          "type": "array"
-        },
-        "main": {
-          "items": {
-            "$ref": "#/$defs/SubagentName"
-          },
-          "type": "array"
-        },
-        "maxConcurrent": {
-          "format": "uint",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "workflow": {
-          "items": {
-            "$ref": "#/$defs/SubagentName"
-          },
-          "type": "array"
-        }
-      },
-      "type": "object"
-    },
-    "PartialTimeout": {
-      "additionalProperties": false,
-      "properties": {
-        "responseStartTimeoutMs": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "streamIdleTimeoutMs": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "type": "object"
-    },
-    "PartialToolDeadline": {
-      "additionalProperties": false,
-      "properties": {
-        "hardDeadlineMs": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "idleLivenessMs": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
+        "edit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativePolicyOverrideDocument"
+            }
           ]
-        }
-      },
-      "type": "object"
-    },
-    "PartialWorkflows": {
-      "additionalProperties": false,
-      "properties": {
-        "definitions": {
-          "items": {
-            "$ref": "#/$defs/WorkflowId"
-          },
-          "type": "array"
         },
-        "main": {
-          "items": {
-            "$ref": "#/$defs/WorkflowId"
-          },
-          "type": "array"
+        "glob": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativePolicyOverrideDocument"
+            }
+          ]
+        },
+        "grep": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativePolicyOverrideDocument"
+            }
+          ]
+        },
+        "read": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativePolicyOverrideDocument"
+            }
+          ]
+        },
+        "write": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativePolicyOverrideDocument"
+            }
+          ]
         }
       },
       "type": "object"
     },
     "ReasoningProfileId": {
-      "description": "The identity of one reasoning profile declared by a model.\n\nThe runtime assigns no meaning to the name: `off`, `on`, `low`,\n`thinking-32k`, and `deep` are all just names whose wire behaviour is\nexactly the profile's configured `requestParams`.",
+      "description": "The identity of one reasoning profile declared by a model.\n\nThe runtime assigns no meaning to the name: `off`, `on`, `low`,\n`thinking-32k`, and `deep` are all just names whose wire behaviour is\nexactly the profile's configured `request_params_json`.",
+      "type": "string"
+    },
+    "ReasoningSelection": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "catalog_default",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "profile",
+              "type": "string"
+            },
+            "name": {
+              "$ref": "#/$defs/ReasoningProfileId"
+            }
+          },
+          "required": [
+            "mode",
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RequestParamsJson": {
+      "description": "JSON text with an object at its top level. Arbitrary nested provider-native JSON is retained, including null. Protected wire keys are rejected during model resolution.",
       "type": "string"
     },
     "SourceEnablement": {
@@ -494,16 +499,76 @@
         }
       ]
     },
+    "StatusLayer": {
+      "additionalProperties": false,
+      "properties": {
+        "background": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BackgroundLayer"
+            }
+          ]
+        },
+        "enabled": {
+          "type": [
+            "boolean"
+          ]
+        },
+        "time": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeLayer"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "SubagentName": {
       "description": "The canonical typed name of one admitted subagent definition.\n\nThe keyspace is deliberately narrow: lowercase ASCII letters, digits,\n`-`, and `_`, starting with a letter. A name is the model-facing routing\ntoken, the durable ownership identity, and the Runtime Client projection\nidentity, so an ambiguous or shell-shaped spelling is rejected at the\nconfiguration boundary rather than normalized later.",
       "type": "string"
     },
-    "SummaryModelPolicy": {
-      "description": "The compaction summary model policy of a session.",
+    "SubagentsLayer": {
+      "additionalProperties": false,
+      "properties": {
+        "definitions": {
+          "items": {
+            "$ref": "#/$defs/SubagentName"
+          },
+          "type": [
+            "array"
+          ]
+        },
+        "main": {
+          "items": {
+            "$ref": "#/$defs/SubagentName"
+          },
+          "type": [
+            "array"
+          ]
+        },
+        "max_concurrent": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer"
+          ]
+        },
+        "workflow": {
+          "items": {
+            "$ref": "#/$defs/SubagentName"
+          },
+          "type": [
+            "array"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "SummaryAuthoring": {
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "Summary generation follows the admitted attempt's primary model.",
           "properties": {
             "mode": {
               "const": "session",
@@ -517,15 +582,12 @@
         },
         {
           "additionalProperties": false,
-          "description": "Summary generation uses an explicitly configured catalog model.",
           "properties": {
             "max_output_tokens": {
-              "description": "The explicit summary output-budget override.",
-              "format": "uint32",
-              "minimum": 0,
-              "type": [
-                "integer",
-                "null"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelOutput"
+                }
               ]
             },
             "mode": {
@@ -533,25 +595,18 @@
               "type": "string"
             },
             "model": {
-              "$ref": "#/$defs/ModelRef",
-              "description": "The catalog model reference."
+              "$ref": "#/$defs/ModelRef"
             },
             "reasoning_profile": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/ReasoningProfileId"
-                },
-                {
-                  "type": "null"
+                  "$ref": "#/$defs/ReasoningSelection"
                 }
-              ],
-              "description": "The selected reasoning profile; the model default is used when\nabsent."
+              ]
             },
-            "request_params": {
-              "additionalProperties": true,
-              "default": {},
-              "description": "The explicit summary request-parameter overrides.",
-              "type": "object"
+            "request_params_json": {
+              "$ref": "#/$defs/RequestParamsJson",
+              "default": "{}"
             }
           },
           "required": [
@@ -562,24 +617,82 @@
         }
       ]
     },
-    "TimeStatusConfig": {
+    "SummaryOutput": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "model_limit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "limit",
+              "type": "string"
+            },
+            "tokens": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "mode",
+            "tokens"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TimeLayer": {
       "additionalProperties": false,
-      "description": "Configuration of the bounded Time status contributor.",
       "properties": {
         "enabled": {
-          "default": true,
-          "description": "Whether Time participates in an available Agent Status opportunity.",
-          "type": "boolean"
+          "type": [
+            "boolean"
+          ]
         },
         "timezone": {
-          "description": "The optional IANA timezone used only by Time presentation. Omitting it\nrenders UTC.",
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timezone"
+            }
           ]
         }
       },
       "type": "object"
+    },
+    "TimeoutLayer": {
+      "additionalProperties": false,
+      "properties": {
+        "response_start_timeout_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer"
+          ]
+        },
+        "stream_idle_timeout_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Timezone": {
+      "type": "string"
     },
     "TodoExtensionDocument": {
       "additionalProperties": false,
@@ -593,92 +706,192 @@
       },
       "type": "object"
     },
+    "ToolDeadlineLayer": {
+      "additionalProperties": false,
+      "properties": {
+        "hard_deadline_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer"
+          ]
+        },
+        "idle_liveness_ms": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IdleLiveness"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "WorkflowId": {
       "description": "The configured workflow identity.\n\nThis is both the catalog key and the eventual model-facing Tool name. It\nis deliberately not repeated inside YAML.",
       "type": "string"
+    },
+    "WorkflowsLayer": {
+      "additionalProperties": false,
+      "properties": {
+        "definitions": {
+          "items": {
+            "$ref": "#/$defs/WorkflowId"
+          },
+          "type": [
+            "array"
+          ]
+        },
+        "main": {
+          "items": {
+            "$ref": "#/$defs/WorkflowId"
+          },
+          "type": [
+            "array"
+          ]
+        }
+      },
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "agentId": {
-      "$ref": "#/$defs/AgentId"
+    "agent_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentId"
+        }
+      ]
     },
-    "approvalMode": {
-      "$ref": "#/$defs/ApprovalMode"
+    "approval_mode": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ApprovalMode"
+        }
+      ]
     },
     "context": {
-      "$ref": "#/$defs/PartialContext"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ContextLayer"
+        }
+      ]
     },
-    "defaultTools": {
+    "default_tools": {
       "items": {
         "type": "string"
       },
-      "type": "array"
+      "type": [
+        "array"
+      ]
     },
     "environment": {
       "additionalProperties": {
         "type": "string"
       },
-      "type": "object"
+      "type": [
+        "object"
+      ]
     },
     "extensions": {
-      "$ref": "#/$defs/NativeAgentExtensionsDocument"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExtensionsLayer"
+        }
+      ]
     },
-    "mcpServers": {
+    "mcp_servers": {
       "additionalProperties": {
-        "$ref": "#/$defs/McpServerDocument"
+        "$ref": "#/$defs/McpAuthoring"
       },
-      "type": "object"
+      "type": [
+        "object"
+      ]
     },
-    "mcpToolPolicies": {
+    "mcp_tool_policies": {
       "additionalProperties": {
         "$ref": "#/$defs/InvocationPolicyDocument"
       },
-      "type": "object"
+      "type": [
+        "object"
+      ]
     },
     "model": {
-      "$ref": "#/$defs/PartialModel"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ModelLayer"
+        }
+      ]
     },
-    "modelTimeoutPolicy": {
-      "$ref": "#/$defs/PartialTimeout"
+    "model_timeout_policy": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TimeoutLayer"
+        }
+      ]
     },
     "models": {
-      "type": "string"
+      "type": [
+        "string"
+      ]
     },
-    "nativeTools": {
-      "$ref": "#/$defs/NativeToolPoliciesDocument"
+    "native_tools": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/NativeToolsLayer"
+        }
+      ]
     },
-    "pythonSources": {
+    "python_sources": {
       "additionalProperties": {
         "$ref": "#/$defs/SourceEnablement"
       },
-      "type": "object"
+      "type": [
+        "object"
+      ]
     },
-    "runtimeRoot": {
-      "type": "string"
+    "runtime_root": {
+      "type": [
+        "string"
+      ]
     },
-    "schemaVersion": {
+    "schema_version": {
       "format": "uint32",
       "minimum": 0,
-      "type": "integer"
+      "type": [
+        "integer"
+      ]
     },
     "skills": {
       "items": {
         "type": "string"
       },
-      "type": "array"
+      "type": [
+        "array"
+      ]
     },
     "subagents": {
-      "$ref": "#/$defs/PartialSubagents"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SubagentsLayer"
+        }
+      ]
     },
-    "toolDeadlinePolicy": {
-      "$ref": "#/$defs/PartialToolDeadline"
+    "tool_deadline_policy": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ToolDeadlineLayer"
+        }
+      ]
     },
     "workflows": {
-      "$ref": "#/$defs/PartialWorkflows"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WorkflowsLayer"
+        }
+      ]
     }
   },
-  "title": "PartialRuntime",
+  "title": "RuntimeLayer",
   "type": "object"
 }

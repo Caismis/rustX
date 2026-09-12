@@ -5,13 +5,14 @@
 //! which credential authorizes it. There is deliberately no other path:
 //!
 //! ```text
-//! models.jsonc  ->  ModelCatalogDocument  ->  ModelCatalog  ->  ResolvedModelCatalog
-//!                  (syntax)                  (validated)      (credentials bound)
+//! models.toml -> authoring::Catalog -> ModelCatalogDocument -> ModelCatalog
+//!               (strict TOML)       (native typed)          (validated)
+//! ModelCatalog -> ResolvedModelCatalog (host credentials bound at admission)
 //! ```
 //!
 //! # Explicit provider binding
 //!
-//! A provider declares its `baseUrl` and its `apiKey` source explicitly. A
+//! A provider declares its `base_url` and its `api_key` source explicitly. A
 //! provider *name* carries no endpoint semantics: naming a provider
 //! `openai` or `anthropic` never selects an official endpoint, and no
 //! adapter constructor can reach the network without a base URL that came
@@ -33,7 +34,7 @@
 //! Provider wire parameters are opaque ([`crate::model::invocation`] owns
 //! the overlay and protected-key contract). Reasoning is expressed as
 //! model-declared named profiles whose behaviour is exactly their configured
-//! `requestParams`; the runtime assigns no meaning to a profile name.
+//! `request_params_json`; the runtime assigns no meaning to a profile name.
 //! Structural translation behaviour lives in the bounded [`ModelCompat`],
 //! which is deliberately *not* a strategy framework and is never inferred
 //! from a hostname. Historical Chat reasoning replay is an explicit
@@ -71,7 +72,7 @@ pub struct ModelId(String);
 ///
 /// The runtime assigns no meaning to the name: `off`, `on`, `low`,
 /// `thinking-32k`, and `deep` are all just names whose wire behaviour is
-/// exactly the profile's configured `requestParams`.
+/// exactly the profile's configured `request_params_json`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 #[derive(schemars::JsonSchema)]
@@ -234,7 +235,7 @@ impl CredentialSource {
         if value.is_empty() {
             return Err(ModelCatalogError::InvalidCredentialSource {
                 provider: provider.clone(),
-                detail: "the apiKey source must not be empty".to_owned(),
+                detail: "the api_key source must not be empty".to_owned(),
             });
         }
         let Some(name) = value.strip_prefix('$') else {
@@ -284,9 +285,8 @@ impl Serialize for CredentialSource {
 
 impl<'de> Deserialize<'de> for CredentialSource {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        let raw = value.as_str().ok_or_else(|| serde::de::Error::custom("expected a credential literal or $ENV_VAR reference; redacted projections are not replayable"))?;
-        Self::parse(raw, &ProviderId::new("configured")).map_err(serde::de::Error::custom)
+        let raw = String::deserialize(deserializer)?;
+        Self::parse(&raw, &ProviderId::new("configured")).map_err(serde::de::Error::custom)
     }
 }
 
@@ -634,6 +634,24 @@ impl<'de> Deserialize<'de> for ModelCompat {
     }
 }
 
+impl From<super::authoring::Compat> for ModelCompat {
+    fn from(document: super::authoring::Compat) -> Self {
+        let explicit_fields = u8::from(document.chat_max_tokens_field.is_some())
+            | (u8::from(document.chat_stream_usage.is_some()) << 1)
+            | (u8::from(document.chat_reasoning_replay.is_some()) << 2)
+            | (u8::from(document.responses_storage.is_some()) << 3)
+            | (u8::from(document.chat_tool_protocol.is_some()) << 4);
+        Self {
+            chat_max_tokens_field: document.chat_max_tokens_field.unwrap_or_default(),
+            chat_stream_usage: document.chat_stream_usage.unwrap_or_default(),
+            chat_reasoning_replay: document.chat_reasoning_replay,
+            chat_tool_protocol: document.chat_tool_protocol.unwrap_or_default(),
+            responses_storage: document.responses_storage.unwrap_or_default(),
+            explicit_fields,
+        }
+    }
+}
+
 impl ModelCompat {
     const CHAT_MAX_TOKENS_EXPLICIT: u8 = 1;
     const CHAT_STREAM_USAGE_EXPLICIT: u8 = 1 << 1;
@@ -770,21 +788,19 @@ pub struct ModelCatalog {
 }
 
 impl ModelCatalog {
-    /// Parses and validates a catalog from JSONC bytes.
+    /// Parses and validates a catalog from TOML bytes.
     ///
-    /// The document is [JSONC](crate::config_format): JSON plus comments and
-    /// trailing commas, so a `models.jsonc` can record why a provider,
-    /// limit, or compatibility value is what it is.
+    /// Strict `snake_case` authoring types resolve into native configuration.
     ///
     /// # Errors
     ///
-    /// Returns [`ModelCatalogError::Syntax`] for malformed JSONC (including
+    /// Returns [`ModelCatalogError::Syntax`] for malformed TOML (including
     /// unknown fields and duplicate provider identities) and a specific
     /// validation error otherwise.
-    pub fn from_jsonc_slice(bytes: &[u8]) -> Result<Self, ModelCatalogError> {
-        let document: ModelCatalogDocument = crate::config_format::parse(bytes)
+    pub fn from_toml_slice(bytes: &[u8]) -> Result<Self, ModelCatalogError> {
+        let document: super::authoring::Catalog = crate::toml_authoring::parse(bytes)
             .map_err(|detail| ModelCatalogError::Syntax { detail })?;
-        Self::from_document(document)
+        Self::from_document(document.into())
     }
 
     /// Validates an already-parsed catalog document.
@@ -1067,7 +1083,8 @@ impl CredentialEnvironment for MapCredentialEnvironment {
 // Document (wire) shapes
 // ---------------------------------------------------------------------------
 
-/// The `models.jsonc` document shape.
+/// The native programmatic catalog document. TOML authoring is owned by
+/// [`super::authoring::Catalog`] and resolves into this typed representation.
 ///
 /// Unknown fields are rejected everywhere: a typo must fail loudly rather
 /// than silently changing runtime semantics.
@@ -1223,14 +1240,14 @@ fn validate_model(
     if document.context_window == 0 || document.max_output_tokens == 0 {
         return Err(ModelCatalogError::InvalidLimits {
             model: reference,
-            detail: "contextWindow and maxOutputTokens must both be positive".to_owned(),
+            detail: "context_window and max_output_tokens must both be positive".to_owned(),
         });
     }
     if u64::from(document.max_output_tokens) >= document.context_window {
         return Err(ModelCatalogError::InvalidLimits {
             model: reference,
             detail: format!(
-                "maxOutputTokens {} must be smaller than contextWindow {}",
+                "max_output_tokens {} must be smaller than context_window {}",
                 document.max_output_tokens, document.context_window
             ),
         });
@@ -1240,8 +1257,9 @@ fn validate_model(
     {
         return Err(ModelCatalogError::InvalidCapabilities {
             model: reference,
-            detail: "inputModalities and outputModalities must each declare at least one modality"
-                .to_owned(),
+            detail:
+                "input_modalities and output_modalities must each declare at least one modality"
+                    .to_owned(),
         });
     }
     if !document.capabilities.supports_text_conversation() {
@@ -1292,7 +1310,7 @@ fn validate_compat(
 ) -> Result<(), ModelCatalogError> {
     let invalid_detail = match protocol {
         ModelProtocol::OpenAiChatCompletions if compat.chat_reasoning_replay.is_none() => Some(
-            "compat.chatReasoningReplay is required for openai_chat_completions and must be one of reasoning, reasoning_content, or omit"
+            "compat.chat_reasoning_replay is required for openai_chat_completions and must be one of reasoning, reasoning_content, or omit"
                 .to_owned(),
         ),
         ModelProtocol::OpenAiChatCompletions if compat.responses_storage_is_explicit() => Some(
@@ -1348,7 +1366,7 @@ fn validate_reasoning(
         return Err(ModelCatalogError::InvalidReasoning {
             model: reference.clone(),
             detail: format!(
-                "defaultProfile {:?} is not declared in profiles",
+                "default_profile {:?} is not declared in profiles",
                 reasoning.default_profile.as_str()
             ),
         });
@@ -1387,7 +1405,7 @@ fn validate_reasoning(
 /// credential is identified by its variable name only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelCatalogError {
-    /// The catalog file is not valid JSON for the catalog schema.
+    /// The catalog input is malformed or does not satisfy its typed schema.
     Syntax {
         /// The parser detail.
         detail: String,
@@ -1504,7 +1522,7 @@ impl fmt::Display for ModelCatalogError {
             Self::Syntax { detail } => write!(f, "malformed model catalog: {detail}"),
             Self::UnsupportedSchemaVersion { supported, found } => write!(
                 f,
-                "unsupported model catalog schemaVersion {found}; this runtime speaks {supported}"
+                "unsupported model catalog schema_version {found}; this runtime speaks {supported}"
             ),
             Self::EmptyCatalog => f.write_str("the model catalog declares no provider"),
             Self::InvalidIdentity { kind, value } => {
@@ -1516,11 +1534,11 @@ impl fmt::Display for ModelCatalogError {
             ),
             Self::InvalidBaseUrl { provider, base_url } => write!(
                 f,
-                "provider {provider} declares an invalid baseUrl {base_url:?}; \
+                "provider {provider} declares an invalid base_url {base_url:?}; \
                  an explicit absolute http(s) endpoint is mandatory"
             ),
             Self::InvalidCredentialSource { provider, detail } => {
-                write!(f, "provider {provider} apiKey source is invalid: {detail}")
+                write!(f, "provider {provider} api_key source is invalid: {detail}")
             }
             Self::ProviderWithoutModels { provider } => {
                 write!(f, "provider {provider} declares no model")
@@ -1540,7 +1558,7 @@ impl fmt::Display for ModelCatalogError {
             }
             Self::ProtectedKey { model, key, layer } => write!(
                 f,
-                "model {model} {layer} declares runtime-owned protected wire key {key:?}"
+                "model {model} {layer} (request_params_json) declares runtime-owned protected wire key {key:?}"
             ),
             Self::UnknownProvider { provider } => {
                 write!(f, "unknown catalog provider {provider}")
@@ -1559,7 +1577,7 @@ impl std::error::Error for ModelCatalogError {}
 /// The safe public catalog view served to Runtime Clients.
 ///
 /// A client selects a model and a reasoning profile from this view; it never
-/// reads `models.jsonc` itself and never sees a credential, an adapter, or a
+/// reads `models.toml` itself and never sees a credential, an adapter, or a
 /// provider HTTP client.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1617,6 +1635,15 @@ mod tests {
         ModelCompat, ModelRef, ProviderId, ResolvedCredential,
     };
 
+    // Programmatic native-document fixtures, independent of authoring syntax.
+    // The TOML boundary has its own tests in model::authoring.
+    fn fixture_catalog(bytes: &[u8]) -> Result<ModelCatalog, ModelCatalogError> {
+        let document = serde_json::from_slice(bytes).map_err(|e| ModelCatalogError::Syntax {
+            detail: e.to_string(),
+        })?;
+        ModelCatalog::from_document(document)
+    }
+
     fn catalog_json(provider_body: &str) -> String {
         format!(r#"{{"providers": {{"p": {provider_body}}}}}"#)
     }
@@ -1649,7 +1676,7 @@ mod tests {
             r#"{{"apiKey":"$K","models":[{}]}}"#,
             model_json("")
         ));
-        let error = ModelCatalog::from_jsonc_slice(json.as_bytes()).expect_err("must fail");
+        let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
         assert!(
             matches!(error, ModelCatalogError::Syntax { .. }),
             "{error:?}"
@@ -1664,7 +1691,7 @@ mod tests {
             r#"{{"baseUrl":"https://x.example/v1","models":[{}]}}"#,
             model_json("")
         ));
-        let error = ModelCatalog::from_jsonc_slice(json.as_bytes()).expect_err("must fail");
+        let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
         assert!(error.to_string().contains("apiKey"));
     }
 
@@ -1674,14 +1701,14 @@ mod tests {
     #[test]
     fn provider_name_never_implies_an_endpoint() {
         let without = r#"{"providers":{"openai":{"apiKey":"$K","models":[]}}}"#;
-        assert!(ModelCatalog::from_jsonc_slice(without.as_bytes()).is_err());
+        assert!(fixture_catalog(without.as_bytes()).is_err());
 
         let with = format!(
             r#"{{"providers":{{"openai":{{"baseUrl":"https://local.test/v1","apiKey":"k",
                  "models":[{}]}}}}}}"#,
             model_json("")
         );
-        let catalog = ModelCatalog::from_jsonc_slice(with.as_bytes()).expect("valid");
+        let catalog = fixture_catalog(with.as_bytes()).expect("valid");
         let provider = catalog.providers().next().expect("one provider");
         assert_eq!(provider.base_url, "https://local.test/v1");
     }
@@ -1703,7 +1730,7 @@ mod tests {
                 r#"{{"baseUrl":{value:?},"apiKey":"k","models":[{}]}}"#,
                 model_json("")
             ));
-            let error = ModelCatalog::from_jsonc_slice(json.as_bytes()).expect_err("must fail");
+            let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
             assert!(
                 matches!(error, ModelCatalogError::InvalidBaseUrl { .. }),
                 "{value:?} -> {error:?}"
@@ -1722,7 +1749,7 @@ mod tests {
                   "compat":{"chatReasoningReplay":"omit"},
                   "requestParams":{"provider_reasoning":{"mode":"default"}}}]}"#,
         );
-        let catalog = ModelCatalog::from_jsonc_slice(json.as_bytes()).expect("valid");
+        let catalog = fixture_catalog(json.as_bytes()).expect("valid");
         let resolved = catalog
             .resolve(&MapCredentialEnvironment::default())
             .expect("literal credential resolves");
@@ -1748,7 +1775,7 @@ mod tests {
             model_json(r#","compat":{"responsesStorage":"stored"}"#)
         ));
         assert!(matches!(
-            ModelCatalog::from_jsonc_slice(chat_with_responses_storage.as_bytes())
+            fixture_catalog(chat_with_responses_storage.as_bytes())
                 .expect_err("foreign storage compat must fail"),
             ModelCatalogError::InvalidCompat { .. }
         ));
@@ -1762,7 +1789,7 @@ mod tests {
                   "compat":{"chatMaxTokensField":"max_tokens"}}]}"#,
         );
         assert!(matches!(
-            ModelCatalog::from_jsonc_slice(anthropic_with_chat_compat.as_bytes())
+            fixture_catalog(anthropic_with_chat_compat.as_bytes())
                 .expect_err("foreign chat compat must fail"),
             ModelCatalogError::InvalidCompat { .. }
         ));
@@ -1773,14 +1800,14 @@ mod tests {
         let document: ModelCatalogDocument =
             serde_json::from_str(&valid_catalog()).expect("document parses");
         let encoded = serde_json::to_vec(&document).expect("document serializes");
-        ModelCatalog::from_jsonc_slice(&encoded).expect("serialized defaults remain valid");
+        fixture_catalog(&encoded).expect("serialized defaults remain valid");
     }
 
     /// `$ENV_VAR` resolves from the environment; a missing variable is a
     /// startup configuration failure naming only the variable.
     #[test]
     fn environment_credentials_resolve_or_fail() {
-        let catalog = ModelCatalog::from_jsonc_slice(valid_catalog().as_bytes()).expect("valid");
+        let catalog = fixture_catalog(valid_catalog().as_bytes()).expect("valid");
         let environment =
             MapCredentialEnvironment::new([("RUSTX_KEY".to_owned(), "sk-secret".to_owned())]);
         let resolved = catalog.resolve(&environment).expect("resolves");
@@ -1825,7 +1852,7 @@ mod tests {
             r#"{{"baseUrl":"https://x.example/v1","apiKey":{secret:?},"models":[{}]}}"#,
             model_json("")
         ));
-        let catalog = ModelCatalog::from_jsonc_slice(json.as_bytes()).expect("valid");
+        let catalog = fixture_catalog(json.as_bytes()).expect("valid");
         assert!(!format!("{catalog:?}").contains(secret));
         let resolved = catalog
             .resolve(&MapCredentialEnvironment::default())
@@ -1851,16 +1878,14 @@ mod tests {
                                 "p":{{"baseUrl":"https://b.example","apiKey":"k","models":[{m}]}}}}}}"#,
             m = model_json("")
         );
-        let error =
-            ModelCatalog::from_jsonc_slice(duplicate_provider.as_bytes()).expect_err("must fail");
+        let error = fixture_catalog(duplicate_provider.as_bytes()).expect_err("must fail");
         assert!(error.to_string().contains("duplicate key"));
 
         let duplicate_model = catalog_json(&format!(
             r#"{{"baseUrl":"https://a.example","apiKey":"k","models":[{m},{m}]}}"#,
             m = model_json("")
         ));
-        let error =
-            ModelCatalog::from_jsonc_slice(duplicate_model.as_bytes()).expect_err("must fail");
+        let error = fixture_catalog(duplicate_model.as_bytes()).expect_err("must fail");
         assert!(matches!(error, ModelCatalogError::DuplicateModel { .. }));
     }
 
@@ -1873,7 +1898,7 @@ mod tests {
                   "capabilities":{"inputModalities":["text"],"outputModalities":["text"],
                                   "toolCalls":true,"reasoning":false}}]}"#,
         );
-        let error = ModelCatalog::from_jsonc_slice(json.as_bytes()).expect_err("must fail");
+        let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
         assert!(matches!(error, ModelCatalogError::Syntax { .. }));
     }
 
@@ -1888,7 +1913,7 @@ mod tests {
                        "capabilities":{{"inputModalities":["text"],"outputModalities":["text"],
                                         "toolCalls":true,"reasoning":false}}}}]}}"#
             ));
-            let error = ModelCatalog::from_jsonc_slice(json.as_bytes()).expect_err("must fail");
+            let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
             assert!(
                 matches!(error, ModelCatalogError::InvalidLimits { .. }),
                 "{window}/{output} -> {error:?}"
@@ -1908,7 +1933,7 @@ mod tests {
                                   "toolCalls":true,"reasoning":false}}]}"#,
         );
         assert!(matches!(
-            ModelCatalog::from_jsonc_slice(empty.as_bytes()).expect_err("must fail"),
+            fixture_catalog(empty.as_bytes()).expect_err("must fail"),
             ModelCatalogError::InvalidCapabilities { .. }
         ));
 
@@ -1920,7 +1945,7 @@ mod tests {
                                   "toolCalls":true,"reasoning":false}}]}"#,
         );
         assert!(matches!(
-            ModelCatalog::from_jsonc_slice(no_text.as_bytes()).expect_err("must fail"),
+            fixture_catalog(no_text.as_bytes()).expect_err("must fail"),
             ModelCatalogError::InvalidCapabilities { .. }
         ));
     }
@@ -1935,9 +1960,9 @@ mod tests {
                 r#","reasoning":{"defaultProfile":"missing","profiles":{"off":{"enabled":false}}}"#
             )
         ));
-        let error = ModelCatalog::from_jsonc_slice(json.as_bytes()).expect_err("must fail");
+        let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
         assert!(matches!(error, ModelCatalogError::InvalidReasoning { .. }));
-        assert!(error.to_string().contains("defaultProfile"));
+        assert!(error.to_string().contains("default_profile"));
     }
 
     /// A model that declares `capabilities.reasoning = false` may not
@@ -1950,7 +1975,7 @@ mod tests {
                 r#","reasoning":{"defaultProfile":"on","profiles":{"on":{"enabled":true}}}"#
             )
         ));
-        let error = ModelCatalog::from_jsonc_slice(json.as_bytes()).expect_err("must fail");
+        let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
         assert!(matches!(error, ModelCatalogError::InvalidReasoning { .. }));
     }
 
@@ -1962,7 +1987,7 @@ mod tests {
             r#"{{"baseUrl":"https://a.example","apiKey":"k","models":[{}]}}"#,
             model_json(r#","requestParams":{"messages":[]}"#)
         ));
-        let error = ModelCatalog::from_jsonc_slice(json.as_bytes()).expect_err("must fail");
+        let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
         assert!(matches!(error, ModelCatalogError::ProtectedKey { .. }));
         assert!(error.to_string().contains("messages"));
     }
@@ -1977,7 +2002,7 @@ mod tests {
         ));
         // `capabilities_placeholder` is not a schema field: unknown fields
         // are rejected, which is itself the contract under test here.
-        assert!(ModelCatalog::from_jsonc_slice(json.as_bytes()).is_err());
+        assert!(fixture_catalog(json.as_bytes()).is_err());
 
         let json = catalog_json(
             r#"{"baseUrl":"https://a.example","apiKey":"k","models":[
@@ -1988,7 +2013,7 @@ mod tests {
                   "reasoning":{"defaultProfile":"on","profiles":{
                      "on":{"enabled":true,"requestParams":{"max_tokens":99}}}}}]}"#,
         );
-        let error = ModelCatalog::from_jsonc_slice(json.as_bytes()).expect_err("must fail");
+        let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
         assert!(matches!(error, ModelCatalogError::ProtectedKey { .. }));
         assert!(error.to_string().contains("max_tokens"));
     }
@@ -1998,7 +2023,7 @@ mod tests {
     /// reference fails explicitly.
     #[test]
     fn model_references_resolve_unambiguously() {
-        let catalog = ModelCatalog::from_jsonc_slice(valid_catalog().as_bytes()).expect("valid");
+        let catalog = fixture_catalog(valid_catalog().as_bytes()).expect("valid");
         let reference = ModelRef::parse("p/m").expect("parses");
         assert_eq!(reference.to_string(), "p/m");
         assert_eq!(
@@ -2043,9 +2068,9 @@ mod tests {
                   "capabilities":{"inputModalities":["text"],"outputModalities":["text"],
                                   "toolCalls":true,"reasoning":false}}]}"#,
         );
-        let error = ModelCatalog::from_jsonc_slice(json.as_bytes()).expect_err("must fail");
+        let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
         assert!(matches!(error, ModelCatalogError::InvalidCompat { .. }));
-        assert!(error.to_string().contains("chatReasoningReplay"));
+        assert!(error.to_string().contains("compat.chat_reasoning_replay"));
         assert!(error.to_string().contains("p/m"));
     }
 
@@ -2064,7 +2089,7 @@ mod tests {
                                       "toolCalls":true,"reasoning":false}},
                       "compat":{{"chatReasoningReplay":"{wire}"}}}}]}}"#
             ));
-            let catalog = ModelCatalog::from_jsonc_slice(json.as_bytes()).expect("valid catalog");
+            let catalog = fixture_catalog(json.as_bytes()).expect("valid catalog");
             let compat = catalog
                 .model(&ModelRef::parse("p/m").expect("reference"))
                 .expect("model")
@@ -2094,7 +2119,7 @@ mod tests {
                                       "toolCalls":true,"reasoning":false}},
                       "compat":{{"chatReasoningReplay":"omit","chatToolProtocol":"{wire}"}}}}]}}"#
             ));
-            let catalog = ModelCatalog::from_jsonc_slice(json.as_bytes()).expect("valid catalog");
+            let catalog = fixture_catalog(json.as_bytes()).expect("valid catalog");
             let compat = catalog
                 .model(&ModelRef::parse("p/m").expect("reference"))
                 .expect("model")
@@ -2119,7 +2144,7 @@ mod tests {
                                   "toolCalls":true,"reasoning":false},
                   "compat":{"chatReasoningReplay":"reasoning"}}]}"#,
         );
-        let catalog = ModelCatalog::from_jsonc_slice(json.as_bytes()).expect("valid catalog");
+        let catalog = fixture_catalog(json.as_bytes()).expect("valid catalog");
         let compat = catalog
             .model(&ModelRef::parse("p/Qwen/Qwen3").expect("reference"))
             .expect("model")
@@ -2140,7 +2165,7 @@ mod tests {
                                       "toolCalls":true,"reasoning":false}},
                       "compat":{{"chatToolProtocol":"qwen_xml"}}}}]}}"#
             ));
-            let error = ModelCatalog::from_jsonc_slice(json.as_bytes()).expect_err("must fail");
+            let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
             assert!(matches!(error, ModelCatalogError::InvalidCompat { .. }));
         }
     }
@@ -2156,7 +2181,7 @@ mod tests {
                                       "toolCalls":true,"reasoning":false}},
                       "compat":{{"chatReasoningReplay":"omit"}}}}]}}"#
             ));
-            let error = ModelCatalog::from_jsonc_slice(json.as_bytes()).expect_err("must fail");
+            let error = fixture_catalog(json.as_bytes()).expect_err("must fail");
             assert!(matches!(error, ModelCatalogError::InvalidCompat { .. }));
         }
     }
@@ -2174,7 +2199,7 @@ mod tests {
                                   "toolCalls":true,"reasoning":false},
                  "compat":{"chatReasoningReplay":"omit"}}]}"#,
         );
-        let catalog = ModelCatalog::from_jsonc_slice(json.as_bytes()).expect("valid");
+        let catalog = fixture_catalog(json.as_bytes()).expect("valid");
         let reference = ModelRef::parse("p/Qwen/Qwen3").expect("reference");
         assert_eq!(
             catalog.model(&reference).expect("model exists").id.as_str(),
@@ -2199,6 +2224,6 @@ mod tests {
             r#"{{"baseUrl":"https://a.example","apiKey":"k","future":true,"models":[{}]}}"#,
             model_json("")
         ));
-        assert!(ModelCatalog::from_jsonc_slice(json.as_bytes()).is_err());
+        assert!(fixture_catalog(json.as_bytes()).is_err());
     }
 }

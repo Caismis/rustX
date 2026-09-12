@@ -21,7 +21,7 @@ it does not refresh or replace the live snapshot.
 | Ordinary selected tools and source availability | Existing capability/resource owners | Admitted activation, registration and exact selection policy | No generic live setter; bounded resources reload requires quiescence | Authoring files only | Validated coherent capability/resource replacement | New composition |
 | Roles, Skills, instructions, Workflow registrations and policies | `RuntimeResourceSnapshot` and existing loader | Pinned authorized resource slots and files | Prepare off-side; publish under coordinator lock while admission is gated | Authoring files only | New published generation, or old generation on failure | New composition |
 | Runtime root, model catalog/bindings, host startup policy | Launch resolver/composition | Host-owned paths and allowed CLI inputs | Restart required | Explicit authoring | Not reapplied; loader retains captured startup values | Re-resolved |
-| Saved primary model/profile or approval default | Rust `UserDefaults` document writer | Explicit `user` scope: `$XDG_CONFIG_HOME/rustx/settings.jsonc` (or `$HOME/.config/rustx/settings.jsonc`) | Same-directory rename publishes one validated document | Only the explicitly selected fields | Does not replace Session model or approval | Can affect a future launch; project/CLI precedence still applies |
+| Saved primary model/profile or approval default | Rust `UserDefaults` document writer | Explicit `user` scope: `$XDG_CONFIG_HOME/rustx/settings.toml` (or `$HOME/.config/rustx/settings.toml`) | Same-directory rename publishes one validated document | Only the explicitly selected fields | Does not replace Session model or approval | Can affect a future launch; project/CLI precedence still applies |
 | Attempt model, resource revision, approval mode | Native admission | Actual frozen model/resource/policy snapshots | Frozen together at admission; never live-mutated | Retained execution/request evidence only | Retained admitted facts unchanged | No reconstruction from new defaults |
 | Effective native Agent Extension composition (Agent Status) | The composed `ConversationRuntime` itself; frozen at `LocalConversationCore::compose` (root) or in `ResolvedSubagentSpec.extensions` (child) | The launch's `extensions` document (root) or the named role's own `extensions` (child) | Immutable for the life of the Agent; there is no live setter and no install/uninstall | Authoring files only | Unchanged — reload republishes resources and cannot recompose extensions | New launch resolves the current document and may compose a different set |
 | Child model/profile/capabilities and compiled/admitted Workflow program/inputs | Existing Subagent and Workflow admission owners | Parent-frozen native specifications and compiled program | Immutable for admitted execution; no rediscovery in child workspace | Existing native evidence only | Already admitted specifications unchanged | No replay or automatic resume |
@@ -55,10 +55,11 @@ persisted Session-local model selection.
 - `/defaults user` shows only the permitted saved fields, target document and its
   content revision. It does not resolve layers or claim the values win precedence.
 - `/save-default user model <revision>` writes exactly `model.model` and
-  `model.reasoningProfile` from the current native Session selection, captured by Rust
+  `model.reasoning_profile` from the current native Session selection, captured by Rust
   under the coordinator lock at the save operation. The TUI sends only a target,
   never a value from its asynchronous projection cache. A cleared profile
-  is written as `null`, preserving its nearby comments.
+  is written as `{ mode = "catalog_default" }`, preserving unrelated TOML and
+  comments. A selected profile uses `{ mode = "profile", name = "…" }`.
 - `/save-default user approval <revision>` writes exactly `approvalMode` from the
   authoritative desired runtime mode, captured under the coordinator lock. An
   active attempt can still retain a different frozen effective mode; for example,
@@ -78,7 +79,7 @@ and resource replacement under its coordinator lock. A failed preparation/public
 leaves the prior pair authoritative. The result and snapshot report the published
 revision, never a failed candidate's revision. Startup/Session fields are not reapplied
 from the resource documents. Existing schema/ownership validation still applies to
-authored documents; malformed JSONC cannot be ignored by resource loading.
+authored documents; malformed TOML cannot be ignored by resource loading.
 
 ## Commit points and evidence
 
@@ -119,7 +120,7 @@ correct at once:
 runtime projects from the composition it already materialized
 (`ConversationRuntime::native_extensions()`). Reading it opens no configuration
 file, resolves no layer, and consults no resource generation. So editing
-`rustx.jsonc` after launch makes the two views disagree — and that disagreement
+`rustx.toml` after launch makes the two views disagree — and that disagreement
 is the contract, not a bug: the live view keeps describing the Agent that is
 running.
 
@@ -208,20 +209,20 @@ default-writer authority.
 The expected revision is SHA-256 of the exact document bytes, including comments
 and whitespace. `missing` is the distinct absent-document revision. Saves reject
 symlink/nonregular targets and oversized input. The canonical parent and fixed
-filename select a persistent sibling lock (`.settings.jsonc.lock`); rustX writers,
+filename select a persistent sibling lock (`.settings.toml.lock`); rustX writers,
 including initialization, acquire that file lock and never unlink its inode.
 This serializes cooperating writers across threads/processes on supported local
 Linux/macOS filesystems. It is not distributed locking.
 
 After lock acquisition, the writer rereads and checks the expected fingerprint.
-The existing `jsonc-parser` CST changes only the finite selected properties, retaining
+The existing `toml_edit` CST changes only the finite selected properties, retaining
 unrelated fields and comments. Ambiguous duplicate keys (including escaped key
 spellings) are rejected. An unsupported shape is refused rather than replaced with
 a freshly serialized whole JSON document. No secret-bearing configuration is
 returned in results, diagnostics, or debug formatting.
 
 The writer stages in the target directory, preserves existing permissions, syncs
-the staged file, and validates those bytes with the **same canonical JSONC parser,
+the staged file, and validates those bytes with the **same canonical TOML parser,
 user-layer serde schema and field-ownership checks** used by launch. This proves
 user-document validity, not full launch readiness in a mutable project. The writer
 retains only the target directory and captured model catalog: it does not retain a
@@ -229,7 +230,7 @@ LaunchRequest, reopen project configuration, resolve trust, reload the catalog, 
 inspect resource files. Full prospective launch readiness remains the job of
 `rustx config check`, `rustx config show --sources`, and normal launch resolution.
 
-A model save changes only `model.model` and `model.reasoningProfile`, but validates
+A model save changes only `model.model` and `model.reasoning_profile`, but validates
 **the complete model object parsed from the staged bytes**, including preserved
 `requestParams`, `maxOutputTokens`, and `summaryModel`. The canonical
 `SessionModelConfig` schema supplies its defaults; `analyze_session_model_config`

@@ -262,7 +262,7 @@ pub struct ResolvedSubagentSkill {
 /// their synthesized server identities (Issue #174); there is no
 /// Python-specific materialization channel.
 ///
-/// The child never reads `rustx.jsonc` to obtain any of this: a
+/// The child never reads `rustx.toml` to obtain any of this: a
 /// configuration edit between the parent's freeze and the child's
 /// composition cannot change which server the child connects or which store
 /// it opens.
@@ -288,7 +288,7 @@ impl ResolvedSubagentMaterialization {
 ///
 /// Every semantic identity the child needs is already decided here. The
 /// child consumes this value and reinterprets nothing: it does not read
-/// `rustx.jsonc`, discover project instructions, choose model state,
+/// `rustx.toml`, discover project instructions, choose model state,
 /// rediscover Skills, or widen Tool authority.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -315,7 +315,7 @@ pub struct ResolvedSubagentSpec {
     ///
     /// A resolved invocation crosses the boundary, never a desired
     /// `SessionModelConfig` plus a catalog path: the child materializes this
-    /// decision physically and never reopens `models.jsonc` as semantic
+    /// decision physically and never reopens `models.toml` as semantic
     /// authority, so a catalog edit between parent freeze and child
     /// composition cannot change what the child runs.
     pub model: FrozenModelSpec,
@@ -1476,7 +1476,7 @@ fn resolve_materialization(
 /// window, output budget, reasoning-profile semantics, effective request
 /// parameters, effective capabilities, and compat metadata exactly once,
 /// here, against the registry the invoking attempt was admitted with. The
-/// child can then have no opinion about a `models.jsonc` that changed in the
+/// child can then have no opinion about a `models.toml` that changed in the
 /// meantime, because it never consults one.
 fn resolve_model(
     definition: &SubagentDefinition,

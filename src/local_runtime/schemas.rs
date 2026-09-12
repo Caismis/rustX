@@ -4,23 +4,6 @@
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-pub(super) fn camel_case(name: &str) -> String {
-    let mut uppercase = false;
-    name.chars()
-        .filter_map(|character| {
-            if character == '_' {
-                uppercase = true;
-                None
-            } else if uppercase {
-                uppercase = false;
-                Some(character.to_ascii_uppercase())
-            } else {
-                Some(character)
-            }
-        })
-        .collect()
-}
-
 /// Generate the checked-in editor schemas, deterministically and offline.
 ///
 /// # Panics
@@ -38,7 +21,7 @@ pub fn generate() -> BTreeMap<&'static str, Value> {
         }
     }
     if let Some(properties) = project
-        .pointer_mut("/$defs/McpServerDocument/properties")
+        .pointer_mut("/$defs/McpAuthoring/properties")
         .and_then(Value::as_object_mut)
     {
         for &field in super::launch::MCP_SECRET_FIELDS {
@@ -53,10 +36,8 @@ pub fn generate() -> BTreeMap<&'static str, Value> {
         ),
         (
             "models.schema.json",
-            serde_json::to_value(schemars::schema_for!(
-                crate::model::catalog::ModelCatalogDocument
-            ))
-            .expect("schema serializes"),
+            serde_json::to_value(schemars::schema_for!(crate::model::authoring::Catalog))
+                .expect("schema serializes"),
         ),
         ("settings.schema.json", settings),
         ("rustx.schema.json", project),
@@ -68,12 +49,46 @@ pub fn generate() -> BTreeMap<&'static str, Value> {
             .expect("schema serializes"),
         ),
     ]);
-    for schema in schemas.values_mut() {
+    for (name, schema) in &mut schemas {
+        if matches!(
+            *name,
+            "settings.schema.json" | "rustx.schema.json" | "models.schema.json"
+        ) {
+            toml_domain(schema);
+        }
         schema.sort_all_objects();
     }
     schemas
 }
 
+// JSON Schema is an editor artifact. TOML has omission but no null literal;
+// typed reset modes are described by the authoring enums, never Option's JSON null.
+fn toml_domain(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            if object.get("default") == Some(&Value::Null) {
+                object.remove("default");
+            }
+            if let Some(Value::Array(types)) = object.get_mut("type") {
+                types.retain(|t| t != "null");
+            }
+            for union in ["anyOf", "oneOf"] {
+                if let Some(Value::Array(branches)) = object.get_mut(union) {
+                    branches.retain(|branch| branch.get("type").is_none_or(|kind| kind != "null"));
+                }
+            }
+            for child in object.values_mut() {
+                toml_domain(child);
+            }
+        }
+        Value::Array(array) => {
+            for child in array {
+                toml_domain(child);
+            }
+        }
+        _ => {}
+    }
+}
 #[cfg(test)]
 mod tests {
     #[test]

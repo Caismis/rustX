@@ -7214,12 +7214,16 @@ mod tests {
         )
         .await;
         let catalog_root = tempfile::tempdir().expect("catalog root");
-        let config = CurrentRuntimeConfig::from_jsonc_slice(
-            br#"{
-              "agentId": "agent-a",
-              "model": {"model": "scripted/scripted"},
-              "context": {"reserveTokens": 0, "keepRecentTokens": 0}
-            }"#,
+        let config = CurrentRuntimeConfig::from_toml_slice(
+            br#"agent_id = "agent-a"
+
+[model]
+model = "scripted/scripted"
+
+[context]
+reserve_tokens = 0
+keep_recent_tokens = 0
+"#,
         )
         .expect("current runtime config");
         let catalog = SessionCatalog::create(

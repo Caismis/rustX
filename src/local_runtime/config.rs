@@ -127,7 +127,7 @@ pub struct CurrentRuntimeConfig {
     pub workflows: WorkflowsDocument,
 }
 
-/// The JSONC representation of the named-subagent plane.
+/// The resolved native representation of the named-subagent plane.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 #[derive(schemars::JsonSchema)]
@@ -159,7 +159,7 @@ impl Default for SubagentsDocument {
     }
 }
 
-/// The JSONC representation of the Workflow definition and admission plane.
+/// The resolved native Workflow definition and admission plane.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 #[derive(schemars::JsonSchema)]
@@ -267,7 +267,7 @@ impl Default for SubagentAgentsMdDocument {
     }
 }
 
-/// The JSONC representation of a named subagent's optional Git worktree
+/// The resource representation of a named subagent's optional Git worktree
 /// isolation. An omitted or disabled value is the existing shared-workspace
 /// behavior; there is no model-facing per-call override.
 ///
@@ -323,7 +323,7 @@ impl SubagentWorktreeDocument {
     }
 }
 
-/// The JSONC representation of the one shared model request timeout policy.
+/// The resolved native model request timeout policy.
 ///
 /// Milliseconds keep the configuration human-readable while the runtime
 /// receives a typed [`ModelTimeoutPolicy`] containing only finite
@@ -359,10 +359,12 @@ impl ModelTimeoutPolicyDocument {
     #[must_use = "the validated policy must be used by runtime composition"]
     pub fn to_policy(self) -> Result<ModelTimeoutPolicy, String> {
         if self.response_start_timeout_ms == 0 {
-            return Err("modelTimeoutPolicy.responseStartTimeoutMs must be positive".to_owned());
+            return Err(
+                "model_timeout_policy.response_start_timeout_ms must be positive".to_owned(),
+            );
         }
         if self.stream_idle_timeout_ms == 0 {
-            return Err("modelTimeoutPolicy.streamIdleTimeoutMs must be positive".to_owned());
+            return Err("model_timeout_policy.stream_idle_timeout_ms must be positive".to_owned());
         }
         Ok(ModelTimeoutPolicy::new(
             Duration::from_millis(self.response_start_timeout_ms),
@@ -416,12 +418,12 @@ impl ToolDeadlinePolicyDocument {
     #[must_use = "the validated policy must be used by runtime composition"]
     pub fn to_policy(self) -> Result<crate::tools::deadline::ToolExecutionDeadlinePolicy, String> {
         if self.hard_deadline_ms == 0 {
-            return Err("toolDeadlinePolicy.hardDeadlineMs must be positive".to_owned());
+            return Err("tool_deadline_policy.hard_deadline_ms must be positive".to_owned());
         }
         if let Some(idle) = self.idle_liveness_ms
             && idle == 0
         {
-            return Err("toolDeadlinePolicy.idleLivenessMs must be positive".to_owned());
+            return Err("tool_deadline_policy.idle_liveness_ms must be positive".to_owned());
         }
         Ok(crate::tools::deadline::ToolExecutionDeadlinePolicy::new(
             Duration::from_millis(self.hard_deadline_ms),
@@ -456,6 +458,28 @@ fn default_agent_id() -> AgentId {
 }
 
 impl CurrentRuntimeConfig {
+    pub(super) fn defaults(model: SessionModelConfig) -> Self {
+        Self {
+            schema_version: default_schema_version(),
+            agent_id: default_agent_id(),
+            model,
+            approval_mode: ApprovalMode::default(),
+            extensions: NativeAgentExtensionsDocument::default(),
+            context: ContextPolicyDocument::default(),
+            model_timeout_policy: ModelTimeoutPolicyDocument::default(),
+            tool_deadline_policy: ToolDeadlinePolicyDocument::default(),
+            mcp_servers: BTreeMap::default(),
+            python_sources: BTreeMap::default(),
+            mcp_tool_policies: BTreeMap::default(),
+            native_tools: NativeToolPoliciesDocument::default(),
+            environment: BTreeMap::default(),
+            default_tools: default_tools(),
+            skills: Vec::default(),
+            subagents: SubagentsDocument::default(),
+            workflows: WorkflowsDocument::default(),
+        }
+    }
+
     /// Normalize source intent after the launch resolver has accepted project
     /// trust and resource authority. No configuration can author host-only states.
     #[must_use]
@@ -475,17 +499,19 @@ impl CurrentRuntimeConfig {
             })
             .collect()
     }
-    /// Parses and validates current runtime configuration from JSONC bytes.
+    /// Parses and validates current runtime configuration from TOML bytes.
     ///
-    /// The document is [JSONC](crate::config_format): JSON plus comments and
-    /// trailing commas, so a `rustx.jsonc` can explain its own values.
+    /// Strict `snake_case` authoring types resolve into native configuration.
     ///
     /// # Errors
     ///
-    /// Returns [`CurrentRuntimeConfigError::Syntax`] for malformed JSONC or
+    /// Returns [`CurrentRuntimeConfigError::Syntax`] for malformed TOML or
     /// unknown fields, and a specific validation error otherwise.
-    pub fn from_jsonc_slice(bytes: &[u8]) -> Result<Self, CurrentRuntimeConfigError> {
-        let config: Self = crate::config_format::parse(bytes)
+    pub fn from_toml_slice(bytes: &[u8]) -> Result<Self, CurrentRuntimeConfigError> {
+        let layer: super::authoring::RuntimeLayer = crate::toml_authoring::parse(bytes)
+            .map_err(|detail| CurrentRuntimeConfigError::Syntax { detail })?;
+        let config = layer
+            .resolve()
             .map_err(|detail| CurrentRuntimeConfigError::Syntax { detail })?;
         config.validate()?;
         Ok(config)
@@ -514,18 +540,18 @@ impl CurrentRuntimeConfig {
         }
         if self.agent_id.as_str().is_empty() {
             return Err(CurrentRuntimeConfigError::Invalid {
-                detail: "agentId must be non-empty".to_owned(),
+                detail: "agent_id must be non-empty".to_owned(),
             });
         }
         if self.context.summary_output_cap == Some(0) {
             return Err(CurrentRuntimeConfigError::Invalid {
-                detail: "context.summaryOutputCap must be positive when present".to_owned(),
+                detail: "context.summary_output_cap must be positive when present".to_owned(),
             });
         }
         self.timeout_policy()?;
         if self.default_tools.iter().any(|name| name.trim().is_empty()) {
             return Err(CurrentRuntimeConfigError::Invalid {
-                detail: "defaultTools entries must be non-empty names".to_owned(),
+                detail: "default_tools entries must be non-empty names".to_owned(),
             });
         }
         // `defaultTools` addresses ordinary capabilities. An extension's Tool
@@ -535,7 +561,7 @@ impl CurrentRuntimeConfig {
             if let Some(extension) = crate::capabilities::extension_provided_tool(name) {
                 return Err(CurrentRuntimeConfigError::Invalid {
                     detail: format!(
-                        "defaultTools entry {name:?} is provided by the \
+                        "default_tools entry {name:?} is provided by the \
                          {extension:?} Agent Extension, not by ordinary Tool \
                          selection; compose it with extensions.{extension}.enabled instead"
                     ),
@@ -563,7 +589,7 @@ impl CurrentRuntimeConfig {
         {
             return Err(CurrentRuntimeConfigError::Invalid {
                 detail: format!(
-                    "subagents.maxConcurrent must be between 1 and \
+                    "subagents.max_concurrent must be between 1 and \
                      {MAX_MAX_CONCURRENT_SUBAGENTS}, found {}",
                     self.subagents.max_concurrent
                 ),
@@ -738,7 +764,7 @@ impl CurrentRuntimeConfig {
                         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
             }) {
                 return Err(CurrentRuntimeConfigError::Invalid {
-                    detail: "pythonSources keys must be python:<folder> identities".into(),
+                    detail: "python_sources keys must be python:<folder> identities".into(),
                 });
             }
         }
@@ -746,7 +772,7 @@ impl CurrentRuntimeConfig {
             if !self.mcp_servers.contains_key(server_id) {
                 return Err(CurrentRuntimeConfigError::Invalid {
                     detail: format!(
-                        "mcpToolPolicies names {server_id}, which mcpServers does not declare"
+                        "mcp_tool_policies names {server_id}, which mcp_servers does not declare"
                     ),
                 });
             }
@@ -756,7 +782,7 @@ impl CurrentRuntimeConfig {
             .map(|(server_id, document)| {
                 if server_id.as_str().is_empty() {
                     return Err(CurrentRuntimeConfigError::Invalid {
-                        detail: "mcpServers keys must be non-empty server identities".to_owned(),
+                        detail: "mcp_servers keys must be non-empty server identities".to_owned(),
                     });
                 }
                 // The `python:` MCP server namespace is structurally
@@ -771,7 +797,7 @@ impl CurrentRuntimeConfig {
                 {
                     return Err(CurrentRuntimeConfigError::Invalid {
                         detail: format!(
-                            "mcpServers.{server_id}: the \"{}\" MCP server namespace is reserved \
+                            "mcp_servers.{server_id}: the \"{}\" MCP server namespace is reserved \
                              for automatically discovered managed Python tool packages \
                              (each `.agents/tools/<folder>/` synthesizes \
                              \"{0}<folder>\"); configure this server under a different id",
@@ -781,7 +807,7 @@ impl CurrentRuntimeConfig {
                 }
                 let transport = document.to_transport().map_err(|detail| {
                     CurrentRuntimeConfigError::Invalid {
-                        detail: format!("mcpServers.{server_id}: {detail}"),
+                        detail: format!("mcp_servers.{server_id}: {detail}"),
                     }
                 })?;
                 Ok((
@@ -1201,7 +1227,7 @@ impl McpServerDocument {
         for key in self.sensitive_env.keys() {
             if !crate::credentials::valid_environment_name(key) || self.env.contains_key(key) {
                 return Err(
-                    "sensitiveEnv requires valid environment names disjoint from env".into(),
+                    "sensitive_env requires valid environment names disjoint from env".into(),
                 );
             }
         }
@@ -1215,7 +1241,7 @@ impl McpServerDocument {
                     .any(|name| name.eq_ignore_ascii_case(key))
             {
                 return Err(
-                    "sensitiveHeaders requires unique valid header names disjoint from headers"
+                    "sensitive_headers requires unique valid header names disjoint from headers"
                         .into(),
                 );
             }
@@ -1321,7 +1347,7 @@ impl std::fmt::Display for CurrentRuntimeConfigError {
             }
             Self::UnsupportedSchemaVersion { supported, found } => write!(
                 f,
-                "unsupported current runtime schemaVersion {found}; this runtime speaks {supported}"
+                "unsupported current runtime schema_version {found}; this runtime speaks {supported}"
             ),
             Self::Invalid { detail } => {
                 write!(f, "invalid current runtime config: {detail}")
@@ -1340,16 +1366,20 @@ mod tests {
     use super::{CurrentRuntimeConfig, CurrentRuntimeConfigError, ModelTimeoutPolicyDocument};
     use crate::model::deadline::{DEFAULT_RESPONSE_START_TIMEOUT, DEFAULT_STREAM_IDLE_TIMEOUT};
 
-    const MINIMAL: &str = r#"{
-        "agentId": "agent-a",
-        "model": {"model": "p/m"},
-        "context": {"reserveTokens": 1024, "keepRecentTokens": 4096}
-    }"#;
+    const MINIMAL: &str = r#"agent_id = "agent-a"
+
+[model]
+model = "p/m"
+
+[context]
+reserve_tokens = 1024
+keep_recent_tokens = 4096
+"#;
 
     /// The minimal configuration parses and derives its policy pieces.
     #[test]
     fn minimal_configuration_parses() {
-        let config = CurrentRuntimeConfig::from_jsonc_slice(MINIMAL.as_bytes()).expect("valid");
+        let config = CurrentRuntimeConfig::from_toml_slice(MINIMAL.as_bytes()).expect("valid");
         assert_eq!(config.approval_mode, crate::runtime::ApprovalMode::Policy);
         assert_eq!(config.context_policy().reserve_tokens, 1024);
         assert!(config.extensions.agent_status.time.enabled);
@@ -1444,10 +1474,11 @@ mod tests {
     #[test]
     fn model_timeout_policy_is_configurable() {
         let json = MINIMAL.replace(
-            r#""agentId": "agent-a""#,
-            r#""agentId": "agent-a", "modelTimeoutPolicy": {"responseStartTimeoutMs": 7, "streamIdleTimeoutMs": 11}"#,
+            r#"agent_id = "agent-a""#,
+            r#"agent_id = "agent-a"
+model_timeout_policy = { "response_start_timeout_ms" = 7, "stream_idle_timeout_ms" = 11 }"#,
         );
-        let config = CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect("valid");
+        let config = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect("valid");
         let policy = config.timeout_policy().expect("finite timeout policy");
         assert_eq!(
             policy.response_start_timeout,
@@ -1501,12 +1532,17 @@ mod tests {
     #[test]
     fn zero_model_timeout_is_rejected() {
         let json = MINIMAL.replace(
-            r#""agentId": "agent-a""#,
-            r#""agentId": "agent-a", "modelTimeoutPolicy": {"responseStartTimeoutMs": 0, "streamIdleTimeoutMs": 11}"#,
+            r#"agent_id = "agent-a""#,
+            r#"agent_id = "agent-a"
+model_timeout_policy = { "response_start_timeout_ms" = 0, "stream_idle_timeout_ms" = 11 }"#,
         );
-        let error = CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect_err("must fail");
+        let error = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect_err("must fail");
         assert!(matches!(error, CurrentRuntimeConfigError::Invalid { .. }));
-        assert!(error.to_string().contains("responseStartTimeoutMs"));
+        assert!(
+            error
+                .to_string()
+                .contains("model_timeout_policy.response_start_timeout_ms")
+        );
     }
 
     /// A policy read for one admission remains unchanged when current
@@ -1514,10 +1550,11 @@ mod tests {
     #[test]
     fn timeout_policy_changes_apply_only_to_later_admissions() {
         let json = MINIMAL.replace(
-            r#""agentId": "agent-a""#,
-            r#""agentId": "agent-a", "modelTimeoutPolicy": {"responseStartTimeoutMs": 7, "streamIdleTimeoutMs": 11}"#,
+            r#"agent_id = "agent-a""#,
+            r#"agent_id = "agent-a"
+model_timeout_policy = { "response_start_timeout_ms" = 7, "stream_idle_timeout_ms" = 11 }"#,
         );
-        let mut config = CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect("valid");
+        let mut config = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect("valid");
         let admitted = config.timeout_policy().expect("initial policy");
         config.model_timeout_policy.response_start_timeout_ms = 13;
         config.model_timeout_policy.stream_idle_timeout_ms = 17;
@@ -1547,10 +1584,11 @@ mod tests {
     #[test]
     fn tool_deadline_policy_is_configurable() {
         let json = MINIMAL.replace(
-            r#""agentId": "agent-a""#,
-            r#""agentId": "agent-a", "toolDeadlinePolicy": {"hardDeadlineMs": 7000, "idleLivenessMs": 1500}"#,
+            r#"agent_id = "agent-a""#,
+            r#"agent_id = "agent-a"
+tool_deadline_policy = { "hard_deadline_ms" = 7000, "idle_liveness_ms" = { "mode" = "window", "milliseconds" = 1500 } }"#,
         );
-        let config = CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect("valid");
+        let config = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect("valid");
         let policy = config
             .tool_deadline_policy()
             .expect("finite deadline policy");
@@ -1565,7 +1603,7 @@ mod tests {
     /// finite hard deadline without an idle watchdog.
     #[test]
     fn tool_deadline_policy_defaults_when_omitted() {
-        let config = CurrentRuntimeConfig::from_jsonc_slice(MINIMAL.as_bytes()).expect("valid");
+        let config = CurrentRuntimeConfig::from_toml_slice(MINIMAL.as_bytes()).expect("valid");
         let policy = config
             .tool_deadline_policy()
             .expect("default deadline policy");
@@ -1585,15 +1623,20 @@ mod tests {
     #[test]
     fn zero_tool_hard_deadline_is_rejected() {
         let json = MINIMAL.replace(
-            r#""agentId": "agent-a""#,
-            r#""agentId": "agent-a", "toolDeadlinePolicy": {"hardDeadlineMs": 0, "idleLivenessMs": 1500}"#,
+            r#"agent_id = "agent-a""#,
+            r#"agent_id = "agent-a"
+tool_deadline_policy = { "hard_deadline_ms" = 0, "idle_liveness_ms" = { "mode" = "window", "milliseconds" = 1500 } }"#,
         );
-        let config = CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect("valid");
+        let config = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect("valid");
         let error = config
             .tool_deadline_policy()
             .expect_err("zero hard deadline must fail");
         assert!(matches!(error, CurrentRuntimeConfigError::Invalid { .. }));
-        assert!(error.to_string().contains("hardDeadlineMs"));
+        assert!(
+            error
+                .to_string()
+                .contains("tool_deadline_policy.hard_deadline_ms")
+        );
     }
 
     /// A zero idle-liveness window is rejected at the policy boundary
@@ -1601,15 +1644,20 @@ mod tests {
     #[test]
     fn zero_tool_idle_liveness_is_rejected() {
         let json = MINIMAL.replace(
-            r#""agentId": "agent-a""#,
-            r#""agentId": "agent-a", "toolDeadlinePolicy": {"hardDeadlineMs": 7000, "idleLivenessMs": 0}"#,
+            r#"agent_id = "agent-a""#,
+            r#"agent_id = "agent-a"
+tool_deadline_policy = { "hard_deadline_ms" = 7000, "idle_liveness_ms" = { "mode" = "window", "milliseconds" = 0 } }"#,
         );
-        let config = CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect("valid");
+        let config = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect("valid");
         let error = config
             .tool_deadline_policy()
             .expect_err("zero idle liveness must fail");
         assert!(matches!(error, CurrentRuntimeConfigError::Invalid { .. }));
-        assert!(error.to_string().contains("idleLivenessMs"));
+        assert!(
+            error
+                .to_string()
+                .contains("tool_deadline_policy.idle_liveness_ms")
+        );
     }
 
     /// A policy read for one admission stays frozen when current
@@ -1618,10 +1666,11 @@ mod tests {
     #[test]
     fn tool_deadline_policy_changes_apply_only_to_later_admissions() {
         let json = MINIMAL.replace(
-            r#""agentId": "agent-a""#,
-            r#""agentId": "agent-a", "toolDeadlinePolicy": {"hardDeadlineMs": 7000, "idleLivenessMs": 1500}"#,
+            r#"agent_id = "agent-a""#,
+            r#"agent_id = "agent-a"
+tool_deadline_policy = { "hard_deadline_ms" = 7000, "idle_liveness_ms" = { "mode" = "window", "milliseconds" = 1500 } }"#,
         );
-        let mut config = CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect("valid");
+        let mut config = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect("valid");
         let admitted = config.tool_deadline_policy().expect("initial policy");
         config.tool_deadline_policy.hard_deadline_ms = 13000;
         config.tool_deadline_policy.idle_liveness_ms = Some(2500);
@@ -1644,10 +1693,11 @@ mod tests {
     #[test]
     fn approval_mode_is_current_configuration_with_policy_default() {
         let json = MINIMAL.replace(
-            r#""agentId": "agent-a""#,
-            r#""agentId": "agent-a", "approvalMode": "full_access""#,
+            r#"agent_id = "agent-a""#,
+            r#"agent_id = "agent-a"
+approval_mode = "full_access""#,
         );
-        let config = CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect("valid");
+        let config = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect("valid");
         assert_eq!(
             config.approval_mode,
             crate::runtime::ApprovalMode::FullAccess
@@ -1657,16 +1707,22 @@ mod tests {
     /// Unknown fields fail rather than silently changing semantics.
     #[test]
     fn unknown_fields_are_rejected() {
-        let json = r#"{
-            "conversationId": "c", "agentId": "a",
-            "model": {"model": "p/m"},
-            "context": {"reserveTokens": 0, "keepRecentTokens": 0},
-            "futureKnob": true
-        }"#;
-        assert!(matches!(
-            CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect_err("must fail"),
-            CurrentRuntimeConfigError::Syntax { .. }
-        ));
+        let json = r#"agent_id = "a"
+future_knob = true
+
+[model]
+model = "p/m"
+
+[context]
+reserve_tokens = 0
+keep_recent_tokens = 0
+"#;
+        json.parse::<toml_edit::DocumentMut>().expect("valid TOML");
+        let error = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect_err("must fail");
+        assert!(
+            error.to_string().contains("unknown field `future_knob`"),
+            "{error}"
+        );
     }
 
     /// Schema v3 owns timezone under the Time status module; the obsolete
@@ -1674,11 +1730,12 @@ mod tests {
     #[test]
     fn top_level_timezone_is_rejected() {
         let json = MINIMAL.replace(
-            r#""agentId": "agent-a""#,
-            r#""agentId": "agent-a", "timezone": "UTC""#,
+            r#"agent_id = "agent-a""#,
+            r#"agent_id = "agent-a"
+timezone = "UTC""#,
         );
         assert!(matches!(
-            CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect_err("must fail"),
+            CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect_err("must fail"),
             CurrentRuntimeConfigError::Syntax { .. }
         ));
     }
@@ -1690,22 +1747,19 @@ mod tests {
     #[test]
     fn ext256_the_obsolete_top_level_agent_status_contract_is_rejected() {
         for obsolete in [
-            r#""agentStatus": {}"#,
-            r#""agentStatus": {"time": {"enabled": false}}"#,
-            r#""agentStatus": {"time": {"timezone": "Asia/Shanghai"}, "background": {"enabled": true}}"#,
+            "agent_status = {}",
+            "agent_status = { time = { enabled = false } }",
+            "agent_status = { time = { timezone = 'Asia/Shanghai' }, background = { enabled = true } }",
         ] {
-            let json = MINIMAL.replace(
-                r#""agentId": "agent-a""#,
-                &format!(r#""agentId": "agent-a", {obsolete}"#),
-            );
+            let text = format!("{obsolete}\n{MINIMAL}");
             let error =
-                CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect_err("must fail");
+                CurrentRuntimeConfig::from_toml_slice(text.as_bytes()).expect_err("must fail");
             assert!(
                 matches!(error, CurrentRuntimeConfigError::Syntax { .. }),
                 "the obsolete contract must fail loudly: {error}"
             );
             assert!(
-                error.to_string().contains("agentStatus"),
+                error.to_string().contains("agent_status"),
                 "the failure names the offending obsolete field: {error}"
             );
         }
@@ -1716,25 +1770,41 @@ mod tests {
     /// extension both fail at launch rather than being ignored.
     #[test]
     fn ext256_unknown_extension_names_and_fields_are_rejected() {
-        for unknown in [
-            r#""extensions": {"futureGoal": {}}"#,
-            r#""extensions": {"todo": {"future": true}}"#,
-            r#""extensions": {"todo": {"enabled": "true"}}"#,
-            r#""extensions": {"agentStatus": {"future": true}}"#,
-            r#""extensions": {"agentStatus": {"time": {"future": true}}}"#,
-            r#""extensions": {"agentStatus": {"background": {"future": true}}}"#,
+        for (fragment, expected) in [
+            ("future = true", "unknown field `future`"),
+            (
+                "[extensions.future_goal]\nenabled = true",
+                "unknown field `future_goal`",
+            ),
+            (
+                "[extensions.todo]\nenabled = true\nfuture = true",
+                "unknown field `future`",
+            ),
+            ("[extensions.todo]\nenabled = 'true'", "expected a boolean"),
+            (
+                "[extensions.agent_status]\nfuture = true",
+                "unknown field `future`",
+            ),
+            (
+                "[extensions.agent_status.time]\nenabled = true\nfuture = true",
+                "unknown field `future`",
+            ),
+            (
+                "[extensions.agent_status.background]\nfuture = true",
+                "unknown field `future`",
+            ),
         ] {
-            let json = MINIMAL.replace(
-                r#""agentId": "agent-a""#,
-                &format!(r#""agentId": "agent-a", {unknown}"#),
-            );
-            assert!(
-                matches!(
-                    CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect_err("must fail"),
-                    CurrentRuntimeConfigError::Syntax { .. }
-                ),
-                "accepted {unknown}"
-            );
+            let text = if fragment.starts_with('[') {
+                format!("{MINIMAL}\n{fragment}\n")
+            } else {
+                format!("{fragment}\n{MINIMAL}")
+            };
+            text.parse::<toml_edit::DocumentMut>()
+                .expect("valid TOML must reach the typed schema");
+            let error = CurrentRuntimeConfig::from_toml_slice(text.as_bytes())
+                .expect_err("strict schema rejects the field or type");
+            assert!(matches!(error, CurrentRuntimeConfigError::Syntax { .. }));
+            assert!(error.to_string().contains(expected), "{fragment}: {error}");
         }
     }
 
@@ -1744,10 +1814,11 @@ mod tests {
     #[test]
     fn ext256_the_extension_surface_freezes_the_declared_composition() {
         let enabled = MINIMAL.replace(
-            r#""agentId": "agent-a""#,
-            r#""agentId": "agent-a", "extensions": {"agentStatus": {"time": {"timezone": "Asia/Shanghai"}, "background": {"enabled": false}}}"#,
+            r#"agent_id = "agent-a""#,
+            r#"agent_id = "agent-a"
+extensions = { "agent_status" = { "time" = { "timezone" = "Asia/Shanghai" }, "background" = { "enabled" = false } } }"#,
         );
-        let config = CurrentRuntimeConfig::from_jsonc_slice(enabled.as_bytes()).expect("valid");
+        let config = CurrentRuntimeConfig::from_toml_slice(enabled.as_bytes()).expect("valid");
         let composition = config.extension_composition();
         let agent_status = composition
             .agent_status()
@@ -1756,10 +1827,11 @@ mod tests {
         assert!(!agent_status.background.enabled);
 
         let disabled = MINIMAL.replace(
-            r#""agentId": "agent-a""#,
-            r#""agentId": "agent-a", "extensions": {"agentStatus": {"enabled": false}}"#,
+            r#"agent_id = "agent-a""#,
+            r#"agent_id = "agent-a"
+extensions = { "agent_status" = { "enabled" = false } }"#,
         );
-        let config = CurrentRuntimeConfig::from_jsonc_slice(disabled.as_bytes()).expect("valid");
+        let config = CurrentRuntimeConfig::from_toml_slice(disabled.as_bytes()).expect("valid");
         assert!(
             config.extension_composition().agent_status().is_none(),
             "a disabled extension leaves an empty composition, not a disabled one"
@@ -1768,11 +1840,12 @@ mod tests {
         // Issue #259: the members are independent, and switching both off is
         // what empties the composition.
         let neither = MINIMAL.replace(
-            r#""agentId": "agent-a""#,
-            r#""agentId": "agent-a", "extensions": {"agentStatus": {"enabled": false}, "todo": {"enabled": false}}"#,
+            r#"agent_id = "agent-a""#,
+            r#"agent_id = "agent-a"
+extensions = { "agent_status" = { "enabled" = false }, "todo" = { "enabled" = false } }"#,
         );
         assert!(
-            CurrentRuntimeConfig::from_jsonc_slice(neither.as_bytes())
+            CurrentRuntimeConfig::from_toml_slice(neither.as_bytes())
                 .expect("valid")
                 .extension_composition()
                 .is_empty()
@@ -1782,14 +1855,18 @@ mod tests {
     /// An unsupported schema version fails.
     #[test]
     fn unsupported_schema_version_fails() {
-        let json = r#"{
-            "schemaVersion": 99,
-            "agentId": "a",
-            "model": {"model": "p/m"},
-            "context": {"reserveTokens": 0, "keepRecentTokens": 0}
-        }"#;
+        let json = r#"schema_version = 99
+agent_id = "a"
+
+[model]
+model = "p/m"
+
+[context]
+reserve_tokens = 0
+keep_recent_tokens = 0
+"#;
         assert!(matches!(
-            CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect_err("must fail"),
+            CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect_err("must fail"),
             CurrentRuntimeConfigError::UnsupportedSchemaVersion { .. }
         ));
     }
@@ -1797,16 +1874,24 @@ mod tests {
     /// The obsolete array-based `mcpServers` schema is not a valid document.
     #[test]
     fn array_based_mcp_servers_are_rejected() {
-        let json = r#"{
-            "agentId": "a",
-            "model": {"model": "p/m"},
-            "context": {"reserveTokens": 0, "keepRecentTokens": 0},
-            "mcpServers": [
-              {"serverId": "s", "transport": {"type": "streamable_http", "endpoint": "https://x"}}
-            ]
-        }"#;
+        let json = r#"agent_id = "a"
+
+[model]
+model = "p/m"
+
+[context]
+reserve_tokens = 0
+keep_recent_tokens = 0
+
+[[mcp_servers]]
+server_id = "s"
+
+[mcp_servers.transport]
+type = "streamable_http"
+endpoint = "https://x"
+"#;
         assert!(matches!(
-            CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect_err("must fail"),
+            CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect_err("must fail"),
             CurrentRuntimeConfigError::Syntax { .. }
         ));
     }
@@ -1815,72 +1900,73 @@ mod tests {
     /// context would otherwise never need compaction.
     #[test]
     fn zero_summary_output_cap_is_rejected() {
-        let json = MINIMAL.replace(
-            r#""keepRecentTokens": 4096"#,
-            r#""keepRecentTokens": 0, "summaryOutputCap": 0"#,
-        );
-        let error = CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect_err("must fail");
+        let json = format!("{MINIMAL}\nsummary_output_cap = {{ mode = \"limit\", tokens = 0 }}\n");
+        let error = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect_err("must fail");
         assert!(matches!(error, CurrentRuntimeConfigError::Invalid { .. }));
         assert!(
             error
                 .to_string()
-                .contains("summaryOutputCap must be positive")
+                .contains("summary_output_cap must be positive")
         );
     }
 
     #[test]
     fn subagent_definition_and_admission_domains_are_independent() {
         let json = MINIMAL.replace(
-            r#""agentId": "agent-a""#,
-            r#""agentId": "agent-a", "subagents": {"definitions": ["worker"], "main": [], "workflow": ["worker"]}"#,
+            r#"agent_id = "agent-a""#,
+            r#"agent_id = "agent-a"
+subagents = { "definitions" = ["worker"], "main" = [], "workflow" = ["worker"] }"#,
         );
-        let config = CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect("valid");
+        let config = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect("valid");
         assert!(config.subagents.main.is_empty());
         assert_eq!(config.subagents.workflow.len(), 1);
         assert_eq!(config.subagents.definitions.len(), 1);
 
         let defined_but_unadmitted = MINIMAL.replace(
-            r#""agentId": "agent-a""#,
-            r#""agentId": "agent-a", "subagents": {"definitions": ["worker"], "main": [], "workflow": []}"#,
+            r#"agent_id = "agent-a""#,
+            r#"agent_id = "agent-a"
+subagents = { "definitions" = ["worker"], "main" = [], "workflow" = [] }"#,
         );
-        assert!(CurrentRuntimeConfig::from_jsonc_slice(defined_but_unadmitted.as_bytes()).is_ok());
+        assert!(CurrentRuntimeConfig::from_toml_slice(defined_but_unadmitted.as_bytes()).is_ok());
     }
 
     #[test]
     fn unknown_or_duplicate_admission_ids_are_rejected() {
         let unknown = MINIMAL.replace(
-            r#""agentId": "agent-a""#,
-            r#""agentId": "agent-a", "subagents": {"definitions": [], "main": ["missing"], "workflow": []}"#,
+            r#"agent_id = "agent-a""#,
+            r#"agent_id = "agent-a"
+subagents = { "definitions" = [], "main" = ["missing"], "workflow" = [] }"#,
         );
-        let error =
-            CurrentRuntimeConfig::from_jsonc_slice(unknown.as_bytes()).expect_err("unknown");
+        let error = CurrentRuntimeConfig::from_toml_slice(unknown.as_bytes()).expect_err("unknown");
         assert!(error.to_string().contains("subagents.main"));
 
         let duplicate = MINIMAL.replace(
-            r#""agentId": "agent-a""#,
-            r#""agentId": "agent-a", "subagents": {"definitions": ["worker"], "main": ["worker", "worker"], "workflow": []}"#,
+            r#"agent_id = "agent-a""#,
+            r#"agent_id = "agent-a"
+subagents = { "definitions" = ["worker"], "main" = ["worker", "worker"], "workflow" = [] }"#,
         );
         let error =
-            CurrentRuntimeConfig::from_jsonc_slice(duplicate.as_bytes()).expect_err("duplicate");
+            CurrentRuntimeConfig::from_toml_slice(duplicate.as_bytes()).expect_err("duplicate");
         assert!(error.to_string().contains("duplicate profile"));
     }
 
     #[test]
     fn workflow_registration_and_main_exposure_are_separate() {
         let valid = MINIMAL.replace(
-            r#""agentId": "agent-a""#,
-            r#""agentId": "agent-a", "workflows": {"definitions": ["review_pr"], "main": []}"#,
+            r#"agent_id = "agent-a""#,
+            r#"agent_id = "agent-a"
+workflows = { "definitions" = ["review_pr"], "main" = [] }"#,
         );
-        let config = CurrentRuntimeConfig::from_jsonc_slice(valid.as_bytes()).expect("valid");
+        let config = CurrentRuntimeConfig::from_toml_slice(valid.as_bytes()).expect("valid");
         assert_eq!(config.workflows.definitions.len(), 1);
         assert!(config.workflows.main.is_empty());
 
         let unknown = MINIMAL.replace(
-            r#""agentId": "agent-a""#,
-            r#""agentId": "agent-a", "workflows": {"definitions": ["review_pr"], "main": ["investigate"]}"#,
+            r#"agent_id = "agent-a""#,
+            r#"agent_id = "agent-a"
+workflows = { "definitions" = ["review_pr"], "main" = ["investigate"] }"#,
         );
-        let error =
-            CurrentRuntimeConfig::from_jsonc_slice(unknown.as_bytes()).expect_err("unknown");
+        let error = CurrentRuntimeConfig::from_toml_slice(unknown.as_bytes()).expect_err("unknown");
         assert!(error.to_string().contains("workflows.main"));
     }
 }

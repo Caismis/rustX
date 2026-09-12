@@ -41,54 +41,56 @@ fn binary() -> std::path::PathBuf {
 /// A catalog pointing at the local fixture server.
 fn models_json(base_url: &str) -> String {
     format!(
-        r#"{{
-  "providers": {{
-    "fixture": {{
-      "baseUrl": "{base_url}",
-      "apiKey": "$RUSTX_SUBAGENT_TEST_KEY",
-      "models": [
-        {{
-          "id": "subagent-model",
-          "protocol": "openai_chat_completions",
-          "contextWindow": 128000,
-          "maxOutputTokens": 512,
-          "capabilities": {{
-            "inputModalities": ["text"],
-            "outputModalities": ["text"],
-            "toolCalls": true,
-            "reasoning": false
-          }},
-          "compat": {{"chatReasoningReplay": "omit"}}
-        }}
-      ]
-    }}
-  }}
-}}"#
+        r#"[providers.fixture]
+base_url = "{base_url}"
+api_key = "$RUSTX_SUBAGENT_TEST_KEY"
+
+[[providers.fixture.models]]
+id = "subagent-model"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 512
+
+[providers.fixture.models.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[providers.fixture.models.compat]
+chat_reasoning_replay = "omit"
+"#
     )
 }
 
 /// The launch configuration with the deliberately tiny frozen timeout
 /// policy that every launched child must inherit.
-const SESSION_JSON: &str = r#"{
-  "agentId": "agent-parent",
-  "model": {"model": "fixture/subagent-model"},
-  "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
-  "defaultTools": ["read", "subagent"],
-  "modelTimeoutPolicy": {"responseStartTimeoutMs": 300, "streamIdleTimeoutMs": 300},
-  "subagents": {
-    "maxConcurrent": 4,
-    "roles": {
-      "conformance": {
-        "description": "Issue 138 named conformance child.",
+const SESSION_TOML: &str = r#"agent_id = "agent-parent"
+default_tools = ["read", "subagent"]
 
-        "tools": {"builtin": ["read"]},
-        "skills": ["conformance"]
-      }
-    },
-    "main": ["conformance"],
-    "workflow": []
-  }
-}"#;
+[model]
+model = "fixture/subagent-model"
+
+[context]
+reserve_tokens = 1024
+keep_recent_tokens = 8192
+
+[model_timeout_policy]
+response_start_timeout_ms = 300
+stream_idle_timeout_ms = 300
+
+[subagents]
+max_concurrent = 4
+main = ["conformance"]
+workflow = []
+
+[subagents.roles.conformance]
+description = "Issue 138 named conformance child."
+skills = ["conformance"]
+
+[subagents.roles.conformance.tools]
+builtin = ["read"]
+"#;
 
 /// One spawned `rustx` process wired to its stdio JSONL transport.
 struct Process {
@@ -116,20 +118,21 @@ impl Process {
             "---\nname: conformance\ndescription: Issue 138 conformance skill.\n---\n\nUse the ordinary child runtime.\n",
         )
         .expect("skill manifest");
-        std::fs::write(root.join("models.jsonc"), models).expect("models.jsonc");
-        let mut document: serde_json::Value = serde_json::from_str(session).unwrap();
+        std::fs::write(root.join("models.toml"), models).expect("models.toml");
+        let mut document: serde_json::Value =
+            rustx::toml_authoring::parse(session.as_bytes()).unwrap();
         crate::launch_fixture::write_roles(&workspace, &mut document["subagents"]);
         std::fs::write(
-            root.join("rustx.jsonc"),
-            serde_json::to_vec(&document).unwrap(),
+            root.join("rustx.toml"),
+            toml::to_string_pretty(&document).unwrap(),
         )
-        .expect("rustx.jsonc");
+        .expect("rustx.toml");
         let mut command = tokio::process::Command::new(binary());
         command
             .arg("--models")
-            .arg(root.join("models.jsonc"))
+            .arg(root.join("models.toml"))
             .arg("--config")
-            .arg(root.join("rustx.jsonc"))
+            .arg(root.join("rustx.toml"))
             .arg("--workspace")
             .arg(&workspace)
             .arg("--runtime-root")
@@ -257,7 +260,7 @@ async fn run_real_child_inherits_the_frozen_timeout_policy_and_retries_locally()
     let mut process = Process::spawn(
         root.path(),
         &models_json(&server.url("/v1")),
-        SESSION_JSON,
+        SESSION_TOML,
         "subagent-secret",
     );
 

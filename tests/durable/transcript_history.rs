@@ -534,41 +534,43 @@ fn requirement_04_older_pages_have_stable_order_without_duplicates_or_gaps() {
 // Requirements 5–6 and 12–14: Runtime Client boundaries and resources
 // ---------------------------------------------------------------------------
 
-const MODELS_JSON: &str = r#"{
-  "providers": {
-    "local": {
-      "baseUrl": "https://local.issue110.invalid/v1",
-      "apiKey": "$RUSTX_ISSUE110_KEY",
-      "models": [{
-        "id": "issue110-model",
-        "protocol": "openai_chat_completions",
-        "contextWindow": 128000,
-        "maxOutputTokens": 4096,
-        "capabilities": {
-          "inputModalities": ["text"],
-          "outputModalities": ["text"],
-          "toolCalls": true,
-          "reasoning": false
-        },
-        "compat": {"chatReasoningReplay": "omit"}
-      }]
-    }
-  }
-}"#;
+const MODELS_TOML: &str = r#"[providers.local]
+base_url = "https://local.issue110.invalid/v1"
+api_key = "$RUSTX_ISSUE110_KEY"
 
-const RUNTIME_CONFIG_JSON: &str = r#"{
-  "agentId": "agent-issue110",
-  "model": {"model": "local/issue110-model"},
-  "context": {"reserveTokens": 1024, "keepRecentTokens": 8192}
-}"#;
+[[providers.local.models]]
+id = "issue110-model"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 4096
+
+[providers.local.models.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[providers.local.models.compat]
+chat_reasoning_replay = "omit"
+"#;
+
+const RUNTIME_CONFIG_TOML: &str = r#"agent_id = "agent-issue110"
+
+[model]
+model = "local/issue110-model"
+
+[context]
+reserve_tokens = 1024
+keep_recent_tokens = 8192
+"#;
 
 fn startup(root: &Path) -> LaunchFixture {
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
-    let models = root.join("models.jsonc");
-    let config = root.join("rustx.jsonc");
-    std::fs::write(&models, MODELS_JSON).expect("models.jsonc");
-    std::fs::write(&config, RUNTIME_CONFIG_JSON).expect("rustx.jsonc");
+    let models = root.join("models.toml");
+    let config = root.join("rustx.toml");
+    std::fs::write(&models, MODELS_TOML).expect("models.toml");
+    std::fs::write(&config, RUNTIME_CONFIG_TOML).expect("rustx.toml");
     LaunchFixture {
         models,
         config,

@@ -395,7 +395,7 @@ struct PersistedSession {
 /// — continue the active Session, start an empty one, bind a named one —
 /// and then has to compose a runtime for that destination, which is the
 /// step that can still fail: a Session whose recorded model no longer
-/// exists in `models.jsonc`, a database that will not open, a capability
+/// exists in `models.toml`, a database that will not open, a capability
 /// composition that cannot be built. Publishing the decision first and
 /// composing afterwards leaves a process that failed to start having
 /// silently moved the active selection, so the next launch begins somewhere
@@ -2569,14 +2569,18 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use tempfile::TempDir;
 
-    const CONFIG: &str = r#"{
-        "agentId": "agent-a",
-        "model": {"model": "provider/model"},
-        "context": {"reserveTokens": 1024, "keepRecentTokens": 4096}
-    }"#;
+    const CONFIG: &str = r#"agent_id = "agent-a"
+
+[model]
+model = "provider/model"
+
+[context]
+reserve_tokens = 1024
+keep_recent_tokens = 4096
+"#;
 
     fn config() -> CurrentRuntimeConfig {
-        CurrentRuntimeConfig::from_jsonc_slice(CONFIG.as_bytes()).expect("valid test config")
+        CurrentRuntimeConfig::from_toml_slice(CONFIG.as_bytes()).expect("valid test config")
     }
 
     fn state() -> SessionPersistentState {

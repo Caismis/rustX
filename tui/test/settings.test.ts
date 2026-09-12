@@ -26,7 +26,7 @@ it("CFG238 shares the native protocol fixture and explicit lifetimes", () => {
 
 it("CFG238 reconstructs distinct launch, Session, pending and frozen facts from a fresh snapshot", () => {
   const native = snapshot({
-    launch_settings: { model: { model: "local/a", reasoning_profile: null }, model_origin: { kind: "user", document: "/config/settings.jsonc" }, reasoning_origin: { kind: "builtin" }, approval_mode: "policy", approval_origin: { kind: "builtin" }, runtime_root_origin: { kind: "cli" }, tool_selection_origin: { kind: "builtin" } },
+    launch_settings: { model: { model: "local/a", reasoning_profile: null }, model_origin: { kind: "user", document: "/config/settings.toml" }, reasoning_origin: { kind: "builtin" }, approval_mode: "policy", approval_origin: { kind: "builtin" }, runtime_root_origin: { kind: "cli" }, tool_selection_origin: { kind: "builtin" } },
     model: sessionModel("local/b"),
     effective_approval_mode: "policy", pending_approval_mode: "full_access",
     resources: { revision: 8, context_files: [], agent_profile: false },
@@ -141,7 +141,7 @@ it("EXT256 /settings distinguishes absent, composed, and timezone-configured Age
 
   // The rendering is native facts only: no prompt, registry, or document dump.
   for (const rendered of [composed, idle, absent, child])
-    for (const forbidden of ["system-reminder", "requestParams", "rustx.jsonc", "NativeAgentExtensionsDocument"])
+    for (const forbidden of ["system-reminder", "requestParams", "rustx.toml", "NativeAgentExtensionsDocument"])
       assert.ok(!rendered.includes(forbidden), forbidden);
 });
 

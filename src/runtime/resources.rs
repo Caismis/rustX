@@ -678,7 +678,7 @@ fn load_context_file_from_directory(
         }
         validate_project_resource_path(directory, &path)
             .map_err(|error| error.at(&path, "projectInstructions"))?;
-        let bytes = crate::config_format::read_bounded(&path).map_err(|error| {
+        let bytes = crate::bounded_file::read_bounded(&path).map_err(|error| {
             RuntimeResourceLoadError::new(format!(
                 "cannot read project context file {}: {error}",
                 path.display()

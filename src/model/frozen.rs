@@ -16,7 +16,7 @@
 //! # Why this type exists
 //!
 //! [`SessionModelConfig`] is *desired configuration*, not a resolved model
-//! binding. Handing a child a `SessionModelConfig` plus a `models.jsonc`
+//! binding. Handing a child a `SessionModelConfig` plus a `models.toml`
 //! path makes the child re-resolve semantics against a **mutable** file:
 //! the catalog can change between the moment the parent admitted the
 //! invoking attempt and the moment the child composes, and the child would
@@ -29,7 +29,7 @@
 //! semantics across the process boundary. The child performs only
 //! **physical materialization**: it constructs the provider adapter from
 //! the frozen provider binding and the parent's privately transferred admitted
-//! credential. It never opens `models.jsonc` again or rebinds a changing host
+//! credential. It never opens `models.toml` again or rebinds a changing host
 //! environment to the parent's frozen destination.
 //!
 //! # What deliberately does not cross
@@ -377,23 +377,26 @@ mod tests {
     use crate::model::session::SessionModelConfig;
     use crate::model::types::ModelProtocol;
 
-    const M1: &str = r#"{
-      "providers": {
-        "local": {
-          "baseUrl": "http://127.0.0.1:9/v1",
-          "apiKey": "$RUSTX_FROZEN_KEY",
-          "models": [{
-            "id": "m",
-            "protocol": "openai_chat_completions",
-            "contextWindow": 128000,
-            "maxOutputTokens": 512,
-            "capabilities": {"inputModalities": ["text"], "outputModalities": ["text"], "toolCalls": true, "reasoning": false},
-            "requestParams": {"temperature": 0.25},
-            "compat": {"chatReasoningReplay": "omit"}
-          }]
-        }
-      }
-    }"#;
+    const M1: &str = r#"[providers.local]
+base_url = "http://127.0.0.1:9/v1"
+api_key = "$RUSTX_FROZEN_KEY"
+
+[[providers.local.models]]
+id = "m"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 512
+request_params_json = "{\"temperature\": 0.25}"
+
+[providers.local.models.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[providers.local.models.compat]
+chat_reasoning_replay = "omit"
+"#;
 
     fn environment() -> MapCredentialEnvironment {
         MapCredentialEnvironment::new([(
@@ -403,7 +406,7 @@ mod tests {
     }
 
     fn registry(document: &str) -> ModelBindingRegistry {
-        let catalog = ModelCatalog::from_jsonc_slice(document.as_bytes()).expect("catalog");
+        let catalog = ModelCatalog::from_toml_slice(document.as_bytes()).expect("catalog");
         ModelBindingRegistry::new(catalog.resolve(&environment()).expect("resolved"))
             .expect("registry")
     }

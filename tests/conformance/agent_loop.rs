@@ -169,15 +169,15 @@ impl Driver {
         let workspace = root.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         std::fs::write(
-            root.path().join("models.jsonc"),
+            root.path().join("models.toml"),
             models_json(emulator, setup),
         )
-        .expect("models.jsonc");
-        std::fs::write(root.path().join("rustx.jsonc"), session_json(setup)).expect("rustx.jsonc");
+        .expect("models.toml");
+        std::fs::write(root.path().join("rustx.toml"), session_json(setup)).expect("rustx.toml");
 
         let paths = LaunchFixture {
-            models: root.path().join("models.jsonc"),
-            config: root.path().join("rustx.jsonc"),
+            models: root.path().join("models.toml"),
+            config: root.path().join("rustx.toml"),
             skill_paths: setup.skill_paths.clone(),
             no_skills: setup.no_skills,
             no_builtin_tools: false,
@@ -301,11 +301,11 @@ fn models_json(emulator: &ProviderEmulator, setup: &Setup) -> String {
     let openai = emulator.openai_base_url();
     let anthropic = emulator.base_url();
     let window = setup.context_window;
-    serde_json::json!({
+    toml::to_string_pretty(&serde_json::json!({
         "providers": {
             "emulator": {
-                "baseUrl": openai,
-                "apiKey": format!("${CREDENTIAL_VARIABLE}"),
+                "base_url": openai,
+                "api_key": format!("${CREDENTIAL_VARIABLE}"),
                 "models": [
                     chat_model(CHAT_MODEL, window),
                     chat_model(SECOND_MODEL, window),
@@ -313,46 +313,46 @@ fn models_json(emulator: &ProviderEmulator, setup: &Setup) -> String {
                     {
                         "id": RESPONSES_MODEL,
                         "protocol": "openai_responses",
-                        "contextWindow": window,
-                        "maxOutputTokens": 1024,
+                        "context_window": window,
+                        "max_output_tokens": 1024,
                         "capabilities": text_capabilities(),
                     },
                 ],
             },
             "emulator-anthropic": {
-                "baseUrl": anthropic,
-                "apiKey": format!("${CREDENTIAL_VARIABLE}"),
+                "base_url": anthropic,
+                "api_key": format!("${CREDENTIAL_VARIABLE}"),
                 "models": [
                     {
                         "id": ANTHROPIC_MODEL,
                         "protocol": "anthropic_messages",
-                        "contextWindow": window,
-                        "maxOutputTokens": 1024,
+                        "context_window": window,
+                        "max_output_tokens": 1024,
                         "capabilities": text_capabilities(),
                     },
                 ],
             },
         },
-    })
-    .to_string()
+    }))
+    .unwrap()
 }
 
 fn chat_model(id: &str, window: u64) -> serde_json::Value {
     serde_json::json!({
         "id": id,
         "protocol": "openai_chat_completions",
-        "contextWindow": window,
-        "maxOutputTokens": 1024,
+        "context_window": window,
+        "max_output_tokens": 1024,
         "capabilities": text_capabilities(),
-        "compat": {"chatReasoningReplay": "omit"},
+        "compat": {"chat_reasoning_replay": "omit"},
     })
 }
 
 fn text_capabilities() -> serde_json::Value {
     serde_json::json!({
-        "inputModalities": ["text"],
-        "outputModalities": ["text"],
-        "toolCalls": true,
+        "input_modalities": ["text"],
+        "output_modalities": ["text"],
+        "tool_calls": true,
         "reasoning": true,
     })
 }
@@ -360,17 +360,17 @@ fn text_capabilities() -> serde_json::Value {
 fn session_json(setup: &Setup) -> String {
     let mut model = serde_json::json!({"model": setup.model});
     if let Some(summary) = &setup.summary_model {
-        model["summaryModel"] = serde_json::json!({"mode": "explicit", "model": summary});
+        model["summary_model"] = serde_json::json!({"mode": "explicit", "model": summary});
     }
-    serde_json::json!({
-        "agentId": "agent-issue47",
+    toml::to_string_pretty(&serde_json::json!({
+        "agent_id": "agent-issue47",
         "model": model,
         "context": {
-            "reserveTokens": setup.reserve_tokens,
-            "keepRecentTokens": setup.keep_recent_tokens,
+            "reserve_tokens": setup.reserve_tokens,
+            "keep_recent_tokens": setup.keep_recent_tokens,
         },
-    })
-    .to_string()
+    }))
+    .unwrap()
 }
 
 /// The provider-request bodies the emulator recorded, as raw JSON text.
@@ -1259,14 +1259,14 @@ async fn a_crash_after_the_request_start_commit_never_resends_the_request() {
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
     std::fs::write(
-        root.path().join("models.jsonc"),
+        root.path().join("models.toml"),
         models_json(&emulator, &setup),
     )
-    .expect("models.jsonc");
-    std::fs::write(root.path().join("rustx.jsonc"), session_json(&setup)).expect("rustx.jsonc");
+    .expect("models.toml");
+    std::fs::write(root.path().join("rustx.toml"), session_json(&setup)).expect("rustx.toml");
     let paths = LaunchFixture {
-        models: root.path().join("models.jsonc"),
-        config: root.path().join("rustx.jsonc"),
+        models: root.path().join("models.toml"),
+        config: root.path().join("rustx.toml"),
         skill_paths: setup.skill_paths.clone(),
         no_skills: setup.no_skills,
         no_builtin_tools: false,

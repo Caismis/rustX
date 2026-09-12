@@ -160,7 +160,7 @@ fn context_with_workspace_policy(
     lifecycle: crate::agent::AttemptLifecycle,
     workspace_policy: WorkspacePolicy,
 ) -> crate::runtime::subagent::AttemptSubagentContext {
-    let model_catalog = ModelCatalog::from_jsonc_slice(WORKFLOW_TEST_MODELS.as_bytes()).unwrap();
+    let model_catalog = ModelCatalog::from_toml_slice(WORKFLOW_TEST_MODELS.as_bytes()).unwrap();
     let models = ModelBindingRegistry::new(
         model_catalog
             .resolve(&MapCredentialEnvironment::default())

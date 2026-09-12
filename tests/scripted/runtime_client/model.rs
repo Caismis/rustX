@@ -1,7 +1,7 @@
 //! Issue #42: the Runtime Client model read/update contract.
 //!
 //! The client boundary must let #39 control the real session model without
-//! reading `models.jsonc`, without rebuilding the runtime, and without
+//! reading `models.toml`, without rebuilding the runtime, and without
 //! inferring "which model is this attempt actually using" from event
 //! ordering. It must also never expose a credential.
 
@@ -818,4 +818,52 @@ fn the_new_methods_round_trip_on_the_wire() {
     let unknown_config_field =
         r#"{"method":"model_set","id":1,"config":{"model":"a/b","future":1}}"#;
     assert!(serde_json::from_str::<RuntimeClientRequest>(unknown_config_field).is_err());
+}
+
+/// Runtime Client failures describe Session semantics independently of authoring syntax.
+#[tokio::test]
+async fn model_set_protected_keys_use_serialization_neutral_diagnostics() {
+    let (_model, host) = runtime(vec![]).await;
+    let (attachment, _) = host
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .expect("attach");
+    let (before, _) = host.snapshot().expect("snapshot");
+    for (id, config, layer) in [
+        (
+            1,
+            serde_json::json!({"model": "alpha/model-a", "requestParams": {"messages": []}}),
+            "session",
+        ),
+        (
+            2,
+            serde_json::json!({"model": "alpha/model-a", "summaryModel": {
+                "mode": "explicit", "model": "summary/summary-model", "request_params": {"messages": []}
+            }}),
+            "explicit summary",
+        ),
+    ] {
+        let config: SessionModelConfig =
+            serde_json::from_value(config).expect("Runtime Client JSON");
+        let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
+            id: RequestId::new(id),
+            config: Box::new(config),
+        });
+        let Some(RuntimeClientError::InvalidModelConfiguration { message }) = response.error else {
+            panic!("protected key must fail Session validation: {response:?}");
+        };
+        assert!(message.contains(layer), "{message}");
+        assert!(message.contains("request-parameter overrides"), "{message}");
+        assert!(
+            message.contains("protected wire key \"messages\""),
+            "{message}"
+        );
+        for spelling in ["request_params_json", "requestParams", "TOML", "toml"] {
+            assert!(!message.contains(spelling), "{message}");
+        }
+        let (after, _) = host.snapshot().expect("snapshot");
+        assert_eq!(
+            before.model, after.model,
+            "rejection must not publish model state"
+        );
+    }
 }

@@ -74,29 +74,28 @@ impl RuntimeClock for FixedClock {
 /// resolved from the in-process fixture registry; this file exists because the
 /// composition contract requires an explicit catalog path.
 fn models_json() -> String {
-    serde_json::json!({
+    toml::to_string_pretty(&serde_json::json!({
         "providers": {
             "fixture": {
-                "baseUrl": "https://fixture.invalid/v1",
-                "apiKey": "fixture-key-fixture",
+                "base_url": "https://fixture.invalid/v1",
+                "api_key": "fixture-key-fixture",
                 "models": [{
                     "id": "fnd06",
                     "protocol": "openai_chat_completions",
-                    "contextWindow": 1_000_000,
-                    "maxOutputTokens": 4096,
+                    "context_window": 1_000_000,
+                    "max_output_tokens": 4096,
                     "capabilities": {
-                        "inputModalities": ["text"],
-                        "outputModalities": ["text"],
-                        "toolCalls": true,
+                        "input_modalities": ["text"],
+                        "output_modalities": ["text"],
+                        "tool_calls": true,
                         "reasoning": false
                     },
-                    "compat": {"chatReasoningReplay": "omit"},
-                    "requestParams": {}
-                }]
+                    "compat": {"chat_reasoning_replay": "omit"},
+                    "request_params_json": serde_json::to_string(&serde_json::json!({})).unwrap()}]
             }
         }
-    })
-    .to_string()
+    }))
+    .unwrap()
 }
 
 /// The runtime configuration a child composes from.
@@ -106,24 +105,24 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
     // bounded catalog the rest of FND-06 relies on is preserved by composing
     // no Todo extension unless a case asks for one.
     let default_tools = vec!["read", "bash", "execution", "subagent"];
-    serde_json::json!({
-        "schemaVersion": 8,
-        "agentId": "agent-fnd06",
+    toml::to_string_pretty(&serde_json::json!({
+        "schema_version": 8,
+        "agent_id": "agent-fnd06",
         "model": {"model": MODEL},
-        "approvalMode": "policy",
-        "context": {"reserveTokens": 0, "keepRecentTokens": 0},
-        "nativeTools": {
+        "approval_mode": "policy",
+        "context": {"reserve_tokens": 0, "keep_recent_tokens": 0},
+        "native_tools": {
             "read": {"approval": read_approval},
             // Process-death tests own execution gates, not approval interaction.
             "bash": {"execution": "model_selectable", "approval": "never"}
         },
-        "defaultTools": default_tools,
+        "default_tools": default_tools,
         "extensions": {"todo": {"enabled": include_todo}},
         // One named subagent definition (Issue #144). The instruction
         // document is a workspace resource the parent generation freezes;
         // the child never reads this configuration.
         "subagents": {
-            "maxConcurrent": 4,
+            "max_concurrent": 4,
             "roles": {
                 "explore": {
                     "description": "Read-only exploration of the shared workspace.",
@@ -134,8 +133,8 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
             "main": ["explore"],
             "workflow": []
         }
-    })
-    .to_string()
+    }))
+    .unwrap()
 }
 
 /// Rewrites a child lab configuration with the **Todo Agent Extension**
@@ -143,20 +142,20 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
 /// FND-06 retains its original bounded catalog.
 pub(crate) fn write_runtime_config_with_todo(root: &Path) {
     crate::launch_fixture::write_documents(
-        &root.join("rustx.jsonc"),
+        &root.join("rustx.toml"),
         &runtime_json("never", true),
-        &["approvalMode", "nativeTools"],
+        &["approval_mode", "native_tools"],
     );
 }
 
 pub(crate) fn write_runtime_config_with_goal(root: &Path) {
     let mut document: serde_json::Value =
-        serde_json::from_str(&runtime_json("never", false)).unwrap();
+        rustx::toml_authoring::parse(runtime_json("never", false).as_bytes()).unwrap();
     document["extensions"]["goal"] = serde_json::json!({"enabled": true});
     crate::launch_fixture::write_documents(
-        &root.join("rustx.jsonc"),
-        &document.to_string(),
-        &["approvalMode", "nativeTools"],
+        &root.join("rustx.toml"),
+        &toml::to_string_pretty(&document).unwrap(),
+        &["approval_mode", "native_tools"],
     );
 }
 
@@ -182,7 +181,7 @@ impl Lab {
         )
         .expect("explore instructions");
         std::fs::create_dir_all(lab.root().join("private")).expect("runtime-private root");
-        std::fs::write(lab.root().join("models.jsonc"), models_json()).expect("models.jsonc");
+        std::fs::write(lab.root().join("models.toml"), models_json()).expect("models.toml");
         lab.write_runtime_config("never");
         lab.write_project_instructions("R1 project instructions.");
         lab.write_skill_frontmatter("alpha", "R1 alpha summary");
@@ -205,9 +204,9 @@ impl Lab {
 
     pub(crate) fn write_runtime_config(&self, read_approval: &str) {
         crate::launch_fixture::write_documents(
-            &self.root().join("rustx.jsonc"),
+            &self.root().join("rustx.toml"),
             &runtime_json(read_approval, false),
-            &["approvalMode", "nativeTools"],
+            &["approval_mode", "native_tools"],
         );
     }
 

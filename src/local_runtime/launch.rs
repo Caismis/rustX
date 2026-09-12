@@ -1,23 +1,25 @@
 //! One host-owned launch boundary. No provider, Session, or runtime is composed here.
 
+use crate::bounded_file::read_bounded;
 use crate::capabilities::activation::{SourceActivation, SourceEnablement};
-use crate::config_format::read_bounded;
 use std::collections::BTreeMap;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde::Serialize;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use super::authoring::{ModelLayer, RuntimeLayer};
 use super::composition::StartupSession;
-use super::config::{CurrentRuntimeConfig, present};
+use super::config::CurrentRuntimeConfig;
 use super::diagnostics::LaunchFailure;
 use crate::model::catalog::ModelCatalog;
 
-pub(super) const USER_PATH_FIELDS: &[&str] = &["models", "runtimeRoot"];
-pub(super) const HOST_POLICY_FIELDS: &[&str] = &["approvalMode", "nativeTools", "mcpToolPolicies"];
-pub(super) const MCP_SECRET_FIELDS: &[&str] = &["sensitiveEnv", "sensitiveHeaders"];
+pub(super) const USER_PATH_FIELDS: &[&str] = &["models", "runtime_root"];
+pub(super) const HOST_POLICY_FIELDS: &[&str] =
+    &["approval_mode", "native_tools", "mcp_tool_policies"];
+pub(super) const MCP_SECRET_FIELDS: &[&str] = &["sensitive_env", "sensitive_headers"];
 
 /// Filesystem locations and controls produced by the launch resolver.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -294,10 +296,10 @@ impl ProspectiveLaunch {
                 reasoning_profile: self.config.model.reasoning_profile.clone(),
             },
             model_origin: origin("model.model"),
-            reasoning_origin: origin("model.reasoningProfile"),
+            reasoning_origin: origin("model.reasoning_profile"),
             approval_mode: self.config.approval_mode,
-            approval_origin: origin("approvalMode"),
-            runtime_root_origin: origin("runtimeRoot"),
+            approval_origin: origin("approval_mode"),
+            runtime_root_origin: origin("runtime_root"),
             tool_selection_origin: if self.no_tools
                 || self.no_builtin_tools
                 || self.tools.is_some()
@@ -305,7 +307,7 @@ impl ProspectiveLaunch {
             {
                 SettingOrigin::Cli
             } else {
-                origin("defaultTools")
+                origin("default_tools")
             },
         }
     }
@@ -334,31 +336,26 @@ impl ProspectiveLaunch {
         &self,
     ) -> Result<(CurrentRuntimeConfig, BTreeMap<String, Origin>), String> {
         self.validate_workspace_resource_roots()?;
-        let mut merged = Map::new();
+        let mut merged = RuntimeLayer::default();
         let mut provenance = BTreeMap::new();
         for (path, required, origin) in &self.documents {
             let mut layer = read_layer(path, *required, matches!(origin, Origin::Project { .. }))?;
             // Reload owns only resource inputs. Startup/Session defaults remain
             // the launch capture, even when disk defaults have since changed.
-            layer.retain(|field, _| resource_field(field));
+            layer.resources_only();
             rebase_paths(&mut layer, origin, &self.workspace)?;
-            merge_fields(&mut merged, layer, "", origin, &mut provenance);
+            merged.overlay(layer, origin, &mut provenance);
         }
         if !self.skill_paths.is_empty() {
-            merged.insert(
-                "skills".into(),
-                serde_json::to_value(&self.skill_paths).map_err(|e| e.to_string())?,
-            );
+            merged.skills = Some(self.skill_paths.clone());
         }
-        let captured = serde_json::to_value(self.config.as_ref()).map_err(|e| e.to_string())?;
-        for (field, value) in captured.as_object().expect("runtime config object") {
-            if !resource_field(field) {
-                merged.insert(field.clone(), value.clone());
-            }
-        }
-        apply_defaults(&mut merged, &mut provenance);
-        let config: CurrentRuntimeConfig =
-            serde_json::from_value(Value::Object(merged)).map_err(|e| e.to_string())?;
+        merged.model = Some(ModelLayer {
+            model: Some(self.config.model.model.clone()),
+            ..Default::default()
+        });
+        let resources = merged.resolve()?;
+        let mut config = self.config.as_ref().clone();
+        RuntimeLayer::copy_resources(&mut config, resources);
         config.validate().map_err(|e| e.to_string())?;
         Ok((config, provenance))
     }
@@ -491,16 +488,20 @@ pub fn resolve_inspection_locations(
     host: &HostEnvironment,
 ) -> Result<LaunchLocations, String> {
     let (mut locations, _) = resolve_locations(request, host)?;
-    let settings = host.config_directory.join("settings.jsonc");
+    let settings = host.config_directory.join("settings.toml");
     if request.runtime_root.is_none() && present_on_disk(&settings)? {
-        let document: Value = crate::config_format::parse(&read_bounded(&settings)?)?;
-        if let Some(value) = document.get("runtimeRoot") {
-            let path = value
-                .as_str()
-                .filter(|p| !p.is_empty())
-                .ok_or("user runtimeRoot must be a non-empty path")?;
-            locations.runtime_root =
-                normalize_missing(&absolute(&host.config_directory, Path::new(path)))?;
+        // Location-only inspection must not validate unrelated model/resource
+        // fields. This bounded projection grants no configuration authority.
+        #[derive(serde::Deserialize)]
+        struct StateLocation {
+            runtime_root: Option<PathBuf>,
+        }
+        let document: StateLocation = crate::toml_authoring::parse(&read_bounded(&settings)?)?;
+        if let Some(path) = document.runtime_root {
+            if path.as_os_str().is_empty() {
+                return Err("user runtime_root must be a non-empty path".into());
+            }
+            locations.runtime_root = normalize_missing(&absolute(&host.config_directory, &path))?;
         }
     }
     Ok(locations)
@@ -522,9 +523,9 @@ pub fn analyze(
 ) -> Result<ProspectiveLaunch, LaunchFailure> {
     let (mut locations, identity) = resolve_locations(request, host)?;
     let launch = canonical_directory(&host.launch_directory)?;
-    let user_path = host.config_directory.join("settings.jsonc");
+    let user_path = host.config_directory.join("settings.toml");
     let project_path = request.config.as_ref().map_or_else(
-        || locations.workspace.join("rustx.jsonc"),
+        || locations.workspace.join("rustx.toml"),
         |p| absolute(&launch, p),
     );
     let mut user = read_layer(&user_path, false, false)?;
@@ -534,20 +535,15 @@ pub fn analyze(
     let trusted = trust_root(host, &locations.workspace)?
         .join(&identity)
         .is_dir();
-    let user_models = user.remove("models");
+    let user_models = user.models.take();
     let user_selected_catalog = user_models.is_some();
     let models_path = request
         .models
         .as_ref()
         .map(|p| absolute(&launch, p))
-        .or_else(|| {
-            user_models.and_then(|v| {
-                v.as_str()
-                    .map(|p| absolute(user_path.parent().expect("parent"), Path::new(p)))
-            })
-        })
-        .unwrap_or_else(|| host.config_directory.join("models.jsonc"));
-    let state = user.remove("runtimeRoot");
+        .or_else(|| user_models.map(|p| absolute(user_path.parent().expect("parent"), &p)))
+        .unwrap_or_else(|| host.config_directory.join("models.toml"));
+    let state = user.runtime_root.take();
     let state_origin = if state.is_some() {
         Origin::User {
             document: user_path.clone(),
@@ -559,22 +555,19 @@ pub fn analyze(
     if request.runtime_root.is_none()
         && let Some(value) = state
     {
-        locations.runtime_root = absolute(
-            user_path.parent().expect("parent"),
-            Path::new(value.as_str().expect("validated path")),
-        );
+        locations.runtime_root = absolute(user_path.parent().expect("parent"), &value);
     }
     locations.runtime_root = normalize_missing(&locations.runtime_root)?;
     let trust_directory = trust_root(host, &locations.workspace)?;
     if locations.runtime_root.starts_with(&trust_directory)
         || trust_directory.starts_with(&locations.runtime_root)
     {
-        return Err("runtimeRoot must be disjoint from host trust authority".into());
+        return Err("runtime_root must be disjoint from host trust authority".into());
     }
     if locations.runtime_root.starts_with(&locations.workspace)
         || locations.workspace.starts_with(&locations.runtime_root)
     {
-        return Err("runtimeRoot must be disjoint from the workspace".into());
+        return Err("runtime_root must be disjoint from the workspace".into());
     }
     let model_bytes = read_bounded(&models_path).map_err(|detail| {
         let mut error = LaunchFailure::at(
@@ -593,9 +586,10 @@ pub fn analyze(
         )));
         error
     })?;
-    let model_document = crate::config_format::parse_detailed(&model_bytes)
-        .map_err(|error| LaunchFailure::parse(&models_path, error))?;
-    let models = ModelCatalog::from_document(model_document).map_err(|e| {
+    let model_document: crate::model::authoring::Catalog =
+        crate::toml_authoring::parse_detailed(&model_bytes)
+            .map_err(|error| LaunchFailure::parse(&models_path, error))?;
+    let models = ModelCatalog::from_document(model_document.into()).map_err(|e| {
         LaunchFailure::at(
             Some(models_path.clone()),
             "providers",
@@ -622,7 +616,7 @@ pub fn analyze(
             },
         ),
     ];
-    let mut merged = Map::new();
+    let mut merged = RuntimeLayer::default();
     let mut provenance = BTreeMap::new();
     let mut project_resources = Vec::new();
     for (mut layer, origin) in [
@@ -642,13 +636,10 @@ pub fn analyze(
         ),
     ] {
         project_resources.extend(rebase_paths(&mut layer, &origin, &locations.workspace)?);
-        merge_fields(&mut merged, layer, "", &origin, &mut provenance);
+        merged.overlay(layer, &origin, &mut provenance);
     }
     if !request.skill_paths.is_empty() {
-        merged.insert(
-            "skills".into(),
-            serde_json::to_value(&locations.skill_paths).map_err(|e| e.to_string())?,
-        );
+        merged.skills = Some(locations.skill_paths.clone());
         provenance.insert(
             "skills".into(),
             Origin::Cli {
@@ -657,8 +648,10 @@ pub fn analyze(
         );
     }
     if let Some(model) = &request.model {
-        let value = serde_json::json!({"model": model});
-        merged.insert("model".into(), value);
+        merged.model = Some(ModelLayer {
+            model: Some(crate::model::catalog::ModelRef::parse(model).map_err(|e| e.to_string())?),
+            ..Default::default()
+        });
         provenance.retain(|key, _| !key.starts_with("model."));
         provenance.insert(
             "model.model".into(),
@@ -667,25 +660,27 @@ pub fn analyze(
             },
         );
     }
-    if !merged.contains_key("model") || merged["model"].get("model").is_none() {
+    if merged
+        .model
+        .as_ref()
+        .is_none_or(|model| model.model.is_none())
+    {
         let mut error = LaunchFailure::at(
             Some(user_path.clone()),
             "model.model",
             "no unambiguous default model selected",
-            "set model.model in user settings.jsonc or pass --model provider/model",
+            "set model.model in user settings.toml or pass --model provider/model",
             "no unambiguous default model selected".into(),
         );
         error.incomplete = true;
         error.partial = Some(Box::new(super::diagnostics::PartialProjection::new(
             &locations,
             trusted,
-            Value::Object(merged),
+            serde_json::to_value(&merged).map_err(|e| e.to_string())?,
         )));
         return Err(error);
     }
-    apply_defaults(&mut merged, &mut provenance);
-    let config: CurrentRuntimeConfig =
-        serde_json::from_value(Value::Object(merged)).map_err(|e| e.to_string())?;
+    let config = merged.resolve()?;
     config.validate().map_err(|e| e.to_string())?;
     config
         .tool_deadline_policy
@@ -711,18 +706,14 @@ pub fn analyze(
                 error.message,
             )
         })?;
-    record_default_origins(
-        &serde_json::to_value(&config).map_err(|e| e.to_string())?,
-        "",
-        &mut provenance,
-    );
+    RuntimeLayer::record_default_origins(&config, &mut provenance);
     for (key, present) in [
         ("skills.cli", !request.skill_paths.is_empty()),
-        ("noSkills", request.no_skills),
-        ("noTools", request.no_tools),
-        ("noBuiltinTools", request.no_builtin_tools),
+        ("no_skills", request.no_skills),
+        ("no_tools", request.no_tools),
+        ("no_builtin_tools", request.no_builtin_tools),
         ("tools", request.tools.is_some()),
-        ("excludeTools", request.exclude_tools.is_some()),
+        ("exclude_tools", request.exclude_tools.is_some()),
     ] {
         provenance.insert(
             key.into(),
@@ -737,7 +728,7 @@ pub fn analyze(
     }
     for (key, explicit, fallback) in [
         ("workspace", request.workspace.is_some(), Origin::Builtin),
-        ("runtimeRoot", request.runtime_root.is_some(), state_origin),
+        ("runtime_root", request.runtime_root.is_some(), state_origin),
         (
             "models",
             request.models.is_some(),
@@ -1115,7 +1106,7 @@ fn discover_workspace(launch: &Path) -> Result<PathBuf, String> {
             return Err("workspace discovery exceeded 128 directories; pass --workspace".into());
         }
         if present_on_disk(&directory.join(".git"))?
-            || present_on_disk(&directory.join("rustx.jsonc"))?
+            || present_on_disk(&directory.join("rustx.toml"))?
         {
             return Ok(directory.into());
         }
@@ -1124,119 +1115,9 @@ fn discover_workspace(launch: &Path) -> Result<PathBuf, String> {
 }
 
 // The finite reload ownership vocabulary. Startup fields are captured separately.
-fn resource_field(field: &str) -> bool {
-    matches!(
-        field,
-        "mcpServers"
-            | "pythonSources"
-            | "mcpToolPolicies"
-            | "nativeTools"
-            | "environment"
-            | "defaultTools"
-            | "skills"
-            | "subagents"
-            | "workflows"
-    )
-}
-
-// This finite schema is deliberately not an arbitrary recursive merge framework.
-// Records listed here merge their explicit members. All other objects are whole
-// declared entries, except the named maps below (an empty map clears the map).
-fn record(path: &str) -> bool {
-    matches!(
-        path,
-        "model"
-            | "context"
-            | "modelTimeoutPolicy"
-            | "toolDeadlinePolicy"
-            | "extensions"
-            | "extensions.agentStatus"
-            | "extensions.agentStatus.time"
-            | "extensions.agentStatus.background"
-            | "subagents"
-            | "workflows"
-    )
-}
-fn named_map(path: &str) -> bool {
-    matches!(
-        path,
-        "mcpServers" | "pythonSources" | "mcpToolPolicies" | "environment" | "nativeTools"
-    )
-}
-
-fn record_default_origins(value: &Value, prefix: &str, origins: &mut BTreeMap<String, Origin>) {
-    if (prefix.is_empty() || record(prefix) || named_map(prefix))
-        && let Some(entries) = value.as_object()
-        && !entries.is_empty()
-    {
-        for (key, value) in entries {
-            let path = if prefix.is_empty() {
-                key.clone()
-            } else {
-                format!("{prefix}.{key}")
-            };
-            record_default_origins(value, &path, origins);
-        }
-        return;
-    }
-    origins.entry(prefix.into()).or_insert(Origin::Builtin);
-}
-
-fn merge_fields(
-    target: &mut Map<String, Value>,
-    layer: Map<String, Value>,
-    prefix: &str,
-    origin: &Origin,
-    provenance: &mut BTreeMap<String, Origin>,
-) {
-    for (key, value) in layer {
-        let path = if prefix.is_empty() {
-            key.clone()
-        } else {
-            format!("{prefix}.{key}")
-        };
-        if (record(&path) || named_map(&path))
-            && let Value::Object(entries) = &value
-            && (record(&path) || !entries.is_empty())
-        {
-            let destination = target
-                .entry(key.clone())
-                .or_insert_with(|| Value::Object(Map::new()));
-            if let Value::Object(destination) = destination {
-                merge_fields(destination, entries.clone(), &path, origin, provenance);
-                continue;
-            }
-        }
-        provenance.retain(|old, _| old != &path && !old.starts_with(&format!("{path}.")));
-        provenance.insert(path, origin.clone());
-        target.insert(key, value);
-    }
-}
-
-fn apply_defaults(target: &mut Map<String, Value>, provenance: &mut BTreeMap<String, Origin>) {
-    let defaults = serde_json::json!({"context": super::config::ContextPolicyDocument::default()});
-    for (key, value) in defaults.as_object().expect("object") {
-        if !target.contains_key(key) {
-            target.insert(key.clone(), value.clone());
-            provenance.insert(key.clone(), Origin::Builtin);
-        } else if key == "context"
-            && let Some(context) = target.get_mut(key).and_then(Value::as_object_mut)
-        {
-            for (name, value) in value.as_object().expect("context") {
-                if !context.contains_key(name) {
-                    context.insert(name.clone(), value.clone());
-                    provenance.insert(format!("context.{name}"), Origin::Builtin);
-                }
-            }
-        }
-    }
-}
-
-/// Materialize only the model-dependent user sections from an already parsed
-/// layer. Deserialize whole sections through the native schemas, never recreate
-/// a selection from the finite mutation. No project precedence or I/O is involved.
+/// Materialize only owned model-dependent settings. No project or resource I/O.
 pub(super) fn user_model_sections(
-    mut layer: Map<String, Value>,
+    layer: RuntimeLayer,
 ) -> Result<
     (
         crate::model::session::SessionModelConfig,
@@ -1244,22 +1125,12 @@ pub(super) fn user_model_sections(
     ),
     LaunchFailure,
 > {
-    apply_defaults(&mut layer, &mut BTreeMap::new());
-    let model = serde_json::from_value(layer.remove("model").ok_or("missing user model")?)
-        .map_err(|e| e.to_string())?;
-    let context = serde_json::from_value(layer.remove("context").expect("built-in context"))
-        .map_err(|e| e.to_string())?;
-    Ok((model, context))
+    layer.model_sections().map_err(Into::into)
 }
 
-#[allow(clippy::too_many_lines)] // One finite authoring/field-authority boundary.
-fn read_layer(
-    path: &Path,
-    required: bool,
-    project: bool,
-) -> Result<Map<String, Value>, LaunchFailure> {
+fn read_layer(path: &Path, required: bool, project: bool) -> Result<RuntimeLayer, LaunchFailure> {
     if !required && !present_on_disk(path)? {
-        return Ok(Map::new());
+        return Ok(RuntimeLayer::default());
     }
     let bytes = read_bounded(path).map_err(|detail| {
         LaunchFailure::at(
@@ -1273,125 +1144,66 @@ fn read_layer(
     parse_layer(path, &bytes, project)
 }
 
-#[allow(clippy::too_many_lines)]
 pub(super) fn parse_layer(
     path: &Path,
     bytes: &[u8],
     project: bool,
-) -> Result<Map<String, Value>, LaunchFailure> {
-    let value: Value =
-        crate::config_format::parse_detailed(bytes).map_err(|e| LaunchFailure::parse(path, e))?;
-    let mut object = value
-        .as_object()
-        .cloned()
-        .ok_or("configuration must be an object")?;
-    for name in [
-        "models",
-        "providers",
-        "credentials",
-        "trust",
-        "trusted",
-        "trustStore",
-        "stateDirectory",
-        "runtimeRoot",
-        "workspace",
+) -> Result<RuntimeLayer, LaunchFailure> {
+    let layer: RuntimeLayer =
+        crate::toml_authoring::parse_detailed(bytes).map_err(|e| LaunchFailure::parse(path, e))?;
+    for (field, value) in [
+        ("models", &layer.models),
+        ("runtime_root", &layer.runtime_root),
     ] {
-        if object.contains_key(name) && (project || !matches!(name, "models" | "runtimeRoot")) {
-            return Err(LaunchFailure::at(
-                Some(path.into()),
-                name,
-                "forbidden host-owned project override",
-                "move this field to user-owned configuration",
-                format!(
-                    "{}: field {name} is forbidden in {} settings (host-owned authority)",
-                    path.display(),
-                    if project { "project" } else { "user" }
-                ),
-            ));
-        }
-    }
-    for &name in USER_PATH_FIELDS {
-        if let Some(value) = object.get(name)
-            && value.as_str().is_none_or(str::is_empty)
-        {
-            return Err(LaunchFailure::at(
-                Some(path.into()),
-                name,
-                "path must be non-empty",
-                "supply a non-empty local path",
-                format!("{}: {name} must be a non-empty path", path.display()),
-            ));
-        }
-    }
-    // Approval-bearing objects are host-only, including empty objects and
-    // non-approval members. Reject before merging: precedence cannot hide this.
-    if project {
-        if let Some(servers) = object.get("mcpServers").and_then(Value::as_object) {
-            for (name, server) in servers {
-                if MCP_SECRET_FIELDS
-                    .iter()
-                    .any(|field| server.get(*field).is_some())
-                {
-                    return Err(LaunchFailure::at(
-                        Some(path.into()),
-                        &format!("mcpServers.{name}"),
-                        "credential references are host-owned",
-                        "bind the whole credential-bearing source in user settings",
-                        format!(
-                            "mcpServers.{name}: credential references are host-owned; bind the whole source in user settings"
-                        ),
-                    ));
-                }
+        if let Some(value) = value {
+            if project {
+                return Err(authority_failure(path, field));
             }
-        }
-        for &name in HOST_POLICY_FIELDS {
-            if object.contains_key(name) {
+            if value.as_os_str().is_empty() {
                 return Err(LaunchFailure::at(
                     Some(path.into()),
-                    name,
-                    "forbidden project Tool approval override",
-                    "move the complete policy object to user settings",
-                    format!(
-                        "{}: field {name} is forbidden in project settings (host-owned Tool approval authority)",
-                        path.display()
-                    ),
+                    field,
+                    "path must be non-empty",
+                    "supply a non-empty local path",
+                    format!("{}: {field} must be a non-empty path", path.display()),
                 ));
             }
         }
     }
-    // Validate partial syntax independently, so an invalid lower layer cannot be
-    // hidden by an upper one. The typed partial document never inserts defaults.
-    let fields: Vec<_> = PartialRuntime::FIELD_NAMES
-        .iter()
-        .map(|name| super::schemas::camel_case(name))
-        .collect();
-    if let Some(unknown) = object.keys().find(|name| !fields.contains(name)) {
-        return Err(LaunchFailure::at(
-            Some(path.into()),
-            unknown,
-            "unknown configuration field",
-            "remove or correct the field name using the authoring schema",
-            format!("{}: unknown field {unknown:?}", path.display()),
-        ));
+    if project {
+        for (field, present) in [
+            ("approval_mode", layer.approval_mode.is_some()),
+            ("native_tools", layer.native_tools.is_some()),
+            ("mcp_tool_policies", layer.mcp_tool_policies.is_some()),
+        ] {
+            if present {
+                return Err(authority_failure(path, field));
+            }
+        }
+        if let Some(servers) = &layer.mcp_servers {
+            for (name, server) in servers {
+                if server.sensitive_env.is_some() || server.sensitive_headers.is_some() {
+                    return Err(authority_failure(path, &format!("mcp_servers.{name}")));
+                }
+            }
+        }
     }
-    let parsed: PartialRuntime =
-        crate::config_format::parse_detailed(bytes).map_err(|e| LaunchFailure::parse(path, e))?;
-    if let Some(version) = parsed.schema_version
+    if let Some(version) = layer.schema_version
         && version != super::config::CURRENT_RUNTIME_SCHEMA_VERSION
     {
         return Err(LaunchFailure::at(
             Some(path.into()),
-            "schemaVersion",
+            "schema_version",
             "unsupported runtime schema version",
             "use the current canonical authoring schema",
             format!(
-                "unsupported runtime schemaVersion {version}; this runtime speaks {}",
+                "unsupported runtime schema_version {version}; this runtime speaks {}",
                 super::config::CURRENT_RUNTIME_SCHEMA_VERSION
             ),
         ));
     }
-    if let Some(subagents) = parsed.subagents
-        && let Some(names) = subagents.definitions
+    if let Some(subagents) = &layer.subagents
+        && let Some(names) = &subagents.definitions
     {
         let unique: std::collections::BTreeSet<_> = names.iter().collect();
         if unique.len() != names.len() {
@@ -1404,94 +1216,66 @@ pub(super) fn parse_layer(
             ));
         }
     }
-    Ok(std::mem::take(&mut object))
+    Ok(layer)
+}
+fn authority_failure(path: &Path, field: &str) -> LaunchFailure {
+    LaunchFailure::at(
+        Some(path.into()),
+        field,
+        "forbidden host-owned project override",
+        "move the complete host-owned field to user settings",
+        format!(
+            "{}: field {field} is forbidden in project settings (host-owned authority)",
+            path.display()
+        ),
+    )
 }
 
 fn rebase_paths(
-    layer: &mut Map<String, Value>,
+    layer: &mut RuntimeLayer,
     origin: &Origin,
     workspace: &Path,
 ) -> Result<Vec<PathBuf>, String> {
     let mut resources = Vec::new();
-    let mut path = |value: &mut Value, base: &Path| -> Result<(), String> {
-        let raw = value.as_str().ok_or("path must be a string")?;
-        if raw.is_empty() {
+    let base = match origin {
+        Origin::User { base, .. } | Origin::Project { base, .. } | Origin::Cli { base } => base,
+        Origin::Builtin => return Ok(resources),
+    };
+    let mut path = |value: &mut PathBuf| -> Result<(), String> {
+        if value.as_os_str().is_empty() {
             return Err("path must be non-empty".into());
         }
-        let resolved = absolute(base, Path::new(raw));
+        let resolved = absolute(base, value);
         if matches!(origin, Origin::Project { .. }) {
             crate::runtime::resources::validate_project_resource_path(workspace, &resolved)
                 .map_err(|e| e.to_string())?;
             resources.push(resolved.clone());
         }
-        *value = serde_json::to_value(resolved).map_err(|e| e.to_string())?;
+        *value = resolved;
         Ok(())
     };
-    let base = match origin {
-        Origin::User { base, .. } | Origin::Project { base, .. } | Origin::Cli { base } => base,
-        Origin::Builtin => return Ok(resources),
-    };
-    if let Some(Value::Array(skills)) = layer.get_mut("skills") {
+    if let Some(skills) = &mut layer.skills {
         for skill in skills {
-            path(skill, base)?;
+            path(skill)?;
         }
     }
-    if let Some(Value::Object(servers)) = layer.get_mut("mcpServers") {
+    if let Some(servers) = &mut layer.mcp_servers {
         for server in servers.values_mut() {
-            if let Some(cwd) = server.get_mut("cwd")
-                && !cwd.is_null()
-            {
-                path(cwd, base)?;
+            if let Some(cwd) = &mut server.cwd {
+                path(cwd)?;
             }
-            if let Some(command) = server.get_mut("command")
-                && command.as_str().is_some_and(|s| s.contains('/'))
+            if let Some(command) = &mut server.command
+                && command.contains('/')
             {
-                path(command, base)?;
+                let mut value = PathBuf::from(&*command);
+                path(&mut value)?;
+                *command = value.to_str().ok_or("command path must be UTF-8")?.into();
             }
         }
     }
     Ok(resources)
 }
 
-macro_rules! partial {
-    ($name:ident { $($field:ident: $ty:ty),* $(,)? }) => {
-        #[derive(Debug, Deserialize, Serialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct $name { $(#[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")] $field: Option<$ty>),* }
-        impl $name { const FIELD_NAMES: &'static [&'static str] = &[$(stringify!($field)),*]; }
-        impl schemars::JsonSchema for $name {
-            fn schema_name() -> std::borrow::Cow<'static, str> { stringify!($name).into() }
-            fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-                let mut properties = serde_json::Map::new();
-                let mut names = Self::FIELD_NAMES.iter();
-                $(properties.insert(super::schemas::camel_case(names.next().expect("field metadata")), serde_json::to_value(generator.subschema_for::<$ty>()).expect("schema serializes"));)*
-                serde_json::json!({"type":"object", "additionalProperties":false, "properties":properties}).try_into().expect("schema object")
-            }
-        }
-    };
-}
-partial!(PartialRuntime {
-    models: PathBuf, runtime_root: PathBuf,
-    schema_version: u32, agent_id: crate::runtime::identity::AgentId,
-    model: PartialModel, approval_mode: crate::runtime::ApprovalMode,
-    extensions: crate::extensions::NativeAgentExtensionsDocument, context: PartialContext,
-    model_timeout_policy: PartialTimeout, tool_deadline_policy: PartialToolDeadline,
-    mcp_servers: BTreeMap<crate::runtime::identity::McpServerId, super::config::McpServerDocument>,
-    python_sources: BTreeMap<crate::runtime::identity::McpServerId, crate::capabilities::activation::SourceEnablement>,
-    mcp_tool_policies: BTreeMap<crate::runtime::identity::McpServerId, super::config::InvocationPolicyDocument>,
-    native_tools: super::config::NativeToolPoliciesDocument, environment: BTreeMap<String, String>,
-    default_tools: Vec<String>, skills: Vec<PathBuf>, subagents: PartialSubagents, workflows: PartialWorkflows,
-});
-partial!(PartialContext { reserve_tokens: u64, keep_recent_tokens: u64, summary_output_cap: Option<u32> });
-partial!(PartialTimeout {
-    response_start_timeout_ms: u64,
-    stream_idle_timeout_ms: u64
-});
-partial!(PartialToolDeadline { hard_deadline_ms: u64, idle_liveness_ms: Option<u64> });
-partial!(PartialModel { model: crate::model::catalog::ModelRef, reasoning_profile: Option<crate::model::catalog::ReasoningProfileId>, request_params: crate::model::invocation::RequestParams, max_output_tokens: Option<u32>, summary_model: crate::model::session::SummaryModelPolicy });
-partial!(PartialSubagents { max_concurrent: usize, definitions: Vec<crate::runtime::subagent::SubagentName>, main: Vec<crate::runtime::subagent::SubagentName>, workflow: Vec<crate::runtime::subagent::SubagentName> });
-partial!(PartialWorkflows { definitions: Vec<crate::runtime::workflow::WorkflowId>, main: Vec<crate::runtime::workflow::WorkflowId> });
-
 pub(super) fn authoring_schema() -> Value {
-    serde_json::to_value(schemars::schema_for!(PartialRuntime)).expect("schema serializes")
+    serde_json::to_value(schemars::schema_for!(RuntimeLayer)).expect("schema serializes")
 }

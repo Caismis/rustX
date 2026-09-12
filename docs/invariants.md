@@ -72,7 +72,7 @@ These invariants are architectural constraints. Implementations may change; thes
 
 ## Configuration analysis and activation
 
-There is one JSONC parser and one prospective launch semantic path. Runtime
+There is one TOML parser and one prospective launch semantic path. Runtime
 admission follows static analysis; diagnostics never simulate admission with
 trust grants, credential snapshots, executors or connected-source facts.
 Static configuration checks may read bounded authorized local files but cannot
@@ -2642,7 +2642,7 @@ after ChildGuidanceOutcome::Accepted:
   crosses is a `FrozenModelSpec` — the resolved invocation's provider
   binding, protocol, context window, output budget, reasoning profile and
   enabled state, effective request parameters, effective capabilities, and
-  compat metadata — never a `SessionModelConfig` plus a `models.jsonc` path.
+  compat metadata — never a `SessionModelConfig` plus a `models.toml` path.
   The child materializes it physically (adapter construction plus credential
   resolution through its own `CredentialEnvironment`) and owns **no** mutable
   model authority: `SessionModelState::registry()` is `None` there and a live
@@ -2660,7 +2660,7 @@ after ChildGuidanceOutcome::Accepted:
 - **Committed child identity is `(agent, definition_digest)`.**
   `SubagentDefinitionDigest` is SHA-256 over a rustX-owned versioned
   canonical framing (`rustx-subagent-definition-v4`) of the normalized
-  semantic definition — never raw JSONC bytes — so comments, whitespace, key
+  semantic definition — never raw TOML bytes — so comments, whitespace, key
   order, and selector listing order cannot change it while every semantic
   change does. It is the identity of the **named definition itself**, not of
   the full effective child runtime: inherited project instructions, the exact
@@ -2988,7 +2988,7 @@ after ChildGuidanceOutcome::Accepted:
   an authorized invocation override are resolved against one admitted runtime
   generation, validated once, and frozen before process staging and durable
   ownership commit. The child consumes that value and reinterprets nothing: it
-  rereads no role file, `rustx.jsonc`, model catalog, Skill catalog, extension
+  rereads no role file, `rustx.toml`, model catalog, Skill catalog, extension
   authoring document, or later resource generation.
 - **A named definition is the canonical *default* child profile.** Exactly
   three dimensions are overridable — `tools`, `skills`, `extensions` — through
@@ -3599,15 +3599,14 @@ the launch-boundary policy inheritance.
   ConversationId lineage, durable conversation history, and explicitly
   Session-local choices. Its current persisted choice is the selected model.
   It never serializes a complete runtime/project configuration.
-- **Configuration documents are JSONC, and nothing else is relaxed.**
-  `models.jsonc` and `rustx.jsonc` accept `//` and `/* */` comments and
-  trailing commas so a hand-edited file can explain itself. Single-quoted
-  strings, unquoted property names, hexadecimal numbers, unary plus, missing
-  commas, and unknown fields all fail startup. The relaxation is surface
-  syntax only: every schema, default, and validation rule is unchanged, and
-  runtime-owned generated state under `runtime-root` stays strict JSON.
+- **Configuration documents are strictly typed TOML.** `settings.toml`,
+  `models.toml`, and `rustx.toml` deserialize into snake_case authoring structs.
+  Explicit domain choices replace meaningful JSON-null layer behavior. Provider
+  overlays use only `request_params_json`, parsed into arbitrary JSON objects
+  before native validation. Runtime semantic composition never merges dynamic
+  TOML or JSON trees. Generated schemas and wire state remain JSON.
 - **Current runtime configuration is recomposed on every launch.**
-  `--config <rustx.jsonc>` is parsed and validated before an existing Session
+  `--config <rustx.toml>` is parsed and validated before an existing Session
   catalog is opened. MCP definitions, native Tool policy and activation,
   Skill roots/resources, environment, context policy, the launch-scoped native
   Agent Extension composition (including the Agent Status Time timezone), agent
@@ -3615,7 +3614,7 @@ the launch-boundary policy inheritance.
   sources therefore come from the current launch. A valid old Session can
   never make an invalid current configuration disappear.
 - Resource reload replaces only the process-local Runtime Resource Snapshot;
-  it does not reread `rustx.jsonc` or change the native Agent Extension
+  it does not reread `rustx.toml` or change the native Agent Extension
   composition.
 - **A running `ConversationRuntime` executes against the native Agent
   Extension composition frozen for that launch (Issue #256).** `extensions` is
@@ -3637,7 +3636,7 @@ the launch-boundary policy inheritance.
   and durable ownership commit, and the root's document is not an input to
   resolution. Role extension settings participate in
   `SubagentDefinitionDigest`. The child materializes that frozen decision and
-  never rereads `rustx.jsonc`, host or project configuration, role files, or a
+  never rereads `rustx.toml`, host or project configuration, role files, or a
   later resource generation to reinterpret which extensions it owns.
 - **Runtime Client reports the extension composition owned by the attached
   Agent runtime; it never rereads authoring configuration to reconstruct or
@@ -3684,7 +3683,7 @@ the launch-boundary policy inheritance.
   resume composes a fresh generation without restoring one from history.
 - **First-Session publication follows model validation and full
   composition.** On a fresh `runtime-root`, composition loads the current
-  `models.jsonc` and validates the current runtime default before building
+  `models.toml` and validates the current runtime default before building
   the root Session, and the root Session is built as an unpublished plan:
   `catalog.json` is written by the one startup catalog transaction, after
   composition, recovery, and host binding have succeeded. A failed first
@@ -5779,7 +5778,7 @@ message role, history shape, or timestamps:
   Background membership exists or at least 8 active model-visible canonical
   non-AgentStatus messages follow the latest visible Background generation.
   Agent Status messages do not advance that distance, and an empty active set
-  produces no Background generation. The heuristic is code-owned, not JSONC
+  produces no Background generation. The heuristic is code-owned, not TOML
   configuration.
 - Surface visibility, authoritative domain state, and durable emission history
   are distinct inputs. Compaction may retire a visible Time or Background
@@ -7844,7 +7843,7 @@ contracts and provider protocols. These invariants are frozen by M2:
   selector over `model_catalog_get` and applies a choice through `model_set`;
   `/model show` renders `model_get`'s projection. The selector filters and
   formats the published catalog and nothing more. The client never
-  reads `models.jsonc`, instantiates a provider SDK, resolves an API key, or
+  reads `models.toml`, instantiates a provider SDK, resolves an API key, or
   interprets provider protocol semantics. Only *effective* capability is
   advertised. Reasoning profiles are shown exactly as published: a
   reasoning-capable model with no profiles means reasoning is supported with

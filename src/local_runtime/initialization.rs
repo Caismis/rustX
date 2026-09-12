@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use crate::model::authoring::{Capabilities, Catalog, Compat, Model, Provider};
 use serde::Serialize;
-use serde_json::{Value, json};
 
 use super::launch::HostEnvironment;
 use crate::model::catalog::ModelCatalog;
@@ -65,7 +65,7 @@ pub(super) fn documents(arguments: &[String]) -> Result<[Vec<u8>; 2], String> {
         );
     }
     let template = required("--template")?;
-    let model: Value = if template == "custom" {
+    let model: Model = if template == "custom" {
         if options.keys().any(|key| {
             matches!(
                 *key,
@@ -79,7 +79,7 @@ pub(super) fn documents(arguments: &[String]) -> Result<[Vec<u8>; 2], String> {
         }) {
             return Err("custom uses --model-document for the complete model declaration".into());
         }
-        crate::config_format::parse(&crate::config_format::read_bounded(Path::new(required(
+        crate::toml_authoring::parse(&crate::bounded_file::read_bounded(Path::new(required(
             "--model-document",
         )?))?)
         .map_err(|_| "invalid custom model document".to_owned())?
@@ -88,9 +88,9 @@ pub(super) fn documents(arguments: &[String]) -> Result<[Vec<u8>; 2], String> {
             return Err("--model-document requires --template custom".into());
         }
         let protocol = match template {
-            "openai-chat" => "openai_chat_completions",
-            "openai-responses" => "openai_responses",
-            "anthropic" => "anthropic_messages",
+            "openai-chat" => crate::model::ModelProtocol::OpenAiChatCompletions,
+            "openai-responses" => crate::model::ModelProtocol::OpenAiResponses,
+            "anthropic" => crate::model::ModelProtocol::AnthropicMessages,
             _ => {
                 return Err(
                     "template must be openai-chat, openai-responses, anthropic, or custom".into(),
@@ -107,28 +107,66 @@ pub(super) fn documents(arguments: &[String]) -> Result<[Vec<u8>; 2], String> {
                 .parse::<bool>()
                 .map_err(|_| format!("{flag} requires true or false"))
         };
-        let mut model = json!({
-            "id": required("--model-id")?, "protocol": protocol,
-            "contextWindow": number("--context-window")?, "maxOutputTokens": number("--max-output")?,
-            "capabilities": {"inputModalities":["text"], "outputModalities":["text"], "toolCalls":boolean("--tool-calls")?, "reasoning":boolean("--reasoning")?}
-        });
-        if template != "anthropic" || options.contains_key("--compat") {
-            model["compat"] = crate::config_format::parse(required("--compat")?.as_bytes())
-                .map_err(|_| "--compat must be a JSONC compatibility object".to_owned())?;
+        let compat = if template != "anthropic" || options.contains_key("--compat") {
+            crate::toml_authoring::parse::<Compat>(
+                options
+                    .get("--compat")
+                    .ok_or("init requires --compat")?
+                    .as_bytes(),
+            )
+            .map_err(|_| "--compat must be a TOML compatibility document".to_owned())?
+        } else {
+            Compat::default()
+        };
+        Model {
+            id: required("--model-id")?.into(),
+            protocol,
+            context_window: number("--context-window")?,
+            max_output_tokens: u32::try_from(number("--max-output")?)
+                .map_err(|_| "--max-output exceeds u32")?,
+            capabilities: Capabilities {
+                input_modalities: [crate::model::catalog::Modality::Text].into(),
+                output_modalities: [crate::model::catalog::Modality::Text].into(),
+                tool_calls: boolean("--tool-calls")?,
+                reasoning: boolean("--reasoning")?,
+            },
+            request_params_json: crate::toml_authoring::RequestParamsJson::default(),
+            reasoning: None,
+            compat,
         }
-        model
     };
-    let id = model
-        .get("id")
-        .and_then(Value::as_str)
-        .ok_or("model document requires id")?;
-    let catalog = json!({"providers": {provider: {"baseUrl": required("--endpoint")?, "apiKey": format!("${credential}"), "models": [model]}}});
-    let bytes = serde_json::to_vec_pretty(&catalog).map_err(|_| "cannot encode catalog")?;
-    let parsed = ModelCatalog::from_jsonc_slice(&bytes).map_err(|_| "invalid model declaration; check protocol, limits, capabilities, and compatibility fields")?;
-    let settings = json!({"model": {"model": format!("{provider}/{id}")}});
-    let settings_bytes =
-        serde_json::to_vec_pretty(&settings).map_err(|_| "cannot encode settings")?;
-    let config = super::config::CurrentRuntimeConfig::from_jsonc_slice(&settings_bytes)
+    let selected = crate::model::catalog::ModelRef::parse(&format!("{provider}/{}", model.id))
+        .map_err(|_| "invalid model reference")?;
+    let catalog = Catalog {
+        schema_version: crate::model::catalog::MODEL_CATALOG_SCHEMA_VERSION,
+        providers: BTreeMap::from([(
+            provider.into(),
+            Provider {
+                base_url: required("--endpoint")?.into(),
+                api_key: crate::model::catalog::CredentialSource::parse(
+                    &format!("${credential}"),
+                    &crate::model::catalog::ProviderId::new(provider),
+                )
+                .map_err(|_| "invalid credential reference")?,
+                models: vec![model],
+            },
+        )]),
+    };
+    let bytes = toml::to_string_pretty(&catalog)
+        .map_err(|_| "cannot encode catalog")?
+        .into_bytes();
+    let parsed = ModelCatalog::from_toml_slice(&bytes).map_err(|_| "invalid model declaration; check protocol, limits, capabilities, and compatibility fields")?;
+    let settings = super::authoring::RuntimeLayer {
+        model: Some(super::authoring::ModelLayer {
+            model: Some(selected),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let settings_bytes = toml::to_string_pretty(&settings)
+        .map_err(|_| "cannot encode settings")?
+        .into_bytes();
+    let config = super::config::CurrentRuntimeConfig::from_toml_slice(&settings_bytes)
         .map_err(|_| "invalid model selection")?;
     let view = crate::model::invocation::analyze_selection(
         parsed
@@ -172,8 +210,8 @@ fn publish_with_writer(
     mut write_staged: impl FnMut(usize, &mut std::fs::File, &[u8]) -> std::io::Result<()>,
 ) -> InitializationResult {
     let targets = [
-        directory.join("models.jsonc"),
-        directory.join("settings.jsonc"),
+        directory.join("models.toml"),
+        directory.join("settings.toml"),
     ];
     let mut result = InitializationResult {
         written: Vec::new(),
@@ -233,7 +271,7 @@ mod tests {
     #[test]
     fn cfg235_partial_staging_write_failure_never_publishes_truncated_configuration() {
         let root = tempfile::tempdir().unwrap();
-        let existing = root.path().join("unrelated.jsonc");
+        let existing = root.path().join("unrelated.toml");
         std::fs::write(&existing, b"existing user content").unwrap();
         let result = publish_with_writer(
             root.path(),
@@ -247,12 +285,12 @@ mod tests {
                 file.write_all(bytes)
             },
         );
-        assert_eq!(result.written, [root.path().join("models.jsonc")]);
-        assert_eq!(result.failed, Some(root.path().join("settings.jsonc")));
-        assert!(!root.path().join("settings.jsonc").exists());
+        assert_eq!(result.written, [root.path().join("models.toml")]);
+        assert_eq!(result.failed, Some(root.path().join("settings.toml")));
+        assert!(!root.path().join("settings.toml").exists());
         assert_eq!(std::fs::read(existing).unwrap(), b"existing user content");
         assert_eq!(
-            std::fs::read(root.path().join("models.jsonc")).unwrap(),
+            std::fs::read(root.path().join("models.toml")).unwrap(),
             b"models"
         );
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 4); // two persistent writer locks
@@ -295,7 +333,7 @@ mod tests {
                 .join("python-tools")
                 .exists()
         );
-        assert!(!launch.workspace.join("rustx.jsonc").exists());
+        assert!(!launch.workspace.join("rustx.toml").exists());
         product.runtime().shutdown().await.unwrap();
     }
 
@@ -305,14 +343,14 @@ mod tests {
             let mut flags = declarations();
             flags[1] = template.into();
             if template == "openai-responses" {
-                *flags.last_mut().unwrap() = "{}".into();
+                *flags.last_mut().unwrap() = String::new();
             }
             if template == "anthropic" {
                 flags.truncate(flags.len() - 2);
             }
             let first = documents(&flags).unwrap();
             assert_eq!(first, documents(&flags).unwrap());
-            assert!(ModelCatalog::from_jsonc_slice(&first[0]).is_ok());
+            assert!(ModelCatalog::from_toml_slice(&first[0]).is_ok());
             let output = String::from_utf8(first[0].clone()).unwrap();
             assert!(output.contains("$RUSTX_TEST_KEY"));
             assert!(!output.contains("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"));
@@ -346,7 +384,7 @@ mod tests {
             "--reasoning",
             "false",
             "--compat",
-            "{\"chatReasoningReplay\":\"omit\"}",
+            "chat_reasoning_replay = \"omit\"",
         ]
         .map(str::to_owned)
         .to_vec()
@@ -365,8 +403,8 @@ mod tests {
         assert_eq!(
             result.written,
             [
-                host.config_directory.join("models.jsonc"),
-                host.config_directory.join("settings.jsonc")
+                host.config_directory.join("models.toml"),
+                host.config_directory.join("settings.toml")
             ]
         );
         assert!(result.failed.is_none());
@@ -377,7 +415,7 @@ mod tests {
         assert!(launch.config.mcp_servers.is_empty());
         assert!(launch.config.python_sources.is_empty());
         assert_eq!(launch.config.model.model.to_string(), "local/declared");
-        assert!(!workspace.join("rustx.jsonc").exists());
+        assert!(!workspace.join("rustx.toml").exists());
         assert!(!host.state_directory.exists());
         let repeated = initialize(&host, &documents);
         assert!(repeated.written.is_empty());
@@ -393,14 +431,14 @@ mod tests {
     #[test]
     fn cfg235_preflight_conflict_writes_nothing_and_never_enters_publication() {
         let root = tempfile::tempdir().unwrap();
-        std::fs::write(root.path().join("settings.jsonc"), "existing").unwrap();
+        std::fs::write(root.path().join("settings.toml"), "existing").unwrap();
         let result = publish(root.path(), &[b"one".to_vec(), b"two".to_vec()], |_, _| {
             panic!("preflight must stop publication")
         });
         assert!(result.written.is_empty());
-        assert!(!root.path().join("models.jsonc").exists());
+        assert!(!root.path().join("models.toml").exists());
         assert_eq!(
-            std::fs::read_to_string(root.path().join("settings.jsonc")).unwrap(),
+            std::fs::read_to_string(root.path().join("settings.toml")).unwrap(),
             "existing"
         );
     }
@@ -435,7 +473,7 @@ mod tests {
                 .unwrap();
             release.send(()).unwrap();
             let result = writer.join().unwrap();
-            assert_eq!(result.written, [directory.join("models.jsonc")]);
+            assert_eq!(result.written, [directory.join("models.toml")]);
             assert_eq!(result.failed, Some(target.clone()));
             assert_eq!(result.conflicts.as_slice(), std::slice::from_ref(&target));
             assert_eq!(std::fs::read(target).unwrap(), b"racing creator");
@@ -456,12 +494,12 @@ mod tests {
                 }
             },
         );
-        assert_eq!(result.written, [root.path().join("models.jsonc")]);
+        assert_eq!(result.written, [root.path().join("models.toml")]);
         assert_eq!(
-            std::fs::read(root.path().join("models.jsonc")).unwrap(),
+            std::fs::read(root.path().join("models.toml")).unwrap(),
             b"models\n"
         );
-        assert!(!root.path().join("settings.jsonc").exists());
+        assert!(!root.path().join("settings.toml").exists());
         assert!(result.failed.is_some());
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 3);
     }

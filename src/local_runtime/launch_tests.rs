@@ -3,6 +3,7 @@
 use super::launch::*;
 use super::{LocalRuntimeDependencies, LocalSessionProduct};
 use crate::capabilities::{CapabilitySourceId, CapabilitySourceState};
+use crate::model::ModelCatalog;
 use serde_json::json;
 use std::path::Path;
 
@@ -208,7 +209,7 @@ block:
 ";
     install_workflow(&f, text);
     for enabled in [true, false] {
-        f.project(json!({"mcpServers":{"external":{"enabled":enabled,"command":"must-never-spawn"}},"workflows":{"definitions":["example"]}}));
+        f.project(json!({"mcp_servers":{"external":{"enabled":enabled,"command":"must-never-spawn"}},"workflows":{"definitions":["example"]}}));
         for explain in [false, true] {
             let (report, effects) = super::static_effects::measure(|| {
                 super::workflow_inspection::inspect(
@@ -528,7 +529,7 @@ fn check_python_package(
         std::fs::write(package.join("requirements.txt"), requirements).unwrap();
     }
     if let Some(intent) = intent {
-        f.project(json!({"pythonSources":{"python:foo":intent}}));
+        f.project(json!({"python_sources":{"python:foo":intent}}));
     }
     if !trusted {
         f.trust(TrustAction::Revoke);
@@ -571,7 +572,7 @@ fn check_python_package(
             let diagnostic = report
                 .diagnostics
                 .iter()
-                .find(|d| d.path == "pythonSources.python:foo")
+                .find(|d| d.path == "python_sources.python:foo")
                 .unwrap();
             assert_eq!(diagnostic.category, "invalid");
             assert_eq!(diagnostic.classification, "error");
@@ -649,15 +650,15 @@ fn cfg235_untrusted_python_package_contents_are_not_read() {
 #[test]
 fn cfg235_provider_readiness_is_unresolved_without_credential_lookup() {
     let f = Fixture::new();
-    let path = f.host.config_directory.join("models.jsonc");
+    let path = f.host.config_directory.join("models.toml");
     let mut model: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        crate::toml_authoring::parse(&std::fs::read(&path).unwrap()).unwrap();
     for credential in ["$CFG235_UNSET", "RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"] {
-        model["providers"]["host"]["apiKey"] = json!(credential);
-        std::fs::write(&path, serde_json::to_vec(&model).unwrap()).unwrap();
+        model["providers"]["host"]["api_key"] = json!(credential);
+        std::fs::write(&path, toml::to_string_pretty(&model).unwrap()).unwrap();
         for mcp in [false, true] {
             f.project(if mcp {
-                json!({"mcpServers":{"online":{"enabled":true,"url":"http://127.0.0.1:9/mcp"}}})
+                json!({"mcp_servers":{"online":{"enabled":true,"url":"http://127.0.0.1:9/mcp"}}})
             } else {
                 json!({})
             });
@@ -683,7 +684,7 @@ fn cfg235_provider_readiness_is_unresolved_without_credential_lookup() {
                         report
                             .diagnostics
                             .iter()
-                            .any(|d| d.path == "mcpServers.online" && d.category == "unresolved")
+                            .any(|d| d.path == "mcp_servers.online" && d.category == "unresolved")
                     );
                 }
                 for output in [
@@ -720,7 +721,7 @@ fn cfg235_python_local_contract_reuses_name_file_and_symlink_validation() {
         if case == "symlink" {
             std::os::unix::fs::symlink("server.py", package.join("linked.py")).unwrap();
         }
-        f.project(json!({"pythonSources":{id.clone():"enabled"}}));
+        f.project(json!({"python_sources":{id.clone():"enabled"}}));
         let ((report, launch), effects) = super::static_effects::measure(|| {
             super::diagnostics::inspect("config_check", &f.request, &f.host)
         });
@@ -747,9 +748,9 @@ fn cfg235_static_check_show_have_zero_effects_and_redacted_outputs() {
         json!({}),
         json!({"unknownField": true}),
         json!({"environment":{"DECLARED_LITERAL":sentinel}}),
-        json!({"mcpServers":{"offline":{"enabled":true,"url":"http://127.0.0.1:9/mcp"}}}),
-        json!({"mcpServers":{"disabled":{"enabled":false,"command":"must-never-spawn","args":[sentinel]}}}),
-        json!({"mcpServers":{"unconfigured":{"command":"must-never-spawn"}}}),
+        json!({"mcp_servers":{"offline":{"enabled":true,"url":"http://127.0.0.1:9/mcp"}}}),
+        json!({"mcp_servers":{"disabled":{"enabled":false,"command":"must-never-spawn","args":[sentinel]}}}),
+        json!({"mcp_servers":{"unconfigured":{"command":"must-never-spawn"}}}),
     ] {
         f.project(configuration);
         for operation in ["config_check", "config_show"] {
@@ -762,7 +763,7 @@ fn cfg235_static_check_show_have_zero_effects_and_redacted_outputs() {
                     let diagnostic = report
                         .diagnostics
                         .iter()
-                        .find(|diagnostic| diagnostic.path == format!("mcpServers.{name}"))
+                        .find(|diagnostic| diagnostic.path == format!("mcp_servers.{name}"))
                         .unwrap();
                     assert!(diagnostic.file.is_some());
                     assert!(!diagnostic.reason.is_empty() && !diagnostic.correction.is_empty());
@@ -780,7 +781,7 @@ fn cfg235_static_check_show_have_zero_effects_and_redacted_outputs() {
             assert!(!f.resolve_locations_only().runtime_root.exists());
         }
     }
-    f.project(json!({"mcpServers":{"untrusted":{"enabled":true,"command":"must-never-spawn"}}}));
+    f.project(json!({"mcp_servers":{"untrusted":{"enabled":true,"command":"must-never-spawn"}}}));
     f.trust(TrustAction::Revoke);
     let ((report, launch), counts) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_show", &f.request, &f.host)
@@ -798,7 +799,7 @@ fn cfg235_static_check_show_have_zero_effects_and_redacted_outputs() {
 #[test]
 fn cfg235_prospective_values_and_origins_equal_runtime_resolution() {
     let mut f = Fixture::new();
-    f.project(json!({"context":{"reserveTokens":8192},"environment":{"PRIVATE":"RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"}}));
+    f.project(json!({"context":{"reserve_tokens":8192},"environment":{"PRIVATE":"RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"}}));
     f.request.exclude_tools = Some(vec!["read".into()]);
     let prospective = analyze(&f.request, &f.host).unwrap();
     let runtime = f.resolve();
@@ -828,19 +829,19 @@ fn cfg235_oversized_invalid_projection_preserves_authoritative_diagnostics() {
     )
     .unwrap();
     f.project(json!({
-        "pythonSources":{"python:foo":"enabled"},
+        "python_sources":{"python:foo":"enabled"},
         "environment": (0..4096).map(|index| (format!("FIELD_{index}"), "RUSTX_SECRET_SENTINEL_DO_NOT_LEAK")).collect::<std::collections::BTreeMap<_,_>>()
     }));
     let (report, _) = super::diagnostics::inspect("config_show", &f.request, &f.host);
     assert_eq!(report.exit_code(), 2);
-    assert_bounded_cause(&report, "pythonSources.python:foo", "invalid");
+    assert_bounded_cause(&report, "python_sources.python:foo", "invalid");
 }
 
 #[test]
 fn cfg235_oversized_incomplete_projection_preserves_incomplete_diagnostic() {
     let f = Fixture::new();
     f.user(json!({}));
-    f.project(json!({"defaultTools": (0..12000).map(|index| format!("unresolved_tool_identity_{index}")).collect::<Vec<_>>(), "environment":{"PRIVATE":"RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"}}));
+    f.project(json!({"default_tools": (0..12000).map(|index| format!("unresolved_tool_identity_{index}")).collect::<Vec<_>>(), "environment":{"PRIVATE":"RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"}}));
     let (report, _) = super::diagnostics::inspect("config_show", &f.request, &f.host);
     assert_eq!(report.exit_code(), 3);
     assert!(report.partial.is_some());
@@ -896,8 +897,8 @@ fn cfg235_diagnostics_only_overflow_preserves_first_cause_deterministically() {
     use super::diagnostics::{Diagnostic, OUTPUT_LIMIT, Report};
     let mut report = Report::failure(
         "config_check",
-        Some("rustx.jsonc".into()),
-        "pythonSources.python:foo",
+        Some("rustx.toml".into()),
+        "python_sources.python:foo",
         "enabled package violates the local package contract",
         "repair server.py and requirements.txt",
     );
@@ -986,21 +987,21 @@ fn cfg235_projection_has_a_structured_size_bound_without_changing_validity() {
 fn cfg235_all_example_layers_use_real_resolver_and_workflow_compiler() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/local-runtime");
     for (workspace, config, model, expected_workflows) in [
-        ("minimal/workspace", None, "minimal/models.jsonc", 0),
-        ("workflow-basic", None, "minimal/models.jsonc", 1),
-        ("workspace", Some("rustx.jsonc"), "models.jsonc", 2),
+        ("minimal/workspace", None, "minimal/models.toml", 0),
+        ("workflow-basic", None, "minimal/models.toml", 1),
+        ("workspace", Some("rustx.toml"), "models.toml", 2),
     ] {
         let f = Fixture::new();
         let mut host = f.host.clone();
         host.launch_directory = base.join(workspace);
         std::fs::write(
-            host.config_directory.join("models.jsonc"),
+            host.config_directory.join("models.toml"),
             std::fs::read(base.join(model)).unwrap(),
         )
         .unwrap();
         std::fs::write(
-            host.config_directory.join("settings.jsonc"),
-            std::fs::read(base.join("minimal/settings.jsonc")).unwrap(),
+            host.config_directory.join("settings.toml"),
+            std::fs::read(base.join("minimal/settings.toml")).unwrap(),
         )
         .unwrap();
         let request = LaunchRequest {
@@ -1029,11 +1030,11 @@ async fn cfg235_probe_verifies_mcp_without_business_calls_and_respects_inert_sou
     use crate::tools::mcp::fixture::streamable_http::{HttpFixture, HttpFixtureControl};
     let fixture = HttpFixture::start(HttpFixtureControl::new()).await;
     let f = Fixture::new();
-    f.project(json!({"mcpServers":{
+    f.project(json!({"mcp_servers":{
         "enabled":{"enabled":true,"url":fixture.endpoint},
         "disabled":{"enabled":false,"command":"must-never-execute"},
         "unconfigured":{"command":"must-never-execute"}
-    },"pythonSources":{"python:optional":"enabled"}}));
+    },"python_sources":{"python:optional":"enabled"}}));
     let (report, launch) = super::diagnostics::inspect("doctor", &f.request, &f.host);
     assert_eq!(report.validity, super::diagnostics::Validity::Invalid);
     let launch = launch.unwrap();
@@ -1080,8 +1081,8 @@ async fn cfg235_probe_verifies_mcp_without_business_calls_and_respects_inert_sou
 fn cfg235_diagnostics_keep_source_field_classification_and_correction() {
     let f = Fixture::new();
     for (configuration, field) in [
-        (json!({"unknownField":true}), "unknownField"),
-        (json!({"approvalMode":"full_access"}), "approvalMode"),
+        (json!({"unknown_field":true}), "$"),
+        (json!({"approval_mode":"full_access"}), "approval_mode"),
         (
             json!({"subagents":{"definitions":["missing"]}}),
             "subagents.definitions.missing",
@@ -1105,7 +1106,11 @@ fn cfg235_diagnostics_keep_source_field_classification_and_correction() {
         assert!(!diagnostic.reason.is_empty());
         assert!(!diagnostic.correction.is_empty());
     }
-    std::fs::write(f.host.launch_directory.join("rustx.jsonc"), "{\n bad").unwrap();
+    std::fs::write(
+        f.host.launch_directory.join("rustx.toml"),
+        "# document\n[bad",
+    )
+    .unwrap();
     let (report, _) = super::diagnostics::inspect("config_check", &f.request, &f.host);
     assert_eq!(report.diagnostics[0].line, Some(2));
     assert!(report.diagnostics[0].column.is_some());
@@ -1124,7 +1129,7 @@ async fn cfg235_probe_stdio_timeout_and_cancel_reap_owned_process() {
     }
     for timed_out in [false, true] {
         let f = Fixture::new();
-        f.user(json!({"model":{"model":"host/one"}, "mcpServers":{"owned":{
+        f.user(json!({"model":{"model":"host/one"}, "mcp_servers":{"owned":{
             "enabled":true, "command":std::env::current_exe().unwrap(),
             "args":fixture_spawn_args("local_runtime::launch_tests::cfg235_probe_stdio_timeout_and_cancel_reap_owned_process"),
             "env":{FIXTURE_MODE_ENV:"1"}
@@ -1187,7 +1192,7 @@ async fn cfg235_probe_close_is_awaited_and_failed_close_is_not_verified() {
     use std::sync::Arc;
     let fixture = HttpFixture::start(HttpFixtureControl::new()).await;
     let f = Fixture::new();
-    f.project(json!({"mcpServers":{"owned":{"enabled":true,"url":fixture.endpoint}}}));
+    f.project(json!({"mcp_servers":{"owned":{"enabled":true,"url":fixture.endpoint}}}));
     let launch = analyze(&f.request, &f.host).unwrap();
     let mut plan = plan(&launch, false);
     let close = Arc::new(crate::tools::mcp::test_sync::CloseProbe::parking());
@@ -1220,11 +1225,11 @@ async fn cfg235_probe_close_is_awaited_and_failed_close_is_not_verified() {
 #[test]
 fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states() {
     let mut f = Fixture::new();
-    let model_path = f.host.config_directory.join("models.jsonc");
+    let model_path = f.host.config_directory.join("models.toml");
     let mut model: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&model_path).unwrap()).unwrap();
-    model["providers"]["host"]["apiKey"] = json!("$CFG235_UNSET_CREDENTIAL");
-    std::fs::write(&model_path, serde_json::to_vec(&model).unwrap()).unwrap();
+        crate::toml_authoring::parse(&std::fs::read(&model_path).unwrap()).unwrap();
+    model["providers"]["host"]["api_key"] = json!("$CFG235_UNSET_CREDENTIAL");
+    std::fs::write(&model_path, toml::to_string_pretty(&model).unwrap()).unwrap();
     let ((report, _), counts) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_check", &f.request, &f.host)
     });
@@ -1234,12 +1239,12 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
         3,
         "execution credential and connectivity facts remain unresolved"
     );
-    f.request.config = Some("explicit-missing.jsonc".into());
+    f.request.config = Some("explicit-missing.toml".into());
     let (report, _) = super::diagnostics::inspect("config_check", &f.request, &f.host);
     assert_eq!(report.exit_code(), 2);
     assert_eq!(
         report.diagnostics[0].file,
-        Some(f.host.launch_directory.join("explicit-missing.jsonc"))
+        Some(f.host.launch_directory.join("explicit-missing.toml"))
     );
     f.request.config = None;
     let workflow = f
@@ -1322,7 +1327,7 @@ async fn cfg235_preparation_requires_authorization_and_uses_existing_python_owne
     std::fs::create_dir_all(&package).unwrap();
     std::fs::write(package.join("server.py"), "# never executed by this test\n").unwrap();
     std::fs::write(package.join("requirements.txt"), "").unwrap();
-    f.project(json!({"pythonSources":{"python:optional":"enabled"}}));
+    f.project(json!({"python_sources":{"python:optional":"enabled"}}));
     let launch = analyze(&f.request, &f.host).unwrap();
     let runner = Arc::new(FailingRunner::default());
     let store = crate::tools::python::PythonToolStore::with_binaries_and_runner(
@@ -1366,7 +1371,7 @@ async fn cfg235_probe_credential_use_and_failures_never_leak_values() {
     use crate::tools::mcp::fixture::streamable_http::{HttpFixture, HttpFixtureControl};
     let fixture = HttpFixture::start(HttpFixtureControl::new()).await;
     let f = Fixture::new();
-    f.user(json!({"model":{"model":"host/one"},"mcpServers":{"secret":{"enabled":true,"url":fixture.endpoint,"sensitiveHeaders":{"Authorization":"$CFG235_TOKEN"}}}}));
+    f.user(json!({"model":{"model":"host/one"},"mcp_servers":{"secret":{"enabled":true,"url":fixture.endpoint,"sensitive_headers":{"Authorization":"$CFG235_TOKEN"}}}}));
     let launch = analyze(&f.request, &f.host).unwrap();
     for present in [false, true] {
         let mut plan = super::probes::plan(&launch, false);
@@ -1416,12 +1421,12 @@ impl Fixture {
             HostEnvironment::from_paths(workspace.clone(), root.path().join("home"), None, None)
                 .unwrap();
         std::fs::create_dir_all(&host.config_directory).unwrap();
-        std::fs::write(host.config_directory.join("models.jsonc"), serde_json::to_vec(&json!({
-            "providers": { "host": { "baseUrl": "http://127.0.0.1:9/v1", "apiKey": "fixture", "models": [
-                {"id":"one", "protocol":"openai_chat_completions", "contextWindow":128_000, "maxOutputTokens":4096,
-                 "capabilities":{"inputModalities":["text"],"outputModalities":["text"],"toolCalls":true,"reasoning":false},"compat":{"chatReasoningReplay":"omit"}},
-                {"id":"two", "protocol":"openai_chat_completions", "contextWindow":128_000, "maxOutputTokens":4096,
-                 "capabilities":{"inputModalities":["text"],"outputModalities":["text"],"toolCalls":true,"reasoning":false},"compat":{"chatReasoningReplay":"omit"}}
+        std::fs::write(host.config_directory.join("models.toml"), toml::to_string_pretty(&json!({
+            "providers": { "host": { "base_url": "http://127.0.0.1:9/v1", "api_key": "fixture", "models": [
+                {"id":"one", "protocol":"openai_chat_completions", "context_window":128_000, "max_output_tokens":4096,
+                 "capabilities":{"input_modalities":["text"],"output_modalities":["text"],"tool_calls":true,"reasoning":false},"compat":{"chat_reasoning_replay":"omit"}},
+                {"id":"two", "protocol":"openai_chat_completions", "context_window":128_000, "max_output_tokens":4096,
+                 "capabilities":{"input_modalities":["text"],"output_modalities":["text"],"tool_calls":true,"reasoning":false},"compat":{"chat_reasoning_replay":"omit"}}
             ]}}
         })).unwrap()).unwrap();
         let fixture = Self {
@@ -1436,8 +1441,8 @@ impl Fixture {
     }
     fn user(&self, value: serde_json::Value) {
         std::fs::write(
-            self.host.config_directory.join("settings.jsonc"),
-            serde_json::to_vec(&value).unwrap(),
+            self.host.config_directory.join("settings.toml"),
+            toml::to_string_pretty(&value).unwrap(),
         )
         .unwrap();
     }
@@ -1460,8 +1465,8 @@ impl Fixture {
     }
     fn project(&self, value: serde_json::Value) {
         std::fs::write(
-            self.host.launch_directory.join("rustx.jsonc"),
-            serde_json::to_vec(&value).unwrap(),
+            self.host.launch_directory.join("rustx.toml"),
+            toml::to_string_pretty(&value).unwrap(),
         )
         .unwrap();
     }
@@ -1529,7 +1534,7 @@ fn cfg233_configuration_accepts_only_declarative_python_enablement() {
     for project_layer in [false, true] {
         for value in ["enabled", "disabled", "untrusted", "unconfigured"] {
             let f = Fixture::new();
-            let mut document = json!({"pythonSources":{"python:x":value}});
+            let mut document = json!({"python_sources":{"python:x":value}});
             if project_layer {
                 f.project(document);
             } else {
@@ -1545,7 +1550,7 @@ fn cfg233_configuration_accepts_only_declarative_python_enablement() {
         }
     }
     let f = Fixture::new();
-    f.project(json!({"pythonSources":{"python:x":"enabled"}}));
+    f.project(json!({"python_sources":{"python:x":"enabled"}}));
     f.trust(TrustAction::Revoke);
     assert!(
         resolve(&f.request, &f.host)
@@ -1564,16 +1569,16 @@ fn cfg233_whole_source_replacement_never_rebinds_host_credentials() {
     )]);
     for (host, project) in [
         (
-            json!({"enabled":true,"url":"https://host.invalid/mcp","sensitiveHeaders":{"Authorization":"$HOST_SECRET"}}),
+            json!({"enabled":true,"url":"https://host.invalid/mcp","sensitive_headers":{"Authorization":"$HOST_SECRET"}}),
             json!({"enabled":true,"url":"https://project.invalid/mcp"}),
         ),
         (
-            json!({"enabled":true,"command":"host-server","sensitiveEnv":{"TOKEN":"$HOST_SECRET"}}),
+            json!({"enabled":true,"command":"host-server","sensitive_env":{"TOKEN":"$HOST_SECRET"}}),
             json!({"enabled":true,"command":"project-server"}),
         ),
     ] {
-        f.user(json!({"model":{"model":"host/one"},"mcpServers":{"service":host}}));
-        f.project(json!({"mcpServers":{"service":project}}));
+        f.user(json!({"model":{"model":"host/one"},"mcp_servers":{"service":host}}));
+        f.project(json!({"mcp_servers":{"service":project}}));
         let launch = f.resolve();
         let bindings = super::composition::mcp_bindings_with_authority(
             launch.config(),
@@ -1586,10 +1591,10 @@ fn cfg233_whole_source_replacement_never_rebinds_host_credentials() {
         assert!(binding.credentials.environment.is_empty());
         assert!(binding.credentials.headers.is_empty());
         assert!(!format!("{launch:?}").contains("CFG233_HOST_SECRET_SENTINEL"));
-        for key in ["sensitiveEnv", "sensitiveHeaders"] {
+        for key in ["sensitive_env", "sensitive_headers"] {
             let mut forbidden = project.clone();
             forbidden[key] = json!({"TOKEN":"$HOST_SECRET"});
-            f.project(json!({"mcpServers":{"service":forbidden}}));
+            f.project(json!({"mcp_servers":{"service":forbidden}}));
             assert!(
                 resolve(&f.request, &f.host)
                     .unwrap_err()
@@ -1602,13 +1607,13 @@ fn cfg233_whole_source_replacement_never_rebinds_host_credentials() {
 #[tokio::test]
 async fn cfg233_provider_binding_uses_launch_snapshot_and_ignores_unused_missing_keys() {
     let mut f = Fixture::new();
-    let path = f.host.config_directory.join("models.jsonc");
+    let path = f.host.config_directory.join("models.toml");
     let mut document: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    document["providers"]["host"]["apiKey"] = json!("$CAPTURED_KEY");
+        crate::toml_authoring::parse(&std::fs::read(&path).unwrap()).unwrap();
+    document["providers"]["host"]["api_key"] = json!("$CAPTURED_KEY");
     document["providers"]["unused"] = document["providers"]["host"].clone();
-    document["providers"]["unused"]["apiKey"] = json!("$UNSET_UNUSED_KEY");
-    std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+    document["providers"]["unused"]["api_key"] = json!("$UNSET_UNUSED_KEY");
+    std::fs::write(&path, toml::to_string_pretty(&document).unwrap()).unwrap();
     f.credentials = crate::credentials::CredentialSnapshot::new([(
         "CAPTURED_KEY".into(),
         "CFG233_PROVIDER_SENTINEL".into(),
@@ -1632,10 +1637,10 @@ async fn cfg233_provider_binding_uses_launch_snapshot_and_ignores_unused_missing
 #[tokio::test]
 async fn cfg233_enabled_missing_credentials_and_connection_failures_are_source_local() {
     let f = Fixture::new();
-    f.user(json!({"model":{"model":"host/one"},"mcpServers":{
-        "credential":{"enabled":true,"command":"/does/not/exist","sensitiveEnv":{"TOKEN":"$REQUIRED_KEY"}},
+    f.user(json!({"model":{"model":"host/one"},"mcp_servers":{
+        "credential":{"enabled":true,"command":"/does/not/exist","sensitive_env":{"TOKEN":"$REQUIRED_KEY"}},
         "connection":{"enabled":true,"command":"/does/not/exist"},
-        "disabled":{"enabled":false,"command":"/does/not/exist","sensitiveEnv":{"TOKEN":"$IGNORED_KEY"}}
+        "disabled":{"enabled":false,"command":"/does/not/exist","sensitive_env":{"TOKEN":"$IGNORED_KEY"}}
     }}));
     let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
         .await
@@ -1661,7 +1666,7 @@ async fn cfg233_enabled_missing_credentials_and_connection_failures_are_source_l
 #[tokio::test]
 async fn cfg233_missing_declared_python_is_visible_in_composed_source_status() {
     let f = Fixture::new();
-    f.project(json!({"pythonSources":{"python:missing":"enabled", "python:optional":"disabled"}}));
+    f.project(json!({"python_sources":{"python:missing":"enabled", "python:optional":"disabled"}}));
     let launch = f.resolve();
     let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
         .await
@@ -1712,9 +1717,9 @@ async fn cfg233_native_composition_keeps_disabled_and_discovered_resources_inert
     )
     .unwrap();
     // No requirements file: inert discovery cannot require package validity.
-    f.user(json!({"model":{"model":"host/one"},"mcpServers":{
-        "missing":{"enabled":false,"command":"/nonexistent/cfg233","sensitiveEnv":{"TOKEN":"$UNSET"}},
-        "offline":{"enabled":false,"url":"http://127.0.0.1:1/mcp","sensitiveHeaders":{"Authorization":"$UNSET"}}
+    f.user(json!({"model":{"model":"host/one"},"mcp_servers":{
+        "missing":{"enabled":false,"command":"/nonexistent/cfg233","sensitive_env":{"TOKEN":"$UNSET"}},
+        "offline":{"enabled":false,"url":"http://127.0.0.1:1/mcp","sensitive_headers":{"Authorization":"$UNSET"}}
     }}));
     let launch = f.resolve();
     let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
@@ -1746,9 +1751,9 @@ async fn cfg233_shared_connect_gate_rejects_all_inert_states_without_spawn_or_ne
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let marker = f.root.path().join("spawn-marker");
-    f.user(json!({"model":{"model":"host/one"},"mcpServers":{
-        "stdio":{"command":"/bin/sh","args":["-c",format!("touch {}", marker.display())],"sensitiveEnv":{"TOKEN":"$UNSET"}},
-        "http":{"url":format!("http://{}/mcp", listener.local_addr().unwrap()),"sensitiveHeaders":{"Authorization":"$UNSET"}}
+    f.user(json!({"model":{"model":"host/one"},"mcp_servers":{
+        "stdio":{"command":"/bin/sh","args":["-c",format!("touch {}", marker.display())],"sensitive_env":{"TOKEN":"$UNSET"}},
+        "http":{"url":format!("http://{}/mcp", listener.local_addr().unwrap()),"sensitive_headers":{"Authorization":"$UNSET"}}
     }}));
     let launch = f.resolve();
     let workspace = crate::tools::Workspace::new(&launch.workspace).unwrap();
@@ -1804,7 +1809,7 @@ async fn cfg233_http_credential_failure_redacts_peer_echo_and_configuration() {
         let body = format!("credential rejected: {SENTINEL}");
         socket.write_all(format!("HTTP/1.1 401 Unauthorized\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
     });
-    f.user(json!({"model":{"model":"host/one"},"mcpServers":{"authenticated":{"enabled":true,"url":format!("http://{endpoint}/mcp"),"sensitiveHeaders":{"Authorization":"$AUTH"}}}}));
+    f.user(json!({"model":{"model":"host/one"},"mcp_servers":{"authenticated":{"enabled":true,"url":format!("http://{endpoint}/mcp"),"sensitive_headers":{"Authorization":"$AUTH"}}}}));
     let launch = f.resolve();
     let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
         .await
@@ -1850,19 +1855,30 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
         builtin.config.native_tools.to_policies(),
         crate::tools::NativeToolPolicies::default()
     );
-    assert_eq!(builtin.provenance["agentId"], Origin::Builtin);
-    f.user(json!({"model":{"model":"host/one"}, "agentId":"user", "context":{"reserveTokens":2000,"keepRecentTokens":6000},
-        "defaultTools":["read","bash"],"environment":{"USER_ENTRY":"one","REPLACED":"old"},
-        "mcpServers":{"service":{"command":"old-command","args":["old"]},"retained":{"command":"retained"}},
+    assert_eq!(builtin.provenance["agent_id"], Origin::Builtin);
+    f.user(json!({"model":{"model":"host/one", "reasoning_profile":{"mode":"catalog_default"}}, "agent_id":"user", "context":{"reserve_tokens":2000,"keep_recent_tokens":6000},
+        "default_tools":["read","bash"],"environment":{"USER_ENTRY":"one","REPLACED":"old"},
+        "mcp_servers":{"service":{"command":"old-command","args":["old"]},"retained":{"command":"retained"}},
         "subagents":{"definitions":["role"]}
     }));
     f.project(
-        json!({"model":{"model":"host/two"},"context":{"reserveTokens":3000},"defaultTools":[],
-            "environment":{"REPLACED":"new"}, "mcpServers":{"service":{"command":"new-command"}},
+        json!({"model":{"model":"host/two"},"context":{"reserve_tokens":3000},"default_tools":[],
+            "environment":{"REPLACED":"new"}, "mcp_servers":{"service":{"command":"new-command"}},
             "subagents":{"definitions":["role"]}
         }),
     );
     let resolved = f.resolve();
+    assert_eq!(
+        resolved.settings_view().reasoning_origin,
+        crate::runtime_client::settings::SettingOrigin::User {
+            document: f
+                .host
+                .config_directory
+                .join("settings.toml")
+                .display()
+                .to_string(),
+        },
+    );
     assert_eq!(resolved.config.agent_id.as_str(), "user");
     assert_eq!(resolved.config.context.reserve_tokens, 3000);
     assert_eq!(resolved.config.context.keep_recent_tokens, 6000);
@@ -1883,11 +1899,11 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
         &f.host.config_directory.join("subagents/role.md")
     );
     assert!(matches!(
-        resolved.provenance["context.keepRecentTokens"],
+        resolved.provenance["context.keep_recent_tokens"],
         Origin::User { .. }
     ));
     assert!(matches!(
-        resolved.provenance["context.reserveTokens"],
+        resolved.provenance["context.reserve_tokens"],
         Origin::Project { .. }
     ));
     f.request.model = Some("host/one".into());
@@ -1896,9 +1912,12 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
     let cli = f.resolve();
     assert_eq!(cli.config.model.model.to_string(), "host/one");
     assert!(matches!(cli.provenance["model.model"], Origin::Cli { .. }));
-    assert!(matches!(cli.provenance["excludeTools"], Origin::Cli { .. }));
+    assert!(matches!(
+        cli.provenance["exclude_tools"],
+        Origin::Cli { .. }
+    ));
     assert_eq!(cli.tools, Some(vec!["read".into(), "bash".into()]));
-    f.project(json!({"environment":{},"mcpServers":{},"subagents":{"definitions":[]}}));
+    f.project(json!({"environment":{},"mcp_servers":{},"subagents":{"definitions":[]}}));
     let empty = f.resolve();
     assert!(empty.config.environment.is_empty());
     assert!(empty.config.mcp_servers.is_empty());
@@ -1917,15 +1936,16 @@ fn forbidden_authority_fails_through_discovery_and_relative_config_override() {
         "trusted",
         "trustStore",
         "stateDirectory",
-        "runtimeRoot",
+        "runtime_root",
         "workspace",
     ] {
         f.project(json!({field:"../../host-authority"}));
         for explicit in [false, true] {
-            f.request.config = explicit.then(|| "./rustx.jsonc".into());
+            f.request.config = explicit.then(|| "./rustx.toml".into());
             let error = resolve(&f.request, &f.host).unwrap_err();
             assert!(
-                error.contains(field) && error.contains("forbidden"),
+                error.contains(field)
+                    && (error.contains("forbidden") || error.contains("unknown field")),
                 "{error}"
             );
         }
@@ -1933,36 +1953,41 @@ fn forbidden_authority_fails_through_discovery_and_relative_config_override() {
 }
 
 #[test]
-fn optional_explicit_malformed_unknown_and_null_are_distinct() {
+fn optional_explicit_malformed_and_typed_rejections_are_distinct() {
     let mut f = Fixture::new();
     assert_eq!(f.resolve().config.agent_id.as_str(), "rustx");
-    f.request.config = Some("missing.jsonc".into());
+    f.request.config = Some("missing.toml".into());
     assert!(
         resolve(&f.request, &f.host)
             .unwrap_err()
             .contains("cannot read")
     );
     f.request.config = None;
-    for value in [
-        "{",
-        "{\"unknown\":1}",
-        "{\"skills\":null}",
-        "{\"context\":{\"typo\":1}}",
-        "{\"defaultTools\":false}",
+    std::fs::write(f.host.launch_directory.join("rustx.toml"), "[unterminated").unwrap();
+    let malformed = analyze(&f.request, &f.host).unwrap_err();
+    assert!(malformed.diagnostic.reason.contains("malformed TOML"));
+    for (text, expected) in [
+        ("unknown = 1", "unknown field `unknown`"),
+        ("[context]\ntypo = 1", "unknown field `typo`"),
+        ("default_tools = false", "expected a sequence"),
+        ("skills = 'null'", "expected a sequence"),
     ] {
-        std::fs::write(f.host.launch_directory.join("rustx.jsonc"), value).unwrap();
-        assert!(resolve(&f.request, &f.host).is_err(), "{value}");
+        text.parse::<toml_edit::DocumentMut>()
+            .expect("syntactically valid TOML");
+        std::fs::write(f.host.launch_directory.join("rustx.toml"), text).unwrap();
+        let error = resolve(&f.request, &f.host).unwrap_err();
+        assert!(error.contains(expected), "{text}: {error}");
     }
-    f.project(json!({"context":{"summaryOutputCap":null},"skills":[]}));
+    f.project(json!({"context":{"summary_output_cap":{"mode":"model_limit"}},"skills":[]}));
     assert_eq!(f.resolve().config.context.summary_output_cap, None);
-    std::fs::remove_file(f.host.config_directory.join("settings.jsonc")).unwrap();
+    std::fs::remove_file(f.host.config_directory.join("settings.toml")).unwrap();
     f.request.model = Some("host/one".into());
     assert!(
         resolve(&f.request, &f.host).is_ok(),
         "optional user settings"
     );
     std::fs::write(
-        f.host.launch_directory.join("rustx.jsonc"),
+        f.host.launch_directory.join("rustx.toml"),
         " ".repeat(1024 * 1024 + 1),
     )
     .unwrap();
@@ -2015,8 +2040,8 @@ fn relative_paths_keep_their_document_and_cli_bases() {
         };
         assert_eq!(source.selected, base.join(format!("{name}.md")));
     }
-    f.request.config = Some("replacement.jsonc".into());
-    std::fs::write(f.host.launch_directory.join("replacement.jsonc"), "{}").unwrap();
+    f.request.config = Some("replacement.toml".into());
+    std::fs::write(f.host.launch_directory.join("replacement.toml"), "").unwrap();
     assert_eq!(
         f.resolve().config.subagents.definitions.len(),
         1,
@@ -2034,7 +2059,7 @@ fn workspace_boundaries_subdirectories_non_git_nested_and_explicit() {
     f.host.launch_directory = sub.clone();
     assert_eq!(f.resolve().identity, original.identity);
     assert_eq!(f.resolve().runtime_root, original.runtime_root);
-    std::fs::write(sub.join("rustx.jsonc"), "{}").unwrap();
+    std::fs::write(sub.join("rustx.toml"), "").unwrap();
     let (_, nested) = resolve_locations(&f.request, &f.host).unwrap();
     assert_ne!(nested, original.identity);
     assert!(
@@ -2139,7 +2164,7 @@ fn canonical_symlink_and_real_git_worktree_identities_are_stable_and_separate() 
 async fn minimal_native_composition_and_frozen_launch_ignore_later_config_edits() {
     let f = Fixture::new();
     let launch = f.resolve();
-    f.user(json!({"model":{"model":"host/two"},"agentId":"edited"}));
+    f.user(json!({"model":{"model":"host/two"},"agent_id":"edited"}));
     f.project(json!({"model":{"model":"missing/model"}}));
     let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
         .await
@@ -2182,7 +2207,7 @@ async fn resolution_and_composition_failures_preserve_published_session_selectio
     );
     assert_eq!(before, std::fs::read(&catalog).unwrap());
     f.trust(TrustAction::Grant);
-    f.project(json!({"agentId":""}));
+    f.project(json!({"agent_id":""}));
     assert!(resolve(&f.request, &f.host).is_err());
     assert_eq!(before, std::fs::read(&catalog).unwrap());
     f.project(json!({"skills":["missing-skill"]}));
@@ -2208,14 +2233,14 @@ fn no_model_or_protocol_is_guessed_and_host_paths_are_validated() {
         "unqualified reference is ambiguous"
     );
     f.user(json!({"model":{"model":"host/one"}}));
-    let model_path = f.host.config_directory.join("models.jsonc");
+    let model_path = f.host.config_directory.join("models.toml");
     let mut catalog: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&model_path).unwrap()).unwrap();
+        crate::toml_authoring::parse(&std::fs::read(&model_path).unwrap()).unwrap();
     catalog["providers"]["host"]["models"][0]
         .as_object_mut()
         .unwrap()
         .remove("protocol");
-    std::fs::write(model_path, serde_json::to_vec(&catalog).unwrap()).unwrap();
+    std::fs::write(model_path, toml::to_string_pretty(&catalog).unwrap()).unwrap();
     assert!(
         resolve(&f.request, &f.host)
             .unwrap_err()
@@ -2235,25 +2260,25 @@ fn no_model_or_protocol_is_guessed_and_host_paths_are_validated() {
 #[test]
 fn host_state_and_catalog_overrides_keep_document_and_cli_origins() {
     let mut f = Fixture::new();
-    f.user(json!({"models":"models.jsonc","runtimeRoot":"private","model":{"model":"host/one"}}));
+    f.user(json!({"models":"models.toml","runtime_root":"private","model":{"model":"host/one"}}));
     let user = f.resolve();
     assert_eq!(user.runtime_root, f.host.config_directory.join("private"));
     assert_eq!(
         user.provenance["models"],
         Origin::User {
-            document: f.host.config_directory.join("settings.jsonc"),
+            document: f.host.config_directory.join("settings.toml"),
             base: f.host.config_directory.clone()
         }
     );
     assert!(matches!(
-        user.provenance["runtimeRoot"],
+        user.provenance["runtime_root"],
         Origin::User { .. }
     ));
     f.request.runtime_root = Some("../cli-state".into());
-    f.request.models = Some(f.host.config_directory.join("models.jsonc"));
+    f.request.models = Some(f.host.config_directory.join("models.toml"));
     let cli = f.resolve();
     assert_eq!(cli.runtime_root, f.root.path().join("cli-state"));
-    assert!(matches!(cli.provenance["runtimeRoot"], Origin::Cli { .. }));
+    assert!(matches!(cli.provenance["runtime_root"], Origin::Cli { .. }));
     f.request.runtime_root = Some(f.host.state_directory.clone());
     assert!(
         resolve(&f.request, &f.host)
@@ -2266,9 +2291,9 @@ fn host_state_and_catalog_overrides_keep_document_and_cli_origins() {
 fn inspection_reads_only_the_host_state_reference_without_activation_or_writes() {
     let f = Fixture::new();
     f.trust(TrustAction::Revoke);
-    f.user(json!({"runtimeRoot":"private","model":null,"context":false}));
+    f.user(json!({"runtime_root":"private","model":false,"context":false}));
     f.project(json!({"trust":true}));
-    std::fs::remove_file(f.host.config_directory.join("models.jsonc")).unwrap();
+    std::fs::remove_file(f.host.config_directory.join("models.toml")).unwrap();
     let locations = resolve_inspection_locations(&f.request, &f.host).unwrap();
     assert_eq!(
         locations.runtime_root,
@@ -2282,8 +2307,7 @@ fn inspection_reads_only_the_host_state_reference_without_activation_or_writes()
 #[test]
 fn dangling_optional_files_and_project_redirected_trust_are_errors() {
     let f = Fixture::new();
-    std::os::unix::fs::symlink("missing.jsonc", f.host.launch_directory.join("rustx.jsonc"))
-        .unwrap();
+    std::os::unix::fs::symlink("missing.toml", f.host.launch_directory.join("rustx.toml")).unwrap();
     assert!(
         resolve(&f.request, &f.host)
             .unwrap_err()
@@ -2374,8 +2398,9 @@ fn non_utf8_workspace_identity_is_not_lossy() {
 fn duplicate_role_definitions_and_invalid_lower_layer_cannot_be_hidden() {
     let f = Fixture::new();
     std::fs::write(
-        f.host.launch_directory.join("rustx.jsonc"),
-        r#"{"subagents":{"definitions":["role","role"]}}"#,
+        f.host.launch_directory.join("rustx.toml"),
+        r#"[subagents]
+definitions = ["role", "role"]"#,
     )
     .unwrap();
     assert!(
@@ -2384,7 +2409,7 @@ fn duplicate_role_definitions_and_invalid_lower_layer_cannot_be_hidden() {
             .contains("duplicate")
     );
     f.user(json!({"model":{"model":"host/one"},"context":{"unknown":true}}));
-    f.project(json!({"context":{"reserveTokens":7}}));
+    f.project(json!({"context":{"reserve_tokens":7}}));
     assert!(
         resolve(&f.request, &f.host)
             .unwrap_err()
@@ -2397,12 +2422,12 @@ fn duplicate_role_definitions_and_invalid_lower_layer_cannot_be_hidden() {
             .unwrap_err()
             .contains("duplicate")
     );
-    f.user(json!({"model":{"model":"host/one"},"schemaVersion":7}));
-    f.project(json!({"schemaVersion":8}));
+    f.user(json!({"model":{"model":"host/one"},"schema_version":7}));
+    f.project(json!({"schema_version":8}));
     assert!(
         resolve(&f.request, &f.host)
             .unwrap_err()
-            .contains("schemaVersion 7")
+            .contains("schema_version 7")
     );
     f.user(json!({"model":{"model":"host/one"}}));
     f.project(
@@ -2414,10 +2439,10 @@ fn duplicate_role_definitions_and_invalid_lower_layer_cannot_be_hidden() {
 #[test]
 fn project_trust_never_grants_tool_approval_authority() {
     let mut f = Fixture::new();
-    let user = json!({"model":{"model":"host/one"},"approvalMode":"full_access",
-        "nativeTools":{"bash":{"approval":"always"}},
-        "mcpServers":{"server":{"command":"fixture"}},
-        "mcpToolPolicies":{"server":{"approval":"always"}}});
+    let user = json!({"model":{"model":"host/one"},"approval_mode":"full_access",
+        "native_tools":{"bash":{"approval":"always"}},
+        "mcp_servers":{"server":{"command":"fixture"}},
+        "mcp_tool_policies":{"server":{"approval":"always"}}});
     f.user(user);
     let host = f.resolve();
     assert_eq!(
@@ -2431,20 +2456,20 @@ fn project_trust_never_grants_tool_approval_authority() {
         "always"
     );
     for document in [
-        json!({"approvalMode":"full_access"}),
-        json!({"nativeTools":{"bash":{"approval":"never"}}}),
-        json!({"mcpToolPolicies":{"server":{"approval":"never"}}}),
-        json!({"nativeTools":{}}),
-        json!({"nativeTools":{"bash":{"execution":"background_only"}}}),
+        json!({"approval_mode":"full_access"}),
+        json!({"native_tools":{"bash":{"approval":"never"}}}),
+        json!({"mcp_tool_policies":{"server":{"approval":"never"}}}),
+        json!({"native_tools":{}}),
+        json!({"native_tools":{"bash":{"execution":"background_only"}}}),
     ] {
         f.project(document);
         // Explicit CLI selection cannot mask a forbidden project declaration.
         f.request.model = Some("host/two".into());
         for explicit in [false, true] {
-            f.request.config = explicit.then(|| "rustx.jsonc".into());
+            f.request.config = explicit.then(|| "rustx.toml".into());
             let error = resolve(&f.request, &f.host).unwrap_err();
             assert!(
-                error.contains("forbidden") && error.contains("approval authority"),
+                error.contains("forbidden") && error.contains("host-owned authority"),
                 "{error}"
             );
         }
@@ -2471,8 +2496,8 @@ async fn project_resource_authority_rejects_every_declared_escape_but_preserves_
         role(json!(&resource)),
         json!({"skills":[&other]}),
         role(json!(&resource)),
-        json!({"mcpServers":{"x":{"command":&resource}}}),
-        json!({"mcpServers":{"x":{"command":"fixture","cwd":&other}}}),
+        json!({"mcp_servers":{"x":{"command":&resource}}}),
+        json!({"mcp_servers":{"x":{"command":"fixture","cwd":&other}}}),
     ] {
         f.project(document);
         let error = resolve(&f.request, &f.host).unwrap_err();
@@ -2480,11 +2505,11 @@ async fn project_resource_authority_rejects_every_declared_escape_but_preserves_
     }
     // An external --config is inert input, not a grant for its neighboring files.
     std::fs::write(
-        other.join("config.jsonc"),
-        role(json!("../B/resource")).to_string(),
+        other.join("config.toml"),
+        toml::to_string_pretty(&role(json!("../B/resource"))).unwrap(),
     )
     .unwrap();
-    f.request.config = Some(other.join("config.jsonc"));
+    f.request.config = Some(other.join("config.toml"));
     assert!(
         resolve(&f.request, &f.host)
             .unwrap_err()
@@ -2609,8 +2634,8 @@ fn project_directory_symlinks_cannot_authorize_builtin_or_declared_resources() {
     std::os::unix::fs::symlink(&other, f.host.launch_directory.join("link")).unwrap();
     for document in [
         json!({"skills":["link"]}),
-        json!({"mcpServers":{"x":{"command":"link/file"}}}),
-        json!({"mcpServers":{"x":{"command":"fixture","cwd":"link"}}}),
+        json!({"mcp_servers":{"x":{"command":"link/file"}}}),
+        json!({"mcp_servers":{"x":{"command":"fixture","cwd":"link"}}}),
     ] {
         f.project(document);
         assert!(
@@ -2695,7 +2720,7 @@ async fn frozen_mcp_binding_rechecks_project_authority_on_every_connect() {
     let f = Fixture::new();
     let program = f.host.launch_directory.join("server");
     std::fs::write(&program, "initial project resource").unwrap();
-    f.project(json!({"mcpServers":{"x":{"enabled":true,"command":"./server"}}}));
+    f.project(json!({"mcp_servers":{"x":{"enabled":true,"command":"./server"}}}));
     let launch = f.resolve();
     let bindings = super::composition::mcp_bindings_with_authority(
         launch.config(),
@@ -2739,10 +2764,90 @@ async fn frozen_mcp_binding_rechecks_project_authority_on_every_connect() {
         );
         assert!(!sentinel.exists());
     }
-    f.project(json!({"mcpServers":{"x":{"command":"./server","resourceWorkspace":other}}}));
+    f.project(json!({"mcp_servers":{"x":{"command":"./server","resourceWorkspace":other}}}));
     assert!(
         resolve(&f.request, &f.host)
             .unwrap_err()
             .contains("unknown field")
     );
+}
+
+#[test]
+fn cfg270_only_toml_names_are_discovered_and_old_documents_are_inert() {
+    let f = Fixture::new();
+    // Even malformed/host-authority-bearing obsolete files are inert.
+    for path in [
+        f.host.config_directory.join("settings.jsonc"),
+        f.host.config_directory.join("models.jsonc"),
+        f.host.launch_directory.join("rustx.jsonc"),
+    ] {
+        std::fs::write(path, b"{ obsolete malformed configuration").unwrap();
+    }
+    let launch = f.resolve();
+    assert_eq!(launch.config.model.model.to_string(), "host/one");
+    std::fs::remove_file(f.host.config_directory.join("settings.toml")).unwrap();
+    let missing_selection = analyze(&f.request, &f.host).unwrap_err();
+    assert!(missing_selection.incomplete);
+    assert!(
+        missing_selection
+            .diagnostic
+            .correction
+            .contains("settings.toml")
+    );
+    std::fs::remove_file(f.host.config_directory.join("models.toml")).unwrap();
+    let missing_catalog = analyze(&f.request, &f.host).unwrap_err();
+    assert!(missing_catalog.incomplete);
+    assert!(
+        missing_catalog
+            .diagnostic
+            .file
+            .unwrap()
+            .ends_with("models.toml")
+    );
+    let nested = f.host.launch_directory.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    std::fs::write(nested.join("rustx.jsonc"), b"{}").unwrap();
+    // An obsolete ancestor marker cannot claim a workspace either.
+    let child = nested.join("child");
+    std::fs::create_dir(&child).unwrap();
+    let mut host = f.host.clone();
+    host.launch_directory = child.clone();
+    assert_eq!(
+        resolve_locations(&LaunchRequest::default(), &host)
+            .unwrap()
+            .0
+            .workspace,
+        child
+    );
+}
+
+#[test]
+fn cfg270_every_checked_in_toml_example_uses_its_production_authoring_owner() {
+    fn visit(directory: &Path) {
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if entry.file_type().unwrap().is_dir() {
+                visit(&path);
+            } else if path.extension().is_some_and(|ext| ext == "toml") {
+                let bytes = std::fs::read(&path).unwrap();
+                match path.file_name().unwrap().to_str().unwrap() {
+                    "models.toml" => {
+                        ModelCatalog::from_toml_slice(&bytes)
+                            .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+                    }
+                    "settings.toml" | "rustx.toml" => {
+                        super::launch::parse_layer(
+                            &path,
+                            &bytes,
+                            path.file_name().unwrap() == "rustx.toml",
+                        )
+                        .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+                    }
+                    other => panic!("unowned TOML example {other}"),
+                }
+            }
+        }
+    }
+    visit(&Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/local-runtime"));
 }

@@ -22,54 +22,59 @@ use rustx::runtime_client::types::{
     RequestId, RuntimeClientError, RuntimeClientRequest, RuntimeClientResult,
 };
 
-const MODELS: &str = r#"{
-  "providers": {
-    "local": {
-      "baseUrl": "http://127.0.0.1:9/v1",
-      "apiKey": "$RUSTX_ISSUE88_KEY",
-      "models": [{
-        "id": "test-model",
-        "protocol": "openai_chat_completions",
-        "contextWindow": 128000,
-        "maxOutputTokens": 512,
-        "capabilities": {
-          "inputModalities": ["text"],
-          "outputModalities": ["text"],
-          "toolCalls": true,
-          "reasoning": false
-        },
-        "compat": {"chatReasoningReplay": "omit"}
-      }, {
-        "id": "second-model",
-        "protocol": "openai_chat_completions",
-        "contextWindow": 32000,
-        "maxOutputTokens": 256,
-        "capabilities": {
-          "inputModalities": ["text"],
-          "outputModalities": ["text"],
-          "toolCalls": true,
-          "reasoning": false
-        },
-        "compat": {"chatReasoningReplay": "omit"}
-      }]
-    }
-  }
-}"#;
+const MODELS: &str = r#"[providers.local]
+base_url = "http://127.0.0.1:9/v1"
+api_key = "$RUSTX_ISSUE88_KEY"
 
-const BOOTSTRAP: &str = r#"{
-  "agentId": "agent-issue88",
-  "model": {"model": "local/test-model"},
-  "context": {"reserveTokens": 1024, "keepRecentTokens": 4096}
-}"#;
+[[providers.local.models]]
+id = "test-model"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 512
+
+[providers.local.models.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[providers.local.models.compat]
+chat_reasoning_replay = "omit"
+
+[[providers.local.models]]
+id = "second-model"
+protocol = "openai_chat_completions"
+context_window = 32000
+max_output_tokens = 256
+
+[providers.local.models.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[providers.local.models.compat]
+chat_reasoning_replay = "omit"
+"#;
+
+const BOOTSTRAP: &str = r#"agent_id = "agent-issue88"
+
+[model]
+model = "local/test-model"
+
+[context]
+reserve_tokens = 1024
+keep_recent_tokens = 4096
+"#;
 
 fn paths(root: &std::path::Path) -> LaunchFixture {
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
-    std::fs::write(root.join("models.jsonc"), MODELS).expect("models");
-    std::fs::write(root.join("rustx.jsonc"), BOOTSTRAP).expect("rustx.jsonc");
+    std::fs::write(root.join("models.toml"), MODELS).expect("models");
+    std::fs::write(root.join("rustx.toml"), BOOTSTRAP).expect("rustx.toml");
     LaunchFixture {
-        models: root.join("models.jsonc"),
-        config: root.join("rustx.jsonc"),
+        models: root.join("models.toml"),
+        config: root.join("rustx.toml"),
         skill_paths: Vec::new(),
         no_skills: false,
         no_builtin_tools: false,
@@ -1094,7 +1099,7 @@ fn use_session(
 ///
 /// The failure is the realistic one: a persisted Session records a
 /// Session-local model, and that model is later removed from
-/// `models.jsonc`. Selecting that Session is metadata-valid — the catalog
+/// `models.toml`. Selecting that Session is metadata-valid — the catalog
 /// knows the Session and the node — and only composition discovers the
 /// model is gone. Publishing the selection before composing would leave a
 /// process that never started having moved the active selection, so the
@@ -1130,7 +1135,7 @@ async fn a_failed_launch_leaves_the_catalog_and_the_active_selection_untouched()
     let active_before = active_session_id(&runtime_root);
     assert_ne!(active_before, doomed_session);
 
-    // The history Session records a model that `models.jsonc` no longer
+    // The history Session records a model that `models.toml` no longer
     // offers. Nothing about the catalog is invalid; only composition can
     // discover this.
     let mut document: serde_json::Value =

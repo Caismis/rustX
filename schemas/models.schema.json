@@ -1,5 +1,37 @@
 {
   "$defs": {
+    "Capabilities": {
+      "additionalProperties": false,
+      "properties": {
+        "input_modalities": {
+          "items": {
+            "$ref": "#/$defs/Modality"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "output_modalities": {
+          "items": {
+            "$ref": "#/$defs/Modality"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "reasoning": {
+          "type": "boolean"
+        },
+        "tool_calls": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "input_modalities",
+        "output_modalities",
+        "tool_calls",
+        "reasoning"
+      ],
+      "type": "object"
+    },
     "ChatMaxTokensField": {
       "description": "Which max-token field spelling a Chat Completions service accepts.\n\nThis is a real structural translation difference between\nOpenAI-compatible services, not a provider wire value: the two spellings\nare mutually exclusive and both are runtime-protected.",
       "oneOf": [
@@ -65,6 +97,47 @@
         }
       ]
     },
+    "Compat": {
+      "additionalProperties": false,
+      "properties": {
+        "chat_max_tokens_field": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatMaxTokensField"
+            }
+          ]
+        },
+        "chat_reasoning_replay": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatReasoningReplay"
+            }
+          ]
+        },
+        "chat_stream_usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatStreamUsage"
+            }
+          ]
+        },
+        "chat_tool_protocol": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatToolProtocol"
+            }
+          ]
+        },
+        "responses_storage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResponsesStorageMode"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "CredentialSource": {
       "description": "The declared source of one provider credential.\n\nThe syntax is exactly two forms and is never extended implicitly: a\nliteral string, or `$ENV_VAR`.",
       "type": "string"
@@ -89,162 +162,49 @@
         }
       ]
     },
-    "ModelCapabilities": {
+    "Model": {
       "additionalProperties": false,
-      "description": "The semantic capability set of a model, an adapter/protocol, or the\nruntime.\n\nModalities are structured sets rather than one boolean per modality, so\nadding a modality never reshapes the contract. The client-visible\ncapability is always an [`intersection`](ModelCapabilities::intersect) of\nthe model claim, the adapter/protocol capability, and the current runtime\ncapability — a raw catalog claim is never advertised.",
-      "properties": {
-        "inputModalities": {
-          "description": "The accepted input modalities.",
-          "items": {
-            "$ref": "#/$defs/Modality"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "outputModalities": {
-          "description": "The produced output modalities.",
-          "items": {
-            "$ref": "#/$defs/Modality"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "reasoning": {
-          "description": "Whether the model semantically supports reasoning.",
-          "type": "boolean"
-        },
-        "toolCalls": {
-          "description": "Whether the model can be given tool definitions and can call them.",
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "inputModalities",
-        "outputModalities",
-        "toolCalls",
-        "reasoning"
-      ],
-      "type": "object"
-    },
-    "ModelCompat": {
-      "additionalProperties": false,
-      "description": "The bounded structural protocol-translation metadata of one model.\n\nEvery field here corresponds to a translation branch the current\nadapters actually take. There is intentionally no strategy trait, no\nplugin registry, no translator factory, and no JSON-driven\ntransformation, and nothing here is ever inferred from a provider name or\na base URL hostname.",
-      "properties": {
-        "chatMaxTokensField": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ChatMaxTokensField"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "chatReasoningReplay": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ChatReasoningReplay"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "chatStreamUsage": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ChatStreamUsage"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "chatToolProtocol": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ChatToolProtocol"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "responsesStorage": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ResponsesStorageMode"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        }
-      },
-      "type": "object"
-    },
-    "ModelDocument": {
-      "additionalProperties": false,
-      "description": "One model entry of the catalog document.",
       "properties": {
         "capabilities": {
-          "$ref": "#/$defs/ModelCapabilities",
-          "description": "The claimed capabilities."
+          "$ref": "#/$defs/Capabilities"
         },
         "compat": {
-          "$ref": "#/$defs/ModelCompat",
-          "default": {},
-          "description": "The bounded structural translation metadata."
+          "$ref": "#/$defs/Compat",
+          "default": {}
         },
-        "contextWindow": {
-          "description": "The model context window in tokens.",
+        "context_window": {
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
         },
         "id": {
-          "description": "The model identity within its provider.",
           "type": "string"
         },
-        "maxOutputTokens": {
-          "description": "The configured maximum output tokens.",
+        "max_output_tokens": {
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
         },
         "protocol": {
-          "$ref": "#/$defs/ModelProtocol",
-          "description": "The protocol an adapter must speak."
+          "$ref": "#/$defs/ModelProtocol"
         },
         "reasoning": {
           "anyOf": [
             {
-              "$ref": "#/$defs/ReasoningConfig"
-            },
-            {
-              "type": "null"
+              "$ref": "#/$defs/Reasoning"
             }
-          ],
-          "default": null,
-          "description": "The declared reasoning profiles."
+          ]
         },
-        "requestParams": {
-          "additionalProperties": true,
-          "default": {},
-          "description": "The model-level default provider request parameters.",
-          "type": "object"
+        "request_params_json": {
+          "$ref": "#/$defs/RequestParamsJson",
+          "default": "{}"
         }
       },
       "required": [
         "id",
         "protocol",
-        "contextWindow",
-        "maxOutputTokens",
+        "context_window",
+        "max_output_tokens",
         "capabilities"
       ],
       "type": "object"
@@ -269,68 +229,15 @@
         }
       ]
     },
-    "ProviderDocument": {
+    "Profile": {
       "additionalProperties": false,
-      "description": "One provider entry of the catalog document.",
-      "properties": {
-        "apiKey": {
-          "$ref": "#/$defs/CredentialSource",
-          "description": "The mandatory credential source: a literal or `$ENV_VAR`."
-        },
-        "baseUrl": {
-          "description": "The mandatory explicit provider endpoint.",
-          "type": "string"
-        },
-        "models": {
-          "description": "The provider's models.",
-          "items": {
-            "$ref": "#/$defs/ModelDocument"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "baseUrl",
-        "apiKey",
-        "models"
-      ],
-      "type": "object"
-    },
-    "ReasoningConfig": {
-      "additionalProperties": false,
-      "description": "The reasoning configuration of one model.",
-      "properties": {
-        "defaultProfile": {
-          "$ref": "#/$defs/ReasoningProfileId",
-          "description": "The profile selected when the session does not choose one."
-        },
-        "profiles": {
-          "additionalProperties": {
-            "$ref": "#/$defs/ReasoningProfile"
-          },
-          "description": "The declared profiles.",
-          "type": "object"
-        }
-      },
-      "required": [
-        "defaultProfile",
-        "profiles"
-      ],
-      "type": "object"
-    },
-    "ReasoningProfile": {
-      "additionalProperties": false,
-      "description": "One declared reasoning profile of a model.",
       "properties": {
         "enabled": {
-          "description": "Whether this profile semantically enables reasoning.",
           "type": "boolean"
         },
-        "requestParams": {
-          "additionalProperties": true,
-          "default": {},
-          "description": "The exact provider-owned request parameters of this profile.\n\nThe profile owns every top-level key it declares: a session override\nmay not also declare one of them.",
-          "type": "object"
+        "request_params_json": {
+          "$ref": "#/$defs/RequestParamsJson",
+          "default": "{}"
         }
       },
       "required": [
@@ -338,8 +245,55 @@
       ],
       "type": "object"
     },
+    "Provider": {
+      "additionalProperties": false,
+      "properties": {
+        "api_key": {
+          "$ref": "#/$defs/CredentialSource",
+          "description": "A literal credential or an explicit $`ENV_VAR` reference. Never inferred."
+        },
+        "base_url": {
+          "type": "string"
+        },
+        "models": {
+          "items": {
+            "$ref": "#/$defs/Model"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "base_url",
+        "api_key",
+        "models"
+      ],
+      "type": "object"
+    },
+    "Reasoning": {
+      "additionalProperties": false,
+      "properties": {
+        "default_profile": {
+          "$ref": "#/$defs/ReasoningProfileId"
+        },
+        "profiles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Profile"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "default_profile",
+        "profiles"
+      ],
+      "type": "object"
+    },
     "ReasoningProfileId": {
-      "description": "The identity of one reasoning profile declared by a model.\n\nThe runtime assigns no meaning to the name: `off`, `on`, `low`,\n`thinking-32k`, and `deep` are all just names whose wire behaviour is\nexactly the profile's configured `requestParams`.",
+      "description": "The identity of one reasoning profile declared by a model.\n\nThe runtime assigns no meaning to the name: `off`, `on`, `low`,\n`thinking-32k`, and `deep` are all just names whose wire behaviour is\nexactly the profile's configured `request_params_json`.",
+      "type": "string"
+    },
+    "RequestParamsJson": {
+      "description": "JSON text with an object at its top level. Arbitrary nested provider-native JSON is retained, including null. Protected wire keys are rejected during model resolution.",
       "type": "string"
     },
     "ResponsesStorageMode": {
@@ -360,18 +314,15 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "The `models.jsonc` document shape.\n\nUnknown fields are rejected everywhere: a typo must fail loudly rather\nthan silently changing runtime semantics.",
   "properties": {
     "providers": {
       "additionalProperties": {
-        "$ref": "#/$defs/ProviderDocument"
+        "$ref": "#/$defs/Provider"
       },
-      "description": "The providers, keyed by provider identity. Duplicate keys are\nrejected rather than silently resolved by last-write-wins.",
       "type": "object"
     },
-    "schemaVersion": {
+    "schema_version": {
       "default": 1,
-      "description": "The catalog schema version.",
       "format": "uint32",
       "minimum": 0,
       "type": "integer"
@@ -380,6 +331,6 @@
   "required": [
     "providers"
   ],
-  "title": "ModelCatalogDocument",
+  "title": "Catalog",
   "type": "object"
 }

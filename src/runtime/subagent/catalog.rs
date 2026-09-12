@@ -189,7 +189,7 @@ pub struct SubagentProjectInstructionPolicy {
 ///
 /// The digest covers exactly the normalized semantics that change child
 /// behavior. It is computed over a rustX-owned versioned canonical framing —
-/// never over raw JSONC bytes — so comments, whitespace, and JSON object
+/// never over raw TOML bytes — so comments, whitespace, and JSON object
 /// insertion order cannot change it, while every semantic change does.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -218,7 +218,7 @@ impl core::fmt::Display for SubagentDefinitionDigest {
 
 /// A validated definition-level whole-lifecycle execution deadline.
 ///
-/// Configuration uses milliseconds at the JSONC boundary, but runtime code
+/// Configuration uses milliseconds at the TOML boundary, but runtime code
 /// receives this typed value only after positivity and the rustX-owned maximum
 /// have been checked. Absolute firing time is derived from the runtime's
 /// monotonic clock only after ownership commits.

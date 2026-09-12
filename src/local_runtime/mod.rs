@@ -28,6 +28,7 @@
 //!
 //! `println!` is never used for diagnostics anywhere in the process.
 
+mod authoring;
 pub mod cli;
 pub mod composition;
 pub mod config;

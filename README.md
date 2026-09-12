@@ -42,14 +42,15 @@ Use [`rustx init`](docs/configuration-diagnostics.md#minimal-initialization) wit
 explicit provider/model declarations, or author your model once in the host configuration directory:
 `$XDG_CONFIG_HOME/rustx`, or `$HOME/.config/rustx` when XDG_CONFIG_HOME is
 unset (Linux and macOS). Put explicit provider/model declarations in
-`models.jsonc` and select one in `settings.jsonc`:
+`models.toml` and select one in `settings.toml`:
 
-```jsonc
-{"model": {"model": "example/demo-model"}}
+```toml
+[model]
+model = "example/demo-model"
 ```
 
 Use your declared provider/model identity. The
-[minimal catalog example](examples/local-runtime/minimal/models.jsonc) shows the required endpoint,
+[minimal catalog example](examples/local-runtime/minimal/models.toml) shows the required endpoint,
 credential source, protocol, limits and capabilities; its endpoint is a placeholder.
 The [launch contract](docs/launch-configuration.md) documents all locations,
 field ownership, precedence, path semantics, defaults and trust.
@@ -67,7 +68,7 @@ pnpm --dir tui start --binary "$PWD/target/debug/rustx" --workspace /path/to/pro
 ```
 
 When launched from the project, `--workspace` is unnecessary. A project
-`rustx.jsonc` is optional, and runtime state defaults to the user state directory.
+`rustx.toml` is optional, and runtime state defaults to the user state directory.
 Native-only startup needs neither Python nor MCP. The
 [advanced resource example](examples/local-runtime/README.md) also demonstrates
 optional managed Python tools and fixed Workflows.
@@ -97,7 +98,7 @@ native Read, Write, Edit, Grep, or Glob.
 
 Project-authored Agent resources use the workspace-owned `.agents/` namespace:
 Skills and Python tools retain their discovery semantics, while Subagents and
-native Workflows are admitted explicitly by `rustx.jsonc`. The configured
+native Workflows are admitted explicitly by `rustx.toml`. The configured
 runtime root is runtime-owned/generated state outside the workspace and
 is not a project-resource fallback. `.agents/skills/` is the canonical project
 layout; automatic Skill roots are the host configuration directory's `skills/`

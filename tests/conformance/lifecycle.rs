@@ -38,48 +38,53 @@ const CHAT_MODEL: &str = "chat-model";
 /// A catalog whose credential comes from the environment. The base URL is
 /// unreachable: the composition tests never invoke a provider, so startup
 /// succeeds exactly as in production.
-const MODELS_JSON: &str = r#"{
-  "providers": {
-    "local": {
-      "baseUrl": "https://local.fixture.invalid/v1",
-      "apiKey": "$RUSTX_CONFORMANCE_KEY",
-      "models": [
-        {
-          "id": "composed-model",
-          "protocol": "openai_chat_completions",
-          "contextWindow": 128000,
-          "maxOutputTokens": 4096,
-          "capabilities": {
-            "inputModalities": ["text"],
-            "outputModalities": ["text"],
-            "toolCalls": true,
-            "reasoning": false
-          },
-          "compat": {"chatReasoningReplay": "omit"},
-          "requestParams": {"temperature": 0.3}
-        }
-      ]
-    }
-  }
-}"#;
+const MODELS_TOML: &str = r#"[providers.local]
+base_url = "https://local.fixture.invalid/v1"
+api_key = "$RUSTX_CONFORMANCE_KEY"
 
-const RUNTIME_CONFIG_JSON: &str = r#"{
-  "agentId": "agent-lifecycle",
-  "model": {"model": "local/composed-model"},
-  "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
-  "nativeTools": {"bash": {"execution": "model_selectable", "concurrency": "sequential"}},
-  "environment": {"RUSTX_FIXTURE": "1"}
-}"#;
+[[providers.local.models]]
+id = "composed-model"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 4096
+request_params_json = "{\"temperature\": 0.3}"
+
+[providers.local.models.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[providers.local.models.compat]
+chat_reasoning_replay = "omit"
+"#;
+
+const RUNTIME_CONFIG_TOML: &str = r#"agent_id = "agent-lifecycle"
+
+[model]
+model = "local/composed-model"
+
+[context]
+reserve_tokens = 1024
+keep_recent_tokens = 8192
+
+[native_tools.bash]
+execution = "model_selectable"
+concurrency = "sequential"
+
+[environment]
+RUSTX_FIXTURE = "1"
+"#;
 
 /// Writes the startup files into a temporary root and returns the explicit
 /// paths.
 fn startup(root: &std::path::Path, models: &str, config: &str) -> LaunchFixture {
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
-    let models_path = root.join("models.jsonc");
-    let config_path = root.join("rustx.jsonc");
-    std::fs::write(&models_path, models).expect("models.jsonc");
-    crate::launch_fixture::write_documents(&config_path, config, &["nativeTools"]);
+    let models_path = root.join("models.toml");
+    let config_path = root.join("rustx.toml");
+    std::fs::write(&models_path, models).expect("models.toml");
+    crate::launch_fixture::write_documents(&config_path, config, &["native_tools"]);
     LaunchFixture {
         models: models_path,
         config: config_path,
@@ -160,7 +165,7 @@ fn semantic_projection(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn interactive_and_headless_share_one_semantic_composition() {
     let root = tempfile::tempdir().expect("temp root");
-    let paths = startup(root.path(), MODELS_JSON, RUNTIME_CONFIG_JSON);
+    let paths = startup(root.path(), MODELS_TOML, RUNTIME_CONFIG_TOML);
     let dependencies = dependencies();
 
     let interactive_paths = paths.resolve();
@@ -280,39 +285,39 @@ async fn interactive_and_headless_share_one_semantic_composition() {
 /// conformance shapes.
 fn emulator_models_json(emulator: &ProviderEmulator) -> String {
     let window: u64 = 128_000;
-    serde_json::json!({
+    toml::to_string_pretty(&serde_json::json!({
         "providers": {
             "emulator": {
-                "baseUrl": emulator.openai_base_url(),
-                "apiKey": format!("${CREDENTIAL_VARIABLE}"),
+                "base_url": emulator.openai_base_url(),
+                "api_key": format!("${CREDENTIAL_VARIABLE}"),
                 "models": [
                     {
                         "id": CHAT_MODEL,
                         "protocol": "openai_chat_completions",
-                        "contextWindow": window,
-                        "maxOutputTokens": 1024,
+                        "context_window": window,
+                        "max_output_tokens": 1024,
                         "capabilities": {
-                            "inputModalities": ["text"],
-                            "outputModalities": ["text"],
-                            "toolCalls": true,
+                            "input_modalities": ["text"],
+                            "output_modalities": ["text"],
+                            "tool_calls": true,
                             "reasoning": true
                         },
-                        "compat": {"chatReasoningReplay": "omit"},
+                        "compat": {"chat_reasoning_replay": "omit"},
                     },
                 ],
             },
         },
-    })
-    .to_string()
+    }))
+    .unwrap()
 }
 
 fn emulator_session_json() -> String {
-    serde_json::json!({
-        "agentId": "agent-headless",
+    toml::to_string_pretty(&serde_json::json!({
+        "agent_id": "agent-headless",
         "model": {"model": format!("emulator/{CHAT_MODEL}")},
-        "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
-    })
-    .to_string()
+        "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},
+    }))
+    .unwrap()
 }
 
 /// Test G — the production headless turn: the real headless composition
