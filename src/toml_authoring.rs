@@ -105,9 +105,9 @@ impl<'de> serde::Deserialize<'de> for RequestParamsToml {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = toml::Value::deserialize(deserializer)?;
         if !value.is_table() {
-            return Err(serde::de::Error::custom(
-                "request_params must be a TOML table",
-            ));
+            return Err(serde::de::Error::custom(format!(
+                "{PARAM_ERROR}: request_params must be a TOML table"
+            )));
         }
         match normalize(value, "").map_err(serde::de::Error::custom)? {
             serde_json::Value::Object(map) => Ok(Self(map)),
@@ -318,10 +318,18 @@ allow_fallbacks = true
     fn obsolete_field_and_non_object_roots_reject() {
         let error = parse::<Document>(b"[model]\nrequest_params_json = '{}'").unwrap_err();
         assert!(error.contains("unknown field `request_params_json`"));
-        for value in ["[]", "42", "true", "'SECRET_PROVIDER_VALUE'"] {
+        for value in [
+            "[]",
+            "42",
+            "true",
+            "'SECRET_PROVIDER_VALUE'",
+            "1979-05-27",
+            "nan",
+        ] {
             let error = parse::<Document>(format!("[model]\nrequest_params = {value}").as_bytes())
                 .unwrap_err();
             assert!(error.contains("request_params must be a TOML table"));
+            assert!(error.contains("model.request_params:"), "{error}");
             assert!(!error.contains("SECRET_PROVIDER_VALUE"));
         }
     }
