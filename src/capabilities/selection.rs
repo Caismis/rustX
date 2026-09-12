@@ -127,28 +127,23 @@ impl ToolSelectionDocument {
         fn names(names: &[String]) -> Result<(), String> {
             let mut seen = BTreeSet::new();
             for name in names {
-                if name.is_empty()
-                    || name.trim() != name
-                    || name.chars().any(|c| {
-                        c.is_whitespace()
-                            || c.is_control()
-                            || matches!(c, '*' | '?' | '/' | '\\' | '[' | ']')
-                    })
-                {
+                if name.is_empty() {
                     return Err(format!("malformed exact Tool name {name:?}"));
                 }
                 if !seen.insert(name) {
                     return Err(format!("duplicate exact Tool name {name:?}"));
                 }
-                if let Some(extension) = super::extension_provided_tool(name) {
-                    return Err(format!(
-                        "{name} is provided by the {extension:?} Agent Extension, not by ordinary Tool selection; compose it with extensions.{extension}.enabled instead"
-                    ));
-                }
             }
             Ok(())
         }
         names(&self.builtin)?;
+        for name in &self.builtin {
+            if let Some(extension) = super::extension_provided_tool(name) {
+                return Err(format!(
+                    "{name} is provided by the {extension:?} Agent Extension, not by ordinary Tool selection; compose it with extensions.{extension}.enabled instead"
+                ));
+            }
+        }
         for selection in self.sources.values() {
             if let SourceToolSelection::Exact(exact) = selection {
                 names(exact)?;
@@ -258,10 +253,7 @@ pub fn resolve_source<'a>(
     }
     let mut published: BTreeMap<_, _> = definitions
         .into_iter()
-        .filter(|definition| {
-            definition.origin.source().as_ref() == Some(source)
-                && super::extension_provided_tool(&definition.name).is_none()
-        })
+        .filter(|definition| definition.origin.source().as_ref() == Some(source))
         .map(|definition| (definition.name.clone(), definition))
         .collect();
     match selection {
@@ -660,9 +652,7 @@ github = "all"
         for bad in [
             "sources = {github = ['a','a']}",
             "sources = {github = ['']}",
-            "sources = {github = ['a*']}",
             "builtin = ['todo']",
-            "sources = {github = ['todo']}",
             "builtin = ['read','read']",
         ] {
             let parsed: ToolSelectionDocument = toml::from_str(bad).unwrap();
@@ -718,5 +708,133 @@ github = "all"
                 }
             );
         }
+    }
+    #[test]
+    fn source_names_matching_extensions_are_selected_by_provenance() {
+        for source in [
+            ToolSourceId::Mcp(McpServerId::new("github")),
+            ToolSourceId::ManagedPython("analysis".into()),
+        ] {
+            for name in
+                std::iter::once("todo").chain(crate::tools::native::GOAL_TOOL_NAMES.iter().copied())
+            {
+                let tool = source_definition(&source, name);
+                let registry = ToolRegistry::from_registrations([ToolRegistration::plain(
+                    tool.clone(),
+                    Arc::new(Unused),
+                )])
+                .unwrap();
+                assert_eq!(
+                    crate::extensions::ExtensionToolPlaneShape::of_published_registry(&registry),
+                    crate::extensions::NativeAgentExtensions::none().expected_tool_plane()
+                );
+                let availability = [(source.clone(), CapabilitySourceState::Ready)].into();
+                for mode in [
+                    SourceToolSelection::All,
+                    SourceToolSelection::Exact(vec![name.into()]),
+                ] {
+                    let document = ToolSelectionDocument {
+                        builtin: vec![],
+                        sources: [(source.clone(), mode.clone())].into(),
+                    };
+                    let authored = toml::to_string(&document).unwrap();
+                    let parsed: ToolSelectionDocument = toml::from_str(&authored).unwrap();
+                    parsed.validate_spelling().unwrap();
+                    let SourceToolResolution::Ready {
+                        selected,
+                        missing_exact,
+                    } = resolve_source(&source, &mode, [&tool], &availability)
+                    else {
+                        panic!("ready source")
+                    };
+                    assert_eq!(selected, vec![&tool]);
+                    assert!(missing_exact.is_empty());
+                    assert_eq!(selected[0].origin.source(), Some(source.clone()));
+                }
+            }
+            let registration =
+                ToolRegistration::plain(source_definition(&source, "todo"), Arc::new(Unused));
+            let policy = super::super::ToolActivationPolicy {
+                sources: [(source, SourceToolSelection::All)].into(),
+                ..Default::default()
+            };
+            let (_, selected) = super::super::tools::select_tools(
+                std::slice::from_ref(&registration),
+                &[],
+                &policy,
+            )
+            .unwrap();
+            assert_eq!(selected.definitions().len(), 1);
+            let extension = crate::tools::native::todo_tool_registration();
+            let error = super::super::tools::select_tools(&[registration], &[extension], &policy)
+                .unwrap_err();
+            assert!(
+                error.contains("active Tool selection is invalid"),
+                "{error}"
+            );
+            assert!(error.contains("todo"), "{error}");
+        }
+        assert!(
+            ToolSelectionDocument {
+                builtin: vec!["todo".into()],
+                sources: BTreeMap::new()
+            }
+            .validate_spelling()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn exact_and_all_share_the_canonical_materialized_name_universe() {
+        for name in [
+            "todo",
+            "a b",
+            " leading ",
+            "a*?/[b]\\c",
+            "工具",
+            "all",
+            "\t",
+        ] {
+            let wire: rmcp::model::Tool = serde_json::from_value(
+                serde_json::json!({"name":name,"inputSchema":{"type":"object"}}),
+            )
+            .unwrap();
+            let canonical = crate::tools::mcp::CanonicalMcpTool::try_from(wire).unwrap();
+            for source in [
+                ToolSourceId::Mcp(McpServerId::new("github")),
+                ToolSourceId::ManagedPython("analysis".into()),
+            ] {
+                let tool = source_definition(&source, &canonical.name);
+                ToolRegistry::from_registrations([ToolRegistration::plain(
+                    tool.clone(),
+                    Arc::new(Unused),
+                )])
+                .unwrap();
+                let exact = SourceToolSelection::Exact(vec![canonical.name.clone()]);
+                let document = ToolSelectionDocument {
+                    builtin: vec![],
+                    sources: [(source.clone(), exact.clone())].into(),
+                };
+                let parsed: ToolSelectionDocument =
+                    toml::from_str(&toml::to_string(&document).unwrap()).unwrap();
+                parsed.validate_spelling().unwrap();
+                let availability = [(source.clone(), CapabilitySourceState::Ready)].into();
+                for mode in [SourceToolSelection::All, exact] {
+                    let SourceToolResolution::Ready {
+                        selected,
+                        missing_exact,
+                    } = resolve_source(&source, &mode, [&tool], &availability)
+                    else {
+                        panic!("ready")
+                    };
+                    assert_eq!(selected, vec![&tool]);
+                    assert!(missing_exact.is_empty());
+                }
+            }
+        }
+        let empty: rmcp::model::Tool =
+            serde_json::from_value(serde_json::json!({"name":"","inputSchema":{"type":"object"}}))
+                .unwrap();
+        assert!(crate::tools::mcp::CanonicalMcpTool::try_from(empty).is_err());
     }
 }

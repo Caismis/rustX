@@ -28,8 +28,23 @@ exact source in the admitted resource generation. `Exact` is fine-grained Tool
 trust: only the source-qualified names in the array. Arrays reject malformed and
 duplicate names. There are no wildcard, exclusion, inheritance, or alternate
 Python selectors. Native Tools remain an explicit list. Extension-provided Tools
-belong solely to native Agent Extension composition and cannot be selected
-through either `builtin` or `sources`.
+belong solely to native Agent Extension composition. Extension ownership is
+provenance, not a globally reserved Tool-name namespace. `builtin = ["todo"]`
+cannot select the Todo extension, but a source-owned Tool named `todo` is an
+ordinary source Tool: both All and Exact can select it. If an enabled extension
+and a selected source Tool have the same model-facing name, final ToolRegistry
+composition rejects that collision explicitly; selection neither hides nor
+renames either Tool.
+
+All and Exact address the same canonical Tool identity universe. Configured MCP
+source identities are non-empty strings, preserved exactly, except that the
+`python:` prefix belongs exclusively to Managed Python. Its package suffix is
+validated by the existing Python package identity owner: lowercase ASCII
+letters and digits separated by single hyphens, without leading/trailing hyphens. Canonical source Tool
+names are non-empty strings, also preserved exactly. Exact arrays reject empty
+names and duplicates; spaces, Unicode and punctuation are literal characters,
+not wildcard or pattern syntax. TOML quoting/escaping represents these strings;
+there is no separate selector-only identity language.
 
 A Workflow Tool node selects one exact leaf with `origin: source`, `source_id`,
 and `name`; its Agent override uses the shared `tools.sources` map. A leaf cannot

@@ -807,7 +807,13 @@ fn compute_digest(
     }
     count(&mut hasher, "tools", tools.len());
     for selector in tools {
-        field(&mut hasher, "tool", &selector.canonical());
+        // Display separators are valid identity characters. Hash the typed
+        // fields, never the human-readable selector label.
+        field(
+            &mut hasher,
+            "tool",
+            &serde_json::to_string(selector).expect("typed Tool selector serializes"),
+        );
     }
     count(&mut hasher, "skills", skills.len());
     for skill in skills {
@@ -905,6 +911,28 @@ mod tests {
             WorkspacePolicy::SharedWorkspace,
             crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
         )
+    }
+
+    #[test]
+    fn source_selector_digest_preserves_identity_field_boundaries() {
+        use crate::capabilities::ToolSourceId;
+        use crate::runtime::identity::McpServerId;
+        let selector = |source: &str, name: &str| ToolSelector::Source {
+            source_id: ToolSourceId::Mcp(McpServerId::new(source)),
+            name: name.into(),
+        };
+        let a = definition("agent", vec![selector("a/b", "c")], vec![]).unwrap();
+        let b = definition("agent", vec![selector("a", "b/c")], vec![]).unwrap();
+        let all = definition(
+            "agent",
+            vec![ToolSelector::All {
+                source_id: ToolSourceId::Mcp(McpServerId::new("a/b/c")),
+            }],
+            vec![],
+        )
+        .unwrap();
+        assert_ne!(a.digest(), b.digest());
+        assert_ne!(b.digest(), all.digest());
     }
 
     #[test]

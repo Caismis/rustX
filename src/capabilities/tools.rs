@@ -132,8 +132,8 @@ impl ToolActivationPolicy {
         if !self.exclude_tools.is_empty() {
             validate_names(&self.exclude_tools, "exclusion")?;
         }
-        // An extension-provided Tool is refused on *every* ordinary selection
-        // surface, including `default_tools` — where an unknown name is
+        // An extension-provided Tool is refused on bare-name startup selection
+        // surfaces, including `default_tools` — where an unknown name is
         // otherwise harmlessly ignored, and would therefore have made
         // `defaultTools: ["todo"]` look like it worked while deciding
         // nothing at all (Issue #259).

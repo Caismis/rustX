@@ -8351,3 +8351,18 @@ Completed cleanup records are durably removed. Native allocator high-water marks
 prevent generated identity reuse; catalog generation compare-and-publish prevents
 stale writers from replacing newer state. Runtime Client receives bounded DTOs,
 never the internal frozen workset. See [Session deletion lifecycle](session-deletion-lifecycle.md).
+
+
+### Source selection identity domain
+
+All and Exact address the same canonical Tool identity universe: MCP source ids
+and canonical source Tool names are exact non-empty strings. The `python:`
+source namespace is reserved for Managed Python package identities validated by
+that owner. Selection adds no character grammar or pattern interpretation.
+Duplicate Exact entries remain authoring errors.
+
+Extension ownership is provenance, not a globally reserved Tool-name namespace.
+A source-owned `todo` remains selectable by its source under All or Exact;
+`builtin = ["todo"]` cannot select the Todo extension. A selected source Tool and
+an enabled extension with the same model-facing name fail at final ToolRegistry
+composition, without filtering, shadowing or renaming either registration.
