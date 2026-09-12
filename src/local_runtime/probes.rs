@@ -115,7 +115,7 @@ pub(super) fn render_results(results: &[ProbeResult], json: bool) -> String {
 
 pub(super) fn plan(launch: &ProspectiveLaunch, prepare: bool) -> ProbePlan {
     let mut targets = vec![ProbeTarget {
-        target: launch.config.model.model.to_string(),
+        target: launch.config.initial_model().model.to_string(),
         kind: "provider",
         activation: SourceActivation::Unconfigured,
         spawn_process: false,

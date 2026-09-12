@@ -282,12 +282,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                 &config.subagents,
             )?
             .0;
-            let main_admission = config
-                .subagents
-                .main
-                .iter()
-                .cloned()
-                .collect::<BTreeSet<_>>();
+            let main_admission = config.agent.agents.iter().cloned().collect::<BTreeSet<_>>();
             let workflow_admission = config
                 .subagents
                 .workflow
@@ -299,17 +294,12 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                 .map_err(|error| RuntimeResourceLoadError::new(format!("{error}")))?;
             let workflows = super::workflow_resources::load(
                 &workspace,
-                &config.workflows,
+                &config.agent.workflows,
                 &config.subagents,
                 &subagents,
             )?;
-            let default_tools = default_tools_with_workflows(
-                config
-                    .tools
-                    .as_ref()
-                    .map_or(&config.default_tools, |selection| &selection.builtin),
-                &workflows,
-            );
+            let default_tools =
+                default_tools_with_workflows(&config.agent.tools.builtin, &workflows);
             let mut registry = ToolRegistry::new();
             register_native_tools(
                 &mut registry,
@@ -341,12 +331,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
             if self.paths.no_skills {
                 skill_discovery.automatic_roots.clear();
             }
-            skill_discovery.explicit_paths.extend(
-                config
-                    .skills
-                    .iter()
-                    .map(|path| resolve_workspace_path(&workspace, path)),
-            );
+            skill_discovery.explicit_paths = self.paths.skill_paths.clone();
             let mcp_servers = mcp_bindings_with_authority(
                 &config,
                 &workspace,
@@ -364,11 +349,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                     ),
                     base_tool_registry: Arc::new(registry),
                     tool_activation: ToolActivationPolicy {
-                        sources: config
-                            .tools
-                            .as_ref()
-                            .map(|selection| selection.sources.clone())
-                            .unwrap_or_default(),
+                        sources: config.agent.tools.sources.clone(),
                         default_tools: Some(default_tools),
                         no_builtin_tools: self.paths.no_builtin_tools,
                         no_tools: self.paths.no_tools,
@@ -875,7 +856,8 @@ fn admitted_source_demand(
     python: crate::runtime::resources::ManagedPythonCatalog,
 ) -> crate::capabilities::source::ToolSourceDemand {
     let mut sources = BTreeSet::new();
-    if let Some(selection) = &config.tools {
+    {
+        let selection = &config.agent.tools;
         sources.extend(
             selection
                 .selectors()
@@ -884,7 +866,7 @@ fn admitted_source_demand(
         );
     }
     for agent in agents.definitions() {
-        if config.subagents.main.contains(agent.name())
+        if config.agent.agents.contains(agent.name())
             || config.subagents.workflow.contains(agent.name())
         {
             sources.extend(
@@ -1096,7 +1078,7 @@ impl LocalConversationCore {
             registry,
             runtime_config.clone(),
             SessionPersistentState {
-                model: runtime_config.model.clone(),
+                model: runtime_config.initial_model().clone(),
             },
             ConversationId::new("conversation-standalone"),
             lifecycle.root().join("artifacts"),
@@ -1133,13 +1115,13 @@ impl LocalConversationCore {
                     detail: error.to_string(),
                 }
             })?;
-        SessionModelState::new(registry.clone(), runtime_config.model.clone())?;
+        SessionModelState::new(registry.clone(), runtime_config.initial_model().clone())?;
         let model = SessionModelState::new(registry.clone(), session_state.model.clone())?;
 
         // The root Agent's native Agent Extension composition freeze point
         // (Issues #256, #259). It is resolved once, here, from this launch's
         // already-resolved configuration document. Nothing downstream reads
-        // `runtime_config.extensions` again, and resource reload publishes a
+        // `runtime_config.agent.extensions` again, and resource reload publishes a
         // new `RuntimeResourceSnapshot` that deliberately cannot reach this
         // value: a running ConversationRuntime executes against the
         // composition frozen for its launch.
@@ -1192,8 +1174,8 @@ impl LocalConversationCore {
         // the catalog this generation admits.
         let subagent_catalog = paths.subagents.clone();
         let main_admission = runtime_config
-            .subagents
-            .main
+            .agent
+            .agents
             .iter()
             .cloned()
             .collect::<BTreeSet<_>>();
@@ -1209,15 +1191,8 @@ impl LocalConversationCore {
                 detail: error.to_string(),
             })?;
         let workflows = paths.workflows.as_ref().clone();
-        let default_tools = default_tools_with_workflows(
-            runtime_config
-                .tools
-                .as_ref()
-                .map_or(&runtime_config.default_tools, |selection| {
-                    &selection.builtin
-                }),
-            &workflows,
-        );
+        let default_tools =
+            default_tools_with_workflows(&runtime_config.agent.tools.builtin, &workflows);
         //
         // The frozen model timeout policy is resolved once here so the
         // parent runtime and every launched subagent child share exactly
@@ -1302,13 +1277,7 @@ impl LocalConversationCore {
         }
         // Launch resolution has already rebased paths according to authority.
         // Package discovery retains its own canonical identity validation.
-        let workspace_root = tool_runtime.workspace().root().to_path_buf();
-        skill_discovery.explicit_paths.extend(
-            runtime_config
-                .skills
-                .iter()
-                .map(|path| resolve_workspace_path(&workspace_root, path)),
-        );
+        skill_discovery.explicit_paths = paths.skill_paths.clone();
 
         // 9. The resolver supplied launch controls and layered settings. The
         // coordinator receives the activation policy
@@ -1329,11 +1298,7 @@ impl LocalConversationCore {
             // composition decision of its own.
             extension_tools: tool_runtime.extension_tool_plane(),
             tool_activation: ToolActivationPolicy {
-                sources: runtime_config
-                    .tools
-                    .as_ref()
-                    .map(|selection| selection.sources.clone())
-                    .unwrap_or_default(),
+                sources: runtime_config.agent.tools.sources.clone(),
                 default_tools: Some(default_tools),
                 no_builtin_tools: paths.no_builtin_tools,
                 no_tools: paths.no_tools,
@@ -1988,9 +1953,9 @@ impl LocalSessionProduct {
         // Session-local model.
         let runtime_config = paths.config.as_ref().clone();
         let registry = load_model_registry(paths, dependencies)?;
-        SessionModelState::new(registry.clone(), runtime_config.model.clone())?;
+        SessionModelState::new(registry.clone(), runtime_config.initial_model().clone())?;
         let state = SessionPersistentState {
-            model: runtime_config.model.clone(),
+            model: runtime_config.initial_model().clone(),
         };
         // A first launch builds the root Session in memory and publishes
         // nothing yet. `catalog.json` is written by the one startup
@@ -2092,7 +2057,7 @@ impl LocalSessionProduct {
         // Everything fallible happens against the planned destination and
         // before the catalog changes: composition, recovery, and the
         // Runtime Client host binding. The runtime is left inert.
-        let default_model = runtime_config.model.clone();
+        let default_model = runtime_config.initial_model().clone();
         let core = LocalConversationCore::compose_from_config(
             paths,
             dependencies,
@@ -2534,14 +2499,6 @@ fn load_model_registry(
             .unwrap_or(&paths.credentials),
     )?;
     Ok(ModelBindingRegistry::new(resolved)?)
-}
-
-fn resolve_workspace_path(workspace: &Path, path: &Path) -> PathBuf {
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        workspace.join(path)
-    }
 }
 
 /// A local runtime composition failure.
@@ -4547,7 +4504,7 @@ compat = { chat_reasoning_replay = "omit" }
             registry,
             runtime_config.clone(),
             super::super::session::SessionPersistentState {
-                model: runtime_config.model.clone(),
+                model: runtime_config.initial_model().clone(),
             },
             ConversationId::new("conv-163-composition"),
             controller.root().join("artifacts"),
@@ -4861,7 +4818,7 @@ mod source_demand_tests {
         ]
         .into();
         assert_eq!(demand(&config, &workflows), expected);
-        config.tools = None;
+        config.agent.tools = None;
         assert_eq!(demand(&config, &workflows), expected);
         // Remove the Agent override: the exact leaf alone still demands github.
         authored["block"]["nodes"]["agent"]
@@ -4915,11 +4872,11 @@ mod source_demand_tests {
                 .sources
                 .is_empty()
         );
-        config.subagents.main = ["beta", "alpha"]
+        config.agent.agents = ["beta", "alpha"]
             .map(|name| SubagentName::parse(name).unwrap())
             .into();
         let first = admitted_source_demand(&config, &agents, &WorkflowCatalog::empty(), empty());
-        config.subagents.main.reverse();
+        config.agent.agents.reverse();
         let second = admitted_source_demand(&config, &agents, &WorkflowCatalog::empty(), empty());
         assert_eq!(first.sources, [shared].into());
         assert_eq!(first.sources, second.sources);

@@ -1,5 +1,5 @@
 //! Bounded canonical named Agent discovery. Project overrides user as a whole resource.
-use super::config::{AgentDocument, SubagentsDocument};
+use super::config::{AgentProfileDocument, SubagentsDocument};
 use crate::runtime::resources::{
     ProjectContextFile, RuntimeResourceLoadError, validate_project_resource_path,
 };
@@ -18,11 +18,11 @@ pub struct AgentSource {
     pub overridden: Option<PathBuf>,
 }
 
-pub(crate) fn parse(text: &str) -> Result<AgentDocument, String> {
+pub(crate) fn parse(text: &str) -> Result<AgentProfileDocument, String> {
     if text.len() > 1024 * 1024 {
         return Err("Agent resource exceeds 1 MiB".into());
     }
-    let document: AgentDocument = crate::toml_authoring::parse(text.as_bytes())?;
+    let document: AgentProfileDocument = crate::toml_authoring::parse(text.as_bytes())?;
     document.tools.validate_spelling()?;
     document.execution_deadline()?;
     Ok(document)
@@ -134,10 +134,7 @@ pub(crate) fn load(
     }
     let catalog =
         AgentCatalog::new(definitions).map_err(|e| RuntimeResourceLoadError::new(e.to_string()))?;
-    for (field, admission) in [
-        ("subagents.main", &document.main),
-        ("subagents.workflow", &document.workflow),
-    ] {
+    for (field, admission) in [("subagents.workflow", &document.workflow)] {
         catalog
             .admitted(&admission.iter().cloned().collect())
             .map_err(|e| RuntimeResourceLoadError::new(e.to_string()).at(workspace, field))?;

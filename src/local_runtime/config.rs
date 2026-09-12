@@ -21,7 +21,6 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::capabilities::selection::ToolSelectionDocument;
 use crate::context::SessionContextPolicy;
 use crate::extensions::{NativeAgentExtensions, NativeAgentExtensionsDocument};
-use crate::model::catalog::ModelRef;
 use crate::model::deadline::{
     DEFAULT_RESPONSE_START_TIMEOUT, DEFAULT_STREAM_IDLE_TIMEOUT, ModelTimeoutPolicy,
 };
@@ -55,21 +54,13 @@ pub struct CurrentRuntimeConfig {
     /// The agent executed by attempts of this conversation.
     #[serde(default = "default_agent_id")]
     pub agent_id: AgentId,
-    /// The default model used when a brand-new Session is created.
-    pub model: SessionModelConfig,
     /// The current runtime-wide approval control mode. This is launch
     /// host-only configuration, never project authority or Session history.
     #[serde(default)]
     pub approval_mode: ApprovalMode,
-    /// The closed launch-scoped **Native Agent Extension** composition of
-    /// the root Agent (Issue #256).
-    ///
-    /// This is the single surface for optional Agent augmentation. It is
-    /// read once, at composition, and deliberately never republished by
-    /// resource reload: a running `ConversationRuntime` executes against the
-    /// extension composition frozen for its launch.
+    /// The root Agent uses the same profile document as canonical named Agents.
     #[serde(default)]
-    pub extensions: NativeAgentExtensionsDocument,
+    pub agent: AgentProfileDocument,
     /// The current runtime context policy.
     #[serde(default)]
     pub context: ContextPolicyDocument,
@@ -102,29 +93,10 @@ pub struct CurrentRuntimeConfig {
     /// The current base authorized tool environment.
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
-    /// Ordinary native/built-in names active by default. An empty list
-    /// selects no built-ins; Read has no activation exception.
-    ///
-    /// This is the *ordinary capability* plane only. A Tool contributed by a
-    /// Native Agent Extension — today `todo` — may not appear here: it is
-    /// composed by `extensions`, and naming it is a validation error rather
-    /// than a silently ineffective entry (Issue #259).
-    #[serde(default = "default_tools")]
-    pub default_tools: Vec<String>,
-    /// Explicit ordinary main Agent selection; external sources require this demand.
-    #[serde(default)]
-    pub tools: Option<crate::capabilities::selection::ToolSelectionDocument>,
-    /// Explicit Skill roots/packages; launch provenance retains host/project/CLI authority.
-    #[serde(default)]
-    pub skills: Vec<PathBuf>,
     /// The named subagent definitions and their launch-scoped capacity
     /// (Issue #144).
     #[serde(default)]
     pub subagents: SubagentsDocument,
-    /// The Workflow model-visible
-    /// admission set (Issue #83).
-    #[serde(default)]
-    pub workflows: WorkflowsDocument,
 }
 
 /// The resolved native representation of the named-subagent plane.
@@ -139,8 +111,6 @@ pub struct SubagentsDocument {
     /// under already-committed children would either orphan ownership or
     /// silently lie about the bound.
     pub max_concurrent: usize,
-    /// Profiles admitted to the main Agent's existing `subagent` capability.
-    pub main: Vec<SubagentName>,
     /// Profiles admitted to Workflow Agent and Parallel nodes.
     pub workflow: Vec<SubagentName>,
 }
@@ -149,19 +119,9 @@ impl Default for SubagentsDocument {
     fn default() -> Self {
         Self {
             max_concurrent: DEFAULT_MAX_CONCURRENT_SUBAGENTS,
-            main: Vec::new(),
             workflow: Vec::new(),
         }
     }
-}
-
-/// The resolved native Workflow definition and admission plane.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
-#[derive(schemars::JsonSchema)]
-pub struct WorkflowsDocument {
-    /// Discovered Workflow ids selected for exposure as concrete model-facing Tools.
-    pub main: Vec<WorkflowId>,
 }
 
 /// The launch-scoped subagent capacity used when the document omits it.
@@ -181,22 +141,30 @@ pub const MAX_MAX_CONCURRENT_SUBAGENTS: usize = 64;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
-pub struct AgentDocument {
+pub struct AgentProfileDocument {
+    #[serde(default)]
+    pub agents: Vec<SubagentName>,
+    #[serde(default)]
+    pub workflows: Vec<WorkflowId>,
     /// The bounded model-facing routing description.
+    #[serde(default)]
     pub description: String,
     /// Explicit primary Agent instructions authored as TOML data.
+    #[serde(default)]
     pub instructions: String,
     /// The explicit model this agent runs on. Omit to inherit the invoking
     /// attempt's frozen effective model configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<ModelRef>,
+    #[serde(deserialize_with = "super::authoring::deserialize_profile_model")]
+    #[schemars(with = "Option<super::authoring::ModelLayer>")]
+    pub model: Option<SessionModelConfig>,
     /// The optional maximum wall-clock duration of the complete child
     /// lifecycle, in milliseconds. The model cannot override or extend it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
     /// The exact source-qualified capability selection.
     #[serde(default)]
-    pub tools: SubagentToolsDocument,
+    pub tools: ToolSelectionDocument,
     /// The exact Skill allowlist over the admitted Skill catalog.
     #[serde(default)]
     pub skills: Vec<String>,
@@ -216,7 +184,25 @@ pub struct AgentDocument {
     pub extensions: NativeAgentExtensionsDocument,
 }
 
-impl AgentDocument {
+impl Default for AgentProfileDocument {
+    fn default() -> Self {
+        Self {
+            description: String::new(),
+            instructions: String::new(),
+            model: None,
+            timeout_ms: None,
+            tools: ToolSelectionDocument::default(),
+            skills: Vec::new(),
+            agents: Vec::new(),
+            workflows: Vec::new(),
+            agents_md: SubagentAgentsMdDocument::default(),
+            worktree: SubagentWorktreeDocument::default(),
+            extensions: NativeAgentExtensionsDocument::default(),
+        }
+    }
+}
+
+impl AgentProfileDocument {
     /// Converts the TOML millisecond field into the validated runtime type.
     ///
     /// # Errors
@@ -238,7 +224,6 @@ impl AgentDocument {
 /// selection with exactly this vocabulary, so the type is the shared
 /// [`ToolSelectionDocument`] rather than a second structurally identical
 /// authoring shape.
-pub type SubagentToolsDocument = ToolSelectionDocument;
 
 /// The project-instruction policy of one named definition.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -432,7 +417,7 @@ const fn default_schema_version() -> u32 {
     CURRENT_RUNTIME_SCHEMA_VERSION
 }
 
-fn default_tools() -> Vec<String> {
+fn root_builtin_tools() -> Vec<String> {
     [
         "execution",
         "ask_user",
@@ -454,13 +439,33 @@ fn default_agent_id() -> AgentId {
 }
 
 impl CurrentRuntimeConfig {
+    /// Launch default used only when creating a new durable Session.
+    #[must_use]
+    pub fn initial_model(&self) -> &SessionModelConfig {
+        self.agent
+            .model
+            .as_ref()
+            .expect("validated root Agent model")
+    }
+
     pub(super) fn defaults(model: SessionModelConfig) -> Self {
         Self {
             schema_version: default_schema_version(),
             agent_id: default_agent_id(),
-            model,
             approval_mode: ApprovalMode::default(),
-            extensions: NativeAgentExtensionsDocument::default(),
+            agent: AgentProfileDocument {
+                model: Some(model),
+                extensions: NativeAgentExtensionsDocument {
+                    agent_status: crate::extensions::AgentStatusExtensionDocument::default(),
+                    todo: crate::extensions::TodoExtensionDocument::default(),
+                    goal: crate::extensions::GoalExtensionDocument::default(),
+                },
+                tools: ToolSelectionDocument {
+                    builtin: root_builtin_tools(),
+                    sources: BTreeMap::new(),
+                },
+                ..AgentProfileDocument::default()
+            },
             context: ContextPolicyDocument::default(),
             model_timeout_policy: ModelTimeoutPolicyDocument::default(),
             tool_deadline_policy: ToolDeadlinePolicyDocument::default(),
@@ -468,11 +473,7 @@ impl CurrentRuntimeConfig {
             mcp_tool_policies: BTreeMap::default(),
             native_tools: NativeToolPoliciesDocument::default(),
             environment: BTreeMap::default(),
-            default_tools: default_tools(),
-            tools: None,
-            skills: Vec::default(),
             subagents: SubagentsDocument::default(),
-            workflows: WorkflowsDocument::default(),
         }
     }
 
@@ -522,30 +523,18 @@ impl CurrentRuntimeConfig {
             });
         }
         self.timeout_policy()?;
-        if let Some(selection) = &self.tools {
-            selection
-                .validate_spelling()
-                .map_err(|detail| CurrentRuntimeConfigError::Invalid { detail })?;
-        }
-        if self.default_tools.iter().any(|name| name.trim().is_empty()) {
+        if self.agent.model.is_none() {
             return Err(CurrentRuntimeConfigError::Invalid {
-                detail: "default_tools entries must be non-empty names".to_owned(),
+                detail: "agent.model.model is required for root".into(),
             });
         }
-        // `defaultTools` addresses ordinary capabilities. An extension's Tool
-        // is refused here, at authoring time, rather than tolerated as an
-        // unknown name that quietly decides nothing (Issue #259).
-        for name in &self.default_tools {
-            if let Some(extension) = crate::capabilities::extension_provided_tool(name) {
-                return Err(CurrentRuntimeConfigError::Invalid {
-                    detail: format!(
-                        "default_tools entry {name:?} is provided by the \
-                         {extension:?} Agent Extension, not by ordinary Tool \
-                         selection; compose it with extensions.{extension}.enabled instead"
-                    ),
-                });
-            }
-        }
+        self.agent
+            .tools
+            .validate_spelling()
+            .map_err(|detail| CurrentRuntimeConfigError::Invalid { detail })?;
+        self.agent
+            .execution_deadline()
+            .map_err(|detail| CurrentRuntimeConfigError::Invalid { detail })?;
         // Duplicate MCP identity is structurally impossible: `mcpServers` is
         // a keyed map. Normalization is the remaining semantic gate, and it
         // runs here so a malformed entry fails at parse time rather than at
@@ -573,7 +562,7 @@ impl CurrentRuntimeConfig {
                 ),
             });
         }
-        Self::validate_subagent_admission("subagents.main", &self.subagents.main)?;
+        Self::validate_subagent_admission("agent.agents", &self.agent.agents)?;
         Self::validate_subagent_admission("subagents.workflow", &self.subagents.workflow)?;
         Ok(())
     }
@@ -596,7 +585,7 @@ impl CurrentRuntimeConfig {
 
     /// Validates Workflow selection identity uniqueness.
     fn validate_workflows(&self) -> Result<(), CurrentRuntimeConfigError> {
-        validate_unique_workflow_ids("workflows.main", &self.workflows.main)?;
+        validate_unique_workflow_ids("agent.workflows", &self.agent.workflows)?;
         Ok(())
     }
 
@@ -614,7 +603,7 @@ impl CurrentRuntimeConfig {
     /// later resource generation, reload, or configuration edit reaches it.
     #[must_use]
     pub fn extension_composition(&self) -> NativeAgentExtensions {
-        self.extensions.resolve()
+        self.agent.extensions.resolve()
     }
 
     /// The validated finite model request deadline policy for this runtime.
@@ -1295,9 +1284,9 @@ keep_recent_tokens = 4096
         let config = CurrentRuntimeConfig::from_toml_slice(MINIMAL.as_bytes()).expect("valid");
         assert_eq!(config.approval_mode, crate::runtime::ApprovalMode::Policy);
         assert_eq!(config.context_policy().reserve_tokens, 1024);
-        assert!(config.extensions.agent_status.time.enabled);
-        assert!(config.extensions.agent_status.background.enabled);
-        assert_eq!(config.extensions.agent_status.time.timezone, None);
+        assert!(config.agent.extensions.agent_status.time.enabled);
+        assert!(config.agent.extensions.agent_status.background.enabled);
+        assert_eq!(config.agent.extensions.agent_status.time.timezone, None);
         assert_eq!(
             config.model_timeout_policy,
             ModelTimeoutPolicyDocument::default()
@@ -1400,7 +1389,7 @@ model_timeout_policy = { "response_start_timeout_ms" = 7, "stream_idle_timeout_m
         );
     }
 
-    fn worker_config(timeout: &str) -> Result<super::AgentDocument, String> {
+    fn worker_config(timeout: &str) -> Result<super::AgentProfileDocument, String> {
         crate::local_runtime::agent_resources::parse(&format!(
             "description = \"worker\"\ninstructions = \"Worker\"\ntimeout_ms = {timeout}\n"
         ))
@@ -1828,9 +1817,9 @@ endpoint = "https://x"
 subagents = {  "main" = [], "workflow" = ["worker"] }"#,
         );
         let config = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect("valid");
-        assert!(config.subagents.main.is_empty());
+        assert!(config.agent.agents.is_empty());
         assert_eq!(config.subagents.workflow.len(), 1);
-        assert!(config.subagents.main.is_empty());
+        assert!(config.agent.agents.is_empty());
 
         let defined_but_unadmitted = MINIMAL.replace(
             r#"agent_id = "agent-a""#,
@@ -1867,8 +1856,8 @@ subagents = {  "main" = ["worker", "worker"], "workflow" = [] }"#,
 workflows = {  "main" = [] }"#,
         );
         let config = CurrentRuntimeConfig::from_toml_slice(valid.as_bytes()).expect("valid");
-        assert!(config.workflows.main.is_empty());
-        assert!(config.workflows.main.is_empty());
+        assert!(config.agent.workflows.is_empty());
+        assert!(config.agent.workflows.is_empty());
 
         let unknown = MINIMAL.replace(
             r#"agent_id = "agent-a""#,
@@ -1876,5 +1865,50 @@ workflows = {  "main" = [] }"#,
 workflows = {  "main" = ["investigate"] }"#,
         );
         assert!(CurrentRuntimeConfig::from_toml_slice(unknown.as_bytes()).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod profile_authoring_tests {
+    use super::*;
+    #[test]
+    fn cfg273_root_and_named_share_the_complete_profile_document() {
+        let named = r#"description = 'review'
+instructions = 'Review carefully'
+skills = ['review']
+agents = ['helper']
+workflows = ['check']
+[tools]
+builtin = ['read']
+[extensions]
+[model]
+model = 'provider/model'
+"#;
+        let root = format!(
+            "[agent]\n{}",
+            named
+                .replace("[tools]", "[agent.tools]")
+                .replace("[extensions]", "[agent.extensions]")
+                .replace("[model]", "[agent.model]")
+        );
+        let root = CurrentRuntimeConfig::from_toml_slice(root.as_bytes()).unwrap();
+        let named = crate::local_runtime::agent_resources::parse(named).unwrap();
+        assert_eq!(root.agent, named);
+        assert_eq!(named.extensions.resolve(), NativeAgentExtensions::none());
+    }
+    #[test]
+    fn cfg273_closed_profile_authoring_rejects_unknown_and_duplicate_tools() {
+        for text in [
+            "unknown = true",
+            "[extensions.unknown]",
+            "[tools]\nbuiltin = ['read', 'read']",
+            "agents = ['INVALID']",
+            "[tools]\nbuiltin = false",
+        ] {
+            assert!(
+                crate::local_runtime::agent_resources::parse(text).is_err(),
+                "{text}"
+            );
+        }
     }
 }

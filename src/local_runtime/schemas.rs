@@ -31,7 +31,7 @@ pub fn generate() -> BTreeMap<&'static str, Value> {
     let mut schemas = BTreeMap::from([
         (
             "agent.schema.json",
-            serde_json::to_value(schemars::schema_for!(super::config::AgentDocument))
+            serde_json::to_value(schemars::schema_for!(super::config::AgentProfileDocument))
                 .expect("schema serializes"),
         ),
         (

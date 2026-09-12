@@ -1059,7 +1059,7 @@ impl SubagentResolver {
             validate_selectors_for_admission(definition, available_tools, availability)
                 .map_err(named)?;
             Self::validate_definition_local_references(definition, skills, &mut |model| {
-                FrozenModelSpec::freeze(models, &SessionModelConfig::of(model.clone()))
+                FrozenModelSpec::freeze(models, model)
                     .map(|_| ())
                     .map_err(|error| error.to_string())
             })
@@ -1072,7 +1072,7 @@ impl SubagentResolver {
     pub(crate) fn validate_local_references(
         catalog: &AgentCatalog,
         skills: &SkillSnapshot,
-        mut model_check: impl FnMut(&crate::model::catalog::ModelRef) -> Result<(), String>,
+        mut model_check: impl FnMut(&SessionModelConfig) -> Result<(), String>,
     ) -> Result<(), (SubagentName, SubagentResolutionError)> {
         for definition in catalog.definitions() {
             let named = |error: SubagentResolutionError| (definition.name().clone(), error);
@@ -1085,12 +1085,12 @@ impl SubagentResolver {
     fn validate_definition_local_references(
         definition: &SubagentDefinition,
         skills: &SkillSnapshot,
-        model_check: &mut impl FnMut(&crate::model::catalog::ModelRef) -> Result<(), String>,
+        model_check: &mut impl FnMut(&SessionModelConfig) -> Result<(), String>,
     ) -> Result<(), SubagentResolutionError> {
         resolve_skills(definition.skills(), skills)?;
         if let Some(model) = definition.model() {
             model_check(model).map_err(|detail| SubagentResolutionError::UnknownModel {
-                model: model.to_string(),
+                model: model.model.to_string(),
                 detail,
             })?;
         }
@@ -1483,7 +1483,7 @@ fn resolve_model(
 ) -> Result<FrozenModelSpec, SubagentResolutionError> {
     let configured = match definition.model() {
         None => attempt_model.clone(),
-        Some(model) => SessionModelConfig::of(model.clone()),
+        Some(model) => model.clone(),
     };
     FrozenModelSpec::freeze(models, &configured).map_err(|error| {
         SubagentResolutionError::UnknownModel {

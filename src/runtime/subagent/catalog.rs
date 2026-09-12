@@ -31,7 +31,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::model::catalog::ModelRef;
+use crate::model::session::SessionModelConfig;
 use crate::runtime::resources::ProjectContextFile;
 
 /// The maximum number of named agents one catalog may admit.
@@ -308,13 +308,13 @@ impl std::error::Error for SubagentExecutionDeadlineError {}
 /// the invoking generation's capability/Skill/model authority, which the
 /// [`SubagentResolver`](super::resolver::SubagentResolver) applies at
 /// invocation time.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SubagentDefinition {
     name: SubagentName,
     description: String,
     instructions: String,
     instructions_source: PathBuf,
-    model: Option<ModelRef>,
+    model: Option<SessionModelConfig>,
     execution_deadline: Option<SubagentExecutionDeadline>,
     tools: Vec<AgentToolSelection>,
     skills: Vec<String>,
@@ -343,7 +343,7 @@ impl SubagentDefinition {
         description: String,
         instructions: String,
         instructions_source: PathBuf,
-        model: Option<ModelRef>,
+        model: Option<SessionModelConfig>,
         execution_deadline: Option<SubagentExecutionDeadline>,
         tools: Vec<AgentToolSelection>,
         skills: Vec<String>,
@@ -466,7 +466,7 @@ impl SubagentDefinition {
 
     /// The explicit model selection, when the definition names one.
     #[must_use]
-    pub const fn model(&self) -> Option<&ModelRef> {
+    pub const fn model(&self) -> Option<&SessionModelConfig> {
         self.model.as_ref()
     }
 
@@ -656,7 +656,7 @@ impl std::error::Error for SubagentDefinitionError {}
 ///
 /// The catalog is keyed by canonical [`SubagentName`], so a name is unique by
 /// construction and iteration order is deterministic.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct AgentCatalog {
     agents: BTreeMap<SubagentName, Arc<SubagentDefinition>>,
 }
@@ -776,7 +776,7 @@ fn compute_digest(
     name: &SubagentName,
     description: &str,
     instructions: &str,
-    model: Option<&ModelRef>,
+    model: Option<&SessionModelConfig>,
     execution_deadline: Option<SubagentExecutionDeadline>,
     tools: &[AgentToolSelection],
     skills: &[String],
@@ -795,7 +795,11 @@ fn compute_digest(
         // string: an agent that explicitly names the model the attempt
         // happens to use is not the same definition as one that inherits.
         None => field(&mut hasher, "model", "\u{0}inherit"),
-        Some(model) => field(&mut hasher, "model", &format!("explicit:{model}")),
+        Some(model) => field(
+            &mut hasher,
+            "model",
+            &serde_json::to_string(model).expect("typed model serializes"),
+        ),
     }
     match execution_deadline {
         None => field(&mut hasher, "execution_deadline", "\u{0}absent"),

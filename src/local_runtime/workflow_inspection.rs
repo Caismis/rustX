@@ -96,7 +96,8 @@ pub(super) fn inspect(
                     workflow_admitted: launch.config.subagents.workflow.contains(name),
                     selected_model: definition
                         .model()
-                        .unwrap_or(&launch.config.model.model)
+                        .unwrap_or(launch.config.initial_model())
+                        .model
                         .to_string(),
                     configured_timeout_ms: definition
                         .execution_deadline()

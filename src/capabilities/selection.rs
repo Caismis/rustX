@@ -708,7 +708,7 @@ github = "all"
         let selection = "[tools.sources]\ngithub = 'all'\n";
         let root: crate::local_runtime::config::CurrentRuntimeConfig =
             toml::from_str(&format!("[model]\nmodel = 'local/test'\n{selection}")).unwrap();
-        let named: crate::local_runtime::config::AgentDocument = toml::from_str(&format!(
+        let named: crate::local_runtime::config::AgentProfileDocument = toml::from_str(&format!(
             "description = 'Review'\ninstructions = 'Review code'\n{selection}"
         ))
         .unwrap();

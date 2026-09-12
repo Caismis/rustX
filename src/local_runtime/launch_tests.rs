@@ -1738,7 +1738,7 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
     assert_eq!(resolved.config.agent_id.as_str(), "user");
     assert_eq!(resolved.config.context.reserve_tokens, 3000);
     assert_eq!(resolved.config.context.keep_recent_tokens, 6000);
-    assert!(resolved.config.default_tools.is_empty());
+    assert!(resolved.config.agent.tools.builtin.is_empty());
     assert_eq!(resolved.config.environment.len(), 2);
     assert_eq!(resolved.config.environment["REPLACED"], "new");
     let service =
@@ -1766,7 +1766,7 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
     f.request.tools = Some(vec!["read".into(), "bash".into()]);
     f.request.exclude_tools = Some(vec!["read".into()]);
     let cli = f.resolve();
-    assert_eq!(cli.config.model.model.to_string(), "host/one");
+    assert_eq!(cli.config.initial_model().model.to_string(), "host/one");
     assert!(matches!(cli.provenance["model.model"], Origin::Cli { .. }));
     assert!(matches!(
         cli.provenance["exclude_tools"],
@@ -1777,8 +1777,8 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
     let empty = f.resolve();
     assert!(empty.config.environment.is_empty());
     assert!(empty.config.mcp_servers.is_empty());
-    assert!(empty.config.subagents.main.is_empty());
-    assert_eq!(empty.config.default_tools, ["read", "bash"]);
+    assert!(empty.config.agent.agents.is_empty());
+    assert_eq!(empty.config.agent.tools.builtin, ["read", "bash"]);
 }
 
 #[test]
@@ -2033,7 +2033,7 @@ async fn minimal_native_composition_and_frozen_launch_ignore_later_config_edits(
             .names()
             .is_empty()
     );
-    assert_eq!(launch.config.model.model.to_string(), "host/one");
+    assert_eq!(launch.config.initial_model().model.to_string(), "host/one");
     assert_eq!(launch.config.agent_id.as_str(), "rustx");
     assert!(launch.config.mcp_servers.is_empty());
     assert!(launch.config.skills.is_empty());
@@ -2640,7 +2640,7 @@ fn cfg270_only_toml_names_are_discovered_and_old_documents_are_inert() {
         std::fs::write(path, b"{ obsolete malformed configuration").unwrap();
     }
     let launch = f.resolve();
-    assert_eq!(launch.config.model.model.to_string(), "host/one");
+    assert_eq!(launch.config.initial_model().model.to_string(), "host/one");
     std::fs::remove_file(f.host.config_directory.join("settings.toml")).unwrap();
     let missing_selection = analyze(&f.request, &f.host).unwrap_err();
     assert!(missing_selection.incomplete);

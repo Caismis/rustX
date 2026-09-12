@@ -1,6 +1,6 @@
 //! Bounded trusted Workflow source resolution, shared by prospective analysis and reload.
-use super::config::WorkflowsDocument;
 use crate::runtime::resources::RuntimeResourceLoadError;
+use crate::runtime::workflow::WorkflowId;
 use crate::runtime::workflow::{
     MAX_WORKFLOW_BYTES, WorkflowCatalog, WorkflowCompileError, WorkflowDefinition, WorkflowProgram,
 };
@@ -10,7 +10,7 @@ use std::path::Path;
 #[allow(clippy::too_many_lines)] // One deterministic compile transaction with structured diagnostics.
 pub(crate) fn load(
     workspace: &Path,
-    document: &WorkflowsDocument,
+    selection: &[WorkflowId],
     profiles: &super::config::SubagentsDocument,
     agents: &crate::runtime::subagent::AgentCatalog,
 ) -> Result<WorkflowCatalog, RuntimeResourceLoadError> {
@@ -122,7 +122,7 @@ pub(crate) fn load(
         })?;
         programs.push(program);
     }
-    WorkflowCatalog::new(programs, document.main.clone()).map_err(|error| {
+    WorkflowCatalog::new(programs, selection.iter().cloned()).map_err(|error| {
         RuntimeResourceLoadError::new(format!("cannot admit Workflow catalog: {error}"))
     })
 }
@@ -192,7 +192,7 @@ mod tests {
                 std::fs::write(root.join(format!("{name}.yaml")), PROGRAM).unwrap();
             }
             std::fs::write(root.join("incidental.txt"), "invalid YAML: [").unwrap();
-            let document = WorkflowsDocument::default();
+            let document = Vec::new();
             let profiles = super::super::config::SubagentsDocument::default();
             let agents = crate::runtime::subagent::AgentCatalog::empty();
             let catalog = load(&workspace, &document, &profiles, &agents).unwrap();

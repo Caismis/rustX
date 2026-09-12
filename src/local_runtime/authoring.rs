@@ -62,14 +62,22 @@ macro_rules! partial {
 // never a TOML null value.
 partial!(RuntimeLayer {
     models: PathBuf, runtime_root: PathBuf, schema_version: u32,
-    agent_id: crate::runtime::identity::AgentId, model: ModelLayer,
-    approval_mode: crate::runtime::ApprovalMode, extensions: ExtensionsLayer,
+    agent_id: crate::runtime::identity::AgentId,
+    approval_mode: crate::runtime::ApprovalMode, agent: AgentProfileLayer,
     context: ContextLayer, model_timeout_policy: TimeoutLayer, tool_deadline_policy: ToolDeadlineLayer,
     mcp_servers: BTreeMap<crate::runtime::identity::McpServerId, McpAuthoring>,
     mcp_tool_policies: BTreeMap<crate::runtime::identity::McpServerId, InvocationPolicyDocument>,
-    native_tools: NativeToolsLayer, environment: BTreeMap<String,String>, default_tools: Vec<String>,
+    native_tools: NativeToolsLayer, environment: BTreeMap<String,String>,
+    subagents: SubagentsLayer
+});
+partial!(AgentProfileLayer {
+    description: String, instructions: String, model: ModelLayer, timeout_ms: u64,
     tools: crate::capabilities::selection::ToolSelectionDocument,
-    skills: Vec<PathBuf>, subagents: SubagentsLayer, workflows: WorkflowsLayer
+    skills: Vec<String>, extensions: crate::extensions::NativeAgentExtensionsDocument,
+    agents: Vec<crate::runtime::subagent::SubagentName>,
+    workflows: Vec<crate::runtime::workflow::WorkflowId>,
+    agents_md: super::config::SubagentAgentsMdDocument,
+    worktree: super::config::SubagentWorktreeDocument
 });
 partial!(ModelLayer {
     model: ModelRef,
@@ -91,8 +99,8 @@ partial!(ToolDeadlineLayer {
     hard_deadline_ms: u64,
     idle_liveness_ms: IdleLiveness
 });
-partial!(SubagentsLayer { max_concurrent: usize, main: Vec<crate::runtime::subagent::SubagentName>, workflow: Vec<crate::runtime::subagent::SubagentName> });
-partial!(WorkflowsLayer { main: Vec<crate::runtime::workflow::WorkflowId> });
+partial!(SubagentsLayer { max_concurrent: usize, workflow: Vec<crate::runtime::subagent::SubagentName> });
+
 partial!(NativeToolsLayer {
     read: NativePolicyOverrideDocument,
     write: NativePolicyOverrideDocument,
@@ -101,25 +109,6 @@ partial!(NativeToolsLayer {
     grep: NativePolicyOverrideDocument,
     bash: NativePolicyOverrideDocument
 });
-partial!(ExtensionsLayer {
-    agent_status: StatusLayer,
-    todo: crate::extensions::TodoExtensionDocument,
-    goal: crate::extensions::GoalExtensionDocument
-});
-partial!(StatusLayer {
-    enabled: bool,
-    time: TimeLayer,
-    background: BackgroundLayer
-});
-partial!(TimeLayer {
-    enabled: bool,
-    timezone: Timezone
-});
-partial!(BackgroundLayer { enabled: bool });
-#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(transparent)]
-pub(super) struct Timezone(#[schemars(with = "String")] chrono_tz::Tz);
-
 #[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum ReasoningSelection {
@@ -270,19 +259,14 @@ merge_record!(
         runtime_root,
         schema_version,
         agent_id,
-        approval_mode,
-        default_tools,
-        tools,
-        skills
+        approval_mode
     ],
     [
-        model,
-        extensions,
+        agent,
         context,
         model_timeout_policy,
         tool_deadline_policy,
         subagents,
-        workflows,
         native_tools
     ],
     [mcp_servers, mcp_tool_policies, environment]
@@ -317,8 +301,24 @@ merge_record!(
     [],
     []
 );
-merge_record!(SubagentsLayer, [max_concurrent, main, workflow], [], []);
-merge_record!(WorkflowsLayer, [main], [], []);
+merge_record!(SubagentsLayer, [max_concurrent, workflow], [], []);
+merge_record!(
+    AgentProfileLayer,
+    [
+        description,
+        instructions,
+        timeout_ms,
+        tools,
+        skills,
+        extensions,
+        agents,
+        workflows,
+        agents_md,
+        worktree
+    ],
+    [model],
+    []
+);
 impl Copy for NativeToolsLayer {}
 
 impl NativeToolsLayer {
@@ -338,13 +338,17 @@ impl NativeToolsLayer {
         entry!(read, write, edit, glob, grep, bash);
     }
 }
-merge_record!(ExtensionsLayer, [todo, goal], [agent_status], []);
-merge_record!(StatusLayer, [enabled], [time, background], []);
-merge_record!(TimeLayer, [enabled, timezone], [], []);
-merge_record!(BackgroundLayer, [enabled], [], []);
 
 macro_rules! apply {
     ($layer:ident, $target:ident, $($field:ident),* $(,)?) => { $(if let Some(value) = $layer.$field { $target.$field = value; })* }
+}
+pub(super) fn deserialize_profile_model<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<SessionModelConfig>, D::Error> {
+    ModelLayer::deserialize(deserializer)?
+        .resolve()
+        .map(Some)
+        .map_err(serde::de::Error::custom)
 }
 impl ModelLayer {
     pub fn resolve(self) -> Result<SessionModelConfig, String> {
@@ -391,8 +395,8 @@ impl RuntimeLayer {
             "schema_version",
             "agent_id",
             "approval_mode",
-            "default_tools",
-            "skills",
+            "agent.tools",
+            "agent.skills",
             "model.model",
             "model.reasoning_profile",
             "model.request_params_json",
@@ -412,9 +416,9 @@ impl RuntimeLayer {
             "extensions.todo",
             "extensions.goal",
             "subagents.max_concurrent",
-            "subagents.main",
+            "agent.agents",
             "subagents.workflow",
-            "workflows.main",
+            "agent.workflows",
             "native_tools.read",
             "native_tools.write",
             "native_tools.edit",
@@ -438,25 +442,53 @@ impl RuntimeLayer {
     }
     pub fn model_sections(self) -> Result<(SessionModelConfig, ContextPolicyDocument), String> {
         Ok((
-            self.model.ok_or("missing user model")?.resolve()?,
+            self.agent
+                .and_then(|agent| agent.model)
+                .ok_or("missing agent.model")?
+                .resolve()?,
             self.context.unwrap_or_default().resolve(),
         ))
     }
     pub fn resolve(self) -> Result<CurrentRuntimeConfig, String> {
-        let mut config =
-            CurrentRuntimeConfig::defaults(self.model.ok_or("missing model.model")?.resolve()?);
+        let mut config = CurrentRuntimeConfig::defaults(
+            self.agent
+                .as_ref()
+                .and_then(|agent| agent.model.clone())
+                .ok_or("missing agent.model.model")?
+                .resolve()?,
+        );
         apply!(
             self,
             config,
             schema_version,
             agent_id,
             approval_mode,
-            default_tools,
-            skills,
             mcp_tool_policies,
             environment
         );
-        config.tools = self.tools;
+        if let Some(layer) = self.agent {
+            let mut profile = config.agent;
+            apply!(
+                layer,
+                profile,
+                description,
+                instructions,
+                tools,
+                skills,
+                extensions,
+                agents,
+                workflows,
+                agents_md,
+                worktree
+            );
+            if let Some(model) = layer.model {
+                profile.model = Some(model.resolve()?);
+            }
+            if let Some(timeout) = layer.timeout_ms {
+                profile.timeout_ms = Some(timeout);
+            }
+            config.agent = profile;
+        }
         config.context = self.context.unwrap_or_default().resolve();
         if let Some(layer) = self.model_timeout_policy {
             let mut policy = config.model_timeout_policy;
@@ -478,13 +510,8 @@ impl RuntimeLayer {
         }
         if let Some(layer) = self.subagents {
             let mut subagents = config.subagents;
-            apply!(layer, subagents, max_concurrent, main, workflow);
+            apply!(layer, subagents, max_concurrent, workflow);
             config.subagents = subagents;
-        }
-        if let Some(layer) = self.workflows {
-            let mut workflows = config.workflows;
-            apply!(layer, workflows, main);
-            config.workflows = workflows;
         }
         if let Some(layer) = self.native_tools {
             let mut policies = config.native_tools;
@@ -497,29 +524,6 @@ impl RuntimeLayer {
             .into_iter()
             .map(|(id, entry)| (id, entry.resolve()))
             .collect();
-        if let Some(layer) = self.extensions {
-            let mut extensions = config.extensions;
-            apply!(layer, extensions, todo, goal);
-            if let Some(layer) = layer.agent_status {
-                let mut status = extensions.agent_status;
-                apply!(layer, status, enabled);
-                if let Some(layer) = layer.time {
-                    if let Some(enabled) = layer.enabled {
-                        status.time.enabled = enabled;
-                    }
-                    if let Some(timezone) = layer.timezone {
-                        status.time.timezone = Some(timezone.0);
-                    }
-                }
-                if let Some(layer) = layer.background
-                    && let Some(enabled) = layer.enabled
-                {
-                    status.background.enabled = enabled;
-                }
-                extensions.agent_status = status;
-            }
-            config.extensions = extensions;
-        }
         Ok(config)
     }
     pub fn resources_only(&mut self) {
@@ -527,9 +531,11 @@ impl RuntimeLayer {
         self.runtime_root = None;
         self.schema_version = None;
         self.agent_id = None;
-        self.model = None;
+        if let Some(agent) = &mut self.agent {
+            agent.model = None;
+        }
         self.approval_mode = None;
-        self.extensions = None;
+
         self.context = None;
         self.model_timeout_policy = None;
         self.tool_deadline_policy = None;
@@ -539,11 +545,8 @@ impl RuntimeLayer {
         config.mcp_tool_policies = resources.mcp_tool_policies;
         config.native_tools = resources.native_tools;
         config.environment = resources.environment;
-        config.default_tools = resources.default_tools;
-        config.tools = resources.tools;
-        config.skills = resources.skills;
+        config.agent = resources.agent;
         config.subagents = resources.subagents;
-        config.workflows = resources.workflows;
     }
 }
 

@@ -118,10 +118,18 @@ fn update(bytes: &[u8], value: &DefaultValue) -> Result<Vec<u8>, RuntimeClientEr
     let mut root = tree(bytes)?;
     match value {
         DefaultValue::ModelSelection { selection } => {
-            if !root.contains_key("model") {
-                root["model"] = Item::Table(toml_edit::Table::new());
+            if !root.contains_key("agent") {
+                root["agent"] = Item::Table(toml_edit::Table::new());
             }
-            let model = root["model"]
+            let agent = root["agent"]
+                .as_table_like_mut()
+                .ok_or_else(|| invalid(()))?;
+            if !agent.contains_key("model") {
+                agent.insert("model", Item::Table(toml_edit::Table::new()));
+            }
+            let model = agent
+                .get_mut("model")
+                .expect("model table inserted")
                 .as_table_like_mut()
                 .ok_or_else(|| invalid(()))?;
             set(
@@ -188,7 +196,7 @@ impl UserDefaults {
         } else {
             super::authoring::RuntimeLayer::default()
         };
-        let selection = layer.model.and_then(|model| {
+        let selection = layer.agent.and_then(|agent| agent.model).and_then(|model| {
             model.model.map(|selected| ModelDefault {
                 model: selected,
                 reasoning_profile: model

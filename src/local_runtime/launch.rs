@@ -282,8 +282,8 @@ impl ProspectiveLaunch {
         };
         LaunchSettings {
             model: ModelDefault {
-                model: self.config.model.model.clone(),
-                reasoning_profile: self.config.model.reasoning_profile.clone(),
+                model: self.config.initial_model().model.clone(),
+                reasoning_profile: self.config.initial_model().reasoning_profile.clone(),
             },
             model_origin: origin("model.model"),
             reasoning_origin: origin("model.reasoning_profile"),
@@ -336,11 +336,9 @@ impl ProspectiveLaunch {
             rebase_paths(&mut layer, origin, &self.workspace)?;
             merged.overlay(layer, origin, &mut provenance);
         }
-        if !self.skill_paths.is_empty() {
-            merged.skills = Some(self.skill_paths.clone());
-        }
-        merged.model = Some(ModelLayer {
-            model: Some(self.config.model.model.clone()),
+
+        merged.agent.get_or_insert_default().model = Some(ModelLayer {
+            model: Some(self.config.initial_model().model.clone()),
             ..Default::default()
         });
         let resources = merged.resolve()?;
@@ -629,7 +627,6 @@ pub fn analyze(
         merged.overlay(layer, &origin, &mut provenance);
     }
     if !request.skill_paths.is_empty() {
-        merged.skills = Some(locations.skill_paths.clone());
         provenance.insert(
             "skills".into(),
             Origin::Cli {
@@ -638,7 +635,7 @@ pub fn analyze(
         );
     }
     if let Some(model) = &request.model {
-        merged.model = Some(ModelLayer {
+        merged.agent.get_or_insert_default().model = Some(ModelLayer {
             model: Some(crate::model::catalog::ModelRef::parse(model).map_err(|e| e.to_string())?),
             ..Default::default()
         });
@@ -651,8 +648,9 @@ pub fn analyze(
         );
     }
     if merged
-        .model
+        .agent
         .as_ref()
+        .and_then(|agent| agent.model.as_ref())
         .is_none_or(|model| model.model.is_none())
     {
         let mut error = LaunchFailure::at(
@@ -678,7 +676,7 @@ pub fn analyze(
         .map_err(|e| e.clone())?;
     config.tool_environment().map_err(|e| e.to_string())?;
     let (primary, summary) =
-        crate::model::session::analyze_session_model_config(&models, &config.model)
+        crate::model::session::analyze_session_model_config(&models, &config.initial_model())
             .map_err(|e| e.to_string())?;
     let summary = summary.as_ref().unwrap_or(&primary);
     config
@@ -774,7 +772,7 @@ pub fn analyze(
     let workflows = if trusted {
         super::workflow_resources::load(
             &locations.workspace,
-            &config.workflows,
+            &config.agent.workflows,
             &config.subagents,
             &subagents,
         )
@@ -796,7 +794,7 @@ pub fn analyze(
             &workspace,
             crate::skills::SkillDiscoveryConfig {
                 automatic_roots: skill_roots.clone(),
-                explicit_paths: config.skills.clone(),
+                explicit_paths: locations.skill_paths.clone(),
             },
         )
         .discover()
@@ -827,8 +825,8 @@ pub fn analyze(
         &skills,
         |reference| {
             crate::model::invocation::analyze_selection(
-                models.model(reference).map_err(|e| e.to_string())?,
-                &crate::model::invocation::ModelSelection::of(reference.clone()),
+                models.model(&reference.model).map_err(|e| e.to_string())?,
+                &reference.selection(),
                 crate::model::invocation::RequestParamsLayer::SessionOverrides,
             )
             .map(|_| ())
@@ -846,7 +844,7 @@ pub fn analyze(
     })?;
     let main_subagents = if trusted {
         subagents
-            .admitted(&config.subagents.main.iter().cloned().collect())
+            .admitted(&config.agent.agents.iter().cloned().collect())
             .map_err(|e| e.to_string())?
     } else {
         crate::runtime::subagent::AgentCatalog::empty()
@@ -962,18 +960,14 @@ pub fn analyze(
                 e.to_string(),
             )
         })?;
-    let mut defaults = config.default_tools.clone();
+    let mut defaults = config.agent.tools.builtin.clone();
     defaults.extend(workflows.main().iter().map(ToString::to_string));
     let online = config
         .mcp_servers
         .values()
         .any(|source| source.enabled == Some(true));
     let policy = crate::capabilities::ToolActivationPolicy {
-        sources: config
-            .tools
-            .as_ref()
-            .map(|selection| selection.sources.clone())
-            .unwrap_or_default(),
+        sources: config.agent.tools.sources.clone(),
         default_tools: Some(defaults),
         no_tools: locations.no_tools,
         no_builtin_tools: locations.no_builtin_tools,
@@ -1174,10 +1168,7 @@ pub(super) fn parse_layer(
         ));
     }
     if let Some(subagents) = &layer.subagents {
-        for (field, names) in [
-            ("subagents.main", &subagents.main),
-            ("subagents.workflow", &subagents.workflow),
-        ] {
+        for (field, names) in [("subagents.workflow", &subagents.workflow)] {
             if let Some(names) = names {
                 let unique: std::collections::BTreeSet<_> = names.iter().collect();
                 if unique.len() != names.len() {
@@ -1230,9 +1221,11 @@ fn rebase_paths(
         *value = resolved;
         Ok(())
     };
-    if let Some(skills) = &mut layer.skills {
-        for skill in skills {
-            path(skill)?;
+    if let Some(agent) = &mut layer.agent
+        && let Some(policy) = &mut agent.agents_md
+    {
+        for file in &mut policy.files {
+            path(file)?;
         }
     }
     if let Some(servers) = &mut layer.mcp_servers {

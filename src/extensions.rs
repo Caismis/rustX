@@ -128,8 +128,8 @@ use crate::context::{
 /// Unknown extension names are rejected. Runtime TOML layers use the separate
 /// `snake_case` authoring boundary; resource and wire documents retain their
 /// own serialization contract.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields, default)]
 #[derive(schemars::JsonSchema)]
 pub struct NativeAgentExtensionsDocument {
     /// The Agent Status extension: optional provider-independent runtime
@@ -141,6 +141,19 @@ pub struct NativeAgentExtensionsDocument {
     pub todo: TodoExtensionDocument,
     /// Root-only persistent Goal pursuit, disabled by default.
     pub goal: GoalExtensionDocument,
+}
+
+impl Default for NativeAgentExtensionsDocument {
+    fn default() -> Self {
+        Self {
+            agent_status: AgentStatusExtensionDocument {
+                enabled: false,
+                ..AgentStatusExtensionDocument::default()
+            },
+            todo: TodoExtensionDocument { enabled: false },
+            goal: GoalExtensionDocument::default(),
+        }
+    }
 }
 
 /// Authored opt-in Goal composition.
