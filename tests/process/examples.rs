@@ -129,8 +129,8 @@ async fn checked_in_local_runtime_example_composes_its_real_resources() {
     assert_example_files_exist(&workspace);
     let runtime = HeadlessConversationRuntime::compose(
         &(LaunchFixture {
-            models: examples.join("models.jsonc"),
-            config: examples.join("rustx.jsonc"),
+            models: examples.join("models.toml"),
+            config: examples.join("rustx.toml"),
             // Keep this test independent of the developer's home directory
             // while exercising the actual checked-in project Skill root.
             skill_paths: vec![workspace.join(".agents/skills")],

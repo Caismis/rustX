@@ -45,7 +45,7 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
         "--reasoning",
         "false",
         "--compat",
-        "{\"chatReasoningReplay\":\"omit\"}",
+        "chat_reasoning_replay = \"omit\"",
     ]
     .map(str::to_owned);
     let documents = super::initialization::documents(&args).unwrap();
@@ -56,12 +56,12 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
         2
     );
     // Three explicit fixture models, sharing one scripted adapter. No provider heuristics.
-    let mut catalog: serde_json::Value = crate::config_format::parse(&documents[0]).unwrap();
+    let mut catalog: serde_json::Value = crate::toml_authoring::parse(&documents[0]).unwrap();
     let mut model = catalog["providers"]["local"]["models"][0].clone();
     model["capabilities"]["reasoning"] = json!(true);
-    model["reasoning"] = json!({"defaultProfile":"on","profiles": {
-        "on":{"enabled":true,"requestParams":{"thinking":{"type":"enabled"}}},
-        "off":{"enabled":false,"requestParams":{"thinking":{"type":"disabled"}}}
+    model["reasoning"] = json!({"default_profile":"on","profiles": {
+        "on":{"enabled":true,"request_params_json":r#"{"thinking":{"type":"enabled"}}"#},
+        "off":{"enabled":false,"request_params_json":r#"{"thinking":{"type":"disabled"}}"#}
     }});
     catalog["providers"]["local"]["models"] = json!(["a", "b", "c"].map(|id| {
         let mut m = model.clone();
@@ -69,15 +69,24 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
         m
     }));
     std::fs::write(
-        host.config_directory.join("models.jsonc"),
-        serde_json::to_vec(&catalog).unwrap(),
+        host.config_directory.join("models.toml"),
+        toml::to_string_pretty(&catalog).unwrap(),
     )
     .unwrap();
-    let user_path = host.config_directory.join("settings.jsonc");
+    let user_path = host.config_directory.join("settings.toml");
     // The launch also authors a distinctive native Agent Extension
     // composition (Issue #256): every contributor field is non-default, so a
     // projection that substituted built-in defaults could not pass below.
-    let settings = "{\n // future default A; retain this comment\n \"model\":{\"model\":\"local/a\"},\n \"extensions\":{\"agentStatus\":{\"time\":{\"timezone\":\"Asia/Shanghai\"},\"background\":{\"enabled\":false}}},\n \"environment\":{\"PRIVATE\":\"SECRET_SENTINEL\"}\n}\n";
+    let settings = r#"# future default A; retain this comment
+[model]
+model = "local/a"
+[extensions.agent_status.time]
+timezone = "Asia/Shanghai"
+[extensions.agent_status.background]
+enabled = false
+[environment]
+PRIVATE = "SECRET_SENTINEL"
+"#;
     std::fs::write(&user_path, settings).unwrap();
     let request = super::launch::LaunchRequest::default();
     super::launch::change_trust(&request, &host, super::launch::TrustAction::Grant).unwrap();
@@ -305,9 +314,9 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
         panic!("approval save")
     };
     let disk: serde_json::Value =
-        crate::config_format::parse(&std::fs::read(&user_path).unwrap()).unwrap();
+        crate::toml_authoring::parse(&std::fs::read(&user_path).unwrap()).unwrap();
     assert_eq!(disk["model"]["model"], "local/b");
-    assert_eq!(disk["approvalMode"], "full_access");
+    assert_eq!(disk["approval_mode"], "full_access");
     assert_eq!(
         runtime.approval_mode_state().effective,
         crate::runtime::ApprovalMode::Policy
@@ -502,8 +511,8 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
     );
     assert_eq!(fake.requests()[0], frozen_request);
     std::fs::write(
-        workspace.join("rustx.jsonc"),
-        "{\"workflows\":{\"definitions\":[\"missing\"]}}",
+        workspace.join("rustx.toml"),
+        "[workflows]\ndefinitions = [\"missing\"]\n",
     )
     .unwrap();
     assert!(runtime.reload_resources().await.is_err());
@@ -516,8 +525,8 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
     // left in place for the failed reload path and the fresh resolution at
     // the end of this test.
     std::fs::write(
-        workspace.join("rustx.jsonc"),
-        "{\"extensions\":{\"agentStatus\":{\"enabled\":false}}}",
+        workspace.join("rustx.toml"),
+        "[extensions.agent_status]\nenabled = false\n",
     )
     .unwrap();
     assert_eq!(

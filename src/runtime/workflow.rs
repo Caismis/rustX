@@ -3192,27 +3192,25 @@ mod tests {
     }
 
     #[cfg(unix)]
-    const WORKFLOW_TEST_MODELS: &str = r#"{
-      "providers": {
-        "local": {
-          "baseUrl": "http://127.0.0.1:9/v1",
-          "apiKey": "test-only-secret",
-          "models": [{
-            "id": "model",
-            "protocol": "openai_chat_completions",
-            "contextWindow": 128000,
-            "maxOutputTokens": 512,
-            "capabilities": {
-              "inputModalities": ["text"],
-              "outputModalities": ["text"],
-              "toolCalls": true,
-              "reasoning": false
-            },
-            "compat": {"chatReasoningReplay": "omit"}
-          }]
-        }
-      }
-    }"#;
+    const WORKFLOW_TEST_MODELS: &str = r#"[providers.local]
+base_url = "http://127.0.0.1:9/v1"
+api_key = "test-only-secret"
+
+[[providers.local.models]]
+id = "model"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 512
+
+[providers.local.models.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[providers.local.models.compat]
+chat_reasoning_replay = "omit"
+"#;
 
     #[cfg(unix)]
     struct WorkflowTestPlane {
@@ -3318,7 +3316,7 @@ mod tests {
         workflow_catalog: WorkflowCatalog,
         workspace_policy: WorkspacePolicy,
     ) -> crate::runtime::subagent::AttemptSubagentContext {
-        let model_catalog = ModelCatalog::from_jsonc_slice(WORKFLOW_TEST_MODELS.as_bytes())
+        let model_catalog = ModelCatalog::from_toml_slice(WORKFLOW_TEST_MODELS.as_bytes())
             .expect("workflow test model catalog");
         let models = ModelBindingRegistry::new(
             model_catalog

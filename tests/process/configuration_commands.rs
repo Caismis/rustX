@@ -48,18 +48,21 @@ fn cfg237_binary_workflow_commands_share_json_exit_and_read_only_contract() {
     std::fs::create_dir_all(&workflows).unwrap();
     std::fs::create_dir_all(&user).unwrap();
     std::fs::write(
-        user.join("models.jsonc"),
-        include_bytes!("../../examples/local-runtime/minimal/models.jsonc"),
+        user.join("models.toml"),
+        include_bytes!("../../examples/local-runtime/minimal/models.toml"),
     )
     .unwrap();
     std::fs::write(
-        user.join("settings.jsonc"),
-        include_bytes!("../../examples/local-runtime/minimal/settings.jsonc"),
+        user.join("settings.toml"),
+        include_bytes!("../../examples/local-runtime/minimal/settings.toml"),
     )
     .unwrap();
     std::fs::write(
-        workspace.join("rustx.jsonc"),
-        r#"{"workflows":{"definitions":["human_plan"],"main":[]}}"#,
+        workspace.join("rustx.toml"),
+        r#"[workflows]
+definitions = ["human_plan"]
+main = []
+"#,
     )
     .unwrap();
     let file = workflows.join("human_plan.yaml");
@@ -157,7 +160,7 @@ fn cfg235_binary_init_check_show_exit_and_machine_contract() {
         "--reasoning",
         "false",
         "--compat",
-        "{\"chatReasoningReplay\":\"omit\"}",
+        "chat_reasoning_replay = \"omit\"",
         "--json",
     ];
     let initialized = report(&run(root.path(), &arguments), 0);
@@ -169,13 +172,13 @@ fn cfg235_binary_init_check_show_exit_and_machine_contract() {
             .len(),
         2
     );
-    let models = root.path().join("home/.config/rustx/models.jsonc");
+    let models = root.path().join("home/.config/rustx/models.toml");
     let before = std::fs::read(&models).unwrap();
     assert!(String::from_utf8_lossy(&before).contains("$RUSTX_TEST_KEY"));
     report(&run(root.path(), &arguments), 2);
     assert_eq!(std::fs::read(models).unwrap(), before);
     assert!(!root.path().join("home/.local/state").exists());
-    assert!(!root.path().join("workspace/rustx.jsonc").exists());
+    assert!(!root.path().join("workspace/rustx.toml").exists());
     let untrusted = report(&run(root.path(), &["config", "check", "--json"]), 3);
     assert_eq!(untrusted["validity"], "valid");
     assert_eq!(untrusted["launch"]["trusted"], false);
@@ -194,12 +197,12 @@ fn cfg235_binary_init_check_show_exit_and_machine_contract() {
     let runtime_root = shown["launch"]["runtime_root"].as_str().unwrap();
     assert!(!Path::new(runtime_root).exists());
     std::fs::write(
-        root.path().join("workspace/rustx.jsonc"),
-        "{\"unknownField\":true}",
+        root.path().join("workspace/rustx.toml"),
+        "unknown_field = true",
     )
     .unwrap();
     let invalid = report(&run(root.path(), &["config", "check", "--json"]), 2);
-    assert_eq!(invalid["diagnostics"][0]["path"], "unknownField");
+    assert_eq!(invalid["diagnostics"][0]["path"], "$");
     assert!(invalid["diagnostics"][0]["file"].is_string());
     assert!(!Path::new(runtime_root).exists());
     let help = run(root.path(), &["--help"]);
@@ -214,18 +217,21 @@ fn cfg235_binary_doctor_discloses_plan_and_preserves_mixed_results() {
     let user = root.path().join("home/.config/rustx");
     std::fs::create_dir_all(&user).unwrap();
     std::fs::write(
-        user.join("models.jsonc"),
-        include_str!("../../examples/local-runtime/minimal/models.jsonc"),
+        user.join("models.toml"),
+        include_str!("../../examples/local-runtime/minimal/models.toml"),
     )
     .unwrap();
     std::fs::write(
-        user.join("settings.jsonc"),
-        include_str!("../../examples/local-runtime/minimal/settings.jsonc"),
+        user.join("settings.toml"),
+        include_str!("../../examples/local-runtime/minimal/settings.toml"),
     )
     .unwrap();
     std::fs::write(
-        root.path().join("workspace/rustx.jsonc"),
-        r#"{"mcpServers":{"disabled":{"enabled":false,"command":"must-never-spawn"}}}"#,
+        root.path().join("workspace/rustx.toml"),
+        r#"[mcp_servers.disabled]
+enabled = false
+command = "must-never-spawn"
+"#,
     )
     .unwrap();
     let output = run(root.path(), &["doctor", "--probe", "--json"]);
@@ -254,8 +260,10 @@ fn cfg235_binary_doctor_discloses_plan_and_preserves_mixed_results() {
 
     assert!(run(root.path(), &["--trust", "grant"]).status.success());
     std::fs::write(
-        root.path().join("workspace/rustx.jsonc"),
-        r#"{"pythonSources":{"python:missing":"enabled"}}"#,
+        root.path().join("workspace/rustx.toml"),
+        r#"[python_sources]
+"python:missing" = "enabled"
+"#,
     )
     .unwrap();
     let output = run(root.path(), &["doctor", "--probe", "--prepare", "--json"]);

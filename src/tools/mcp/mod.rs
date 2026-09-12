@@ -280,7 +280,7 @@ impl McpInvalidationGuard<'_> {
 /// The type is serializable because a subagent child materializes the exact
 /// transport its parent generation froze (Issue #145): the frozen binding
 /// crosses the private subagent control channel rather than being
-/// rediscovered from `rustx.jsonc` in the child.
+/// rediscovered from `rustx.toml` in the child.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "transport", rename_all = "snake_case", deny_unknown_fields)]
 pub enum McpTransportConfig {

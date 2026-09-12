@@ -77,7 +77,7 @@ pub struct RuntimeClientSnapshot {
     /// against*, read from the extension owners it materialized — the value
     /// frozen at `LocalConversationCore::compose` for a root, and the value
     /// carried in `ResolvedSubagentSpec::extensions` for a Subagent child.
-    /// Nothing on this path rereads `rustx.jsonc`, project or host
+    /// Nothing on this path rereads `rustx.toml`, project or host
     /// configuration, a role document, a `ProspectiveLaunch`, or the latest
     /// `RuntimeResourceSnapshot`, and nothing infers it from Agent Status
     /// observations, context messages, or the Event Journal. It is therefore

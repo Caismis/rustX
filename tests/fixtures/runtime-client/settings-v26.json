@@ -10,7 +10,7 @@
     "type": "default_saved",
     "result": {
       "scope": "user",
-      "document": "/isolated/config/rustx/settings.jsonc",
+      "document": "/isolated/config/rustx/settings.toml",
       "revision": "sha256:published-document",
       "changed": {
         "field": "model_selection",

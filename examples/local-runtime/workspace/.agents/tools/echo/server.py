@@ -2,7 +2,7 @@
 
 rustX discovers this package because it sits at
 <workspace>/.agents/tools/echo/; there is no registration entry in
-rustx.jsonc. The entrypoint is fixed: this file must expose a top-level
+rustx.toml. The entrypoint is fixed: this file must expose a top-level
 `mcp` FastMCP server object, and rustX launches it as `server.py:mcp`.
 """
 

@@ -16,46 +16,61 @@ use rustx::runtime_client::settings::{
 };
 use rustx::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClientResult};
 
-const MODELS: &str = r#"{
-  "providers": {
-    "local": {
-      "baseUrl": "http://127.0.0.1:9/v1",
-      "apiKey": "$RUSTX_ISSUE96_KEY",
-      "models": [
-        {
-          "id": "model-a",
-          "protocol": "openai_chat_completions",
-          "contextWindow": 128000,
-          "maxOutputTokens": 512,
-          "capabilities": {"inputModalities": ["text"], "outputModalities": ["text"], "toolCalls": true, "reasoning": false},
-          "compat": {"chatReasoningReplay": "omit"}
-        },
-        {
-          "id": "model-b",
-          "protocol": "openai_chat_completions",
-          "contextWindow": 128000,
-          "maxOutputTokens": 512,
-          "capabilities": {"inputModalities": ["text"], "outputModalities": ["text"], "toolCalls": true, "reasoning": false},
-          "compat": {"chatReasoningReplay": "omit"}
-        },
-        {
-          "id": "model-c",
-          "protocol": "openai_chat_completions",
-          "contextWindow": 128000,
-          "maxOutputTokens": 512,
-          "capabilities": {"inputModalities": ["text"], "outputModalities": ["text"], "toolCalls": true, "reasoning": false},
-          "compat": {"chatReasoningReplay": "omit"}
-        }
-      ]
-    }
-  }
-}"#;
+const MODELS: &str = r#"[providers.local]
+base_url = "http://127.0.0.1:9/v1"
+api_key = "$RUSTX_ISSUE96_KEY"
+
+[[providers.local.models]]
+id = "model-a"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 512
+
+[providers.local.models.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[providers.local.models.compat]
+chat_reasoning_replay = "omit"
+
+[[providers.local.models]]
+id = "model-b"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 512
+
+[providers.local.models.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[providers.local.models.compat]
+chat_reasoning_replay = "omit"
+
+[[providers.local.models]]
+id = "model-c"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 512
+
+[providers.local.models.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[providers.local.models.compat]
+chat_reasoning_replay = "omit"
+"#;
 
 fn paths(root: &std::path::Path, config: &std::path::Path) -> LaunchFixture {
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
     LaunchFixture {
-        models: root.join("models.jsonc"),
+        models: root.join("models.toml"),
         config: config.to_path_buf(),
         skill_paths: Vec::new(),
         no_skills: true,
@@ -100,24 +115,24 @@ fn config_json(
     } else {
         serde_json::json!({})
     };
-    serde_json::json!({
-        "schemaVersion": 8,
-        "agentId": "agent-issue96",
+    toml::to_string_pretty(&serde_json::json!({
+        "schema_version": 8,
+        "agent_id": "agent-issue96",
         "model": {"model": model},
         "extensions": {
-            "agentStatus": {
+            "agent_status": {
                 "enabled": true,
                 "time": {"enabled": true, "timezone": timezone},
                 "background": {"enabled": true}
             }
         },
-        "context": {"reserveTokens": reserve_tokens, "keepRecentTokens": 4096},
-        "defaultTools": default_tools,
+        "context": {"reserve_tokens": reserve_tokens, "keep_recent_tokens": 4096},
+        "default_tools": default_tools,
         "skills": [skills_root],
-        "mcpServers": mcp_servers,
+        "mcp_servers": mcp_servers,
         "environment": {"ISSUE96_CURRENT": environment_value}
-    })
-    .to_string()
+    }))
+    .unwrap()
 }
 
 fn write_skill(root: &std::path::Path, name: &str, description: &str) {
@@ -138,10 +153,10 @@ fn model(reference: &str) -> SessionModelConfig {
 #[allow(clippy::too_many_lines)]
 async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
     let root = tempfile::tempdir().expect("root");
-    let config_path = root.path().join("rustx.jsonc");
+    let config_path = root.path().join("rustx.toml");
     let skills_root = root.path().join("workspace/configured-skills");
     write_skill(&skills_root, "old-skill", "Old current resource");
-    std::fs::write(root.path().join("models.jsonc"), MODELS).expect("models");
+    std::fs::write(root.path().join("models.toml"), MODELS).expect("models");
     std::fs::write(
         &config_path,
         config_json(
@@ -368,10 +383,10 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn invalid_current_config_is_rejected_even_when_a_catalog_exists() {
     let root = tempfile::tempdir().expect("root");
-    let config_path = root.path().join("rustx.jsonc");
+    let config_path = root.path().join("rustx.toml");
     let skills_root = root.path().join("workspace/configured-skills");
     std::fs::create_dir_all(&skills_root).expect("Skill root");
-    std::fs::write(root.path().join("models.jsonc"), MODELS).expect("models");
+    std::fs::write(root.path().join("models.toml"), MODELS).expect("models");
     std::fs::write(
         &config_path,
         config_json(
@@ -391,12 +406,16 @@ async fn invalid_current_config_is_rejected_even_when_a_catalog_exists() {
         .expect("valid config creates the catalog");
     drop(product);
 
-    let invalid = br#"{
-        "agentId": "agent-issue96",
-        "model": {"model": "local/model-a"},
-        "context": {"reserveTokens": 1, "keepRecentTokens": 1},
-        "conversationId": "historical"
-    }"#;
+    let invalid = br#"agent_id = "agent-issue96"
+conversation_id = "historical"
+
+[model]
+model = "local/model-a"
+
+[context]
+reserve_tokens = 1
+keep_recent_tokens = 1
+"#;
     std::fs::write(&config_path, invalid).expect("invalid current config");
     assert!(startup.try_resolve().unwrap_err().contains("unknown field"));
 }
@@ -404,10 +423,10 @@ async fn invalid_current_config_is_rejected_even_when_a_catalog_exists() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn invalid_first_boot_model_does_not_publish_a_poisoned_session() {
     let root = tempfile::tempdir().expect("root");
-    let config_path = root.path().join("rustx.jsonc");
+    let config_path = root.path().join("rustx.toml");
     let skills_root = root.path().join("workspace/configured-skills");
     std::fs::create_dir_all(&skills_root).expect("Skill root");
-    std::fs::write(root.path().join("models.jsonc"), MODELS).expect("models");
+    std::fs::write(root.path().join("models.toml"), MODELS).expect("models");
     let startup = paths(root.path(), &config_path);
 
     std::fs::write(
@@ -465,58 +484,52 @@ async fn invalid_first_boot_model_does_not_publish_a_poisoned_session() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn commented_configuration_documents_compose_a_runtime() {
     let root = tempfile::tempdir().expect("root");
-    let config_path = root.path().join("rustx.jsonc");
+    let config_path = root.path().join("rustx.toml");
     std::fs::write(
-        root.path().join("models.jsonc"),
-        r#"{
-  // The provider identity is a local name, never an official endpoint.
-  "providers": {
-    "local": {
-      "baseUrl": "http://127.0.0.1:9/v1",
-      "apiKey": "$RUSTX_ISSUE96_KEY",
-      "models": [
-        {
-          "id": "model-a",
-          "protocol": "openai_chat_completions",
-          "contextWindow": 128000,
-          "maxOutputTokens": 512,
-          "capabilities": {
-            "inputModalities": ["text"],
-            "outputModalities": ["text"],
-            "toolCalls": true,
-            "reasoning": false,
-          },
-          /* Required for this protocol: how prior reasoning is replayed. */
-          "compat": {"chatReasoningReplay": "omit"},
-        },
-      ],
-    },
-  },
-}"#,
+        root.path().join("models.toml"),
+        r#"[providers.local]
+base_url = "http://127.0.0.1:9/v1"
+api_key = "$RUSTX_ISSUE96_KEY"
+
+[[providers.local.models]]
+id = "model-a"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 512
+
+[providers.local.models.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[providers.local.models.compat]
+chat_reasoning_replay = "omit"
+"#,
     )
     .expect("commented models");
     std::fs::write(
         &config_path,
-        r#"{
-  "schemaVersion": 8,
-  "agentId": "agent-issue96",
-  // The default model of a brand-new Session.
-  "model": {"model": "local/model-a"},
-  "context": {
-    "reserveTokens": 11,
-    "keepRecentTokens": 4096,
-  },
-  "defaultTools": ["read"],
-  // "mcpServers": {"exa": {"type": "http", "url": "https://mcp.exa.ai/mcp"}},
-  "mcpServers": {},
-}"#,
+        r#"schema_version = 8
+agent_id = "agent-issue96"
+default_tools = ["read"]
+
+[model]
+model = "local/model-a"
+
+[context]
+reserve_tokens = 11
+keep_recent_tokens = 4096
+
+[mcp_servers]
+"#,
     )
     .expect("commented config");
     let startup = paths(root.path(), &config_path);
 
     let product = LocalSessionProduct::compose(&(startup).resolve(), &dependencies())
         .await
-        .expect("JSONC configuration documents must compose");
+        .expect("TOML configuration documents must compose");
     assert_eq!(
         product.runtime().model_view().configured.model.to_string(),
         "local/model-a"
@@ -532,25 +545,23 @@ async fn commented_configuration_documents_compose_a_runtime() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn relaxations_beyond_jsonc_still_fail_composition() {
+async fn malformed_toml_fails_before_composition() {
     let root = tempfile::tempdir().expect("root");
-    let config_path = root.path().join("rustx.jsonc");
-    std::fs::write(root.path().join("models.jsonc"), MODELS).expect("models");
+    let config_path = root.path().join("rustx.toml");
+    std::fs::write(root.path().join("models.toml"), MODELS).expect("models");
     let startup = paths(root.path(), &config_path);
 
     std::fs::write(
         &config_path,
-        r#"{
-  schemaVersion: 8,
-  'agentId': 'agent-issue96',
-  "model": {"model": "local/model-a"},
-  "context": {"reserveTokens": 11, "keepRecentTokens": 4096}
-}"#,
+        r#"# syntax failure
+[model
+model = "local/model-a"
+"#,
     )
-    .expect("non-JSONC config");
+    .expect("non-TOML config");
     let error = startup
         .try_resolve()
-        .expect_err("unquoted keys and single-quoted strings must fail");
+        .expect_err("unterminated tables must fail");
     assert!(
         error.clone().contains("line 2"),
         "a syntax failure must report where it was detected: {error}"
@@ -560,21 +571,21 @@ async fn relaxations_beyond_jsonc_still_fail_composition() {
 /// Writes a launch document whose only variable is the closed native Agent
 /// Extension composition.
 fn extension_config(enabled: bool, timezone: &str) -> String {
-    serde_json::json!({
-        "schemaVersion": 8,
-        "agentId": "agent-ext256",
+    toml::to_string_pretty(&serde_json::json!({
+        "schema_version": 8,
+        "agent_id": "agent-ext256",
         "model": {"model": "local/model-a"},
-        "context": {"reserveTokens": 11, "keepRecentTokens": 4096},
-        "defaultTools": ["read"],
+        "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096},
+        "default_tools": ["read"],
         "extensions": {
-            "agentStatus": {
+            "agent_status": {
                 "enabled": enabled,
                 "time": {"enabled": true, "timezone": timezone},
                 "background": {"enabled": true}
             }
         }
-    })
-    .to_string()
+    }))
+    .unwrap()
 }
 
 /// Attaches one `LocalSessionProduct` endpoint and returns the
@@ -632,8 +643,8 @@ fn composed_timezone(runtime: &rustx::runtime::ConversationRuntime) -> Option<ch
 #[allow(clippy::too_many_lines)]
 async fn ext256_reload_cannot_recompose_extensions_but_the_next_launch_does() {
     let root = tempfile::tempdir().expect("root");
-    let config_path = root.path().join("rustx.jsonc");
-    std::fs::write(root.path().join("models.jsonc"), MODELS).expect("models");
+    let config_path = root.path().join("rustx.toml");
+    std::fs::write(root.path().join("models.toml"), MODELS).expect("models");
     std::fs::write(&config_path, extension_config(true, "UTC")).expect("config v1");
     let startup = paths(root.path(), &config_path);
 
@@ -885,25 +896,25 @@ fn uncomposed() -> EffectiveNativeAgentExtensions {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition() {
     let root = tempfile::tempdir().expect("root");
-    let config_path = root.path().join("rustx.jsonc");
-    std::fs::write(root.path().join("models.jsonc"), MODELS).expect("models");
+    let config_path = root.path().join("rustx.toml");
+    std::fs::write(root.path().join("models.toml"), MODELS).expect("models");
     // Every contributor field is deliberately non-default, so a projection
     // that quietly substituted built-in defaults could not pass.
     std::fs::write(
         &config_path,
-        serde_json::json!({
-            "schemaVersion": 8,
-            "agentId": "agent-ext256",
+        toml::to_string_pretty(&serde_json::json!({
+            "schema_version": 8,
+            "agent_id": "agent-ext256",
             "model": {"model": "local/model-a"},
-            "context": {"reserveTokens": 11, "keepRecentTokens": 4096},
-            "defaultTools": ["read"],
-            "extensions": {"agentStatus": {
+            "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096},
+            "default_tools": ["read"],
+            "extensions": {"agent_status": {
                 "enabled": true,
                 "time": {"enabled": true, "timezone": "Asia/Shanghai"},
                 "background": {"enabled": false}
             }}
-        })
-        .to_string(),
+        }))
+        .unwrap(),
     )
     .expect("config v1");
     let fixture = paths(root.path(), &config_path);
@@ -949,15 +960,15 @@ async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition(
     // The deliberate divergence with the prospective configuration surface.
     std::fs::write(
         &config_path,
-        serde_json::json!({
-            "schemaVersion": 8,
-            "agentId": "agent-ext256",
+        toml::to_string_pretty(&serde_json::json!({
+            "schema_version": 8,
+            "agent_id": "agent-ext256",
             "model": {"model": "local/model-a"},
-            "context": {"reserveTokens": 11, "keepRecentTokens": 4096},
-            "defaultTools": ["read"],
-            "extensions": {"agentStatus": {"enabled": false}}
-        })
-        .to_string(),
+            "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096},
+            "default_tools": ["read"],
+            "extensions": {"agent_status": {"enabled": false}}
+        }))
+        .unwrap(),
     )
     .expect("config v2");
     let prospective = paths(root.path(), &config_path).resolve();

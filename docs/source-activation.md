@@ -23,32 +23,29 @@ not prove availability; availability does not grant domain admission; admission
 does not necessarily expose a Tool to the main model. Managed Python remains an
 ordinary MCP origin with the identity `python:<folder>`. There is one Tool Plane.
 
-## JSONC surface (runtime schema 8)
+## TOML surface (runtime schema 8)
 
 Both configured MCP sources and managed Python are inert by default. An MCP
 entry must declare `enabled: true`. An absent `enabled` means discovered without
 a grant; `enabled: false` means explicitly disabled. Managed Python decisions
-are a named map, `pythonSources`, keyed by exact synthesized source identity:
+are a named map, `python_sources`, keyed by exact synthesized source identity:
 
-```jsonc
-{
-  "mcpServers": {
-    "public-service": {
-      "enabled": true,
-      "type": "http",
-      "url": "https://service.example/mcp",
-      "headers": {"Accept-Language": "en"}
-    },
-    "optional-process": {
-      "enabled": false,
-      "command": "optional-server"
-    }
-  },
-  "pythonSources": {
-    "python:echo": "enabled",
-    "python:unrelated-demo": "disabled"
-  }
-}
+```toml
+[mcp_servers.public-service]
+enabled = true
+type = "http"
+url = "https://service.example/mcp"
+
+[mcp_servers.public-service.headers]
+Accept-Language = "en"
+
+[mcp_servers.optional-process]
+enabled = false
+command = "optional-server"
+
+[python_sources]
+"python:echo" = "enabled"
+"python:unrelated-demo" = "disabled"
 ```
 
 Configuration accepts only `enabled` and `disabled` for Python identities;
@@ -94,18 +91,18 @@ otherwise empty project; an untrusted launch is rejected before preparation.
 Trust does not enable any external source. Trusted + disabled stays inert;
 untrusted + enabled is rejected; trusted + enabled is eligible for preparation.
 
-`mcpServers` overlays names and replaces a same-name entry **as a whole**. A
+`mcp_servers` overlays names and replaces a same-name entry **as a whole**. A
 replacement includes its own enable decision, command/URL, ordinary environment,
 headers and credential references. Absent members never inherit from the
-replaced entry. An empty map clears the map. The `pythonSources` named map follows
+replaced entry. An empty map clears the map. The `python_sources` named map follows
 the same absence, named replacement and empty-map semantics. Tool allowlists,
 Subagent selectors and Workflow references cannot supply an activation grant.
 
 Project-authored sources may declare ordinary transport configuration and
-enablement under host trust. They cannot declare `sensitiveEnv` or
-`sensitiveHeaders`, even empty objects. Providers, destinations for provider
+enablement under host trust. They cannot declare `sensitive_env` or
+`sensitive_headers`, even empty objects. Providers, destinations for provider
 credentials and provider credential declarations remain host-owned. Define a
-credential-bearing MCP source entirely in user `settings.jsonc`. A project may
+credential-bearing MCP source entirely in user `settings.toml`. A project may
 replace its name, but the replacement receives none of the host credentials or
 enablement. A project cannot partially redirect a host command/URL while keeping
 its authentication. Project resource paths retain CFG-01 containment checks,
@@ -117,25 +114,26 @@ Use `$ENV_VAR` only in declared secret fields. Names follow
 `[A-Za-z_][A-Za-z0-9_]*`. There is no `${...}`, substitution inside strings,
 shell evaluation, command execution, or document-wide interpolation.
 
-Host `models.jsonc` retains `apiKey: "$RUSTX_OPENAI_API_KEY"`; provider literal
-keys are also supported, but references are preferable. Host `settings.jsonc`:
+Host `models.toml` retains `api_key: "$RUSTX_OPENAI_API_KEY"`; provider literal
+keys are also supported, but references are preferable. Host `settings.toml`:
 
-```jsonc
-{
-  "mcpServers": {
-    "private-http": {
-      "enabled": true,
-      "url": "https://service.example/mcp",
-      "sensitiveHeaders": {"Authorization": "$RUSTX_SERVICE_AUTHORIZATION"}
-    },
-    "private-process": {
-      "enabled": true,
-      "command": "service-mcp",
-      "env": {"LOG_LEVEL": "warn"},
-      "sensitiveEnv": {"SERVICE_TOKEN": "$RUSTX_SERVICE_TOKEN"}
-    }
-  }
-}
+```toml
+[mcp_servers.private-http]
+enabled = true
+url = "https://service.example/mcp"
+
+[mcp_servers.private-http.sensitive_headers]
+Authorization = "$RUSTX_SERVICE_AUTHORIZATION"
+
+[mcp_servers.private-process]
+enabled = true
+command = "service-mcp"
+
+[mcp_servers.private-process.env]
+LOG_LEVEL = "warn"
+
+[mcp_servers.private-process.sensitive_env]
+SERVICE_TOKEN = "$RUSTX_SERVICE_TOKEN"
 ```
 
 The Authorization variable contains the complete value, including `Bearer ` if

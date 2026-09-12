@@ -6,7 +6,6 @@
 
 pub mod agent;
 pub mod capabilities;
-pub mod config_format;
 pub mod context;
 pub mod conversation;
 pub mod durable;
@@ -21,6 +20,7 @@ pub mod publication;
 pub mod runtime;
 pub mod runtime_client;
 pub mod skills;
+pub mod toml_authoring;
 pub mod tools;
 
 /// The crate's own published name, available to its test build.

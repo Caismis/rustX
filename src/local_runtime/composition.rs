@@ -235,7 +235,7 @@ struct LocalRuntimeResourceLoader {
     native_resources: NativeToolResources,
     workflow_runtime: WorkflowRuntime,
     /// The launch-scoped model authority. Reload re-reads pinned settings but
-    /// not `models.jsonc`, so an agent's explicit model reference is
+    /// not `models.toml`, so an agent's explicit model reference is
     /// validated against exactly the catalog this process was launched with.
     models: ModelBindingRegistry,
 }
@@ -872,7 +872,7 @@ pub(crate) fn mcp_bindings_with_authority(
     for (name, binding) in &mut bindings {
         binding.credentials.capture(credentials.clone());
         if matches!(
-            provenance.get(&format!("mcpServers.{name}")),
+            provenance.get(&format!("mcp_servers.{name}")),
             Some(super::launch::Origin::Project { .. })
         ) {
             binding.resource_workspace = Some(workspace.into());
@@ -1386,7 +1386,7 @@ impl LocalConversationCore {
     ///
     /// - the startup input is the typed [`SubagentChildSpec`], never a
     ///   current runtime configuration file: the child never opens
-    ///   `rustx.jsonc` and never looks its own agent name up;
+    ///   `rustx.toml` and never looks its own agent name up;
     /// - the base tool registry is exactly the Builtin capability set the
     ///   parent's resolution froze, registered through
     ///   [`register_subagent_child_tools`]; nothing is added, substituted,
@@ -1451,7 +1451,7 @@ impl LocalConversationCore {
             })?;
         // 1-4. The child's model authority, materialized from the
         // parent-frozen resolved invocation. There is deliberately no model
-        // catalog step here: `models.jsonc` is mutable, and reopening it
+        // catalog step here: `models.toml` is mutable, and reopening it
         // would let a catalog edit between the parent's freeze and this
         // composition silently change the child's provider binding,
         // protocol, context window, output budget, reasoning semantics,
@@ -1933,7 +1933,7 @@ impl LocalSessionProduct {
         // A named Session takes the catalog transition `/resume` takes,
         // decided ahead of composition rather than published ahead of it.
         // It is *planned* here and committed at the end: composing the destination is what can still fail — a
-        // Session whose recorded model no longer exists in `models.jsonc`,
+        // Session whose recorded model no longer exists in `models.toml`,
         // a database that will not open — and a launch that fails must not
         // leave the active selection somewhere the user never asked for.
         // A replacement spawn that continues the active selection therefore
@@ -2625,24 +2625,25 @@ mod subagent_child_tests {
         ToolInvocationPolicy, ToolOrigin, ToolReplayPolicy,
     };
 
-    const MODELS: &str = r#"{
-      "providers": {
-        "local": {
-          "baseUrl": "http://127.0.0.1:9/v1",
-          "apiKey": "$RUSTX_CHILD_KEY",
-          "models": [
-            {
-              "id": "model-a",
-              "protocol": "openai_chat_completions",
-              "contextWindow": 128000,
-              "maxOutputTokens": 512,
-              "capabilities": {"inputModalities": ["text"], "outputModalities": ["text"], "toolCalls": true, "reasoning": false},
-              "compat": {"chatReasoningReplay": "omit"}
-            }
-          ]
-        }
-      }
-    }"#;
+    const MODELS: &str = r#"[providers.local]
+base_url = "http://127.0.0.1:9/v1"
+api_key = "$RUSTX_CHILD_KEY"
+
+[[providers.local.models]]
+id = "model-a"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 512
+
+[providers.local.models.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[providers.local.models.compat]
+chat_reasoning_replay = "omit"
+"#;
 
     fn dependencies() -> LocalRuntimeDependencies {
         LocalRuntimeDependencies {
@@ -2910,7 +2911,7 @@ mod subagent_child_tests {
         let dir = tempfile::tempdir().expect("lab");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(workspace.join(".agents/skills/ambient")).expect("skills");
-        std::fs::write(dir.path().join("models.jsonc"), MODELS).expect("models.jsonc");
+        std::fs::write(dir.path().join("models.toml"), MODELS).expect("models.toml");
         std::fs::write(
             workspace.join("AGENTS.md"),
             "ambient workspace instructions\n",
@@ -2942,7 +2943,7 @@ mod subagent_child_tests {
     /// projection is its own frozen `ResolvedSubagentSpec::extensions`, and
     /// nothing else.
     ///
-    /// The lab deliberately carries a *root-shaped* `rustx.jsonc` beside the
+    /// The lab deliberately carries a *root-shaped* `rustx.toml` beside the
     /// child, declaring a conflicting Agent Status composition. That
     /// document stands in for every rereadable authority at once — root
     /// launch configuration, the child workspace's own configuration, and a
@@ -2971,19 +2972,22 @@ mod subagent_child_tests {
         // The conflicting ambient authority: a root document that both
         // enables the extension and configures it differently.
         std::fs::write(
-            dir.path().join("workspace/rustx.jsonc"),
-            serde_json::json!({
-                "schemaVersion": 8,
-                "agentId": "agent-host",
-                "model": {"model": "local/model-a"},
-                "context": {"reserveTokens": 0, "keepRecentTokens": 0},
-                "extensions": {"agentStatus": {
-                    "enabled": true,
-                    "time": {"enabled": true, "timezone": "America/New_York"},
-                    "background": {"enabled": true}
-                }}
-            })
-            .to_string(),
+            dir.path().join("workspace/rustx.toml"),
+            r#"schema_version = 8
+agent_id = "agent-host"
+[model]
+model = "local/model-a"
+[context]
+reserve_tokens = 0
+keep_recent_tokens = 0
+[extensions.agent_status]
+enabled = true
+[extensions.agent_status.time]
+enabled = true
+timezone = "America/New_York"
+[extensions.agent_status.background]
+enabled = true
+"#,
         )
         .expect("an ambient root configuration a rereading child would observe");
 
@@ -3115,7 +3119,7 @@ mod subagent_child_tests {
     /// project, or root configuration to widen or reinterpret its native
     /// Agent Extension set.
     ///
-    /// The lab's workspace carries a `rustx.jsonc` that enables the Agent
+    /// The lab's workspace carries a `rustx.toml` that enables the Agent
     /// Status extension with a distinctive timezone. A child whose invoking
     /// generation froze *no* extension composes no status engine, and a
     /// child whose invoking generation froze a *different* Agent Status
@@ -3125,18 +3129,22 @@ mod subagent_child_tests {
     async fn ext256_child_materialization_never_rereads_configuration_for_its_extension_set() {
         let dir = lab();
         std::fs::write(
-            dir.path().join("workspace/rustx.jsonc"),
-            serde_json::json!({
-                "schemaVersion": 8,
-                "agentId": "agent-host",
-                "model": {"model": "local/model-a"},
-                "context": {"reserveTokens": 0, "keepRecentTokens": 0},
-                "extensions": {"agentStatus": {
-                    "enabled": true,
-                    "time": {"enabled": true, "timezone": "America/New_York"}
-                }}
-            })
-            .to_string(),
+            dir.path().join("workspace/rustx.toml"),
+            r#"schema_version = 8
+agent_id = "agent-host"
+[model]
+model = "local/model-a"
+[context]
+reserve_tokens = 0
+keep_recent_tokens = 0
+[extensions.agent_status]
+enabled = true
+[extensions.agent_status.time]
+enabled = true
+timezone = "America/New_York"
+[extensions.agent_status.background]
+enabled = true
+"#,
         )
         .expect("an ambient host configuration a rereading child would observe");
 
@@ -3549,11 +3557,11 @@ mod subagent_child_tests {
     /// The proof is structural rather than a timing argument: the catalog
     /// file is deleted before composition, and the child still composes with
     /// exactly the frozen semantics. There is no code path left that could
-    /// observe a `models.jsonc` at all.
+    /// observe a `models.toml` at all.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_child_composes_with_no_model_catalog_on_disk() {
         let dir = lab();
-        std::fs::remove_file(dir.path().join("models.jsonc")).expect("remove the catalog");
+        std::fs::remove_file(dir.path().join("models.toml")).expect("remove the catalog");
         let spec = spec(dir.path(), vec![builtin("read")], Vec::new(), Vec::new());
         let core = LocalConversationCore::compose_subagent_child(
             &spec,
@@ -4274,7 +4282,7 @@ mod composition_tests {
     use crate::runtime::identity::{ConversationId, McpServerId, ToolCallId, ToolId};
     use crate::scripted_suites::support::fake::{FakeModel, FakeStep, fake_model};
     use crate::scripted_suites::support::model::{
-        FixtureModel, ScriptedAdapterFactory, fixture_catalog_document, fixture_registry,
+        FixtureModel, ScriptedAdapterFactory, fixture_registry,
     };
     use crate::tools::mcp::fixture::{
         ECHO_CALL_COUNT_FILE_ENV, FIXTURE_MODE_ENV, FixtureServer, TOOL_PREFIX_ENV,
@@ -4296,8 +4304,8 @@ mod composition_tests {
 
     fn paths(root: &std::path::Path, workspace: std::path::PathBuf) -> LaunchFixture {
         LaunchFixture {
-            models: root.join("models.jsonc"),
-            config: root.join("rustx.jsonc"),
+            models: root.join("models.toml"),
+            config: root.join("rustx.toml"),
             skill_paths: Vec::new(),
             no_skills: true,
             no_builtin_tools: false,
@@ -4375,33 +4383,28 @@ mod composition_tests {
             FixtureModel::text("scripted/scripted", ModelProtocol::OpenAiChatCompletions);
         let factory = ScriptedAdapterFactory::new(adapter);
         let registry = fixture_registry(std::slice::from_ref(&fixture_model), &factory);
-        let mut catalog_document = serde_json::to_value(fixture_catalog_document(
-            std::slice::from_ref(&fixture_model),
-        ))
-        .unwrap();
-        // Author an explicit test credential; production projections intentionally redact literals.
-        for provider in catalog_document["providers"]
-            .as_object_mut()
-            .unwrap()
-            .values_mut()
-        {
-            provider["apiKey"] = serde_json::json!("test-only-secret");
-        }
-        std::fs::write(
-            root.path().join("models.jsonc"),
-            serde_json::to_vec_pretty(&catalog_document).expect("model catalog"),
-        )
-        .expect("models.jsonc");
+        std::fs::write(root.path().join("models.toml"), r#"
+[providers.scripted]
+base_url = "https://scripted.fixture.invalid/v1"
+api_key = "test-only-secret"
+[[providers.scripted.models]]
+id = "scripted"
+protocol = "openai_chat_completions"
+context_window = 1000000
+max_output_tokens = 4096
+capabilities = { input_modalities = ["text"], output_modalities = ["text"], tool_calls = true, reasoning = false }
+compat = { chat_reasoning_replay = "omit" }
+"#).unwrap();
 
         let echo_call_count_file = root.path().join("echo-call-count");
         let executable = std::env::current_exe().expect("test executable");
         let config_document = serde_json::json!({
-            "schemaVersion": 8,
-            "agentId": "agent-parent",
+            "schema_version": 8,
+            "agent_id": "agent-parent",
             "model": {"model": "scripted/scripted"},
-            "context": {"reserveTokens": 0, "keepRecentTokens": 0},
-            "defaultTools": ["read", "subagent", TOOL_NAME],
-            "mcpServers": {
+            "context": {"reserve_tokens": 0, "keep_recent_tokens": 0},
+            "default_tools": ["read", "subagent", TOOL_NAME],
+            "mcp_servers": {
                 SERVER_NAME: {
                     "enabled": true,
                     "type": "stdio",
@@ -4415,7 +4418,7 @@ mod composition_tests {
                 },
             },
             "subagents": {
-                "maxConcurrent": 4,
+                "max_concurrent": 4,
                 "roles": {
                     TEST_AGENT: {
                         "description": "Read the workspace",
@@ -4428,9 +4431,9 @@ mod composition_tests {
             },
         });
         crate::launch_fixture::write_documents(
-            &root.path().join("rustx.jsonc"),
-            &config_document.to_string(),
-            &["mcpServers"],
+            &root.path().join("rustx.toml"),
+            &toml::to_string_pretty(&config_document).unwrap(),
+            &["mcp_servers"],
         );
         let launch = paths(root.path(), workspace).resolve();
         let runtime_config = launch.config.as_ref().clone();

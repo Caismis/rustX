@@ -1,0 +1,20 @@
+# Explicit provider/model declarations. Provider request overlays are JSON strings.
+# TOML configuration; fixed Workflows use YAML and model-facing resources use Markdown.
+[providers.example]
+base_url = "https://api.example.invalid/v1"
+api_key = "$RUSTX_EXAMPLE_API_KEY"
+
+[[providers.example.models]]
+id = "demo-model"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 4096
+
+[providers.example.models.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[providers.example.models.compat]
+chat_reasoning_replay = "omit"

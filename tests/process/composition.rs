@@ -18,48 +18,53 @@ use rustx::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClien
 
 /// A catalog whose credential comes from the environment, exercising the
 /// startup credential-resolution path.
-const MODELS_JSON: &str = r#"{
-  "providers": {
-    "local": {
-      "baseUrl": "https://local.fixture.invalid/v1",
-      "apiKey": "$RUSTX_TEST_MODEL_KEY",
-      "models": [
-        {
-          "id": "composed-model",
-          "protocol": "openai_chat_completions",
-          "contextWindow": 128000,
-          "maxOutputTokens": 4096,
-          "capabilities": {
-            "inputModalities": ["text"],
-            "outputModalities": ["text"],
-            "toolCalls": true,
-            "reasoning": false
-          },
-          "compat": {"chatReasoningReplay": "omit"},
-          "requestParams": {"temperature": 0.3}
-        }
-      ]
-    }
-  }
-}"#;
+const MODELS_TOML: &str = r#"[providers.local]
+base_url = "https://local.fixture.invalid/v1"
+api_key = "$RUSTX_TEST_MODEL_KEY"
 
-const RUNTIME_CONFIG_JSON: &str = r#"{
-  "agentId": "agent-composed",
-  "model": {"model": "local/composed-model"},
-  "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
-  "nativeTools": {"bash": {"execution": "model_selectable", "concurrency": "sequential"}},
-  "environment": {"RUSTX_FIXTURE": "1"}
-}"#;
+[[providers.local.models]]
+id = "composed-model"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 4096
+request_params_json = "{\"temperature\": 0.3}"
+
+[providers.local.models.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[providers.local.models.compat]
+chat_reasoning_replay = "omit"
+"#;
+
+const RUNTIME_CONFIG_TOML: &str = r#"agent_id = "agent-composed"
+
+[model]
+model = "local/composed-model"
+
+[context]
+reserve_tokens = 1024
+keep_recent_tokens = 8192
+
+[native_tools.bash]
+execution = "model_selectable"
+concurrency = "sequential"
+
+[environment]
+RUSTX_FIXTURE = "1"
+"#;
 
 /// Writes the startup files into a temporary root and returns the explicit
 /// paths.
 fn startup(root: &std::path::Path, models: &str, config: &str) -> LaunchFixture {
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
-    let models_path = root.join("models.jsonc");
-    let config_path = root.join("rustx.jsonc");
-    std::fs::write(&models_path, models).expect("models.jsonc");
-    crate::launch_fixture::write_documents(&config_path, config, &["nativeTools"]);
+    let models_path = root.join("models.toml");
+    let config_path = root.join("rustx.toml");
+    std::fs::write(&models_path, models).expect("models.toml");
+    crate::launch_fixture::write_documents(&config_path, config, &["native_tools"]);
     LaunchFixture {
         models: models_path,
         config: config_path,
@@ -95,7 +100,7 @@ fn dependencies() -> LocalRuntimeDependencies {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn composition_owns_one_conversation_domain() {
     let root = tempfile::tempdir().expect("temp root");
-    let paths = startup(root.path(), MODELS_JSON, RUNTIME_CONFIG_JSON);
+    let paths = startup(root.path(), MODELS_TOML, RUNTIME_CONFIG_TOML);
     let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
         .await
         .expect("composition succeeds");
@@ -219,7 +224,7 @@ async fn composition_owns_one_conversation_domain() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn runtime_private_roots_stay_disjoint_from_the_workspace() {
     let root = tempfile::tempdir().expect("temp root");
-    let paths = startup(root.path(), MODELS_JSON, RUNTIME_CONFIG_JSON);
+    let paths = startup(root.path(), MODELS_TOML, RUNTIME_CONFIG_TOML);
     assert!(!paths.artifacts_root().starts_with(&paths.workspace));
     assert!(!paths.environment_store_root().starts_with(&paths.workspace));
     assert_ne!(paths.artifacts_root(), paths.environment_store_root());
@@ -249,7 +254,7 @@ async fn startup_configuration_failures_are_explicit() {
     let root = tempfile::tempdir().expect("temp root");
 
     // A missing catalog file.
-    let paths = startup(root.path(), MODELS_JSON, RUNTIME_CONFIG_JSON);
+    let paths = startup(root.path(), MODELS_TOML, RUNTIME_CONFIG_TOML);
     let missing = LaunchFixture {
         models: root.path().join("absent.json"),
         ..paths.clone()
@@ -257,15 +262,15 @@ async fn startup_configuration_failures_are_explicit() {
     assert!(missing.try_resolve().unwrap_err().contains("cannot read"));
 
     // A catalog without an explicit base URL.
-    let no_base = MODELS_JSON.replace("\"baseUrl\": \"https://local.fixture.invalid/v1\",", "");
-    let paths = startup(&root.path().join("no-base"), &no_base, RUNTIME_CONFIG_JSON);
-    assert!(paths.try_resolve().unwrap_err().contains("baseUrl"));
+    let no_base = MODELS_TOML.replace("base_url = \"https://local.fixture.invalid/v1\"", "");
+    let paths = startup(&root.path().join("no-base"), &no_base, RUNTIME_CONFIG_TOML);
+    assert!(paths.try_resolve().unwrap_err().contains("base_url"));
 
     // An unresolved environment credential names only the variable.
     let paths = startup(
         &root.path().join("no-env"),
-        MODELS_JSON,
-        RUNTIME_CONFIG_JSON,
+        MODELS_TOML,
+        RUNTIME_CONFIG_TOML,
     );
     let error = LocalConversationRuntime::compose(
         &(paths).resolve(),
@@ -280,8 +285,8 @@ async fn startup_configuration_failures_are_explicit() {
     assert!(!error.to_string().contains("composed-secret"));
 
     // A session selecting a model the catalog does not declare.
-    let bad_config = RUNTIME_CONFIG_JSON.replace("local/composed-model", "local/absent-model");
-    let paths = startup(&root.path().join("bad-model"), MODELS_JSON, &bad_config);
+    let bad_config = RUNTIME_CONFIG_TOML.replace("local/composed-model", "local/absent-model");
+    let paths = startup(&root.path().join("bad-model"), MODELS_TOML, &bad_config);
     assert!(
         paths
             .try_resolve()
@@ -290,11 +295,8 @@ async fn startup_configuration_failures_are_explicit() {
     );
 
     // A current runtime config with an unknown field.
-    let bad_config = RUNTIME_CONFIG_JSON.replace(
-        "\"agentId\": \"agent-composed\",",
-        "\"agentId\": \"agent-composed\", \"futureKnob\": true,",
-    );
-    let paths = startup(&root.path().join("bad-config"), MODELS_JSON, &bad_config);
+    let bad_config = format!("future_knob = true\n{RUNTIME_CONFIG_TOML}");
+    let paths = startup(&root.path().join("bad-config"), MODELS_TOML, &bad_config);
     assert!(paths.try_resolve().unwrap_err().contains("unknown field"));
 }
 
@@ -303,7 +305,7 @@ async fn startup_configuration_failures_are_explicit() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_endpoint_speaks_for_the_one_composed_host() {
     let root = tempfile::tempdir().expect("temp root");
-    let paths = startup(root.path(), MODELS_JSON, RUNTIME_CONFIG_JSON);
+    let paths = startup(root.path(), MODELS_TOML, RUNTIME_CONFIG_TOML);
     let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
         .await
         .expect("composition succeeds");
@@ -341,7 +343,7 @@ async fn the_endpoint_speaks_for_the_one_composed_host() {
     );
 
     // The model catalog is reachable through the protocol, so a client never
-    // reads models.jsonc itself.
+    // reads models.toml itself.
     let response = endpoint.handle_request(RuntimeClientRequest::ModelCatalogGet {
         id: RequestId::new(2),
     });

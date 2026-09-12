@@ -410,7 +410,7 @@ describe("CommandDispatcher", () => {
     assert.equal(
       afterCatalog[2]?.method,
       "model_catalog_get",
-      "the client reads the runtime catalog, never models.jsonc",
+      "the client reads the runtime catalog, never models.toml",
     );
     peer.respond(3, {
       type: "model_catalog",
@@ -539,7 +539,7 @@ describe("CommandDispatcher", () => {
     assert.equal(
       peer.requests[2]?.method,
       "model_catalog_get",
-      "the selector reads the runtime catalog, never models.jsonc",
+      "the selector reads the runtime catalog, never models.toml",
     );
     peer.respond(3, {
       type: "model_catalog",
@@ -891,7 +891,7 @@ describe("CommandDispatcher", () => {
     assert.equal(request.expected_revision, "sha256:reviewed");
     assert.equal(request.target, "model_selection");
     assert.ok(!("value" in request));
-    peer.respond(3, { type: "default_saved", result: { scope: "user", document: "/config/settings.jsonc", revision: "sha256:new", changed: { field: "model_selection", selection: { model: "alpha/model-b", reasoning_profile: null } }, live_unchanged: true, applies_at: "next_launch" } });
+    peer.respond(3, { type: "default_saved", result: { scope: "user", document: "/config/settings.toml", revision: "sha256:new", changed: { field: "model_selection", selection: { model: "alpha/model-b", reasoning_profile: null } }, live_unchanged: true, applies_at: "next_launch" } });
     const result = await command;
     assert.equal(result.kind, "transient");
     if (result.kind === "transient") assert.match(result.text, /Live Session unchanged/);
@@ -910,7 +910,7 @@ describe("CommandDispatcher", () => {
     const saving = dispatcher.submit("/save-default user model sha256:reviewed");
     await peer.awaitRequests(4);
     assert.deepEqual(peer.requests[3], { method: "default_save", id: 4, scope: "user", expected_revision: "sha256:reviewed", target: "model_selection" });
-    peer.respond(4, { type: "default_saved", result: { scope: "user", document: "/config/settings.jsonc", revision: "sha256:B", changed: { field: "model_selection", selection: { model: "alpha/model-b", reasoning_profile: null } }, live_unchanged: true, applies_at: "next_launch" } });
+    peer.respond(4, { type: "default_saved", result: { scope: "user", document: "/config/settings.toml", revision: "sha256:B", changed: { field: "model_selection", selection: { model: "alpha/model-b", reasoning_profile: null } }, live_unchanged: true, applies_at: "next_launch" } });
     await saving;
     assert.equal(session.state?.sessionModel?.configured.model, "alpha/model-a");
   });
@@ -1308,7 +1308,7 @@ describe("CLI arguments", () => {
     "--models",
     "/m.json",
     "--config",
-    "/rustx.jsonc",
+    "/rustx.toml",
     "--workspace",
     "/ws",
     "--runtime-root",
@@ -1320,7 +1320,7 @@ describe("CLI arguments", () => {
     assert.equal(parsed.binary, "/usr/bin/rustx");
     assert.deepEqual(parsed.paths, {
       models: "/m.json",
-      config: "/rustx.jsonc",
+      config: "/rustx.toml",
       workspace: "/ws",
       runtimeRoot: "/private",
     });

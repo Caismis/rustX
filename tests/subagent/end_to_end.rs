@@ -34,70 +34,74 @@ fn binary() -> std::path::PathBuf {
 /// A catalog pointing at a local fixture server.
 fn models_json(base_url: &str) -> String {
     format!(
-        r#"{{
-  "providers": {{
-    "fixture": {{
-      "baseUrl": "{base_url}",
-      "apiKey": "$RUSTX_SUBAGENT_TEST_KEY",
-      "models": [
-        {{
-          "id": "subagent-model",
-          "protocol": "openai_chat_completions",
-          "contextWindow": 128000,
-          "maxOutputTokens": 512,
-          "capabilities": {{
-            "inputModalities": ["text"],
-            "outputModalities": ["text"],
-            "toolCalls": true,
-            "reasoning": false
-          }},
-          "compat": {{"chatReasoningReplay": "omit"}},
-          "requestParams": {{"temperature": 0.11}}
-        }}
-      ]
-    }}
-  }}
-}}"#
+        r#"[providers.fixture]
+base_url = "{base_url}"
+api_key = "$RUSTX_SUBAGENT_TEST_KEY"
+
+[[providers.fixture.models]]
+id = "subagent-model"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 512
+request_params_json = "{{\"temperature\": 0.11}}"
+
+[providers.fixture.models.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[providers.fixture.models.compat]
+chat_reasoning_replay = "omit"
+"#
     )
 }
 
-const SESSION_JSON: &str = r#"{
-  "agentId": "agent-parent",
-  "model": {"model": "fixture/subagent-model"},
-  "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
-    "subagents": {
-    "maxConcurrent": 4,
-    "roles": {
-      "explore": {
-        "description": "Read-only repository exploration.",
+const SESSION_TOML: &str = r#"agent_id = "agent-parent"
 
-        "tools": {"builtin": ["read", "glob", "grep"]}
-      }
-    },
-    "main": ["explore"],
-    "workflow": []
-  }
-}"#;
+[model]
+model = "fixture/subagent-model"
 
-const ISOLATED_SUBDIRECTORY_SESSION_JSON: &str = r#"{
-  "agentId": "agent-parent",
-  "model": {"model": "fixture/subagent-model"},
-  "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
-  "defaultTools": ["read", "subagent"],
-  "subagents": {
-    "maxConcurrent": 4,
-    "roles": {
-      "explore": {
-        "description": "Read the preserved logical project scope.",
+[context]
+reserve_tokens = 1024
+keep_recent_tokens = 8192
 
-        "tools": {"builtin": ["read"]},
-        "worktree": {"enabled": true}
-      }
-    },
-    "main": ["explore"],
-    "workflow": []
-  }
-}"#;
+[subagents]
+max_concurrent = 4
+main = ["explore"]
+workflow = []
+
+[subagents.roles.explore]
+description = "Read-only repository exploration."
+
+[subagents.roles.explore.tools]
+builtin = ["read", "glob", "grep"]
+"#;
+
+const ISOLATED_SUBDIRECTORY_SESSION_TOML: &str = r#"agent_id = "agent-parent"
+default_tools = ["read", "subagent"]
+
+[model]
+model = "fixture/subagent-model"
+
+[context]
+reserve_tokens = 1024
+keep_recent_tokens = 8192
+
+[subagents]
+max_concurrent = 4
+main = ["explore"]
+workflow = []
+
+[subagents.roles.explore]
+description = "Read the preserved logical project scope."
+
+[subagents.roles.explore.tools]
+builtin = ["read"]
+
+[subagents.roles.explore.worktree]
+enabled = true
+"#;
 
 /// The `explore` agent's instruction document, written into the workspace so
 /// the parent generation can freeze it. It deliberately says nothing about
@@ -214,20 +218,21 @@ impl Process {
             EXPLORE_INSTRUCTIONS,
         )
         .expect("explore instructions");
-        std::fs::write(root.join("models.jsonc"), models).expect("models.jsonc");
-        let mut document: serde_json::Value = serde_json::from_str(session).unwrap();
+        std::fs::write(root.join("models.toml"), models).expect("models.toml");
+        let mut document: serde_json::Value =
+            rustx::toml_authoring::parse(session.as_bytes()).unwrap();
         crate::launch_fixture::write_roles(workspace, &mut document["subagents"]);
         std::fs::write(
-            root.join("rustx.jsonc"),
-            serde_json::to_vec(&document).unwrap(),
+            root.join("rustx.toml"),
+            toml::to_string_pretty(&document).unwrap(),
         )
-        .expect("rustx.jsonc");
+        .expect("rustx.toml");
         let mut command = tokio::process::Command::new(binary());
         command
             .arg("--models")
-            .arg(root.join("models.jsonc"))
+            .arg(root.join("models.toml"))
             .arg("--config")
-            .arg(root.join("rustx.jsonc"))
+            .arg(root.join("rustx.toml"))
             .arg("--workspace")
             .arg(workspace)
             .arg("--runtime-root")
@@ -547,7 +552,7 @@ async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary()
     )
     .unwrap();
     let mut session: serde_json::Value =
-        serde_json::from_str(ISOLATED_SUBDIRECTORY_SESSION_JSON).unwrap();
+        rustx::toml_authoring::parse(ISOLATED_SUBDIRECTORY_SESSION_TOML.as_bytes()).unwrap();
     crate::launch_fixture::write_roles(&logical_parent, &mut session["subagents"]);
     git(&repository, &["init"]);
     git(&repository, &["add", "--all"]);
@@ -567,7 +572,7 @@ async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary()
         root.path(),
         &logical_parent,
         &models,
-        ISOLATED_SUBDIRECTORY_SESSION_JSON,
+        ISOLATED_SUBDIRECTORY_SESSION_TOML,
         "subagent-secret",
     );
     let response = process
@@ -754,7 +759,7 @@ async fn subagent_process_stack(alias_root: bool) {
         .unwrap();
     }
     let models = models_json(&server.url("/v1"));
-    let mut process = Process::spawn(root.path(), &models, SESSION_JSON, "subagent-secret");
+    let mut process = Process::spawn(root.path(), &models, SESSION_TOML, "subagent-secret");
 
     // start -> initialize
     let response = process
@@ -1013,7 +1018,7 @@ async fn subagent_process_stack(alias_root: bool) {
     let mut inspector = Process::inspect(
         root.path(),
         &models,
-        SESSION_JSON,
+        SESSION_TOML,
         "subagent-secret",
         child_conversation_id.as_str(),
     );
@@ -1203,11 +1208,11 @@ async fn running_child_inspection_is_execution_independent() {
             Process::spawn_with_live_inspection_failure(
                 root.path(),
                 &models,
-                SESSION_JSON,
+                SESSION_TOML,
                 "subagent-secret",
             )
         } else {
-            Process::spawn(root.path(), &models, SESSION_JSON, "subagent-secret")
+            Process::spawn(root.path(), &models, SESSION_TOML, "subagent-secret")
         };
 
         let response = parent
@@ -1285,7 +1290,7 @@ async fn running_child_inspection_is_execution_independent() {
                 let mut inspector = Process::inspect(
                     root.path(),
                     &models,
-                    SESSION_JSON,
+                    SESSION_TOML,
                     "subagent-secret",
                     child_conversation_id.as_str(),
                 );
@@ -1322,7 +1327,7 @@ async fn running_child_inspection_is_execution_independent() {
                 let inspector = Process::inspect(
                     root.path(),
                     &models,
-                    SESSION_JSON,
+                    SESSION_TOML,
                     "subagent-secret",
                     child_conversation_id.as_str(),
                 );
@@ -1588,7 +1593,7 @@ async fn running_child_inspection_is_execution_independent() {
             let mut inspector = Process::inspect(
                 root.path(),
                 &models,
-                SESSION_JSON,
+                SESSION_TOML,
                 "subagent-secret",
                 child_conversation_id.as_str(),
             );
@@ -1729,7 +1734,7 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
     let root = tempfile::tempdir().expect("temp root");
     let models = models_json(&server.url("/v1"));
 
-    let mut parent = Process::spawn(root.path(), &models, SESSION_JSON, "subagent-secret");
+    let mut parent = Process::spawn(root.path(), &models, SESSION_TOML, "subagent-secret");
     let response = parent
         .request(|id| RuntimeClientRequest::Initialize {
             id: rustx::runtime_client::RequestId::new(id),
@@ -1792,7 +1797,7 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
 
     // Reopen the same durable conversation. Recovery has no child process to
     // adopt and publishes one Runtime-authored Interrupted inbound.
-    let mut recovered = Process::reopen(root.path(), &models, SESSION_JSON, "subagent-secret");
+    let mut recovered = Process::reopen(root.path(), &models, SESSION_TOML, "subagent-secret");
     let response = recovered
         .request(|id| RuntimeClientRequest::Initialize {
             id: rustx::runtime_client::RequestId::new(id),
@@ -1874,7 +1879,7 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
 
     // A second restart must observe the absorbing terminal identity and must
     // not publish a second Runtime notice or relaunch anything.
-    let mut repeated = Process::reopen(root.path(), &models, SESSION_JSON, "subagent-secret");
+    let mut repeated = Process::reopen(root.path(), &models, SESSION_TOML, "subagent-secret");
     let response = repeated
         .request(|id| RuntimeClientRequest::Initialize {
             id: rustx::runtime_client::RequestId::new(id),

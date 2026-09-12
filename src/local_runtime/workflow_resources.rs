@@ -25,7 +25,7 @@ pub(crate) fn load(
         let path = workspace_workflow_path(workspace, id);
         crate::runtime::resources::validate_project_resource_path(workspace, &path)
             .map_err(|error| error.at(&path, format!("workflows.definitions.{id}")))?;
-        let bytes = crate::config_format::read_bounded(&path).map_err(|error| {
+        let bytes = crate::toml_authoring::read_bounded(&path).map_err(|error| {
             RuntimeResourceLoadError::new(format!(
                 "cannot read registered workflow {id} at {}: {error}",
                 path.display()

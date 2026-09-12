@@ -1,5 +1,10 @@
 # Launch configuration and project trust
 
+TOML authors rustX configuration and model catalogs. YAML authors fixed Workflow
+programs. Markdown authors model-facing resources. JSON is reserved for wire data,
+generated schemas, and explicitly opaque provider-native data. TOML bytes enter
+strict snake_case structs, typed authority/merge rules, then resolved native state.
+
 `extensions.goal.enabled` defaults to `false`. Enabling it for a root launch
 composes GoalDomain, the stable `get_goal`/`create_goal`/`update_goal` Tool surface,
 typed current context, controls and the round driver. Ordinary Tool selection
@@ -36,12 +41,12 @@ Both platforms use the same convention:
 | Location | Exact policy |
 | --- | --- |
 | User configuration directory | `$XDG_CONFIG_HOME/rustx`, otherwise `$HOME/.config/rustx` |
-| Optional user settings | `<user configuration directory>/settings.jsonc` |
-| Host model catalog | `<user configuration directory>/models.jsonc`; user `models` or CLI `--models` may replace it |
+| Optional user settings | `<user configuration directory>/settings.toml` |
+| Host model catalog | `<user configuration directory>/models.toml`; user `models` or CLI `--models` may replace it |
 | User state directory | `$XDG_STATE_HOME/rustx`, otherwise `$HOME/.local/state/rustx` |
 | Trust membership | `<user state directory>/trust/<workspace identity>/` |
 | Default runtime root | `<user state directory>/workspaces/<workspace identity>/` |
-| Project settings | Exactly `<resolved workspace>/rustx.jsonc`, optionally replaced by `--config` |
+| Project settings | Exactly `<resolved workspace>/rustx.toml`, optionally replaced by `--config` |
 | Automatic Skills | `<user configuration directory>/skills`, then `<workspace>/.agents/skills` |
 
 HOME and supplied XDG paths must be absolute. Path discovery does not capture
@@ -49,11 +54,11 @@ credential values. Runtime/probe admission captures credentials through the
 credential owner; tests inject snapshots without modifying process-global environment. Missing
 optional settings are empty layers. A discovered malformed or unknown-field
 document fails. An explicitly selected missing `--config` fails. Configuration
-and catalog reads are limited to 1 MiB each, and retain strict JSONC syntax.
+and catalog reads are limited to 1 MiB each, and retain strict TOML syntax.
 
 An explicit `--workspace` selects that existing directory. Otherwise the
 canonical launch directory is walked upward until the nearest directory with
-either `.git` (file or directory) or `rustx.jsonc`. That directory alone is the
+either `.git` (file or directory) or `rustx.toml`. That directory alone is the
 workspace. The walk has a hard 128-directory limit; exceeding it requires
 `--workspace`. If there is no marker, a non-Git workspace is the launch directory.
 There is no ancestor overlay chain. A nearer nested project or repository wins;
@@ -86,27 +91,27 @@ higher layer would override them. Unknown fields fail at every schema boundary.
 | --- | --- | --- | --- | --- |
 | Model/provider declarations, endpoint, protocol, limits, capabilities, credential source | Host catalog; `models` chooses path | Forbidden | `--models` selects host catalog | Catalog replacement; no provider inference |
 | Default Session model selection and request policy (`model`) | Yes | Existing host model only | `--model provider/model` | Explicit model-policy members; CLI selects fresh model policy |
-| `agentId` | Yes | Yes | — | Scalar replacement |
-| `approvalMode` | Yes | Forbidden | — | Host scalar replacement |
-| `context`, `modelTimeoutPolicy`, `toolDeadlinePolicy`, `extensions` | Yes | Yes | — | Explicit members of these finite records |
-| `defaultTools`, `skills` | Yes | Yes | `--tools`, `--exclude-tools`, `--skill`, disable flags | Lists replace; repeated CLI Skill paths form one replacing list |
-| `mcpServers`, `environment` | Yes | Yes | — | Named entries replace whole entries; empty map clears |
-| `nativeTools`, `mcpToolPolicies` | Yes | Forbidden | — | Host-only whole named entries; empty map clears |
-| `subagents.maxConcurrent`, `.main`, `.workflow` | Yes | Yes | — | Scalar/list replacement |
+| `agent_id` | Yes | Yes | — | Scalar replacement |
+| `approval_mode` | Yes | Forbidden | — | Host scalar replacement |
+| `context`, `model_timeout_policy`, `tool_deadline_policy`, `extensions` | Yes | Yes | — | Explicit members of these finite records |
+| `default_tools`, `skills` | Yes | Yes | `--tools`, `--exclude-tools`, `--skill`, disable flags | Lists replace; repeated CLI Skill paths form one replacing list |
+| `mcp_servers`, `environment` | Yes | Yes | — | Named entries replace whole entries; empty map clears |
+| `native_tools`, `mcp_tool_policies` | Yes | Forbidden | — | Host-only whole named entries; empty map clears |
+| `subagents.max_concurrent`, `.main`, `.workflow` | Yes | Yes | — | Scalar/list replacement |
 | `subagents.definitions` | Yes | Yes | — | Registration lists replace; empty list clears. Canonical role resources replace whole across user/project layers. |
 | `workflows.definitions`, `.main` | Yes | Yes | — | Lists replace; YAML resources belong to workspace `.agents/workflows` |
-| Runtime state root (`runtimeRoot`) | Yes | Forbidden | `--runtime-root` | Path replacement |
+| Runtime state root (`runtime_root`) | Yes | Forbidden | `--runtime-root` | Path replacement |
 | Workspace identity | No settings authority | Forbidden | `--workspace` | Canonical root selection |
 | Trust records/store, credential-store redirection | No settings authority | Forbidden | `--trust grant/revoke` only | Host-owned membership operation |
 | Session selection/name | No | No | `--continue`, `--session`, `--node`, `--name` | Existing Session semantics |
-| `schemaVersion` | Yes | Yes | — | Explicit replacement; current schema only |
+| `schema_version` | Yes | Yes | — | Explicit replacement; current schema only |
 
 Project MCP/resource declarations are permission to use those project-authored
 resources. They cannot replace the model provider catalog or its credentials.
 The independent external-source activation gate belongs to CFG-02.
 
-Project trust is not Tool approval authority. Projects cannot set `approvalMode`
-or any `nativeTools`/`mcpToolPolicies` object, including empty objects or only
+Project trust is not Tool approval authority. Projects cannot set `approval_mode`
+or any `native_tools`/`mcp_tool_policies` object, including empty objects or only
 execution/concurrency members. These complete approval-bearing objects are
 host-only; no project policy members are currently permitted. Declarations fail
 before merge, rather than being silently overwritten. User settings retain all
@@ -116,10 +121,41 @@ Partial documents preserve absence. An absent list/map leaves the preceding
 value. An explicit empty list replaces with no entries; an empty named map
 clears preceding entries. Nonempty named maps retain other names and replace
 same-name entries entirely, including omitted members of that entry. Structured
-records such as `context: {}` contain no overrides. No arbitrary recursive
+records such as `context = {}` contain no overrides. No arbitrary recursive
 semantic merge, permission union, tombstones, includes, profiles or inheritance
-exists. Explicit null is accepted only by nullable domain fields (for example
-`context.summaryOutputCap`); it is invalid for a list or map.
+exists. TOML has no null literal. An omitted field inherits; explicit domain
+choices reset an inherited optional setting:
+
+| Field | Use an explicit value | Reset inherited value |
+| --- | --- | --- |
+| `model.reasoning_profile` | `{ mode = "profile", name = "on" }` | `{ mode = "catalog_default" }` |
+| `model.max_output_tokens` | `{ mode = "limit", tokens = 2048 }` | `{ mode = "catalog_default" }` |
+| `context.summary_output_cap` | `{ mode = "limit", tokens = 1024 }` | `{ mode = "model_limit" }` |
+| `tool_deadline_policy.idle_liveness_ms` | `{ mode = "window", milliseconds = 5000 }` | `{ mode = "disabled" }` |
+| `extensions.agent_status.time.timezone` | `"Asia/Shanghai"` | `"UTC"` |
+
+Catalog defaults mean the catalog's reasoning profile or output limit. `model_limit`
+removes the additional summary cap; `disabled` removes the idle watchdog, preserving
+the hard deadline. A profile named `catalog_default` is still selectable through
+`{ mode = "profile", name = "catalog_default" }`. Explicit summary-model selections
+use the same reasoning/output vocabulary and replace the whole summary policy.
+
+Provider parameters have one authoring form in catalogs, reasoning profiles,
+primary model overlays, and explicit summary model overlays:
+
+```toml
+[model]
+model = "example/demo-model"
+request_params_json = '''
+{"temperature":0.7,"future":{"nested":[1,null,{"enabled":true}]}}
+'''
+```
+
+The string must contain a JSON object. Nested JSON arrays, objects, scalars, and
+nulls remain provider-owned and opaque. Malformed JSON and non-object roots fail;
+protected wire keys are checked by the existing model owner. Catalog/profile/
+Session overlays remain shallow: replacing a top-level object replaces that whole
+object. `[request_params]` is not an alternative authoring form.
 
 CLI-relative paths use the original launch directory. Config-relative Skills,
 MCP cwd and executable paths containing `/` use the selecting document's directory.
@@ -172,7 +208,7 @@ Project-origin MCP bindings also retain the original workspace authority in
 their frozen internal binding. Every connect/reconnect rechecks path-valued
 command/cwd before spawning; admitted children retain that same root, not their
 new worktree as a broader authority. The internal binding field cannot be set
-by JSONC. Managed Python interpreter paths are host-materialized execution
+by TOML. Managed Python interpreter paths are host-materialized execution
 resources; project package roots are checked before materialization.
 
 ## Trust
@@ -211,13 +247,14 @@ Instructions from unrelated ancestor directories are not activated.
 
 Use `rustx init` with explicit model/provider declarations (see the
 [minimal initialization contract](configuration-diagnostics.md#minimal-initialization)).
-It creates only user `models.jsonc` and `settings.jsonc`, with no project file,
+It creates only user `models.toml` and `settings.toml`, with no project file,
 implicit capability guesses or raw keys. Manual authoring is also supported;
-the [minimal catalog](../examples/local-runtime/minimal/models.jsonc) shows the
-required declarations. User `settings.jsonc` needs only the selected reference:
+the [minimal catalog](../examples/local-runtime/minimal/models.toml) shows the
+required declarations. User `settings.toml` needs only the selected reference:
 
-```jsonc
-{"model": {"model": "example/demo-model"}}
+```toml
+[model]
+model = "example/demo-model"
 ```
 
 After granting trust to the workspace, launch `rustx` there, or launch the TUI
@@ -225,8 +262,8 @@ with only `--binary /absolute/path/to/rustx`. No project config is required.
 No single-model guessing occurs: absent selection and unqualified/unknown
 references fail clearly even if the catalog contains only one model.
 
-New domain defaults are `agentId: "rustx"` and context
-`reserveTokens: 1024`, `keepRecentTokens: 4096`, `summaryOutputCap: 1024`.
+New domain defaults are `agent_id: "rustx"` and context
+`reserve_tokens: 1024`, `keep_recent_tokens: 4096`, `summary_output_cap: 1024`.
 These do not infer or change the selected model's context window. Existing
 domain defaults remain authoritative: schema 8, approval `policy`, model
 summary policy `session`, model-declared reasoning/output defaults, no request
@@ -245,24 +282,26 @@ The default native Agent Extension composition contains the Agent Status
 extension with its Time and Background contributors enabled and no configured
 timezone, and the Todo extension. Todo is deliberately absent from the native
 default *tool* list above: it is composed by `extensions.todo`, and naming it
-in `defaultTools` is a validation error.
+in `default_tools` is a validation error.
 
 ## Native Agent Extensions
 
 `extensions` is the single **closed, launch-scoped** configuration surface for
 optional Agent augmentation:
 
-```jsonc
-{
-  "extensions": {
-    "agentStatus": {
-      "enabled": true,
-      "time": { "enabled": true, "timezone": "Asia/Shanghai" },
-      "background": { "enabled": true }
-    },
-    "todo": { "enabled": true }
-  }
-}
+```toml
+[extensions.agent_status]
+enabled = true
+
+[extensions.agent_status.time]
+enabled = true
+timezone = "Asia/Shanghai"
+
+[extensions.agent_status.background]
+enabled = true
+
+[extensions.todo]
+enabled = true
 ```
 
 A Native Agent Extension is optional Agent behavior or context that belongs to
@@ -293,7 +332,7 @@ migration an extension may also contribute a model-facing Tool. The model's
 Tool set is therefore a composition of distinct owners:
 
 ```text
-  ordinary selected Tool capabilities          defaultTools / --tools /
+  ordinary selected Tool capabilities          default_tools / --tools /
                                                --exclude-tools / tools.builtin
 + enabled extension-provided Tool surfaces     extensions.<name>.enabled
 + already-admitted domain terminal protocols   Workflow output, ...
@@ -312,22 +351,23 @@ Neither plane filters the other:
 A truly Tool-free model request therefore requires **both** no ordinary Tools
 **and** no Tool-providing extension:
 
-```jsonc
-// Nothing at all reaches the model.
-{ "extensions": { "todo": { "enabled": false } } }   // plus --no-tools
+```toml
+[extensions.todo]
+enabled = false
 ```
 
 Symmetrically, an extension can never be switched on by naming its Tool.
 `todo` is rejected — deterministically, with a diagnostic naming the extension
-— in `defaultTools`, `--tools`, `--exclude-tools`, a named Subagent's
+— in `default_tools`, `--tools`, `--exclude-tools`, a named Subagent's
 `tools.builtin`, a Workflow's admitted capability set, and every invocation
 override that shares that vocabulary. There is no alias and no compatibility
 parse.
 
 ### The Todo extension
 
-```jsonc
-{ "extensions": { "todo": { "enabled": true } } }
+```toml
+[extensions.todo]
+enabled = true
 ```
 
 `enabled` composes one coherent capability, or none of it:
@@ -339,7 +379,7 @@ parse.
 | the bounded read-only Todo status presentation | no Todo contribution to Agent Status |
 | the Runtime Client / TUI Todo projection | no active Todo panel for this runtime |
 
-It is enabled by default, which preserves the product behavior `defaultTools`
+It is enabled by default, which preserves the product behavior `default_tools`
 used to express — but the default now belongs to extension composition.
 
 Todo carries no contributor configuration. The list's bounds, transitions, and
@@ -402,7 +442,7 @@ contributor was covered. Only the effective authorized composition enters
 The invoking generation freezes the child's effective extension set into
 `ResolvedSubagentSpec` before process staging and durable ownership commit, and
 extension settings participate in the role's semantic digest. The child process
-materializes that frozen decision and never rereads `rustx.jsonc`, host or
+materializes that frozen decision and never rereads `rustx.toml`, host or
 project configuration, role files, or a later resource generation to
 reinterpret which extensions it owns.
 
@@ -453,7 +493,7 @@ selectable Session. Existing published catalog bytes remain authoritative.
 
 `--inspect-conversation` resolves only workspace/state locations and uses the
 read-only inspection owner. Unless `--runtime-root` is explicit, it reads only
-the user settings document's `runtimeRoot` member to locate state. It does not
+the user settings document's `runtime_root` member to locate state. It does not
 load project settings or models, validate unrelated runtime settings, check
 activation trust, compose a runtime, create a Session or publish a selection.
 
@@ -479,4 +519,4 @@ established terminal-agent practice; see the
 rustX deliberately has only the finite layers and fail-closed policy specified here.
 External-source activation is separate from launch trust and Tool exposure.
 The [source activation contract](source-activation.md) defines schema 8's
-`mcpServers.<name>.enabled`, `pythonSources`, and host-only sensitive references.
+`mcp_servers.<name>.enabled`, `python_sources`, and host-only sensitive references.

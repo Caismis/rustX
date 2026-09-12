@@ -288,8 +288,8 @@ fn terminal_count(seen: &[Seen]) -> usize {
 /// The explicit startup paths of one child, derived from the parent's lab.
 fn lab_paths(root: &Path) -> LaunchFixture {
     LaunchFixture {
-        models: root.join("models.jsonc"),
-        config: root.join("rustx.jsonc"),
+        models: root.join("models.toml"),
+        config: root.join("rustx.toml"),
         skill_paths: Vec::new(),
         no_skills: false,
         no_builtin_tools: false,
@@ -530,7 +530,7 @@ async fn compose_session_child(
     let paths = lab_paths(root);
     let config_bytes = std::fs::read(&paths.config).expect("read the lab runtime config");
     let runtime_config =
-        CurrentRuntimeConfig::from_jsonc_slice(&config_bytes).expect("valid runtime config");
+        CurrentRuntimeConfig::from_toml_slice(&config_bytes).expect("valid runtime config");
     let template = SessionPersistentState {
         model: runtime_config.model.clone(),
     };

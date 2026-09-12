@@ -22,36 +22,39 @@ use rustx::runtime_client::{RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientResult
 
 /// A catalog whose only model is never invoked: these tests compose the
 /// runtime and drive tools directly, they do not run an attempt.
-const MODELS_JSON: &str = r#"{
-  "providers": {
-    "local": {
-      "baseUrl": "https://local.fixture.invalid/v1",
-      "apiKey": "$RUSTX_ISSUE81_KEY",
-      "models": [
-        {
-          "id": "composed-model",
-          "protocol": "openai_chat_completions",
-          "contextWindow": 128000,
-          "maxOutputTokens": 4096,
-          "capabilities": {
-            "inputModalities": ["text"],
-            "outputModalities": ["text"],
-            "toolCalls": true,
-            "reasoning": false
-          },
-          "compat": {"chatReasoningReplay": "omit"}
-        }
-      ]
-    }
-  }
-}"#;
+const MODELS_TOML: &str = r#"[providers.local]
+base_url = "https://local.fixture.invalid/v1"
+api_key = "$RUSTX_ISSUE81_KEY"
 
-const SESSION_JSON: &str = r#"{
-  "pythonSources": {"python:broken-tool":"enabled", "python:fixture-tool":"enabled"},
-  "agentId": "agent-81",
-  "model": {"model": "local/composed-model"},
-  "context": {"reserveTokens": 1024, "keepRecentTokens": 8192}
-}"#;
+[[providers.local.models]]
+id = "composed-model"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 4096
+
+[providers.local.models.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[providers.local.models.compat]
+chat_reasoning_replay = "omit"
+"#;
+
+const SESSION_TOML: &str = r#"agent_id = "agent-81"
+
+[python_sources]
+"python:broken-tool" = "enabled"
+"python:fixture-tool" = "enabled"
+
+[model]
+model = "local/composed-model"
+
+[context]
+reserve_tokens = 1024
+keep_recent_tokens = 8192
+"#;
 
 /// Writes the startup files into a temporary root and returns the explicit
 /// paths, together with the canonicalized root (the coordinator resolves
@@ -60,10 +63,10 @@ fn startup(root: &tempfile::TempDir, session: &str) -> (std::path::PathBuf, Laun
     let canonical = std::fs::canonicalize(root.path()).expect("canonical root");
     let workspace = canonical.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
-    let models_path = canonical.join("models.jsonc");
-    let session_path = canonical.join("rustx.jsonc");
-    std::fs::write(&models_path, MODELS_JSON).expect("models.jsonc");
-    crate::launch_fixture::write_documents(&session_path, session, &["mcpServers"]);
+    let models_path = canonical.join("models.toml");
+    let session_path = canonical.join("rustx.toml");
+    std::fs::write(&models_path, MODELS_TOML).expect("models.toml");
+    crate::launch_fixture::write_documents(&session_path, session, &["mcp_servers"]);
     (
         canonical.clone(),
         LaunchFixture {
@@ -224,7 +227,7 @@ async fn prove_native_tool_executes(runtime: &LocalConversationRuntime) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_python_capability_failure_is_isolated_from_runtime_startup() {
     let root = tempfile::tempdir().expect("temp root");
-    let (_canonical, paths) = startup(&root, SESSION_JSON);
+    let (_canonical, paths) = startup(&root, SESSION_TOML);
     // A package without `requirements.txt`: discovery rejects it in place,
     // and its `python:broken-tool` source becomes unavailable.
     write_broken_python_package(&paths.workspace, "broken-tool");
@@ -272,7 +275,7 @@ async fn a_python_capability_failure_is_isolated_from_runtime_startup() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn python_store_initialization_failure_is_isolated_from_runtime_startup() {
     let root = tempfile::tempdir().expect("temp root");
-    let (_, paths) = startup(&root, SESSION_JSON);
+    let (_, paths) = startup(&root, SESSION_TOML);
     // A valid Python package exists, so the failure cannot be attributed
     // to discovery: only opening the Python store can fail.
     write_python_package(&paths.workspace, "fixture-tool");
@@ -398,7 +401,7 @@ fn base_only_capability_setup_is_structurally_independent_of_python_storage() {
 async fn core_and_base_plane_failures_remain_fatal() {
     // A session selecting a model the catalog does not declare: fatal.
     let root = tempfile::tempdir().expect("temp root");
-    let bad_model = SESSION_JSON.replace("local/composed-model", "local/absent-model");
+    let bad_model = SESSION_TOML.replace("local/composed-model", "local/absent-model");
     let (_canonical, paths) = startup(&root, &bad_model);
     assert!(
         paths
@@ -411,7 +414,7 @@ async fn core_and_base_plane_failures_remain_fatal() {
     // is Workspace content the runtime validated), not an optional external
     // source: fatal.
     let root = tempfile::tempdir().expect("temp root");
-    let (_canonical, paths) = startup(&root, SESSION_JSON);
+    let (_canonical, paths) = startup(&root, SESSION_TOML);
     let skill = paths.workspace.join(".agents/skills/broken");
     std::fs::create_dir_all(&skill).expect("skill directory");
     std::fs::write(skill.join("SKILL.md"), "not valid frontmatter at all").expect("SKILL.md");
@@ -437,11 +440,11 @@ mod mcp {
     /// A session with two stdio MCP servers: `good` (the real fixture) and
     /// `bad` (a program that does not exist).
     fn session_with_two_servers(program: &str, args: &[String]) -> String {
-        serde_json::json!({
-            "agentId": "agent-81",
+        toml::to_string_pretty(&serde_json::json!({
+            "agent_id": "agent-81",
             "model": {"model": "local/composed-model"},
-            "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
-            "mcpServers": {
+            "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},
+            "mcp_servers": {
                 "good": {
                     "enabled": true,
                     "type": "stdio",
@@ -456,8 +459,8 @@ mod mcp {
                     "args": [],
                 },
             },
-        })
-        .to_string()
+        }))
+        .unwrap()
     }
 
     /// One failed MCP server never suppresses a successful one (Issue #81):
@@ -550,11 +553,11 @@ mod mcp {
         let args = fixture::fixture_spawn_args(
             "capability_startup::mcp::no_shared_mcp_revision_is_unavailable_not_fatal",
         );
-        let session = serde_json::json!({
-            "agentId": "agent-81",
+        let session = toml::to_string_pretty(&serde_json::json!({
+            "agent_id": "agent-81",
             "model": {"model": "local/composed-model"},
-            "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
-            "mcpServers": {
+            "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},
+            "mcp_servers": {
                 "alien": {
                     "enabled": true,
                     "type": "stdio",
@@ -566,8 +569,8 @@ mod mcp {
                     },
                 },
             },
-        })
-        .to_string();
+        }))
+        .unwrap();
         let (_canonical, paths) = startup(&root, &session);
 
         let runtime = super::LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
@@ -618,11 +621,11 @@ mod mcp {
         let args = fixture::fixture_spawn_args(
             "capability_startup::mcp::an_oversized_mcp_diagnostic_is_bounded_before_authoritative_state",
         );
-        let session = serde_json::json!({
-            "agentId": "agent-81",
+        let session = toml::to_string_pretty(&serde_json::json!({
+            "agent_id": "agent-81",
             "model": {"model": "local/composed-model"},
-            "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
-            "mcpServers": {
+            "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},
+            "mcp_servers": {
                 "loud": {
                     "enabled": true,
                     "type": "stdio",
@@ -634,8 +637,8 @@ mod mcp {
                     },
                 },
             },
-        })
-        .to_string();
+        }))
+        .unwrap();
         let (_canonical, paths) = startup(&root, &session);
 
         let runtime = super::LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
@@ -753,14 +756,14 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
         "from fastmcp import FastMCP\nmcp = FastMCP('broken')\n",
     )
     .expect("server source without the required requirements.txt");
-    std::fs::write(root.path().join("models.jsonc"), MODELS_JSON).expect("models.jsonc");
+    std::fs::write(root.path().join("models.toml"), MODELS_TOML).expect("models.toml");
     // ... and an MCP server whose program does not exist.
     let session = serde_json::json!({
-        "agentId": "agent-81",
-        "pythonSources": {"python:broken-tool": "enabled"},
+        "agent_id": "agent-81",
+        "python_sources": {"python:broken-tool": "enabled"},
         "model": {"model": "local/composed-model"},
-        "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
-        "mcpServers": {
+        "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},
+        "mcp_servers": {
             "exa": {
                 "enabled": true,
                     "type": "stdio",
@@ -770,18 +773,18 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
         },
     });
     crate::launch_fixture::write_documents(
-        &root.path().join("rustx.jsonc"),
-        &session.to_string(),
-        &["mcpServers"],
+        &root.path().join("rustx.toml"),
+        &toml::to_string_pretty(&session).unwrap(),
+        &["mcp_servers"],
     );
 
     let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_rustx"));
     let home = super::runtime_process::grant(root.path(), &workspace);
     command
         .arg("--models")
-        .arg(root.path().join("models.jsonc"))
+        .arg(root.path().join("models.toml"))
         .arg("--config")
-        .arg(root.path().join("rustx.jsonc"))
+        .arg(root.path().join("rustx.toml"))
         .arg("--workspace")
         .arg(&workspace)
         .arg("--runtime-root")

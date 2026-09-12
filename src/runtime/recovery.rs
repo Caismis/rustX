@@ -74,7 +74,7 @@
 //! [`ConversationStore`] evidence. The store exposes semantic durable facts
 //! and semantic transactions; it never decides whether an ambiguous request is
 //! safe to replay. Nothing here reads a Runtime Client snapshot, a TUI cache,
-//! an attachment state, current Skill discovery, current `models.jsonc`, or a
+//! an attachment state, current Skill discovery, current `models.toml`, or a
 //! regenerated dynamic context: current configuration configures **future**
 //! work and may never fill a hole in **historical** work. The evidence fold
 //! itself never reads the current filesystem; the explicit isolated-workspace

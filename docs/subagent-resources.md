@@ -30,17 +30,16 @@ Management reads never create missing stores or directories. See
 lock order, acquisition/release points, participant lifetimes and regression map.
 
 
-Runtime schema 8 registers role identities in JSONC. Each role's primary
+Runtime schema 8 registers role identities in TOML. Each role's primary
 authoring resource is one Markdown file; Rust converts it into the existing
 native `SubagentDefinition` and `SubagentCatalog`.
 
-```jsonc
-"subagents": {
-  "maxConcurrent": 4,
-  "definitions": ["reviewer"],
-  "main": [],
-  "workflow": ["reviewer"]
-}
+```toml
+[subagents]
+max_concurrent = 4
+definitions = ["reviewer"]
+main = []
+workflow = ["reviewer"]
 ```
 
 The identity `reviewer` resolves to `.agents/subagents/reviewer.md` under the
@@ -609,7 +608,7 @@ specification. Workspace/Git worktree acquisition supplies physical workspace
 ownership only. It never restarts launch resolution, reads role roots, walks an
 AGENTS.md chain, discovers Skills, or widens MCP/Python/Tool authority. The child
 materializes the frozen extension composition exactly as it materializes every
-other frozen decision: it never rereads `rustx.jsonc`, host or project
+other frozen decision: it never rereads `rustx.toml`, host or project
 configuration, or role files to reinterpret which extensions it owns. Skill bodies
 retain their established progressive-disclosure semantics.
 

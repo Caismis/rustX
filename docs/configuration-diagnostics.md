@@ -20,7 +20,7 @@ rustx --help
 rustx init --template openai-chat|openai-responses|anthropic
   --provider ID --model-id ID --endpoint URL --credential-env NAME
   --context-window TOKENS --max-output TOKENS
-  --tool-calls true|false --reasoning true|false [--compat JSONC] [--json]
+  --tool-calls true|false --reasoning true|false [--compat TOML] [--json]
 rustx init --template custom --provider ID --endpoint URL
   --credential-env NAME --model-document PATH [--json]
 rustx config check [SELECTION] [--json]
@@ -84,7 +84,7 @@ JSON records are never byte-cut. The common budget includes the human header
 and trailing newline, so human and JSON output retain identical diagnostics.
 Diagnostics carry
 classification, category, source file, field/reference path, reason, correction, and optional
-parser line/column. Positions are supplied only when the JSONC parser knows them;
+parser line/column. Positions are supplied only when the TOML parser knows them;
 semantic errors do not manufacture positions. Doctor emits two ordered records:
 `phase: probe_plan` with typed targets/effects, then `phase: probe_results` with
 individual states and exact verification claims. There is no global `allGood`.
@@ -95,12 +95,12 @@ On both Linux and macOS, user configuration is `$XDG_CONFIG_HOME/rustx`, or
 `$HOME/.config/rustx` if XDG_CONFIG_HOME is absent. Relative HOME/XDG roots fail.
 Initialization writes exactly:
 
-- `<user configuration directory>/models.jsonc`: one explicitly declared
+- `<user configuration directory>/models.toml`: one explicitly declared
   provider and model, endpoint, protocol, credential reference, limits, and
   capabilities;
-- `<user configuration directory>/settings.jsonc`: only `model.model`.
+- `<user configuration directory>/settings.toml`: only `model.model`.
 
-It does not serialize runtime defaults. It never writes project `rustx.jsonc`;
+It does not serialize runtime defaults. It never writes project `rustx.toml`;
 a normal project needs no configuration file. Runtime state remains under
 `$XDG_STATE_HOME/rustx` or `$HOME/.local/state/rustx`, with disjoint per-workspace
 identity directories. Initialization does not create runtime or trust state.
@@ -120,13 +120,13 @@ values in this shape (the endpoint below deliberately cannot serve a model):
 rustx init --template openai-chat --provider example --model-id demo-model \
   --endpoint https://provider.invalid/v1 --credential-env RUSTX_API_KEY \
   --context-window 128000 --max-output 4096 --tool-calls true --reasoning false \
-  --compat '{"chatReasoningReplay":"omit"}'
+  --compat 'chat_reasoning_replay = "omit"'
 rustx config check
 rustx --trust grant
 rustx config show --sources
 ```
 
-`--credential-env` accepts a variable **name**, not its value; JSONC contains
+`--credential-env` accepts a variable **name**, not its value; TOML contains
 `$RUSTX_API_KEY`, never the API key. Secret values must be supplied outside these
 documents. Do not put credentials in ordinary environment, headers, arguments,
 endpoints, or IDs. Literal catalog credentials remain accepted by the
@@ -144,7 +144,7 @@ multi-file atomicity.
 
 ## Static analysis and admission
 
-`launch::analyze` is the one prospective semantic path: bounded JSONC loading,
+`launch::analyze` is the one prospective semantic path: bounded TOML loading,
 field authority, fixed precedence/defaults, path rebasing, catalog selection and
 context validation, resource references, native Workflow compilation, and
 source/Tool metadata admission. `launch::resolve` reuses that result and then
@@ -185,7 +185,7 @@ packages enter the existing bounded local package validator. Disabled,
 unconfigured, and untrusted packages do not enter that parser or read package
 contents. `local_status` is `valid`, `missing`, or `invalid`, and null when not
 inspected (also null for non-Python sources). Missing or malformed enabled
-packages produce source-specific static errors at `pythonSources.<id>` (exit 2),
+packages produce source-specific static errors at `python_sources.<id>` (exit 2),
 with source readiness `unavailable`. They do not abort shared launch analysis
 or prevent independent doctor targets from being probed. Ordinary runtime
 optional-source failure isolation is unchanged. A locally valid package remains
@@ -294,7 +294,7 @@ tests run in CI's `process` target. No race/zero-effect proof uses sleeps.
 | Publication failure preserves published bytes and removes only private staging | `cfg235_failed_publication_preserves_prior_content_and_staged_bytes_are_not_published` |
 | Failed/partial staging write cannot publish truncated config or damage existing data | `cfg235_partial_staging_write_failure_never_publishes_truncated_configuration` (injected writer) |
 | Check/show zero process, connect, provider, Session, runtime/trust write, preparation, credential entries; valid/invalid/online/disabled/unconfigured/untrusted inputs; human/JSON/Debug redaction | `cfg235_static_check_show_have_zero_effects_and_redacted_outputs` (eight effect-owner counters) |
-| Unknown field, forbidden override, missing instruction file, malformed JSONC location and correction | `cfg235_diagnostics_keep_source_field_classification_and_correction` |
+| Unknown field, forbidden override, missing instruction file, malformed TOML location and correction | `cfg235_diagnostics_keep_source_field_classification_and_correction` |
 | Missing credential reference remains unread; explicit missing file invalid; malformed Workflow and native compiler failure; incomplete partial projection | `cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states` |
 | Same startup/show values and origins; exact exclusion; no live-Session claims | `cfg235_prospective_values_and_origins_equal_runtime_resolution` plus zero-effect test |
 | Bounded structured output with honest omission | `cfg235_projection_has_a_structured_size_bound_without_changing_validity` |

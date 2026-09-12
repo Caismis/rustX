@@ -10,6 +10,7 @@
 //! `crate::runtime::continuation`.
 
 pub mod adapter;
+pub mod authoring;
 pub mod catalog;
 pub mod deadline;
 pub mod error;

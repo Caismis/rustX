@@ -75,7 +75,7 @@ Configuration commands:\n\
   rustx init --template openai-chat|openai-responses|anthropic|custom\n\
     --provider <id> --endpoint <url> --credential-env <NAME>\n\
     --model-id <id> --context-window <tokens> --max-output <tokens>\n\
-    --tool-calls true|false --reasoning true|false [--compat <json-object>] [--json]\n\
+    --tool-calls true|false --reasoning true|false [--compat <toml-document>] [--json]\n\
   custom replaces model flags with --model-document <path>.\n\
   OpenAI templates require explicit --compat; no compatibility is inferred.\n\
   rustx config check [launch selection/path flags] [--json]\n\
@@ -87,8 +87,8 @@ Exit: 0 initialization/help complete; 1 probe or output failure; 2 invalid;\n\
 spawn, connect, prepare environments, or create Sessions/state.\n\
 Show describes the prospective next launch. Doctor prints an effect plan before\n\
 effects; --prepare explicitly permits managed Python preparation.\n\
-Init creates user models.jsonc and settings.jsonc only, never overwrites files,\n\
-and never grants project trust. Project rustx.jsonc remains optional.";
+Init creates user models.toml and settings.toml only, never overwrites files,\n\
+and never grants project trust. Project rustx.toml remains optional.";
 
 /// The finite Rust-owned command grammar. Runtime flags have one parser.
 #[derive(Debug)]
@@ -280,7 +280,7 @@ fn remove_switch(arguments: &mut Vec<String>, flag: &str) -> Result<bool, Argume
 }
 
 /// The usage text printed to **stderr** for an argument failure.
-pub const USAGE: &str = "usage: rustx [--models <models.jsonc>] [--config <rustx.jsonc>] \
+pub const USAGE: &str = "usage: rustx [--models <models.toml>] [--config <rustx.toml>] \
                          [--workspace <dir>] [--runtime-root <dir>] \
                          [--model <provider/model>] [--trust grant|revoke] \
                          [--inspect-conversation <conversation-id>] \

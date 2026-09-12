@@ -1650,7 +1650,7 @@ model/types.rs             ModelRequest, ModelUsage, ModelProtocol, and the
                            history plus the frozen Effective System Prompt;
                            no semantic context attachment type crosses this
                            layer.
-model/catalog.rs           the validated models.jsonc catalog: explicit
+model/catalog.rs           the validated models.toml catalog: explicit
                            provider endpoints and credential sources,
                            redacted credentials, model definitions,
                            capabilities, reasoning profiles, bounded compat
@@ -1667,8 +1667,8 @@ local_runtime/             the local conversation runtime process: bounded
                            current runtime configuration, the one composition owner,
                            the startup argument contract, and the stdio
                            serving lifecycle
-config_format.rs           the one JSONC reader behind models.jsonc and
-                           rustx.jsonc: comments and trailing commas, no
+toml_authoring.rs           the one TOML reader behind models.toml and
+                           rustx.toml: strict typed TOML, no
                            other relaxation, and no schema of its own
 model/finish.rs            ModelFinishReason
 model/error.rs             ModelError, ModelErrorKind
@@ -3460,7 +3460,7 @@ M3 Agent Loop
 Selection is upstream of the adapters and entirely catalog-driven:
 
 ```text
-models.jsonc
+models.toml
     -> ModelCatalog                  validated: explicit baseUrl, explicit
                                      apiKey source, protocol, limits,
                                      capabilities, reasoning profiles, compat
@@ -6334,7 +6334,7 @@ Three methods complete the contract:
   protocol, context window, configured max output, declared *and* effective
   capabilities, reasoning profile identities with their semantic enabled
   state, the default profile, and the redacted credential *source*. This is
-  why #39 never reads `models.jsonc`. No endpoint, no credential, no adapter
+  why #39 never reads `models.toml`. No endpoint, no credential, no adapter
   internal, and no compat object appears.
 - `model_get` — the authoritative session model state.
 - `model_set` — a **whole-state replacement**, never a JSON patch.
@@ -6407,7 +6407,7 @@ activation, Skill roots/resources, environment, context policy, Agent Status
 settings (including the Time timezone), agent settings, and future
 capability-source settings are launch-scoped inputs.
 
-`--config <rustx.jsonc>` and project resources are read and validated once on
+`--config <rustx.toml>` and project resources are read and validated once on
 every process start before ordinary request admission. Composition combines that current
 `CurrentRuntimeConfig` with the selected Session state and active node. A
 resume therefore loads a fresh Runtime Resource Snapshot with current
@@ -6780,19 +6780,15 @@ Workspace-owned instruction/Workflow reads and automatic resource roots enforce
 the same boundary. User/CLI resources remain independently host-authorized;
 ordinary tool execution is not filesystem-sandboxed by this check.
 
-Both configuration documents — `models.jsonc` and `rustx.jsonc` — are JSONC:
-JSON plus `//` and `/* */` comments and trailing commas. A human owns these
-files, so the format has to carry the reasoning behind a value next to the
-value. `config_format` is the single place that decision is made; it chooses
-the surface syntax only, and every schema, default, and unknown-field rule
-stays serde-owned. Nothing else is relaxed: single-quoted strings, unquoted
-property names, hexadecimal numbers, unary plus, and missing commas are
-rejected exactly like an unknown field. A syntax failure reports the line and
-column it was detected on; a schema failure reports serde's own message,
-because the position of a schema failure is the enclosing container rather
-than the offending member. Generated runtime-owned state under `runtime-root`
-is unaffected: nothing writes JSONC, and the Session catalog stays strict
-JSON.
+Configuration authoring uses only TOML: `settings.toml`, `models.toml`, and
+`rustx.toml`. Bounded bytes deserialize into strict snake_case authoring structs;
+explicit typed authority and merge rules produce native configuration before
+runtime composition. Unknown fields and malformed documents fail completely.
+Settings edits preserve TOML comments and unrelated allowed values while retaining
+persistent sibling locking, revision checks, staged validation, and same-directory
+atomic publication. Provider-native JSON is authored only as `request_params_json`
+strings and remains opaque JSON after parsing. Fixed Workflow programs use YAML;
+model-facing resources use Markdown; wire data and generated schemas use JSON.
 
 #### Native async subagents (Issue #60 / M9.25)
 
@@ -6884,7 +6880,7 @@ re-derive any of it. Three representations carry that weight:
   reasoning profile with its semantic enabled state, effective request
   parameters, effective capabilities, compat metadata) plus the descriptive
   `SessionModelConfig` it was frozen from — never a `SessionModelConfig` and
-  a `models.jsonc` path. Handing over a path would let a catalog edit landing
+  a `models.toml` path. Handing over a path would let a catalog edit landing
   between the parent's freeze and the child's composition silently change the
   child's provider binding, protocol, limits, or reasoning semantics, or make
   a model the parent authorized fail to resolve at all. The child's work is
@@ -7915,78 +7911,62 @@ boundaries described above. The resulting child is an ordinary
   infrastructure failure path remains `Failed` rather than a clean
   `Interrupted` claim.
 
-Representative `models.jsonc` (no real credential ever appears in a catalog
+Representative `models.toml` (no real credential ever appears in a catalog
 checked into a repository — `$ENV_VAR` is the reason the literal form exists
 only for local development):
 
-```jsonc
-{
-  "providers": {
-    "gateway": {
-      "baseUrl": "https://gateway.example/v1",
-      "apiKey": "$RUSTX_MODEL_API_KEY",
-      "models": [
-        {
-          "id": "reasoner",
-          "protocol": "anthropic_messages",
-          "contextWindow": 200000,
-          "maxOutputTokens": 32000,
-          "capabilities": {
-            "inputModalities": ["text", "image"],
-            "outputModalities": ["text"],
-            "toolCalls": true,
-            "reasoning": true
-          },
-          "requestParams": { "temperature": 0.7, "top_k": 40 },
-          "reasoning": {
-            "defaultProfile": "on",
-            "profiles": {
-              "off": {
-                "enabled": false,
-                "requestParams": {
-                  "thinking": { "type": "disabled" },
-                  "temperature": 0.7
-                }
-              },
-              "on": {
-                "enabled": true,
-                "requestParams": {
-                  "thinking": { "type": "enabled", "budget_tokens": 32000 },
-                  "temperature": 1.0
-                }
-              }
-            }
-          },
-          "compat": {}
-        }
-      ]
-    },
-    "compat-service": {
-      "baseUrl": "http://127.0.0.1:8080/v1",
-      "apiKey": "local-development-only",
-      "models": [
-        {
-          "id": "small",
-          "protocol": "openai_chat_completions",
-          "contextWindow": 32768,
-          "maxOutputTokens": 4096,
-          "capabilities": {
-            "inputModalities": ["text"],
-            "outputModalities": ["text"],
-            "toolCalls": false,
-            "reasoning": false
-          },
-          "requestParams": { "min_p": 0.05, "repetition_penalty": 1.1 },
-          "compat": {
-            "chatMaxTokensField": "max_tokens",
-            "chatReasoningReplay": "omit",
-            "chatStreamUsage": "unsupported"
-          }
-        }
-      ]
-    }
-  }
-}
+```toml
+[providers.gateway]
+base_url = "https://gateway.example/v1"
+api_key = "$RUSTX_MODEL_API_KEY"
+
+[[providers.gateway.models]]
+id = "reasoner"
+protocol = "anthropic_messages"
+context_window = 200000
+max_output_tokens = 32000
+request_params_json = "{\"temperature\": 0.7, \"top_k\": 40}"
+
+[providers.gateway.models.capabilities]
+input_modalities = ["text", "image"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = true
+
+[providers.gateway.models.reasoning]
+default_profile = "on"
+
+[providers.gateway.models.reasoning.profiles.off]
+enabled = false
+request_params_json = "{\"thinking\": {\"type\": \"disabled\"}, \"temperature\": 0.7}"
+
+[providers.gateway.models.reasoning.profiles.on]
+enabled = true
+request_params_json = "{\"thinking\": {\"type\": \"enabled\", \"budget_tokens\": 32000}, \"temperature\": 1.0}"
+
+[providers.gateway.models.compat]
+
+[providers.compat-service]
+base_url = "http://127.0.0.1:8080/v1"
+api_key = "local-development-only"
+
+[[providers.compat-service.models]]
+id = "small"
+protocol = "openai_chat_completions"
+context_window = 32768
+max_output_tokens = 4096
+request_params_json = "{\"min_p\": 0.05, \"repetition_penalty\": 1.1}"
+
+[providers.compat-service.models.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = false
+reasoning = false
+
+[providers.compat-service.models.compat]
+chat_max_tokens_field = "max_tokens"
+chat_reasoning_replay = "omit"
+chat_stream_usage = "unsupported"
 ```
 
 Note that `capabilities.inputModalities` claims `image` for `reasoner`, but
@@ -7996,60 +7976,76 @@ client can explain why.
 
 Representative current runtime/project configuration:
 
-```jsonc
-{
-  "schemaVersion": 8,
-  "agentId": "agent-default",
-  "model": {
-    "model": "gateway/reasoner",
-    "reasoningProfile": "on",
-    "requestParams": { "top_p": 0.95 },
-    "maxOutputTokens": 8000,
-    "summaryModel": {
-      "mode": "explicit",
-      "model": "compat-service/small",
-      "requestParams": { "temperature": 0.1 }
-    }
-  },
-  "extensions": {
-    "agentStatus": {
-      "enabled": true,
-      "time": { "enabled": true, "timezone": "Europe/Paris" },
-      "background": { "enabled": true }
-    }
-  },
-  "context": {
-    "reserveTokens": 16384,
-    "keepRecentTokens": 20000,
-    "summaryOutputCap": 2048
-  },
-  "modelTimeoutPolicy": {
-    "responseStartTimeoutMs": 30000,
-    "streamIdleTimeoutMs": 15000
-  },
-  "mcpServers": {
-    "exa": {
-      "type": "http",
-      "url": "https://mcp.exa.ai/mcp",
-      "headers": { "x-api-key": "YOUR_EXA_API_KEY" }
-    },
-    "exa-local": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "exa-mcp-server"],
-      "env": { "EXA_API_KEY": "YOUR_EXA_API_KEY" }
-    }
-  },
-  "mcpToolPolicies": {
-    "exa": { "execution": "foreground_only", "concurrency": "parallel" }
-  },
-  "nativeTools": {
-    "bash": { "execution": "model_selectable", "concurrency": "sequential" }
-  },
-  "environment": { "RUSTX_PROJECT": "demo" },
-  "defaultTools": ["read", "write", "edit", "glob", "grep", "bash"],
-  "skills": [".agents/skills"]
-}
+```toml
+schema_version = 8
+agent_id = "agent-default"
+default_tools = ["read", "write", "edit", "glob", "grep", "bash"]
+skills = [".agents/skills"]
+
+[model]
+model = "gateway/reasoner"
+request_params_json = "{\"top_p\": 0.95}"
+
+[model.reasoning_profile]
+mode = "profile"
+name = "on"
+
+[model.max_output_tokens]
+mode = "limit"
+tokens = 8000
+
+[model.summary_model]
+mode = "explicit"
+model = "compat-service/small"
+request_params_json = "{\"temperature\": 0.1}"
+
+[extensions.agent_status]
+enabled = true
+
+[extensions.agent_status.time]
+enabled = true
+timezone = "Europe/Paris"
+
+[extensions.agent_status.background]
+enabled = true
+
+[context]
+reserve_tokens = 16384
+keep_recent_tokens = 20000
+
+[context.summary_output_cap]
+mode = "limit"
+tokens = 2048
+
+[model_timeout_policy]
+response_start_timeout_ms = 30000
+stream_idle_timeout_ms = 15000
+
+[mcp_servers.exa]
+type = "http"
+url = "https://mcp.exa.ai/mcp"
+
+[mcp_servers.exa.headers]
+x-api-key = "YOUR_EXA_API_KEY"
+
+[mcp_servers.exa-local]
+type = "stdio"
+command = "npx"
+args = ["-y", "exa-mcp-server"]
+
+[mcp_servers.exa-local.env]
+EXA_API_KEY = "YOUR_EXA_API_KEY"
+
+[mcp_tool_policies.exa]
+execution = "foreground_only"
+concurrency = "parallel"
+
+[native_tools.bash]
+execution = "model_selectable"
+concurrency = "sequential"
+
+[environment]
+RUSTX_PROJECT = "demo"
 ```
 
 `modelTimeoutPolicy` is current runtime execution policy shared by primary
@@ -8325,7 +8321,7 @@ resync_required -> snapshot_get -> replace the projection -> subscribe after
 ```
 
 **What the client must never do**, and does not: construct ModelAdapters or
-provider HTTP clients, parse `models.jsonc`, resolve credentials or endpoints,
+provider HTTP clients, parse `models.toml`, resolve credentials or endpoints,
 build context engines or summarizers, register tools, read `SKILL.md`,
 compose an Agent Status, infer a mailbox drain, execute a tool, or let a tool's
 name or origin decide an execution semantic. Tool identity may choose a
@@ -8364,7 +8360,7 @@ The native Workflow layer is a bounded program boundary over the named
 Subagent runtime. YAML is authoring serialization, never an execution AST:
 
 ```text
-rustx.jsonc
+rustx.toml
     |
     +--> subagent definitions + main/workflow admission
     +--> workflow registration + main exposure
@@ -9052,7 +9048,7 @@ Startup may consume only rustX-owned durable authority:
 
 Historical truth is never reconstructed from a Runtime Client snapshot or
 cache, TUI cards, current DSH state, current Skill discovery, current Agent
-Status, current filesystem state, current `models.jsonc`, a live
+Status, current filesystem state, current `models.toml`, a live
 `ContextContributor` run, regenerated dynamic context, or old process-memory
 registry contents. Current configuration configures **future** work only.
 

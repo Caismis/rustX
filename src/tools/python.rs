@@ -345,7 +345,7 @@ fn collect_files(root: &Path) -> Result<Vec<(PathBuf, Vec<u8>)>, PythonToolError
                         "package paths must be valid UTF-8".to_owned(),
                     ));
                 }
-                let bytes = crate::config_format::read_bounded(&path)
+                let bytes = crate::toml_authoring::read_bounded(&path)
                     .map_err(PythonToolError::InvalidPackage)?;
                 *bytes_left = bytes_left.checked_sub(bytes.len()).ok_or_else(|| {
                     PythonToolError::InvalidPackage("package exceeds 16 MiB".into())

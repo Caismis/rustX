@@ -96,13 +96,13 @@ impl LaunchFailure {
     }
     pub(super) fn parse(
         file: &std::path::Path,
-        failure: crate::config_format::ParseFailure,
+        failure: crate::toml_authoring::ParseFailure,
     ) -> Self {
         let mut result = Self::at(
             Some(file.into()),
             "$",
             if failure.syntax {
-                "malformed JSONC"
+                "malformed TOML"
             } else {
                 "invalid document shape or unknown field"
             },
@@ -476,9 +476,9 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
             };
         }
         let path = if launch.config.mcp_servers.contains_key(name) {
-            format!("mcpServers.{name}")
+            format!("mcp_servers.{name}")
         } else {
-            format!("pythonSources.{name}")
+            format!("python_sources.{name}")
         };
         let file = launch
             .provenance
@@ -563,7 +563,7 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
             "extensionTools": crate::extensions::composed_extension_tool_names(
                 &launch.config.extension_composition(),
             ),
-            "extensionToolsReason":"provided by composed Native Agent Extensions; not selectable through defaultTools/--tools/--exclude-tools, and not removed by --no-tools",
+            "extensionToolsReason":"provided by composed Native Agent Extensions; not selectable through default_tools/--tools/--exclude-tools, and not removed by --no-tools",
             "onlineIdentities":"unresolved until source discovery"}),
         registered_workflows: launch
             .config
@@ -587,7 +587,9 @@ fn redact(value: &mut Value) {
                         | "headers"
                         | "args"
                         | "requestParams"
+                        | "request_params_json"
                         | "apiKey"
+                        | "api_key"
                         | "command"
                         | "url"
                 ) {

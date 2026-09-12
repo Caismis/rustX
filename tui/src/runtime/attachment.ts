@@ -340,7 +340,7 @@ export class RuntimeClientAttachment {
     };
   }
 
-  /** The safe public catalog. This is why the client never reads models.jsonc. */
+  /** The safe public catalog. This is why the client never reads models.toml. */
   async modelCatalog(): Promise<ModelCatalogView> {
     const result = await this.#connection.request({
       method: "model_catalog_get",

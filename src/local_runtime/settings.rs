@@ -8,8 +8,8 @@ use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
-use jsonc_parser::cst::{CstInputValue, CstObject, CstRootNode};
 use sha2::{Digest, Sha256};
+use toml_edit::{DocumentMut, Item, TableLike};
 
 use super::launch::ResolvedLaunch;
 use crate::runtime_client::settings::{
@@ -71,7 +71,7 @@ fn read_document(path: &Path) -> Result<Option<Vec<u8>>, RuntimeClientError> {
         Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => Err(failure(
             "default document must be a regular file, not a symlink",
         )),
-        Ok(_) => crate::config_format::read_bounded(path)
+        Ok(_) => crate::toml_authoring::read_bounded(path)
             .map(Some)
             .map_err(io_failure),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -94,77 +94,67 @@ fn check_revision(path: &Path, expected: &str) -> Result<Option<Vec<u8>>, Runtim
     Ok(bytes)
 }
 
-// Reject duplicate names (including escaped equivalents) rather than selecting an
-// arbitrary occurrence. Recurse only through CST objects/arrays, never parse JSONC ourselves.
-fn unique(node: jsonc_parser::cst::CstNode) -> Result<(), RuntimeClientError> {
-    use jsonc_parser::cst::CstContainerNode;
-    if let jsonc_parser::cst::CstNode::Container(container) = node {
-        if let CstContainerNode::Object(object) = &container {
-            let mut names = std::collections::BTreeSet::new();
-            for prop in object.properties() {
-                let name = prop
-                    .name()
-                    .ok_or_else(|| invalid(()))?
-                    .decoded_value()
-                    .map_err(invalid)?;
-                if !names.insert(name) {
-                    return Err(failure(
-                        "duplicate JSONC properties prevent a non-destructive default save; remove duplicate keys first",
-                    ));
-                }
-            }
-        }
-        for child in container.children() {
-            unique(child)?;
-        }
-    }
-    Ok(())
+// TOML's parser rejects duplicate keys/tables before any mutation.
+fn tree(bytes: &[u8]) -> Result<DocumentMut, RuntimeClientError> {
+    std::str::from_utf8(bytes)
+        .map_err(invalid)?
+        .parse()
+        .map_err(invalid)
 }
-fn tree(bytes: &[u8]) -> Result<CstRootNode, RuntimeClientError> {
-    let text = std::str::from_utf8(bytes).map_err(invalid)?;
-    let root = CstRootNode::parse(text, &crate::config_format::OPTIONS).map_err(invalid)?;
-    unique(root.clone().into())?;
-    root.object_value().ok_or_else(|| invalid(()))?;
-    Ok(root)
-}
-fn set(object: &CstObject, key: &str, value: CstInputValue) {
-    if let Some(prop) = object.get(key) {
-        prop.set_value(value);
-    } else {
-        object.append(key, value);
+fn set(table: &mut dyn TableLike, key: &str, mut value: Item) {
+    if let Some(old) = table.get(key).and_then(Item::as_value)
+        && let Some(new) = value.as_value_mut()
+    {
+        *new.decor_mut() = old.decor().clone();
     }
+    if table.get(key).and_then(Item::as_str).is_some()
+        && table.get(key).and_then(Item::as_str) == value.as_str()
+    {
+        return;
+    }
+    table.insert(key, value);
 }
 fn update(bytes: &[u8], value: &DefaultValue) -> Result<Vec<u8>, RuntimeClientError> {
-    let root = tree(bytes)?;
-    let object = root.object_value().ok_or_else(|| invalid(()))?;
+    let mut root = tree(bytes)?;
     match value {
         DefaultValue::ModelSelection { selection } => {
-            let model = object
-                .object_value_or_create("model")
+            if !root.contains_key("model") {
+                root["model"] = Item::Table(toml_edit::Table::new());
+            }
+            let model = root["model"]
+                .as_table_like_mut()
                 .ok_or_else(|| invalid(()))?;
             set(
-                &model,
+                model,
                 "model",
-                CstInputValue::String(selection.model.to_string()),
+                toml_edit::value(selection.model.to_string()),
             );
-            set(
-                &model,
-                "reasoningProfile",
-                selection
-                    .reasoning_profile
-                    .as_ref()
-                    .map_or(CstInputValue::Null, |profile| {
-                        CstInputValue::String(profile.to_string())
-                    }),
-            );
+            let mut profile = toml_edit::InlineTable::new();
+            if let Some(name) = &selection.reasoning_profile {
+                profile.insert("mode", "profile".into());
+                profile.insert("name", name.to_string().into());
+            } else {
+                profile.insert("mode", "catalog_default".into());
+            }
+            let unchanged = model
+                .get("reasoning_profile")
+                .and_then(Item::as_table_like)
+                .is_some_and(|old| {
+                    old.get("mode").and_then(Item::as_str)
+                        == profile.get("mode").and_then(toml_edit::Value::as_str)
+                        && old.get("name").and_then(Item::as_str)
+                            == profile.get("name").and_then(toml_edit::Value::as_str)
+                });
+            if !unchanged {
+                set(model, "reasoning_profile", Item::Value(profile.into()));
+            }
         }
         DefaultValue::ApprovalMode { mode } => {
-            let value = serde_json::to_value(mode).map_err(invalid)?;
-            set(
-                &object,
-                "approvalMode",
-                CstInputValue::String(value.as_str().ok_or_else(|| invalid(()))?.into()),
-            );
+            let mode = match mode {
+                crate::runtime::ApprovalMode::Policy => "policy",
+                crate::runtime::ApprovalMode::FullAccess => "full_access",
+            };
+            set(root.as_table_mut(), "approval_mode", toml_edit::value(mode));
         }
     }
     Ok(root.to_string().into_bytes())
@@ -188,43 +178,30 @@ impl UserDefaults {
         }
     }
     fn target(&self) -> PathBuf {
-        self.directory.join("settings.jsonc")
+        self.directory.join("settings.toml")
     }
     fn read_sync(&self, scope: DefaultScope) -> Result<DefaultDocument, RuntimeClientError> {
         let path = self.target();
         let bytes = read_document(&path)?;
-        let model = if let Some(bytes) = &bytes {
-            tree(bytes)?;
-            crate::config_format::parse::<serde_json::Value>(bytes).map_err(invalid)?
+        let layer: super::authoring::RuntimeLayer = if let Some(bytes) = &bytes {
+            super::launch::parse_layer(&path, bytes, false).map_err(invalid)?
         } else {
-            serde_json::json!({})
+            super::authoring::RuntimeLayer::default()
         };
-        let selection = model
-            .get("model")
-            .and_then(|m| m.get("model"))
-            .map(|selected| -> Result<ModelDefault, RuntimeClientError> {
-                Ok(ModelDefault {
-                    model: serde_json::from_value(selected.clone()).map_err(invalid)?,
-                    reasoning_profile: model
-                        .get("model")
-                        .and_then(|m| m.get("reasoningProfile"))
-                        .map(|v| serde_json::from_value(v.clone()))
-                        .transpose()
-                        .map_err(invalid)?
-                        .flatten(),
-                })
+        let selection = layer.model.and_then(|model| {
+            model.model.map(|selected| ModelDefault {
+                model: selected,
+                reasoning_profile: model
+                    .reasoning_profile
+                    .and_then(super::authoring::ReasoningSelection::resolve),
             })
-            .transpose()?;
+        });
         Ok(DefaultDocument {
             scope,
             document: path.display().to_string(),
             revision: revision(bytes.as_deref()),
             model: selection,
-            approval_mode: model
-                .get("approvalMode")
-                .map(|v| serde_json::from_value(v.clone()))
-                .transpose()
-                .map_err(invalid)?,
+            approval_mode: layer.approval_mode,
         })
     }
     fn save_sync(
@@ -251,7 +228,7 @@ impl UserDefaults {
         let _lock = lock_document(&target).map_err(io_failure)?;
         frontier(Frontier::Locked)?;
         let original = check_revision(&target, expected)?;
-        let candidate = update(original.as_deref().unwrap_or(b"{\n}\n"), &value)?;
+        let candidate = update(original.as_deref().unwrap_or(b""), &value)?;
         let mut staged = tempfile::NamedTempFile::new_in(&parent).map_err(io_failure)?;
         if original.is_some() {
             staged
@@ -266,7 +243,7 @@ impl UserDefaults {
         staged.write_all(&candidate).map_err(io_failure)?;
         staged.as_file().sync_all().map_err(io_failure)?;
         frontier(Frontier::Staged)?;
-        let bytes = crate::config_format::read_bounded(staged.path()).map_err(io_failure)?;
+        let bytes = crate::toml_authoring::read_bounded(staged.path()).map_err(io_failure)?;
         // Reuse the canonical user-layer schema/ownership parser. This validates
         // the document, not readiness of any mutable project or resource files.
         let layer = super::launch::parse_layer(&target, &bytes, false).map_err(invalid)?;
@@ -339,9 +316,25 @@ mod tests {
             HostEnvironment::from_paths(workspace.clone(), root.path().join("home"), None, None)
                 .unwrap();
         std::fs::create_dir_all(&host.config_directory).unwrap();
-        let models = include_str!("../../examples/local-runtime/minimal/models.jsonc");
-        std::fs::write(host.config_directory.join("models.jsonc"), models).unwrap();
-        std::fs::write(host.config_directory.join("settings.jsonc"), b"{\n // preserve my reason\n \"model\": {\"model\":\"example/demo-model\", /* keep profile comment */ \"reasoningProfile\":null},\n \"environment\": {\"PRIVATE\": \"SECRET_SENTINEL\"},\n \"defaultTools\": [\"read\"],\n}\n").unwrap();
+        let models = include_str!("../../examples/local-runtime/minimal/models.toml");
+        std::fs::write(host.config_directory.join("models.toml"), models).unwrap();
+        std::fs::write(
+            host.config_directory.join("settings.toml"),
+            br#"# preserve my reason
+# keep profile comment
+default_tools = ["read"]
+
+[model]
+model = "example/demo-model"
+
+[model.reasoning_profile]
+mode = "catalog_default"
+
+[environment]
+PRIVATE = "SECRET_SENTINEL"
+"#,
+        )
+        .unwrap();
         let request = LaunchRequest {
             workspace: Some(workspace),
             ..LaunchRequest::default()
@@ -378,8 +371,14 @@ mod tests {
     fn project_fixture() -> (tempfile::TempDir, UserDefaults, PathBuf) {
         let (root, _) = fixture();
         let workspace = root.path().join("workspace");
-        let project = workspace.join("project.jsonc");
-        std::fs::write(&project, br#"{"model":{"model":"example/demo-model"}}"#).unwrap();
+        let project = workspace.join("project.toml");
+        std::fs::write(
+            &project,
+            br#"[model]
+model = "example/demo-model"
+"#,
+        )
+        .unwrap();
         let host =
             HostEnvironment::from_paths(workspace.clone(), root.path().join("home"), None, None)
                 .unwrap();
@@ -397,8 +396,8 @@ mod tests {
 
     fn model_change_fixture(preserved: &str) -> (tempfile::TempDir, UserDefaults) {
         let (root, owner) = fixture();
-        let mut catalog: serde_json::Value = crate::config_format::parse(include_bytes!(
-            "../../examples/local-runtime/minimal/models.jsonc"
+        let mut catalog: serde_json::Value = crate::toml_authoring::parse(include_bytes!(
+            "../../examples/local-runtime/minimal/models.toml"
         ))
         .unwrap();
         let mut a = catalog["providers"]["example"]["models"][0].clone();
@@ -408,21 +407,23 @@ mod tests {
         let mut b = a.clone();
         b["id"] = "b".into();
         b["protocol"] = "openai_chat_completions".into();
-        b["compat"] = serde_json::json!({"chatReasoningReplay": "omit"});
-        b["maxOutputTokens"] = 2048.into();
-        b["contextWindow"] = 8192.into();
+        b["compat"] = serde_json::json!({"chat_reasoning_replay": "omit"});
+        b["max_output_tokens"] = 2048.into();
+        b["context_window"] = 8192.into();
         catalog["providers"]["example"]["models"] = serde_json::json!([a, b]);
         std::fs::write(
-            owner.directory.join("models.jsonc"),
-            serde_json::to_vec(&catalog).unwrap(),
+            owner.directory.join("models.toml"),
+            toml::to_string_pretty(&catalog).unwrap(),
         )
         .unwrap();
         std::fs::write(
             owner.target(),
             format!(
-                r#"{{ // preserved settings
-          "model": {{ "model": "example/a", {preserved} }}
-        }}"#
+                r#"# preserved settings
+[model]
+model = "example/a"
+{preserved}
+"#
             ),
         )
         .unwrap();
@@ -441,7 +442,7 @@ mod tests {
         .admit(|| crate::credentials::CredentialSnapshot::new([]))
         .unwrap();
         let owner = UserDefaults::new(&launch);
-        std::fs::remove_file(owner.directory.join("models.jsonc")).unwrap();
+        std::fs::remove_file(owner.directory.join("models.toml")).unwrap();
         (root, owner)
     }
 
@@ -478,23 +479,30 @@ mod tests {
 
     #[test]
     fn cfg238_staged_model_preserved_output_budget_is_validated() {
-        assert_preserved_model_setting_rejected(r#""maxOutputTokens": 4096"#);
+        assert_preserved_model_setting_rejected(
+            r#"max_output_tokens = { mode = "limit", tokens = 4096 }"#,
+        );
     }
 
     #[test]
     fn cfg238_staged_model_preserved_request_params_are_validated() {
         // `messages` is opaque to Responses but runtime-owned by Chat Completions.
         assert_preserved_model_setting_rejected(
-            r#""requestParams": {"messages": ["SECRET_SENTINEL"]}"#,
+            r#"request_params_json = '{"messages": ["SECRET_SENTINEL"]}'"#,
         );
     }
 
     #[test]
     fn cfg238_staged_model_validates_user_context_with_builtin_defaults() {
-        let (_root, owner) = model_change_fixture(r#""requestParams": {}"#);
+        let (_root, owner) = model_change_fixture(r"request_params_json = '{}'");
         // Valid for A/128000; B/8192 cannot fit this reserve plus its 2048
         // output budget. Other context fields use the canonical built-in defaults.
-        let bytes = br#"{"model":{"model":"example/a"},"context":{"reserveTokens":6144}}"#;
+        let bytes = br#"[model]
+model = "example/a"
+
+[context]
+reserve_tokens = 6144
+"#;
         std::fs::write(owner.target(), bytes).unwrap();
         let expected = current(&owner);
         let value = DefaultValue::ModelSelection {
@@ -520,17 +528,27 @@ mod tests {
     #[test]
     fn cfg238_approval_save_does_not_validate_unrelated_model_semantics() {
         let (_root, owner) = fixture();
-        let bytes = br#"{"model":{"model":"example/missing","maxOutputTokens":0},"context":{"summaryOutputCap":0}}"#;
+        let bytes = br#"[model]
+model = "example/missing"
+
+[model.max_output_tokens]
+mode = "limit"
+tokens = 0
+
+[context.summary_output_cap]
+mode = "limit"
+tokens = 0
+"#;
         std::fs::write(owner.target(), bytes).unwrap();
         let result = owner
             .save_sync(DefaultScope::User, &current(&owner), approval())
             .unwrap();
         let after: serde_json::Value =
-            crate::config_format::parse(&std::fs::read(owner.target()).unwrap()).unwrap();
-        let before: serde_json::Value = crate::config_format::parse(bytes).unwrap();
+            crate::toml_authoring::parse(&std::fs::read(owner.target()).unwrap()).unwrap();
+        let before: serde_json::Value = crate::toml_authoring::parse(bytes).unwrap();
         assert_eq!(after["model"], before["model"]);
         assert_eq!(after["context"], before["context"]);
-        assert_eq!(after["approvalMode"], "full_access");
+        assert_eq!(after["approval_mode"], "full_access");
         assert_eq!(current(&owner), result.revision);
     }
 
@@ -545,7 +563,7 @@ mod tests {
                 std::fs::write(&project, b"broken project SECRET_SENTINEL").unwrap();
             }
             // Domain authority is the captured catalog, not a newly loaded file.
-            std::fs::remove_file(owner.directory.join("models.jsonc")).unwrap();
+            std::fs::remove_file(owner.directory.join("models.toml")).unwrap();
             let result = owner
                 .save_sync(DefaultScope::User, &expected, selected())
                 .unwrap();
@@ -598,10 +616,21 @@ mod tests {
     fn cfg238_user_layer_schema_and_ownership_still_gate_publication() {
         let (_root, owner) = fixture();
         for invalid in [
-            br#"{"unknown":true}"#.as_slice(),
-            br#"{"workspace":"/forbidden"}"#,
-            br#"{"context":{"unexpected":true}}"#,
-            br#"{"model":{"model":"example/demo-model","maxOutputTokens":"wrong-type"}}"#,
+            br"unknown = true
+"
+            .as_slice(),
+            br#"workspace = "/forbidden"
+"#,
+            br"[context]
+unexpected = true
+",
+            br#"[model]
+model = "example/demo-model"
+
+[model.max_output_tokens]
+mode = "limit"
+tokens = "wrong-type"
+"#,
         ] {
             std::fs::write(owner.target(), invalid).unwrap();
             let mut validated = false;
@@ -639,14 +668,14 @@ mod tests {
             .save_sync(DefaultScope::User, &result.revision, approval())
             .unwrap();
         let after = std::fs::read_to_string(owner.target()).unwrap();
-        assert!(after.contains("// preserve my reason"));
-        assert!(after.contains("/* keep profile comment */"));
-        assert!(after.contains("\"PRIVATE\": \"SECRET_SENTINEL\""));
-        let mut expected: serde_json::Value = crate::config_format::parse(&before).unwrap();
-        expected["approvalMode"] = serde_json::json!("full_access");
+        assert!(after.contains("# preserve my reason"));
+        assert!(after.contains("# keep profile comment"));
+        assert!(after.contains("PRIVATE = \"SECRET_SENTINEL\""));
+        let mut expected: serde_json::Value = crate::toml_authoring::parse(&before).unwrap();
+        expected["approval_mode"] = serde_json::json!("full_access");
         assert_eq!(
             expected,
-            crate::config_format::parse::<serde_json::Value>(after.as_bytes()).unwrap()
+            crate::toml_authoring::parse::<serde_json::Value>(after.as_bytes()).unwrap()
         );
         for output in [
             serde_json::to_string(&read).unwrap(),
@@ -748,7 +777,13 @@ mod tests {
     fn cfg238_external_edit_before_final_check_is_rejected() {
         let (_root, owner) = fixture();
         let a = current(&owner);
-        let external = b"{\"model\":{\"model\":\"example/demo-model\"},\"environment\":{\"PRIVATE\":\"EXTERNAL_SECRET\"}}";
+        let external = br#"
+[model]
+model = "example/demo-model"
+
+[environment]
+PRIVATE = "EXTERNAL_SECRET"
+"#;
         let error = owner
             .save_at(DefaultScope::User, &a, approval(), |point| {
                 if point == Frontier::Validated {
@@ -826,15 +861,22 @@ mod tests {
     #[test]
     fn cfg238_duplicate_keys_and_symlinks_are_refused() {
         let (_root, owner) = fixture();
-        let duplicate = b"{\"model\":{\"model\":\"example/demo-model\"},\"environment\":{\"x\":\"SECRET_SENTINEL\",\"x\":\"second\"}}";
+        let duplicate = br#"
+[model]
+model = "example/demo-model"
+
+[environment]
+x = "SECRET_SENTINEL"
+x = "second"
+"#;
         std::fs::write(owner.target(), duplicate).unwrap();
         let error = owner
             .save_sync(DefaultScope::User, &revision(Some(duplicate)), approval())
             .unwrap_err();
-        assert!(format!("{error:?}").contains("duplicate"));
+        assert!(format!("{error:?}").contains("invalid user default document"));
         assert!(!format!("{error:?}").contains("SECRET_SENTINEL"));
         assert_eq!(std::fs::read(owner.target()).unwrap(), duplicate);
-        let other = owner.target().with_file_name("other.jsonc");
+        let other = owner.target().with_file_name("other.toml");
         std::fs::rename(owner.target(), &other).unwrap();
         std::os::unix::fs::symlink(&other, owner.target()).unwrap();
         assert!(owner.read_sync(DefaultScope::User).is_err());

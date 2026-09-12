@@ -161,51 +161,55 @@ async fn bounded_loop_exhaustion_keeps_one_outer_result_and_no_internal_provider
 }
 
 fn models_json_for_base_url(base_url: &str) -> String {
-    serde_json::json!({
+    toml::to_string_pretty(&serde_json::json!({
         "providers": {
             "emulator": {
-                "baseUrl": base_url,
-                "apiKey": "issue83-secret",
+                "base_url": base_url,
+                "api_key": "issue83-secret",
                 "models": [{
                     "id": MODEL,
                     "protocol": "openai_chat_completions",
-                    "contextWindow": 128_000,
-                    "maxOutputTokens": 1024,
+                    "context_window": 128_000,
+                    "max_output_tokens": 1024,
                     "capabilities": {
-                        "inputModalities": ["text"],
-                        "outputModalities": ["text"],
-                        "toolCalls": true,
+                        "input_modalities": ["text"],
+                        "output_modalities": ["text"],
+                        "tool_calls": true,
                         "reasoning": false
                     },
-                    "compat": {"chatReasoningReplay": "omit"}
+                    "compat": {"chat_reasoning_replay": "omit"}
                 }]
             }
         }
-    })
-    .to_string()
+    }))
+    .unwrap()
 }
 
 fn models_json(emulator: &ProviderEmulator) -> String {
     models_json_for_base_url(&emulator.openai_base_url())
 }
 
-const CONFIG: &str = r#"{
-  "schemaVersion": 8,
-  "agentId": "agent-issue83",
-  "model": {"model": "emulator/workflow-model"},
-  "context": {"reserveTokens": 0, "keepRecentTokens": 0},
-  "defaultTools": ["read"],
-  "subagents": {
-    "maxConcurrent": 4,
-    "definitions": ["reviewer"],
-    "main": [],
-    "workflow": ["reviewer"]
-  },
-  "workflows": {
-    "definitions": ["review_pr"],
-    "main": ["review_pr"]
-  }
-}"#;
+const CONFIG: &str = r#"schema_version = 8
+agent_id = "agent-issue83"
+default_tools = ["read"]
+
+[model]
+model = "emulator/workflow-model"
+
+[context]
+reserve_tokens = 0
+keep_recent_tokens = 0
+
+[subagents]
+max_concurrent = 4
+definitions = ["reviewer"]
+main = []
+workflow = ["reviewer"]
+
+[workflows]
+definitions = ["review_pr"]
+main = ["review_pr"]
+"#;
 
 const WORKFLOW: &str = r"description: Review the request with a native child agent.
 block:
@@ -308,9 +312,9 @@ impl Driver {
         std::fs::create_dir_all(workspace.join(".agents/subagents/reviewer"))
             .expect("subagent directory");
         std::fs::create_dir_all(workspace.join(".agents/workflows")).expect("workflow directory");
-        std::fs::write(root.path().join("models.jsonc"), models_json(emulator))
-            .expect("models.jsonc");
-        std::fs::write(root.path().join("rustx.jsonc"), CONFIG).expect("rustx.jsonc");
+        std::fs::write(root.path().join("models.toml"), models_json(emulator))
+            .expect("models.toml");
+        std::fs::write(root.path().join("rustx.toml"), CONFIG).expect("rustx.toml");
         std::fs::write(
             workspace.join(".agents/subagents/reviewer.md"),
             "---\ndescription: The Workflow-only reviewer.\n---\nReview requests carefully.\n",
@@ -328,8 +332,8 @@ impl Driver {
         .expect("inactive workflow YAML");
 
         let paths = LaunchFixture {
-            models: root.path().join("models.jsonc"),
-            config: root.path().join("rustx.jsonc"),
+            models: root.path().join("models.toml"),
+            config: root.path().join("rustx.toml"),
             skill_paths: Vec::new(),
             no_skills: true,
             no_builtin_tools: false,
@@ -443,11 +447,11 @@ async fn a_registered_workflow_rejects_the_obsolete_workspace_rustx_path() {
         .expect("subagent directory");
     std::fs::create_dir_all(workspace.join(".rustx/workflows")).expect("obsolete directory");
     std::fs::write(
-        root.path().join("models.jsonc"),
+        root.path().join("models.toml"),
         models_json_for_base_url("http://127.0.0.1:1/v1"),
     )
-    .expect("models.jsonc");
-    std::fs::write(root.path().join("rustx.jsonc"), CONFIG).expect("rustx.jsonc");
+    .expect("models.toml");
+    std::fs::write(root.path().join("rustx.toml"), CONFIG).expect("rustx.toml");
     std::fs::write(
         workspace.join(".agents/subagents/reviewer.md"),
         "---\ndescription: The Workflow-only reviewer.\n---\nReview requests carefully.\n",
@@ -457,8 +461,8 @@ async fn a_registered_workflow_rejects_the_obsolete_workspace_rustx_path() {
         .expect("legacy workflow YAML");
 
     let paths = LaunchFixture {
-        models: root.path().join("models.jsonc"),
-        config: root.path().join("rustx.jsonc"),
+        models: root.path().join("models.toml"),
+        config: root.path().join("rustx.toml"),
         skill_paths: Vec::new(),
         no_skills: true,
         no_builtin_tools: false,
@@ -491,15 +495,15 @@ async fn registered_workflow_can_remain_out_of_main_model_admission() {
         .expect("subagent directory");
     std::fs::create_dir_all(workspace.join(".agents/workflows")).expect("workflow directory");
     std::fs::write(
-        root.path().join("models.jsonc"),
+        root.path().join("models.toml"),
         models_json_for_base_url("http://127.0.0.1:1/v1"),
     )
-    .expect("models.jsonc");
+    .expect("models.toml");
     std::fs::write(
-        root.path().join("rustx.jsonc"),
-        CONFIG.replace("\"main\": [\"review_pr\"]", "\"main\": []"),
+        root.path().join("rustx.toml"),
+        CONFIG.replace("main = [\"review_pr\"]", "main = []"),
     )
-    .expect("rustx.jsonc");
+    .expect("rustx.toml");
     std::fs::write(
         workspace.join(".agents/subagents/reviewer.md"),
         "---\ndescription: The Workflow-only reviewer.\n---\nReview requests carefully.\n",
@@ -509,8 +513,8 @@ async fn registered_workflow_can_remain_out_of_main_model_admission() {
         .expect("workflow YAML");
 
     let paths = LaunchFixture {
-        models: root.path().join("models.jsonc"),
-        config: root.path().join("rustx.jsonc"),
+        models: root.path().join("models.toml"),
+        config: root.path().join("rustx.toml"),
         skill_paths: Vec::new(),
         no_skills: true,
         no_builtin_tools: false,
@@ -578,8 +582,8 @@ block:
     )
     .expect("replace future profile");
     std::fs::write(
-        driver.root.path().join("rustx.jsonc"),
-        CONFIG.replace("\"main\": [\"review_pr\"]", "\"main\": []"),
+        driver.root.path().join("rustx.toml"),
+        CONFIG.replace("main = [\"review_pr\"]", "main = []"),
     )
     .expect("replace future exposure");
     emulator.release_gate("workflow-child-admitted").await;
@@ -845,18 +849,21 @@ impl Driver {
             reference_git(&workspace, &["commit", "-m", "reference baseline"]);
         }
         std::fs::write(
-            root.path().join("models.jsonc"),
+            root.path().join("models.toml"),
             models_json(emulator).replace("1024", "4096"),
         )
         .unwrap();
-        let config = std::fs::read_to_string(root.path().join("rustx.jsonc"))
+        let config = std::fs::read_to_string(root.path().join("rustx.toml"))
             .unwrap()
             .replace("example/demo-model", "emulator/workflow-model")
-            .replace("\"reasoningProfile\": \"off\",", "");
-        std::fs::write(root.path().join("rustx.jsonc"), config).unwrap();
+            .replace(
+                "[model.reasoning_profile]\nmode = \"profile\"\nname = \"off\"\n",
+                "",
+            );
+        std::fs::write(root.path().join("rustx.toml"), config).unwrap();
         let paths = LaunchFixture {
-            models: root.path().join("models.jsonc"),
-            config: root.path().join("rustx.jsonc"),
+            models: root.path().join("models.toml"),
+            config: root.path().join("rustx.toml"),
             workspace,
             runtime_root: root.path().join("private"),
             skill_paths: vec![],

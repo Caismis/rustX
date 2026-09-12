@@ -29,32 +29,40 @@ const KEY_ENV: &str = "RUSTX_ISSUE144_KEY";
 const EXPLORE_AGENTS: &str = ".agents/subagents/explore/AGENTS.md";
 const EXPLORE_EXTRA: &str = ".agents/subagents/explore/EXTRA.md";
 
-const MODELS: &str = r#"{
-  "providers": {
-    "local": {
-      "baseUrl": "http://127.0.0.1:9/v1",
-      "apiKey": "$RUSTX_ISSUE144_KEY",
-      "models": [
-        {
-          "id": "model-a",
-          "protocol": "openai_chat_completions",
-          "contextWindow": 128000,
-          "maxOutputTokens": 512,
-          "capabilities": {"inputModalities": ["text"], "outputModalities": ["text"], "toolCalls": true, "reasoning": false},
-          "compat": {"chatReasoningReplay": "omit"}
-        },
-        {
-          "id": "model-b",
-          "protocol": "openai_chat_completions",
-          "contextWindow": 128000,
-          "maxOutputTokens": 512,
-          "capabilities": {"inputModalities": ["text"], "outputModalities": ["text"], "toolCalls": true, "reasoning": false},
-          "compat": {"chatReasoningReplay": "omit"}
-        }
-      ]
-    }
-  }
-}"#;
+const MODELS: &str = r#"[providers.local]
+base_url = "http://127.0.0.1:9/v1"
+api_key = "$RUSTX_ISSUE144_KEY"
+
+[[providers.local.models]]
+id = "model-a"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 512
+
+[providers.local.models.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[providers.local.models.compat]
+chat_reasoning_replay = "omit"
+
+[[providers.local.models]]
+id = "model-b"
+protocol = "openai_chat_completions"
+context_window = 128000
+max_output_tokens = 512
+
+[providers.local.models.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+
+[providers.local.models.compat]
+chat_reasoning_replay = "omit"
+"#;
 
 fn dependencies() -> LocalRuntimeDependencies {
     LocalRuntimeDependencies {
@@ -69,7 +77,7 @@ fn dependencies() -> LocalRuntimeDependencies {
 /// The same model authority the runtime composes, rebuilt for direct
 /// resolver calls.
 fn model_registry() -> ModelBindingRegistry {
-    let catalog = ModelCatalog::from_jsonc_slice(MODELS.as_bytes()).expect("model catalog");
+    let catalog = ModelCatalog::from_toml_slice(MODELS.as_bytes()).expect("model catalog");
     let resolved = catalog
         .resolve(dependencies().credentials.as_deref().unwrap())
         .expect("resolved catalog");
@@ -130,7 +138,7 @@ impl Lab {
             std::fs::create_dir_all(lab.workspace().join(format!(".agents/subagents/{profile}")))
                 .expect("subagent resources");
         }
-        std::fs::write(lab.root().join("models.jsonc"), MODELS).expect("models.jsonc");
+        std::fs::write(lab.root().join("models.toml"), MODELS).expect("models.toml");
         std::fs::write(
             lab.subagent_file("explore", "instructions.md"),
             "Explore the shared workspace read-only.\n",
@@ -201,18 +209,18 @@ impl Lab {
         }
         crate::launch_fixture::write_roles(&self.workspace(), &mut subagents);
         let document = serde_json::json!({
-            "schemaVersion": 8,
-            "agentId": "agent-issue144",
+            "schema_version": 8,
+            "agent_id": "agent-issue144",
             "model": {"model": "local/model-a"},
-            "context": {"reserveTokens": 0, "keepRecentTokens": 0},
-            "defaultTools": default_tools,
+            "context": {"reserve_tokens": 0, "keep_recent_tokens": 0},
+            "default_tools": default_tools,
             "subagents": subagents,
         });
         std::fs::write(
-            self.root().join("rustx.jsonc"),
-            serde_json::to_string_pretty(&document).expect("config document"),
+            self.root().join("rustx.toml"),
+            toml::to_string_pretty(&document).expect("config document"),
         )
-        .expect("rustx.jsonc");
+        .expect("rustx.toml");
     }
 
     fn write_skill(&self, name: &str, description: &str) {
@@ -227,8 +235,8 @@ impl Lab {
 
     fn paths(&self) -> LaunchFixture {
         LaunchFixture {
-            models: self.root().join("models.jsonc"),
-            config: self.root().join("rustx.jsonc"),
+            models: self.root().join("models.toml"),
+            config: self.root().join("rustx.toml"),
             skill_paths: Vec::new(),
             no_skills: false,
             no_builtin_tools: false,
@@ -256,7 +264,7 @@ impl Lab {
 async fn an_empty_named_agent_catalog_exposes_no_subagent_tool() {
     let lab = Lab::new();
     lab.write_config(&serde_json::json!({
-        "maxConcurrent": 4,
+        "max_concurrent": 4,
         "roles": {},
     }));
     let product = lab.compose().await;
@@ -306,7 +314,7 @@ async fn reloading_non_empty_catalog_to_empty_removes_only_the_current_subagent_
     );
 
     lab.write_config(&serde_json::json!({
-        "maxConcurrent": 4,
+        "max_concurrent": 4,
         "roles": {},
     }));
     product
@@ -349,7 +357,7 @@ async fn reloading_non_empty_catalog_to_empty_removes_only_the_current_subagent_
 /// A definition selecting exactly the named built-ins.
 fn explore(builtin: &[&str]) -> serde_json::Value {
     serde_json::json!({
-        "maxConcurrent": 4,
+        "max_concurrent": 4,
         "roles": {
             "explore": {
                 "description": "Read-only repository exploration.",
@@ -463,7 +471,7 @@ async fn only_named_catalog_definitions_are_admitted() {
     )
     .expect("research instructions");
     lab.write_config(&serde_json::json!({
-        "maxConcurrent": 2,
+        "max_concurrent": 2,
         "roles": {
             "research": {
                 "description": "Deep research.",
@@ -553,7 +561,7 @@ async fn an_attempt_frozen_on_r1_resolves_r1_after_r2_becomes_current() {
     )
     .expect("revised explore instructions");
     lab.write_config(&serde_json::json!({
-        "maxConcurrent": 4,
+        "max_concurrent": 4,
         "roles": {
             "explore": {
                 "description": "Read-only repository exploration.",
@@ -634,7 +642,7 @@ async fn a_failed_reload_leaves_the_previous_generation_completely_authoritative
     .expect("AGENTS.md");
     lab.write_skill("beta", "the second skill");
     lab.write_config(&serde_json::json!({
-        "maxConcurrent": 4,
+        "max_concurrent": 4,
         "roles": {
             "explore": {
                 "description": "Read-only repository exploration.",
@@ -741,7 +749,7 @@ async fn statically_invalid_references_fail_launch_analysis_closed() {
     for (subagents, expected) in [
         (
             serde_json::json!({
-                "maxConcurrent": 4,
+                "max_concurrent": 4,
                 "roles": {"explore": {
                     "description": "d",
 
@@ -752,7 +760,7 @@ async fn statically_invalid_references_fail_launch_analysis_closed() {
         ),
         (
             serde_json::json!({
-                "maxConcurrent": 4,
+                "max_concurrent": 4,
                 "roles": {"explore": {
                     "description": "d",
 
@@ -763,7 +771,7 @@ async fn statically_invalid_references_fail_launch_analysis_closed() {
         ),
         (
             serde_json::json!({
-                "maxConcurrent": 4,
+                "max_concurrent": 4,
                 "roles": {"explore": {
                     "description": "d",
 
@@ -777,7 +785,7 @@ async fn statically_invalid_references_fail_launch_analysis_closed() {
         ),
         (
             serde_json::json!({
-                "maxConcurrent": 4,
+                "max_concurrent": 4,
                 "roles": {"explore": {
                     "description": "d",
 
@@ -788,7 +796,7 @@ async fn statically_invalid_references_fail_launch_analysis_closed() {
         ),
         (
             serde_json::json!({
-                "maxConcurrent": 4,
+                "max_concurrent": 4,
                 "roles": {"explore": {
                     "description": "d",
 
@@ -842,16 +850,16 @@ async fn an_explicit_ask_user_selection_is_admitted_for_a_child() {
 async fn an_unavailable_source_keeps_the_runtime_healthy_but_blocks_the_agent_that_needs_it() {
     let lab = Lab::new();
     let mut document = serde_json::json!({
-        "schemaVersion": 8,
-        "agentId": "agent-issue144",
+        "schema_version": 8,
+        "agent_id": "agent-issue144",
         "model": {"model": "local/model-a"},
-        "context": {"reserveTokens": 0, "keepRecentTokens": 0},
-        "defaultTools": ["read", "subagent"],
-        "mcpServers": {
+        "context": {"reserve_tokens": 0, "keep_recent_tokens": 0},
+        "default_tools": ["read", "subagent"],
+        "mcp_servers": {
             "offline": {"enabled": true, "type": "stdio", "command": "missing-rustx-issue144-mcp"}
         },
         "subagents": {
-            "maxConcurrent": 4,
+            "max_concurrent": 4,
             "roles": {
                 "explore": {
                     "description": "Read-only repository exploration.",
@@ -864,7 +872,11 @@ async fn an_unavailable_source_keeps_the_runtime_healthy_but_blocks_the_agent_th
         }
     });
     crate::launch_fixture::write_roles(&lab.workspace(), &mut document["subagents"]);
-    std::fs::write(lab.root().join("rustx.jsonc"), document.to_string()).expect("rustx.jsonc");
+    std::fs::write(
+        lab.root().join("rustx.toml"),
+        toml::to_string_pretty(&document).unwrap(),
+    )
+    .expect("rustx.toml");
 
     // The whole runtime composes: an optional source failure is availability
     // state, not a composition error, and the catalog is still admitted.
@@ -910,7 +922,7 @@ async fn model_semantics_inherit_the_invoking_attempt_or_freeze_the_explicit_sel
     )
     .expect("pinned instructions");
     lab.write_config(&serde_json::json!({
-        "maxConcurrent": 4,
+        "max_concurrent": 4,
         "roles": {
             "explore": {
                 "description": "Inherits the invoking attempt's model.",
@@ -971,7 +983,7 @@ async fn project_instruction_policy_freezes_a_deterministic_chain() {
         lab.workspace().join(EXPLORE_EXTRA)
     ]);
     lab.write_config(&serde_json::json!({
-        "maxConcurrent": 4,
+        "max_concurrent": 4,
         "roles": {
             "explore": {
                 "description": "Inherits the parent chain.",
@@ -1030,7 +1042,7 @@ async fn project_instruction_policy_freezes_a_deterministic_chain() {
         lab.workspace().join(EXPLORE_AGENTS)
     ]);
     lab.write_config(&serde_json::json!({
-        "maxConcurrent": 4,
+        "max_concurrent": 4,
         "roles": {"isolated": {
             "description": "Explicit files only.",
 
@@ -1067,7 +1079,7 @@ async fn the_skill_allowlist_is_exact_and_preserves_progressive_disclosure() {
     lab.write_skill("alpha", "the first skill");
     lab.write_skill("beta", "the second skill");
     lab.write_config(&serde_json::json!({
-        "maxConcurrent": 4,
+        "max_concurrent": 4,
         "roles": {"explore": {
             "description": "Read-only repository exploration.",
 
@@ -1111,13 +1123,13 @@ async fn the_skill_allowlist_is_exact_and_preserves_progressive_disclosure() {
     );
 }
 
-/// The definition digest ignores incidental JSONC formatting, comments, and
+/// The definition digest ignores incidental TOML formatting, comments, and
 /// key order, and changes for every semantic difference.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_definition_digest_ignores_incidental_formatting_and_tracks_semantics() {
     let lab = Lab::new();
     lab.write_config(&serde_json::json!({
-        "maxConcurrent": 4,
+        "max_concurrent": 4,
         "roles": {"explore": {
             "description": "Read-only repository exploration.",
 
@@ -1145,7 +1157,7 @@ async fn the_definition_digest_ignores_incidental_formatting_and_tracks_semantic
 
     // A genuine semantic change does move the digest.
     lab.write_config(&serde_json::json!({
-        "maxConcurrent": 4,
+        "max_concurrent": 4,
         "roles": {"explore": {
             "description": "Read-only repository exploration.",
 
@@ -1221,7 +1233,7 @@ async fn the_frozen_specification_preserves_exact_builtin_identity_through_seria
 async fn max_concurrent_is_launch_scoped() {
     let lab = Lab::new();
     lab.write_config(&serde_json::json!({
-        "maxConcurrent": 1,
+        "max_concurrent": 1,
         "roles": {"explore": {
             "description": "Read-only repository exploration.",
 
@@ -1233,7 +1245,7 @@ async fn max_concurrent_is_launch_scoped() {
     // A reload that changes the bound publishes a new catalog without
     // touching the live registry's capacity: capacity is live-registry state.
     lab.write_config(&serde_json::json!({
-        "maxConcurrent": 8,
+        "max_concurrent": 8,
         "roles": {"explore": {
             "description": "Read-only repository exploration, revised.",
 
@@ -1258,12 +1270,12 @@ async fn max_concurrent_is_launch_scoped() {
     );
     // A zero or oversized bound is refused at the configuration boundary.
     let lab = Lab::new();
-    lab.write_config(&serde_json::json!({"maxConcurrent": 0, "roles": {}}));
+    lab.write_config(&serde_json::json!({"max_concurrent": 0, "roles": {}}));
     let error = lab
         .paths()
         .try_resolve()
         .expect_err("a zero bound is refused");
-    assert!(error.contains("maxConcurrent"));
+    assert!(error.contains("max_concurrent"));
 }
 
 /// An invalid agent name is rejected deterministically at the configuration
@@ -1440,39 +1452,38 @@ fn the_runtime_client_projection_carries_the_named_identity() {
 // re-resolved against mutable state the child can observe changing.
 // ---------------------------------------------------------------------------
 
-/// A `models.jsonc` whose `local/model-a` has materially different semantics
+/// A `models.toml` whose `local/model-a` has materially different semantics
 /// from [`MODELS`]: a different endpoint, protocol, context window, output
 /// budget, compat metadata, and request parameters — and no `model-b` at
 /// all, so a re-resolving child would also *fail* where the parent
 /// succeeded.
-const MODELS_MUTATED: &str = r#"{
-  "providers": {
-    "local": {
-      "baseUrl": "http://127.0.0.1:10/v2",
-      "apiKey": "$RUSTX_ISSUE144_KEY",
-      "models": [
-        {
-          "id": "model-a",
-          "protocol": "anthropic_messages",
-          "contextWindow": 1000,
-          "maxOutputTokens": 64,
-          "capabilities": {"inputModalities": ["text"], "outputModalities": ["text"], "toolCalls": true, "reasoning": false},
-          "requestParams": {"temperature": 0.9}
-        }
-      ]
-    }
-  }
-}"#;
+const MODELS_MUTATED: &str = r#"[providers.local]
+base_url = "http://127.0.0.1:10/v2"
+api_key = "$RUSTX_ISSUE144_KEY"
+
+[[providers.local.models]]
+id = "model-a"
+protocol = "anthropic_messages"
+context_window = 1000
+max_output_tokens = 64
+request_params_json = "{\"temperature\": 0.9}"
+
+[providers.local.models.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+tool_calls = true
+reasoning = false
+"#;
 
 /// Blocker 1: the child's model semantics are frozen by the parent, so a
-/// `models.jsonc` edit that lands between the freeze and the child's
+/// `models.toml` edit that lands between the freeze and the child's
 /// composition cannot be observed by that child.
 ///
 /// The race is driven by two explicit linearizations — the resolver call
 /// returns before the file is rewritten, and the child model authority is
 /// composed after it — never by a sleep.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_frozen_child_model_never_observes_a_later_models_jsonc_edit() {
+async fn a_frozen_child_model_never_observes_a_later_models_toml_edit() {
     use rustx::model::session::SessionModelState;
     use rustx::model::types::ModelProtocol;
 
@@ -1507,11 +1518,11 @@ async fn a_frozen_child_model_never_observes_a_later_models_jsonc_edit() {
 
     // M2: the catalog now says something materially different for the very
     // same model reference, and drops `model-b` entirely.
-    std::fs::write(lab.root().join("models.jsonc"), MODELS_MUTATED).expect("mutate models.jsonc");
+    std::fs::write(lab.root().join("models.toml"), MODELS_MUTATED).expect("mutate models.toml");
 
     // A re-resolving consumer *would* observe M2 — this is what makes the
     // assertion below meaningful rather than vacuous.
-    let mutated = ModelCatalog::from_jsonc_slice(MODELS_MUTATED.as_bytes()).expect("M2 parses");
+    let mutated = ModelCatalog::from_toml_slice(MODELS_MUTATED.as_bytes()).expect("M2 parses");
     let mutated_registry = ModelBindingRegistry::new(
         mutated
             .resolve(dependencies().credentials.as_deref().unwrap())
@@ -1593,12 +1604,12 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
     let lab = Lab::new();
     // The generation admits `grep` with a non-default policy on every axis.
     let document = serde_json::json!({
-        "schemaVersion": 8,
-        "agentId": "agent-issue144",
+        "schema_version": 8,
+        "agent_id": "agent-issue144",
         "model": {"model": "local/model-a"},
-        "context": {"reserveTokens": 0, "keepRecentTokens": 0},
-        "defaultTools": ["read", "subagent"],
-        "nativeTools": {
+        "context": {"reserve_tokens": 0, "keep_recent_tokens": 0},
+        "default_tools": ["read", "subagent"],
+        "native_tools": {
             "grep": {
                 "execution": "model_selectable",
                 "concurrency": "parallel",
@@ -1608,9 +1619,9 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
         "subagents": explore(&["grep"]),
     });
     crate::launch_fixture::write_documents(
-        &lab.root().join("rustx.jsonc"),
-        &document.to_string(),
-        &["nativeTools"],
+        &lab.root().join("rustx.toml"),
+        &toml::to_string_pretty(&document).unwrap(),
+        &["native_tools"],
     );
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
@@ -1670,16 +1681,16 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
 async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
     let lab = Lab::new();
     let mut document = serde_json::json!({
-        "schemaVersion": 8,
-        "agentId": "agent-issue144",
+        "schema_version": 8,
+        "agent_id": "agent-issue144",
         "model": {"model": "local/model-a"},
-        "context": {"reserveTokens": 0, "keepRecentTokens": 0},
-        "defaultTools": ["read", "subagent"],
-        "mcpServers": {
+        "context": {"reserve_tokens": 0, "keep_recent_tokens": 0},
+        "default_tools": ["read", "subagent"],
+        "mcp_servers": {
             "offline": {"type": "stdio", "command": "missing-rustx-issue144-mcp"}
         },
         "subagents": {
-            "maxConcurrent": 4,
+            "max_concurrent": 4,
             "roles": {
                 "explore": {
                     "description": "Read-only repository exploration.",
@@ -1698,10 +1709,10 @@ async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
     });
     crate::launch_fixture::write_roles(&lab.workspace(), &mut document["subagents"]);
     std::fs::write(
-        lab.root().join("rustx.jsonc"),
-        serde_json::to_string_pretty(&document).expect("config document"),
+        lab.root().join("rustx.toml"),
+        toml::to_string_pretty(&document).expect("config document"),
     )
-    .expect("rustx.jsonc");
+    .expect("rustx.toml");
 
     let error = lab
         .paths()
@@ -1724,7 +1735,7 @@ async fn skill_version_identity_is_frozen_across_the_boundary() {
     lab.write_skill("alpha", "the first skill");
     lab.write_skill("beta", "the second skill");
     lab.write_config(&serde_json::json!({
-        "maxConcurrent": 4,
+        "max_concurrent": 4,
         "roles": {"explore": {
             "description": "Read-only repository exploration.",
 
@@ -1863,19 +1874,19 @@ fn write_config_with_root_extensions(
     }
     crate::launch_fixture::write_roles(&lab.workspace(), &mut subagents);
     let document = serde_json::json!({
-        "schemaVersion": 8,
-        "agentId": "agent-issue256",
+        "schema_version": 8,
+        "agent_id": "agent-issue256",
         "model": {"model": "local/model-a"},
-        "context": {"reserveTokens": 0, "keepRecentTokens": 0},
-        "defaultTools": ["read", "subagent"],
+        "context": {"reserve_tokens": 0, "keep_recent_tokens": 0},
+        "default_tools": ["read", "subagent"],
         "extensions": root_extensions.clone(),
         "subagents": subagents,
     });
     std::fs::write(
-        lab.root().join("rustx.jsonc"),
-        serde_json::to_string_pretty(&document).expect("config document"),
+        lab.root().join("rustx.toml"),
+        toml::to_string_pretty(&document).expect("config document"),
     )
-    .expect("rustx.jsonc");
+    .expect("rustx.toml");
 }
 
 fn frozen_extensions(
@@ -1914,7 +1925,7 @@ async fn ext256_root_extension_configuration_never_reaches_a_named_role() {
                 "tools": {"builtin": ["read"]},
             },
         }}),
-        &serde_json::json!({"agentStatus": {
+        &serde_json::json!({"agent_status": {
             "enabled": true,
             "time": {"enabled": true, "timezone": "America/New_York"},
             "background": {"enabled": false}

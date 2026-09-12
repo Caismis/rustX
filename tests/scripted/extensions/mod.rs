@@ -1244,15 +1244,13 @@ fn ext259_todo_is_rejected_on_every_ordinary_selection_surface() {
     use rustx::capabilities::ToolActivationPolicy as Selection;
 
     // Root configuration.
-    let config = serde_json::json!({
-        "schemaVersion": 8,
-        "agentId": "agent-ext259",
-        "model": {"model": "local/model-a"},
-        "context": {"reserveTokens": 0, "keepRecentTokens": 0},
-        "defaultTools": ["read", "todo"],
-    })
-    .to_string();
-    let error = rustx::local_runtime::CurrentRuntimeConfig::from_jsonc_slice(config.as_bytes())
+    let config = r#"schema_version = 8
+agent_id = "agent-ext259"
+default_tools = ["read", "todo"]
+model = { model = "local/model-a" }
+context = { reserve_tokens = 0, keep_recent_tokens = 0 }
+"#;
+    let error = rustx::local_runtime::CurrentRuntimeConfig::from_toml_slice(config.as_bytes())
         .expect_err("defaultTools may not name an extension Tool");
     let rendered = error.to_string();
     assert!(

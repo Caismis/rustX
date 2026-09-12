@@ -152,8 +152,8 @@ const KIND_ACTIVITY: u8 = 107;
 /// source-qualified capability identities with their exact admitted
 /// `ToolDefinition`s, the exact Skill version identities with their
 /// model-visible metadata, and the exact project instruction chain. The
-/// child therefore never reads `rustx.jsonc` to look up the agent, never
-/// reopens `models.jsonc` to re-resolve a model, never rediscovers project
+/// child therefore never reads `rustx.toml` to look up the agent, never
+/// reopens `models.toml` to re-resolve a model, never rediscovers project
 /// instructions or Skills, and never widens or substitutes Tool identity.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

@@ -63,84 +63,57 @@ const PROJECT_INSTRUCTIONS = "# Project\n\nthe workspace instruction file\n";
 const CREDENTIAL_VARIABLE = "RUSTX_TUI_INTEGRATION_KEY";
 const CREDENTIAL_VALUE = "integration-secret";
 
-function spawnTrusted(options: ChildRuntimeProcessOptions, hostSettings: object = {}): ChildRuntimeProcess {
+function spawnTrusted(options: ChildRuntimeProcessOptions, hostSettings = ""): ChildRuntimeProcess {
   assert(options.paths.runtimeRoot && options.paths.workspace);
   const host = `${options.paths.runtimeRoot}-host`;
   const env = { ...options.env, HOME: host, XDG_CONFIG_HOME: join(host, "config"), XDG_STATE_HOME: join(host, "state") };
   mkdirSync(join(host, "config", "rustx"), { recursive: true });
-  writeFileSync(join(host, "config", "rustx", "settings.jsonc"), JSON.stringify(hostSettings));
+  writeFileSync(join(host, "config", "rustx", "settings.toml"), hostSettings);
   const grant = spawnSync(options.binary, ["--workspace", options.paths.workspace, "--trust", "grant"], { env, encoding: "utf8" });
   assert.equal(grant.status, 0, grant.stderr);
   return ChildRuntimeProcess.spawn({ ...options, env });
 }
 
-function modelsJson(baseUrl: string): string {
-  return JSON.stringify({
-    providers: {
-      fixture: {
-        baseUrl,
-        // The runtime resolves this from its environment. The client never
-        // reads, defaults, or forwards a credential value.
-        apiKey: `$${CREDENTIAL_VARIABLE}`,
-        models: [
-          {
-            id: "integration-model",
-            protocol: "openai_chat_completions",
-            contextWindow: 128_000,
-            maxOutputTokens: 512,
-            capabilities: {
-              inputModalities: ["text"],
-              outputModalities: ["text"],
-              toolCalls: true,
-              reasoning: false,
-            },
-            compat: { chatReasoningReplay: "omit" },
-            requestParams: { temperature: 0.25 },
-          },
-          {
-            id: "second-model",
-            protocol: "openai_chat_completions",
-            contextWindow: 32_000,
-            maxOutputTokens: 256,
-            capabilities: {
-              inputModalities: ["text"],
-              outputModalities: ["text"],
-              toolCalls: true,
-              reasoning: false,
-            },
-            compat: { chatReasoningReplay: "omit" },
-          },
-        ],
-      },
-    },
-  });
+function modelToml(id: string, contextWindow: number, maxOutput: number, params = "{}"): string {
+  return `[[providers.fixture.models]]
+id = "${id}"
+protocol = "openai_chat_completions"
+context_window = ${contextWindow}
+max_output_tokens = ${maxOutput}
+request_params_json = '${params}'
+capabilities = { input_modalities = ["text"], output_modalities = ["text"], tool_calls = true, reasoning = false }
+compat = { chat_reasoning_replay = "omit" }
+`;
 }
 
-const RUNTIME_CONFIG_JSON = JSON.stringify({
-  schemaVersion: 8,
-  agentId: "agent-tui-integration",
-  model: { model: "fixture/integration-model" },
-  context: { reserveTokens: 1024, keepRecentTokens: 8192 },
-});
+function modelsToml(baseUrl: string): string {
+  return `[providers.fixture]
+base_url = ${JSON.stringify(baseUrl)}
+api_key = "$${CREDENTIAL_VARIABLE}"
+${modelToml("integration-model", 128000, 512, '{"temperature":0.25}')}
+${modelToml("second-model", 32000, 256)}`;
+}
 
-const BEFORE_START_RUNTIME_CONFIG_JSON = JSON.stringify({
-  schemaVersion: 8,
-  agentId: "agent-tui-before-start",
-  model: { model: "fixture/integration-model" },
-  context: { reserveTokens: 1024, keepRecentTokens: 8192 },
-  defaultTools: ["bash"],
-});
+const RUNTIME_CONFIG_TOML = `schema_version = 8
+agent_id = "agent-tui-integration"
+model = { model = "fixture/integration-model" }
+context = { reserve_tokens = 1024, keep_recent_tokens = 8192 }
+`;
+
+const BEFORE_START_RUNTIME_CONFIG_TOML = `schema_version = 8
+agent_id = "agent-tui-before-start"
+default_tools = ["bash"]
+model = { model = "fixture/integration-model" }
+context = { reserve_tokens = 1024, keep_recent_tokens = 8192 }
+`;
 
 it("native Workflow retirement preserves visible Tool identity through stdio, reconnect and reopen", { skip: SKIP, timeout: 20_000 }, async (test) => {
   const provider = await ProviderEmulator.start("workflow_retention");
   const fixture = TempFixture.create("rustx-workflow-projection-");
   const workspace = fixture.path("workspace");
   mkdirSync(join(workspace, ".agents/workflows"), { recursive: true });
-  writeFileSync(fixture.path("models.jsonc"), modelsJson(provider.url("/v1")).replaceAll("integration-model", "workflow-model"));
-  writeFileSync(fixture.path("rustx.jsonc"), JSON.stringify({
-    ...JSON.parse(RUNTIME_CONFIG_JSON), model: { model: "fixture/workflow-model" }, defaultTools: ["read"],
-    workflows: { definitions: ["review_pr"], main: ["review_pr"] },
-  }));
+  writeFileSync(fixture.path("models.toml"), modelsToml(provider.url("/v1")).replaceAll("integration-model", "workflow-model"));
+  writeFileSync(fixture.path("rustx.toml"), RUNTIME_CONFIG_TOML.replace("fixture/integration-model", "fixture/workflow-model") + '\ndefault_tools = ["read"]\n[workflows]\ndefinitions = ["review_pr"]\nmain = ["review_pr"]\n' );
   writeFileSync(join(workspace, ".agents/workflows/review_pr.yaml"), `description: Inspect registered workflow files.
 tools: [{origin: builtin, name: glob}]
 block:
@@ -171,7 +144,7 @@ block:
   edges: [{from: inspect, to: done}]
 `);
   const child = spawnTrusted({ binary: BINARY,
-    paths: { models: fixture.path("models.jsonc"), config: fixture.path("rustx.jsonc"), workspace, runtimeRoot: fixture.path("private") },
+    paths: { models: fixture.path("models.toml"), config: fixture.path("rustx.toml"), workspace, runtimeRoot: fixture.path("private") },
     env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE },
   });
   const connection = new RuntimeClientConnection({ input: child.stdout, output: child.stdin });
@@ -243,7 +216,7 @@ block:
     child.closeStdin();
     await child.waitOrTerminate(10_000);
     const reopened = spawnTrusted({ binary: BINARY,
-      paths: { models: fixture.path("models.jsonc"), config: fixture.path("rustx.jsonc"), workspace, runtimeRoot: fixture.path("private") },
+      paths: { models: fixture.path("models.toml"), config: fixture.path("rustx.toml"), workspace, runtimeRoot: fixture.path("private") },
       startup: { continueActiveSession: true, skillPaths: [], noSkills: false, noBuiltinTools: false, noTools: false },
       env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE },
     });
@@ -296,14 +269,14 @@ describe("real rustx child integration", { skip: SKIP }, () => {
     // A real project instruction file, so the resource projection is proven
     // against what the runtime actually loaded rather than a fixture.
     writeFileSync(join(workspace, "AGENTS.md"), PROJECT_INSTRUCTIONS);
-    writeFileSync(fixture.path("models.jsonc"), modelsJson(provider.url("/v1")));
-    writeFileSync(fixture.path("rustx.jsonc"), RUNTIME_CONFIG_JSON);
+    writeFileSync(fixture.path("models.toml"), modelsToml(provider.url("/v1")));
+    writeFileSync(fixture.path("rustx.toml"), RUNTIME_CONFIG_TOML);
 
     const child = spawnTrusted({
       binary: BINARY,
       paths: {
-        models: fixture.path("models.jsonc"),
-        config: fixture.path("rustx.jsonc"),
+        models: fixture.path("models.toml"),
+        config: fixture.path("rustx.toml"),
         workspace,
         runtimeRoot: fixture.path("private"),
       },
@@ -557,22 +530,22 @@ describe("real rustx BeforeStart cancellation projection", { skip: SKIP }, () =>
     fixture = TempFixture.create("rustx-tui-before-start-");
     const workspace = fixture.path("workspace");
     mkdirSync(workspace, { recursive: true });
-    writeFileSync(fixture.path("models.json"), modelsJson(provider.url("/v1")));
+    writeFileSync(fixture.path("models.toml"), modelsToml(provider.url("/v1")));
     writeFileSync(
-      fixture.path("rustx.json"),
-      BEFORE_START_RUNTIME_CONFIG_JSON,
+      fixture.path("rustx.toml"),
+      BEFORE_START_RUNTIME_CONFIG_TOML,
     );
 
     const child = spawnTrusted({
       binary: BINARY,
       paths: {
-        models: fixture.path("models.json"),
-        config: fixture.path("rustx.json"),
+        models: fixture.path("models.toml"),
+        config: fixture.path("rustx.toml"),
         workspace,
         runtimeRoot: fixture.path("private"),
       },
       env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE },
-    }, { nativeTools: { bash: { approval: "always" } } });
+    }, '[native_tools.bash]\napproval = "always"\n');
     const connection = new RuntimeClientConnection({
       input: child.stdout,
       output: child.stdin,
@@ -725,14 +698,14 @@ describe("real rustx structured ask_user questionnaire", { skip: SKIP }, () => {
     fixture = TempFixture.create("rustx-tui-questionnaire-");
     const workspace = fixture.path("workspace");
     mkdirSync(workspace, { recursive: true });
-    writeFileSync(fixture.path("models.json"), modelsJson(provider.url("/v1")));
-    writeFileSync(fixture.path("rustx.json"), RUNTIME_CONFIG_JSON);
+    writeFileSync(fixture.path("models.toml"), modelsToml(provider.url("/v1")));
+    writeFileSync(fixture.path("rustx.toml"), RUNTIME_CONFIG_TOML);
 
     const child = spawnTrusted({
       binary: BINARY,
       paths: {
-        models: fixture.path("models.json"),
-        config: fixture.path("rustx.json"),
+        models: fixture.path("models.toml"),
+        config: fixture.path("rustx.toml"),
         workspace,
         runtimeRoot: fixture.path("private"),
       },
@@ -937,16 +910,11 @@ describe("real rustx structured ask_user questionnaire", { skip: SKIP }, () => {
 // Repeated compaction over the real stdio transport (Issue #27)
 // ---------------------------------------------------------------------------
 
-const COMPACTION_RUNTIME_CONFIG_JSON = JSON.stringify({
-  schemaVersion: 8,
-  agentId: "agent-tui-compaction",
-  model: { model: "fixture/integration-model" },
-  // Both compaction budgets carry the reserve, so the shared limit is
-  // 56000 - 1536 - 1024 = 53440: above the selected span's estimate (~51k)
-  // and below the whole turn-two request estimate (~56k). See the same
-  // derivation in tests/issue47_conformance.rs.
-  context: { reserveTokens: 1_536, keepRecentTokens: 256 },
-});
+const COMPACTION_RUNTIME_CONFIG_TOML = `schema_version = 8
+agent_id = "agent-tui-compaction"
+model = { model = "fixture/integration-model" }
+context = { reserve_tokens = 1536, keep_recent_tokens = 256 }
+`;
 
 const TUI_TURN_ONE = "tui compaction: turn one";
 const TUI_TURN_TWO = "tui compaction: turn two";
@@ -984,30 +952,11 @@ async function awaitCondition(
  * 8k reserve crosses the soft input limit on the emulator's scripted ~200 KB
  * fillers by construction — the same sizing the Rust conformance suite uses.
  */
-function compactionModelsJson(baseUrl: string): string {
-  return JSON.stringify({
-    providers: {
-      fixture: {
-        baseUrl,
-        apiKey: `$${CREDENTIAL_VARIABLE}`,
-        models: [
-          {
-            id: "integration-model",
-            protocol: "openai_chat_completions",
-            contextWindow: 56_000,
-            maxOutputTokens: 1024,
-            capabilities: {
-              inputModalities: ["text"],
-              outputModalities: ["text"],
-              toolCalls: true,
-              reasoning: false,
-            },
-            compat: { chatReasoningReplay: "omit" },
-          },
-        ],
-      },
-    },
-  });
+function compactionModelsToml(baseUrl: string): string {
+  return `[providers.fixture]
+base_url = ${JSON.stringify(baseUrl)}
+api_key = "$${CREDENTIAL_VARIABLE}"
+${modelToml("integration-model", 56000, 1024)}`;
 }
 
 describe("real rustx child repeated compaction", { skip: SKIP }, () => {
@@ -1020,19 +969,19 @@ describe("real rustx child repeated compaction", { skip: SKIP }, () => {
     const workspace = fixture.path("workspace");
     mkdirSync(workspace, { recursive: true });
     writeFileSync(
-      fixture.path("models.jsonc"),
-      compactionModelsJson(provider.url("/v1")),
+      fixture.path("models.toml"),
+      compactionModelsToml(provider.url("/v1")),
     );
     writeFileSync(
-      fixture.path("rustx.jsonc"),
-      COMPACTION_RUNTIME_CONFIG_JSON,
+      fixture.path("rustx.toml"),
+      COMPACTION_RUNTIME_CONFIG_TOML,
     );
 
     const child = spawnTrusted({
       binary: BINARY,
       paths: {
-        models: fixture.path("models.jsonc"),
-        config: fixture.path("rustx.jsonc"),
+        models: fixture.path("models.toml"),
+        config: fixture.path("rustx.toml"),
         workspace,
         runtimeRoot: fixture.path("private"),
       },
@@ -1154,10 +1103,10 @@ it("Session deletion: real resume UI → attachment → native preview/block/del
   const provider = await ProviderEmulator.start("tui_integration");
   const fixture = TempFixture.create("rustx-resume-delete-");
   const workspace = fixture.path("workspace"); mkdirSync(workspace);
-  writeFileSync(fixture.path("models.jsonc"), modelsJson(provider.url("/v1")));
-  writeFileSync(fixture.path("rustx.jsonc"), RUNTIME_CONFIG_JSON);
+  writeFileSync(fixture.path("models.toml"), modelsToml(provider.url("/v1")));
+  writeFileSync(fixture.path("rustx.toml"), RUNTIME_CONFIG_TOML);
   const options: ChildRuntimeProcessOptions = { binary: BINARY, paths: {
-    models: fixture.path("models.jsonc"), config: fixture.path("rustx.jsonc"), workspace, runtimeRoot: fixture.path("private"),
+    models: fixture.path("models.toml"), config: fixture.path("rustx.toml"), workspace, runtimeRoot: fixture.path("private"),
   }, env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE } };
   let child = spawnTrusted(options);
   const attach = async () => {

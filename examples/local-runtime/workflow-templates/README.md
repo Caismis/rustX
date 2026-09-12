@@ -13,9 +13,9 @@ root, with a built `rustx` on PATH:
 ```sh
 rustx --workspace examples/local-runtime/workflow-templates --trust grant
 rustx workflow check typed_agent --workspace examples/local-runtime/workflow-templates \
-  --models examples/local-runtime/minimal/models.jsonc --model example/demo-model --json
+  --models examples/local-runtime/minimal/models.toml --model example/demo-model --json
 rustx workflow explain parallel_checks --workspace examples/local-runtime/workflow-templates \
-  --models examples/local-runtime/minimal/models.jsonc --model example/demo-model --json
+  --models examples/local-runtime/minimal/models.toml --model example/demo-model --json
 ```
 
 The example model is a declaration, not a working provider credential. Select
@@ -23,7 +23,7 @@ your configured model for execution. The role inherits that selected model.
 Offline commands never read credential values or verify a provider. Exit 3 is
 expected even for valid templates: runtime readiness remains unresolved.
 
-The included `rustx.jsonc` registers all three for convenience. To start with
+The included `rustx.toml` registers all three for convenience. To start with
 only one, use the minimum configuration in its guide:
 
 - [Typed Agent → Return](typed-agent.md): explicit input, one named role, typed output.
