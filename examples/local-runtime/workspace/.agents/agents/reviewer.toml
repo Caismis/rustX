@@ -1,0 +1,6 @@
+description = "Review one bounded request and return a concise result."
+model = "example/demo-model"
+tools = {"builtin" = ["read"]}
+skills = ["review-guidance"]
+instructions = "Review only the explicit proposal or assessment supplied to this child. Return the declared structured summary and acceptable boolean using workflow_output. Do not delegate or ask questions.\n"
+agents_md = {"inherit" = false, "files" = [".agents/agents/reviewer/AGENTS.md"]}

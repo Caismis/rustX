@@ -3,8 +3,8 @@
 See [offline Workflow authoring](workflow-authoring.md) for `rustx workflow check <id>`
 and `rustx workflow explain <id>`, compiled explanations and small executable templates.
 
-See [canonical named Subagent resources](subagent-resources.md) for schema 8
-role files, registration/admission, bounded roots, source provenance, and frozen
+See [canonical named Agent resources](subagent-resources.md) for schema 8
+Agent files, discovery/admission, bounded roots, source provenance, and frozen
 reload/child contracts.
 
 
@@ -180,21 +180,17 @@ Enabled online sources are unresolved until discovery; no schemas or executors
 are fabricated. Untrusted project resources remain unread and unresolved. A
 source probe cannot enable them or grant workspace authority.
 
-Managed-Python identity discovery is inert. Only trusted, explicitly enabled
-packages enter the existing bounded local package validator. Disabled,
-unconfigured, and untrusted packages do not enter that parser or read package
-contents. `local_status` is `valid`, `missing`, or `invalid`, and null when not
-inspected (also null for non-Python sources). Missing or malformed enabled
-packages produce source-specific static errors at `python_sources.<id>` (exit 2),
-with source readiness `unavailable`. They do not abort shared launch analysis
-or prevent independent doctor targets from being probed. Ordinary runtime
-optional-source failure isolation is unchanged. A locally valid package remains
-runtime `unresolved`: no environment creation, uv/Python process, MCP handshake,
-or Tool discovery occurred. Static package inspection never prepares an environment.
+Managed Python discovery records directory identity only. `discovered_package`
+distinguishes these sources from MCP settings; readiness remains inert until
+admitted preparation demand exists. Static discovery never reads package code or
+dependencies, creates environments, runs uv/Python, spawns MCP, or captures credentials.
+Missing roots and unprepared packages do not fail native-only startup. Invalid
+identities and escaping/symlinked canonical packages fail bounded static discovery.
+
 
 The projection includes the selected model, paths, safe provider metadata,
 resolved config, origins, precedence reasons, source activation/readiness,
-main-model Tool policy/selection and exclusion reasons, registered Workflows and
+main-model Tool policy/selection and exclusion reasons, discovered Workflows and
 local Skills. Origins distinguish builtin, user, trusted project, CLI, and
 untrusted prospective project declarations. Online Tool identities remain null
 until known; `--no-tools` is a known empty selection independently of activation.

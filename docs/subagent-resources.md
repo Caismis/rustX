@@ -1,4 +1,4 @@
-# Canonical named Subagent resources
+# Canonical named Agent resources
 
 Goal belongs only to the root conversation in v1. The shared closed extension
 syntax accepts Goal in role definitions and invocation selections, but the
@@ -30,79 +30,54 @@ Management reads never create missing stores or directories. See
 lock order, acquisition/release points, participant lifetimes and regression map.
 
 
-Runtime schema 8 registers role identities in TOML. Each role's primary
-authoring resource is one Markdown file; Rust converts it into the existing
-native `SubagentDefinition` and `SubagentCatalog`.
+Named Agents are strict TOML resources discovered by filename. Resources define
+themselves by existing in their canonical resource location. Settings and Agent
+Profiles express selection, not existence.
 
 ```toml
+# rustx.toml: selection only
 [subagents]
 max_concurrent = 4
-definitions = ["reviewer"]
 main = []
 workflow = ["reviewer"]
 ```
 
-The identity `reviewer` resolves to `.agents/subagents/reviewer.md` under the
-admitted workspace, or `subagents/reviewer.md` under the known user configuration
-directory. Identity is the registered filename stem: 1–64 ASCII bytes, beginning
-with a lowercase letter, followed by lowercase letters, digits, `-`, or `_`.
-Role files cannot be symlinks that redirect this identity. There is no `id` or `name` frontmatter field, directory-role form, arbitrary
-primary path, or alternate extension. Registration arrays reject duplicates,
-including duplicates in an overridden lower configuration layer.
+The identity `reviewer` comes from `.agents/agents/reviewer.toml` in the trusted
+workspace or `agents/reviewer.toml` in the host configuration directory. Names
+use the existing 1–64 byte bounded ASCII identity rules. There is no `name` or
+`id` field, Markdown/frontmatter reader, registration array, or migration reader.
 
-```yaml
----
-description: Review one bounded request and return a concise result.
-model: example/demo-model
-timeoutMs: 3600000
-tools:
-  builtin: [read]
-skills: [review-guidance]
-agentsMd:
-  inherit: false
-  files: [.agents/subagents/reviewer/AGENTS.md]
-worktree:
-  enabled: true
-  requireCleanParent: true
-extensions:
-  agentStatus:
-    enabled: true
-    time:
-      enabled: false
-    background:
-      enabled: true
----
-You are the review subagent. Return evidence for the requested review.
+```toml
+# .agents/agents/reviewer.toml
+description = "Review one bounded request"
+instructions = "Review the supplied proposal and return a concise result."
+skills = ["review-guidance"]
+
+[tools]
+builtin = ["read"]
+
+[agents_md]
+inherit = false
+files = [".agents/agents/reviewer/AGENTS.md"]
 ```
 
-## Frontmatter contract
-
-The entire resource must be a regular UTF-8 file of at most 1 MiB. It starts at
-byte zero with an exact `---` delimiter line and closes its frontmatter with
-another exact `---` line. LF and CRLF are accepted. The body after the closing
-line is retained verbatim as primary instructions, subject to the native 64 KiB
-instruction bound. A BOM before the opening delimiter is rejected.
-
-The frontmatter is one plain mapping, with at most 32 nesting levels. Unknown
-fields, duplicate keys at any depth, non-string mapping keys, malformed YAML,
-invalid types, tags (including standard tags), anchors, aliases, directives,
-extra documents and YAML merges are rejected. There are no includes, expressions,
-macros, inheritance, or generic metadata. Quoted punctuation in ordinary strings
-does not enable these features.
-
-The authoritative Rust authoring type is `SubagentDocument`; its generated editor
-schema is [subagent.schema.json](../schemas/subagent.schema.json).
+Files are limited to 1 MiB and strict typed TOML; unknown fields, duplicate keys,
+invalid types and invalid native bounds reject the complete candidate. Primary
+instructions are explicit TOML data, subject to the native 64 KiB bound. The
+canonical type is `AgentDocument`, with [agent.schema.json](../schemas/agent.schema.json).
+The temporary document preserves named-Agent execution semantics; unified main
+and child Agent profiles are a subsequent architecture step.
 
 | Field | Type and meaning |
 | --- | --- |
 | `description` | Required nonempty string, at most 512 bytes; routing text only. |
 | `model` | Optional `provider/model` reference. Omission inherits the invoking attempt's frozen effective model, including reasoning and request contracts. Explicit references use the native model catalog. |
-| `timeoutMs` | Optional integer, 1–86,400,000; the whole-child lifecycle deadline. |
+| `timeout_ms` | Optional integer, 1–86,400,000; the whole-child lifecycle deadline. |
 | `tools.builtin` | Exact array of **ordinary** native Tool names; default empty. A Tool provided by an Agent Extension (`todo`) is rejected here by name: compose it under `extensions` instead. |
 | `tools.mcp` | Map of source identities to exact Tool-name arrays; default empty. Managed Python uses the existing `python:<package>` source identity. |
 | `skills` | Exact Skill-name array; default empty. |
-| `agentsMd.inherit` | Boolean, default true; include the parent's frozen project guidance. |
-| `agentsMd.files` | Ordered supplemental guidance paths; default empty, at most eight. They are distinct project instructions, never the primary role body. |
+| `agents_md.inherit` | Boolean, default true; include the parent's frozen project guidance. |
+| `agents_md.files` | Ordered supplemental guidance paths; default empty, at most eight. They are distinct project instructions, never the primary role body. |
 | `worktree.enabled` | Boolean, default false. |
 | `worktree.requireCleanParent` | Boolean, default true; applies when Git isolation is enabled. |
 | `extensions.agentStatus` | This role's own closed [Native Agent Extension](launch-configuration.md#native-agent-extensions) composition: `enabled` (default true), `time.enabled`/`time.timezone`, `background.enabled`. Omission means this role's built-in defaults, never the invoking root Agent's configuration. |
@@ -113,16 +88,15 @@ and named-Subagent extensions are separate compositions, and a child never
 implicitly inherits the root's set. A role that omits `extensions` composes the
 built-in defaults, not whatever the invoking runtime happens to run with.
 
-```yaml
----
-description: Implement a bounded change.
-tools:
-  builtin: [read, write, edit, bash]
-extensions:
-  todo:
-    enabled: true
----
-Implement the delegated task.
+```toml
+description = "Implement a bounded change."
+instructions = "Implement the delegated task."
+
+[tools]
+builtin = ["read", "write", "edit", "bash"]
+
+[extensions.todo]
+enabled = true
 ```
 
 A Todo-enabled child owns **its own** list, over its own conversation and its
@@ -141,7 +115,7 @@ definition authored it, or an entitled caller asked for it. See
 A named role is the **default** child execution profile, not the final one. One
 invocation may replace `tools`, `skills`, and `extensions` for exactly that
 child; see [Invocation-scoped overrides](#invocation-scoped-overrides). Every
-other field — model, instructions, `timeoutMs`, `agentsMd`, `worktree` — belongs
+other field — model, instructions, `timeout_ms`, `agents_md`, `worktree` — belongs
 to the definition alone and has no per-call form.
 
 No role field overrides host-owned approval policy, external-source enablement,
@@ -198,7 +172,7 @@ explicitly named or absent. Absent means "not composed", never "use a default".
 An explicit `null` is not an accepted spelling for any dimension, or for
 `override` itself. Unknown fields, non-goal dimensions, and unknown extension
 names are rejected by the same strict boundary that rejects them in role
-frontmatter. Duplicate and out-of-order selectors are canonically normalized
+TOML. Duplicate and out-of-order selectors are canonically normalized
 exactly as a definition normalizes them, so an override restating the defaults
 is the same effective profile as omitting the override.
 
@@ -308,25 +282,21 @@ before the child is staged, when one-shot child execution cannot own it.
 
 ## Roots, replacement, and admission
 
-There are two pinned role slots per registered identity: known user configuration
-directory `subagents/<name>.md`, then trusted workspace
-`.agents/subagents/<name>.md`. A project resource replaces the entire user
-resource: body, tools, Skills and every policy together. There is no recursive
-merge, permission union, or body concatenation. With one filename per identity
-per layer, same-layer collisions cannot arise from directory enumeration;
-duplicate logical registrations are errors. Directory contents are not scanned:
-unregistered files, even malformed ones, remain inert.
+Discovery enumerates the user `agents/*.toml` and trusted project
+`.agents/agents/*.toml` roots, validates identities, sorts them, and resolves
+collisions before parsing. Project Agent overrides user Agent as one whole
+resource, with no field-level merging. Each directory scan has a 1024-entry
+bound and the resulting catalog obeys the native Agent count bound. Incidental
+non-TOML files do not define Agents; malformed canonical TOML rejects the candidate.
 
-Configuration arrays replace whole arrays across layers. Resource replacement
-does not register a role. Registration does not admit it to either execution
-domain. `main` and `workflow` independently select subsets of the registered
-identities. Neither admission bypasses source activation, capability validation,
-or final model-facing Tool selection.
+`subagents.main` and `subagents.workflow` remain independent selection lists.
+They resolve against the discovered catalog. Neither selection bypasses source
+authority, capability validation or invocation approval.
 
 Project role and supplemental paths must remain inside the admitted canonical
 workspace. Project supplemental relative paths resolve from that workspace,
 regardless of where `--config` points. User supplemental paths resolve from the
-known user `subagents` root and remain inside it. Symlink targets and traversal
+known user `agents` root and remain inside it. Symlink targets and traversal
 are checked against the owning boundary. Missing resources fail the candidate.
 These checks do not claim syscall isolation against an actively hostile OS user.
 An untrusted project activates no project roles, Skills, Workflows or instructions.
@@ -346,7 +316,7 @@ guidance is explicit and ordered after inherited guidance.
 ## Checking, reload, and child ownership
 
 `rustx config check` uses the same role loader as runtime preparation. It checks
-file bounds, trust, frontmatter, registration/admission references, statically
+file bounds, trust, TOML, discovery/admission references, statically
 known model, Skill and Tool/source contracts, and every statically knowable
 reference in a Workflow Agent node's invocation override. It performs no model, Tool, Python,
 MCP, package-preparation or network work, creates no Session/runtime state, and
@@ -358,9 +328,9 @@ owner rather than being invented by static analysis.
 `overridden` lower-precedence path. It does not expose role bodies or credentials
 and does not claim to describe an existing running Session. Untrusted sources
 remain excluded and the normal trust diagnostic explains the exclusion. Invalid
-role resources report their source file and registration field path.
+role resources report their source file and authoring field path.
 
-Parsing finishes before native catalog construction returns. Registration and
+Parsing finishes before native catalog construction returns. Discovery and
 independent admissions validate before capability/model/Skill validation of the
 same off-side candidate. `LocalRuntimeResourceLoader::prepare` builds that complete
 candidate. `ConversationRuntime::reload_resources` commits capabilities and swaps

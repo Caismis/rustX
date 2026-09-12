@@ -295,18 +295,11 @@ impl SkillPackage {
         &self.files
     }
 
-    /// The canonical absolute host root of this package.
-    #[must_use]
-    pub(crate) fn root(&self) -> &Path {
-        &self.root
-    }
-
     /// The canonical absolute host root of this package, as a
     /// **materialization source** for a separate-process runtime (Issue
     /// #145).
     ///
-    /// The accessor is deliberately public while [`SkillPackage::root`]
-    /// stays crate-internal, and the name says why: a consumer of this path
+    /// A consumer of this path
     /// is copying bytes out of it and must prove the copy still hashes to
     /// the package's `SkillVersionId`. The path is never an identity.
     #[must_use]
@@ -399,22 +392,24 @@ impl SkillDiscovery {
                 detail: "Skill discovery exceeds 128 packages".into(),
             });
         }
-        let mut packages = Vec::with_capacity(candidates.len());
+        let mut roots = std::collections::BTreeMap::new();
         for (name, root) in candidates {
-            // The single normalization point of the package root invariant:
-            // every accepted package is canonical and absolute from here on,
-            // whatever spelling the configured root or CLI path used.
+            validate_skill_name(&name).map_err(|detail| SkillPackageError::InvalidName {
+                directory: root.display().to_string(),
+                name: name.clone(),
+                detail,
+            })?;
             let root = canonical_package_root(&root)?;
-            if let Some(previous) = packages
-                .iter()
-                .find(|package: &&SkillPackage| package.name() == name)
-            {
+            if let Some(first) = roots.insert(name.clone(), root.clone()) {
                 return Err(SkillPackageError::DuplicateIdentity {
                     name,
-                    first: previous.root().to_path_buf(),
+                    first,
                     second: root,
                 });
             }
+        }
+        let mut packages = Vec::with_capacity(roots.len());
+        for (name, root) in roots {
             packages.push(discover_package(&root, &name)?);
         }
         packages.sort_by(|left, right| left.name().cmp(right.name()));
@@ -515,18 +510,22 @@ fn collect_root(
         path: path.display().to_string(),
         detail: error.to_string(),
     })?;
-    let mut children = Vec::new();
-    for (index, entry) in entries.enumerate() {
-        if index >= 1024 {
-            return Err(SkillPackageError::Io {
-                path: path.display().to_string(),
-                detail: "Skill root exceeds 1024 entries".into(),
-            });
-        }
-        let entry = entry.map_err(|error| SkillPackageError::Io {
+    let mut entries = entries
+        .take(1025)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| SkillPackageError::Io {
             path: path.display().to_string(),
             detail: error.to_string(),
         })?;
+    if entries.len() > 1024 {
+        return Err(SkillPackageError::Io {
+            path: path.display().to_string(),
+            detail: "Skill root exceeds 1024 entries".into(),
+        });
+    }
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    let mut children = Vec::new();
+    for entry in entries {
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.starts_with('.') {
             continue;

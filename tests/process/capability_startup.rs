@@ -44,10 +44,6 @@ chat_reasoning_replay = "omit"
 
 const SESSION_TOML: &str = r#"agent_id = "agent-81"
 
-[python_sources]
-"python:broken-tool" = "enabled"
-"python:fixture-tool" = "enabled"
-
 [model]
 model = "local/composed-model"
 
@@ -248,17 +244,15 @@ async fn a_python_capability_failure_is_isolated_from_runtime_startup() {
         !names.iter().any(|name| name.contains("broken")),
         "no partially initialized Python server enters the committed registry: {names:?}"
     );
-    let Some(CapabilitySourceStateView::Unavailable { reason }) =
-        source_state(&snapshot, &python_source("broken-tool"))
-    else {
-        panic!(
-            "the package's source must be observably unavailable: {:?}",
-            snapshot.capabilities.sources
-        );
-    };
+    assert!(source_state(&snapshot, &python_source("broken-tool")).is_none());
     assert!(
-        reason.contains("invalid Python tool package"),
-        "the reason carries the real diagnostic: {reason}"
+        runtime
+            .runtime()
+            .runtime_resources()
+            .managed_python_catalog()
+            .packages()
+            .keys()
+            .any(|id| id.as_str() == "python:broken-tool")
     );
     prove_native_tool_executes(&runtime).await;
 }
@@ -295,32 +289,19 @@ async fn python_store_initialization_failure_is_isolated_from_runtime_startup() 
         .expect("a Python store initialization failure must not terminate composition");
     let snapshot = attach_snapshot(&runtime);
 
-    let Some(CapabilitySourceStateView::Unavailable { reason }) =
-        source_state(&snapshot, &python_source("fixture-tool"))
-    else {
-        panic!(
-            "the package's source must be observably unavailable: {:?}",
-            snapshot.capabilities.sources
-        );
-    };
+    assert!(source_state(&snapshot, &python_source("fixture-tool")).is_none());
     assert!(
-        reason.contains("Python tool storage failed"),
-        "the reason is the store-opening diagnostic: {reason}"
+        runtime
+            .runtime()
+            .runtime_resources()
+            .managed_python_catalog()
+            .packages()
+            .keys()
+            .any(|id| id.as_str() == "python:fixture-tool")
     );
-    // The authoritative coordinator state carries exactly the projected,
-    // already-bounded value.
-    let authoritative = runtime.capability().availability();
-    let Some(rustx::capabilities::CapabilitySourceState::Unavailable {
-        reason: authoritative_reason,
-    }) = authoritative.get(&rustx::capabilities::CapabilitySourceId::Mcp(
-        rustx::runtime::identity::McpServerId::new("python:fixture-tool"),
-    ))
-    else {
-        panic!("the coordinator owns the unavailable state: {authoritative:?}");
-    };
     assert_eq!(
-        *authoritative_reason, reason,
-        "the projection carries the authoritative value verbatim"
+        std::fs::read(environments.join("python-tools/packages")).unwrap(),
+        b"not a directory"
     );
     let names = tool_names(&snapshot);
     assert!(names.contains(&"bash"), "native tools survive: {names:?}");
@@ -760,7 +741,6 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
     // ... and an MCP server whose program does not exist.
     let session = serde_json::json!({
         "agent_id": "agent-81",
-        "python_sources": {"python:broken-tool": "enabled"},
         "model": {"model": "local/composed-model"},
         "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},
         "mcp_servers": {
@@ -818,17 +798,9 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
             "native tool {expected} must be in the initial snapshot: {names:?}"
         );
     }
-    let Some(CapabilitySourceStateView::Unavailable { reason }) =
-        source_state(&snapshot, &python_source("broken-tool"))
-    else {
-        panic!(
-            "the Python failure is typed and observable, not an opaque EOF: {:?}",
-            snapshot.capabilities.sources
-        );
-    };
     assert!(
-        reason.contains("invalid Python tool package"),
-        "real diagnostic: {reason}"
+        source_state(&snapshot, &python_source("broken-tool")).is_none(),
+        "discovery creates no ready source"
     );
     let exa = CapabilitySourceDescriptor::Mcp {
         server_id: rustx::runtime::identity::McpServerId::new("exa"),

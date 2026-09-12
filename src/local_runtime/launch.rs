@@ -183,8 +183,7 @@ pub struct ResolvedLaunch {
 pub struct ProspectiveLaunch {
     pub(crate) request: LaunchRequest,
     pub(crate) host: HostEnvironment,
-    pub(crate) python_local_status:
-        BTreeMap<crate::runtime::identity::McpServerId, PythonLocalStatus>,
+    pub(crate) managed_python: crate::runtime::resources::ManagedPythonCatalog,
     pub(crate) trusted: bool,
     pub(crate) workflows: std::sync::Arc<crate::runtime::workflow::WorkflowCatalog>,
     pub(crate) workflow_dependencies: std::sync::Arc<
@@ -193,11 +192,11 @@ pub struct ProspectiveLaunch {
             Vec<crate::runtime::workflow::inspection::ToolDependency>,
         >,
     >,
-    pub(crate) subagents: crate::runtime::subagent::SubagentCatalog,
+    pub(crate) subagents: crate::runtime::subagent::AgentCatalog,
     pub(crate) skill_names: Vec<String>,
-    pub(crate) role_root: PathBuf,
+    pub(crate) agent_root: PathBuf,
     pub(crate) role_sources:
-        BTreeMap<crate::runtime::subagent::SubagentName, super::subagent_resources::RoleSource>,
+        BTreeMap<crate::runtime::subagent::SubagentName, super::agent_resources::AgentSource>,
     pub(crate) source_activations: BTreeMap<
         crate::runtime::identity::McpServerId,
         crate::capabilities::activation::SourceActivation,
@@ -213,15 +212,6 @@ pub struct ProspectiveLaunch {
     documents: Vec<(PathBuf, bool, Origin)>,
     /// Project-origin paths retain their authority even after becoming absolute.
     project_resources: Vec<PathBuf>,
-}
-
-/// Inert package validation facts, independent of activation and MCP readiness.
-#[derive(Debug, Clone, Copy, serde::Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PythonLocalStatus {
-    Valid,
-    Missing,
-    Invalid,
 }
 
 impl ProspectiveLaunch {
@@ -253,7 +243,7 @@ impl ProspectiveLaunch {
             let boundary = if role.layer == "project" {
                 &self.workspace
             } else {
-                &self.role_root
+                &self.agent_root
             };
             crate::runtime::resources::validate_project_resource_path(boundary, &role.selected)
                 .map_err(|e| e.to_string())?;
@@ -765,27 +755,32 @@ pub fn analyze(
             locations.workspace.join(".agents/skills"),
         ]
     };
-    let workflows = if trusted {
-        super::workflow_resources::load(&locations.workspace, &config.workflows, &config.subagents)
-            .map_err(LaunchFailure::resource)?
-    } else {
-        crate::runtime::workflow::WorkflowCatalog::empty()
-    };
     // Capture authority once, including host path aliases and missing leaves.
     // Reload reuses this physical identity; validators must not rebind it.
-    let role_root = normalize_missing(&host.config_directory.join("subagents"))?;
+    let agent_root = normalize_missing(&host.config_directory.join("agents"))?;
     if trusted {
         crate::runtime::load_project_context_files(&locations.workspace)
             .map_err(LaunchFailure::resource)?;
     }
     let (subagents, role_sources) = if trusted {
-        super::subagent_resources::load(&locations.workspace, &role_root, &config.subagents)
+        super::agent_resources::load(&locations.workspace, &agent_root, &config.subagents)
             .map_err(LaunchFailure::resource)?
     } else {
         (
-            crate::runtime::subagent::SubagentCatalog::empty(),
+            crate::runtime::subagent::AgentCatalog::empty(),
             BTreeMap::new(),
         )
+    };
+    let workflows = if trusted {
+        super::workflow_resources::load(
+            &locations.workspace,
+            &config.workflows,
+            &config.subagents,
+            &subagents,
+        )
+        .map_err(LaunchFailure::resource)?
+    } else {
+        crate::runtime::workflow::WorkflowCatalog::empty()
     };
     let workspace =
         crate::tools::workspace::Workspace::new(&locations.workspace).map_err(|e| e.to_string())?;
@@ -843,7 +838,7 @@ pub fn analyze(
     .map_err(|(name, error)| {
         LaunchFailure::at(
             None,
-            &format!("subagents.definitions.{name}"),
+            &format!("agents.{name}"),
             "invalid local model or Skill reference",
             "select a declared model and an available local Skill",
             error.to_string(),
@@ -854,7 +849,7 @@ pub fn analyze(
             .admitted(&config.subagents.main.iter().cloned().collect())
             .map_err(|e| e.to_string())?
     } else {
-        crate::runtime::subagent::SubagentCatalog::empty()
+        crate::runtime::subagent::AgentCatalog::empty()
     };
     let native_metadata =
         crate::tools::native::definitions(config.native_tools.to_policies(), &main_subagents);
@@ -890,40 +885,15 @@ pub fn analyze(
             ),
         );
     }
-    for (id, intent) in &config.python_sources {
-        source_activations.insert(
-            id.clone(),
-            SourceActivation::evaluate(Some(*intent), trusted),
-        );
-    }
-    let mut python_local_status = BTreeMap::new();
-    for (id, activation) in &source_activations {
-        if config.python_sources.contains_key(id) && *activation == SourceActivation::Enabled {
-            python_local_status.insert(id.clone(), PythonLocalStatus::Missing);
-        }
-    }
-    if trusted {
-        crate::runtime::resources::validate_project_resource_path(
-            &locations.workspace,
-            &locations.workspace.join(".agents/tools"),
-        )
-        .map_err(LaunchFailure::resource)?;
-        let packages = crate::tools::python::discover_admitted_python_packages(&workspace, |id| {
-            *source_activations
-                .entry(id.clone())
-                .or_insert(SourceActivation::Unconfigured)
-                == SourceActivation::Enabled
-        })
-        .map_err(|e| e.to_string())?;
-        for package in packages {
-            python_local_status.insert(
-                package.server_id,
-                if package.outcome.is_ok() {
-                    PythonLocalStatus::Valid
-                } else {
-                    PythonLocalStatus::Invalid
-                },
-            );
+    let managed_python = if trusted {
+        super::managed_python_resources::discover(&locations.workspace)
+            .map_err(LaunchFailure::resource)?
+    } else {
+        crate::runtime::resources::ManagedPythonCatalog::default()
+    };
+    {
+        for id in managed_python.packages().keys() {
+            source_activations.insert(id.clone(), SourceActivation::Unconfigured);
         }
     }
     let availability = source_activations
@@ -944,7 +914,7 @@ pub fn analyze(
         .map_err(|e| {
             LaunchFailure::at(
                 None,
-                &format!("subagents.definitions.{}.tools", definition.name()),
+                &format!("agents.{}.tools", definition.name()),
                 "invalid local Tool reference",
                 "use a known source-qualified Tool selector",
                 e.to_string(),
@@ -997,11 +967,7 @@ pub fn analyze(
     let online = config
         .mcp_servers
         .values()
-        .any(|source| source.enabled == Some(true))
-        || config
-            .python_sources
-            .values()
-            .any(|intent| *intent == crate::capabilities::activation::SourceEnablement::Enabled);
+        .any(|source| source.enabled == Some(true));
     let policy = crate::capabilities::ToolActivationPolicy {
         default_tools: Some(defaults),
         no_tools: locations.no_tools,
@@ -1026,11 +992,11 @@ pub fn analyze(
         request: request.clone(),
         host: host.clone(),
         workflow_dependencies: std::sync::Arc::new(workflow_dependencies),
-        python_local_status,
+        managed_python,
         trusted,
         workflows: std::sync::Arc::new(workflows),
         subagents,
-        role_root,
+        agent_root,
         role_sources,
         skill_names,
         source_activations,
@@ -1202,18 +1168,23 @@ pub(super) fn parse_layer(
             ),
         ));
     }
-    if let Some(subagents) = &layer.subagents
-        && let Some(names) = &subagents.definitions
-    {
-        let unique: std::collections::BTreeSet<_> = names.iter().collect();
-        if unique.len() != names.len() {
-            return Err(LaunchFailure::at(
-                Some(path.into()),
-                "subagents.definitions",
-                "duplicate role registration",
-                "register each canonical identity once per layer",
-                "duplicate role registration".into(),
-            ));
+    if let Some(subagents) = &layer.subagents {
+        for (field, names) in [
+            ("subagents.main", &subagents.main),
+            ("subagents.workflow", &subagents.workflow),
+        ] {
+            if let Some(names) = names {
+                let unique: std::collections::BTreeSet<_> = names.iter().collect();
+                if unique.len() != names.len() {
+                    return Err(LaunchFailure::at(
+                        Some(path.into()),
+                        field,
+                        "duplicate Agent selection",
+                        "select each Agent identity once per layer",
+                        "duplicate Agent selection".into(),
+                    ));
+                }
+            }
         }
     }
     Ok(layer)

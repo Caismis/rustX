@@ -1041,7 +1041,7 @@ pub fn native_fixture_with_extensions(
     rustx::tools::native::register_native_tools(
         &mut registry,
         rustx::tools::native::NativeToolResources {
-            subagent_catalog: rustx::runtime::subagent::SubagentCatalog::empty(),
+            subagent_catalog: rustx::runtime::subagent::AgentCatalog::empty(),
             background: runtime.background().clone(),
             subagents: None,
         },

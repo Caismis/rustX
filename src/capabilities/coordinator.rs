@@ -34,7 +34,8 @@ use crate::tools::workspace::Workspace;
 /// The coordinator configuration of one conversation/capability owner.
 #[derive(Clone)]
 pub struct CapabilityCoordinatorConfig {
-    /// Managed Python activation decisions; absent identities remain inert.
+    /// Explicit host lifecycle preparation input, never a workspace existence registry.
+    /// Local workspace launch supplies no activation from canonical discovery.
     pub python_sources: BTreeMap<McpServerId, super::activation::SourceActivation>,
     /// The conversation that owns this coordinator and every lease it emits.
     pub conversation_id: ConversationId,
@@ -305,7 +306,8 @@ pub(crate) struct RuntimeCapabilityPublication {
 /// snapshot derived from them.
 #[derive(Debug, Clone)]
 pub struct CapabilityResourceInputs {
-    /// Frozen managed Python activation for this resource generation.
+    /// Frozen host lifecycle preparation input. Canonical discovered identities
+    /// live in `ManagedPythonCatalog` and do not populate this authority map.
     pub python_sources: BTreeMap<McpServerId, super::activation::SourceActivation>,
     /// Native/extension Tool registrations.
     pub base_tool_registry: Arc<ToolRegistry>,
@@ -1040,6 +1042,11 @@ impl CapabilityCoordinator {
         )>,
         CapabilityPreparationError,
     > {
+        // An empty preparation demand never triggers workspace discovery. Canonical
+        // inert identities belong to the enclosing resource generation.
+        if activation.is_empty() {
+            return Ok(Vec::new());
+        }
         // Establish every declaration before walking directories. Discovery
         // replaces the prospective missing state only for identities it finds;
         // absent declarations therefore cannot silently vanish from status.

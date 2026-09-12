@@ -2839,7 +2839,7 @@ mod tests {
             crate::tools::register_native_tools(
                 &mut tools,
                 crate::tools::NativeToolResources {
-                    subagent_catalog: crate::runtime::subagent::SubagentCatalog::empty(),
+                    subagent_catalog: crate::runtime::subagent::AgentCatalog::empty(),
                     background: tool_runtime.background().clone(),
                     subagents: None,
                 },
@@ -5411,15 +5411,11 @@ mod tests {
         );
     }
 
-    /// Issue #81 follow-up: an availability-only capability commit — the
-    /// Python plane becomes unavailable while the committed executable set
-    /// is unchanged — never advances `CapabilityRevision`, yet a
-    /// continuously attached client still observes it as one
-    /// `ResourceGenerationUpdated` event whose capability view reports the
-    /// unchanged revision. No `snapshot_get` polling is needed to discover
-    /// the transition.
+    /// An inert package directory cannot change source readiness or the
+    /// executable revision. Resource reload still publishes its generation
+    /// event, and the folded client snapshot agrees with that event.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn an_availability_only_commit_publishes_a_capability_update_without_a_revision_swap() {
+    async fn inert_python_directory_does_not_change_executable_revision_or_source_readiness() {
         let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
         let (attachment, _) = fixture
             .host
@@ -5442,8 +5438,7 @@ mod tests {
             .to_path_buf();
         let package = workspace.join(".agents").join("tools").join("broken-tool");
         std::fs::create_dir_all(&package).expect("package dir");
-        // A package without `requirements.txt` is rejected in place by the
-        // discovery pass.
+        // Package contents are irrelevant until preparation is admitted.
         std::fs::write(
             package.join("server.py"),
             "from fastmcp import FastMCP\nmcp = FastMCP('broken')\n",
@@ -5476,17 +5471,8 @@ mod tests {
             "the event reports the unchanged executable revision"
         );
         assert!(
-            capabilities.sources.iter().any(|source| {
-                matches!(
-                    source,
-                    crate::runtime_client::snapshot::CapabilitySourceView {
-                        source: crate::runtime_client::snapshot::CapabilitySourceDescriptor::Mcp { server_id, .. },
-                        state: crate::runtime_client::snapshot::CapabilitySourceStateView::Inactive { activation: crate::capabilities::activation::SourceActivation::Unconfigured },
-                    } if server_id.as_str() == "python:broken-tool"
-                )
-            }),
-            "the event carries the typed unavailable state: {:?}",
-            capabilities.sources
+            capabilities.sources.is_empty(),
+            "directory existence cannot grant activation or fabricate source readiness"
         );
         // The folded snapshot agrees with the event stream.
         let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
@@ -6892,7 +6878,7 @@ mod tests {
             crate::tools::register_native_tools(
                 &mut tools,
                 crate::tools::NativeToolResources {
-                    subagent_catalog: crate::runtime::subagent::SubagentCatalog::empty(),
+                    subagent_catalog: crate::runtime::subagent::AgentCatalog::empty(),
                     background: tool_runtime.background().clone(),
                     subagents: None,
                 },

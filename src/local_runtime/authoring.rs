@@ -66,7 +66,6 @@ partial!(RuntimeLayer {
     approval_mode: crate::runtime::ApprovalMode, extensions: ExtensionsLayer,
     context: ContextLayer, model_timeout_policy: TimeoutLayer, tool_deadline_policy: ToolDeadlineLayer,
     mcp_servers: BTreeMap<crate::runtime::identity::McpServerId, McpAuthoring>,
-    python_sources: BTreeMap<crate::runtime::identity::McpServerId, crate::capabilities::activation::SourceEnablement>,
     mcp_tool_policies: BTreeMap<crate::runtime::identity::McpServerId, InvocationPolicyDocument>,
     native_tools: NativeToolsLayer, environment: BTreeMap<String,String>, default_tools: Vec<String>,
     skills: Vec<PathBuf>, subagents: SubagentsLayer, workflows: WorkflowsLayer
@@ -91,8 +90,8 @@ partial!(ToolDeadlineLayer {
     hard_deadline_ms: u64,
     idle_liveness_ms: IdleLiveness
 });
-partial!(SubagentsLayer { max_concurrent: usize, definitions: Vec<crate::runtime::subagent::SubagentName>, main: Vec<crate::runtime::subagent::SubagentName>, workflow: Vec<crate::runtime::subagent::SubagentName> });
-partial!(WorkflowsLayer { definitions: Vec<crate::runtime::workflow::WorkflowId>, main: Vec<crate::runtime::workflow::WorkflowId> });
+partial!(SubagentsLayer { max_concurrent: usize, main: Vec<crate::runtime::subagent::SubagentName>, workflow: Vec<crate::runtime::subagent::SubagentName> });
+partial!(WorkflowsLayer { main: Vec<crate::runtime::workflow::WorkflowId> });
 partial!(NativeToolsLayer {
     read: NativePolicyOverrideDocument,
     write: NativePolicyOverrideDocument,
@@ -284,7 +283,7 @@ merge_record!(
         workflows,
         native_tools
     ],
-    [mcp_servers, python_sources, mcp_tool_policies, environment]
+    [mcp_servers, mcp_tool_policies, environment]
 );
 merge_record!(
     ModelLayer,
@@ -316,13 +315,8 @@ merge_record!(
     [],
     []
 );
-merge_record!(
-    SubagentsLayer,
-    [max_concurrent, definitions, main, workflow],
-    [],
-    []
-);
-merge_record!(WorkflowsLayer, [definitions, main], [], []);
+merge_record!(SubagentsLayer, [max_concurrent, main, workflow], [], []);
+merge_record!(WorkflowsLayer, [main], [], []);
 impl Copy for NativeToolsLayer {}
 
 impl NativeToolsLayer {
@@ -416,10 +410,8 @@ impl RuntimeLayer {
             "extensions.todo",
             "extensions.goal",
             "subagents.max_concurrent",
-            "subagents.definitions",
             "subagents.main",
             "subagents.workflow",
-            "workflows.definitions",
             "workflows.main",
             "native_tools.read",
             "native_tools.write",
@@ -432,7 +424,6 @@ impl RuntimeLayer {
         }
         map(origins, "environment", config.environment.keys());
         map(origins, "mcp_servers", config.mcp_servers.keys());
-        map(origins, "python_sources", config.python_sources.keys());
         map(
             origins,
             "mcp_tool_policies",
@@ -460,7 +451,6 @@ impl RuntimeLayer {
             approval_mode,
             default_tools,
             skills,
-            python_sources,
             mcp_tool_policies,
             environment
         );
@@ -485,19 +475,12 @@ impl RuntimeLayer {
         }
         if let Some(layer) = self.subagents {
             let mut subagents = config.subagents;
-            apply!(
-                layer,
-                subagents,
-                max_concurrent,
-                definitions,
-                main,
-                workflow
-            );
+            apply!(layer, subagents, max_concurrent, main, workflow);
             config.subagents = subagents;
         }
         if let Some(layer) = self.workflows {
             let mut workflows = config.workflows;
-            apply!(layer, workflows, definitions, main);
+            apply!(layer, workflows, main);
             config.workflows = workflows;
         }
         if let Some(layer) = self.native_tools {
@@ -550,7 +533,6 @@ impl RuntimeLayer {
     }
     pub fn copy_resources(config: &mut CurrentRuntimeConfig, resources: CurrentRuntimeConfig) {
         config.mcp_servers = resources.mcp_servers;
-        config.python_sources = resources.python_sources;
         config.mcp_tool_policies = resources.mcp_tool_policies;
         config.native_tools = resources.native_tools;
         config.environment = resources.environment;

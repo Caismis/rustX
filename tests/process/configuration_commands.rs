@@ -59,10 +59,9 @@ fn cfg237_binary_workflow_commands_share_json_exit_and_read_only_contract() {
     .unwrap();
     std::fs::write(
         workspace.join("rustx.toml"),
-        r#"[workflows]
-definitions = ["human_plan"]
+        r"[workflows]
 main = []
-"#,
+",
     )
     .unwrap();
     let file = workflows.join("human_plan.yaml");
@@ -83,7 +82,7 @@ main = []
         );
         assert_eq!(value["validity"], "valid");
         assert_eq!(value["readiness"], "unresolved");
-        assert_eq!(value["workflow"]["registered"], true);
+        assert_eq!(value["workflow"]["discovered"], true);
         assert_eq!(value["workflow"]["configured_main_admission"], false);
         assert_eq!(
             value["workflow"]["program"].is_object(),
@@ -259,22 +258,16 @@ command = "must-never-spawn"
     assert!(!root.path().join("home/.local/state").exists());
 
     assert!(run(root.path(), &["--trust", "grant"]).status.success());
-    std::fs::write(
-        root.path().join("workspace/rustx.toml"),
-        r#"[python_sources]
-"python:missing" = "enabled"
-"#,
-    )
-    .unwrap();
+    std::fs::write(root.path().join("workspace/rustx.toml"), "").unwrap();
+    std::fs::create_dir_all(root.path().join("workspace/.agents/tools/unprepared")).unwrap();
     let output = run(root.path(), &["doctor", "--probe", "--prepare", "--json"]);
-    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.status.code(), Some(3));
     let records: Vec<serde_json::Value> = String::from_utf8(output.stdout)
         .unwrap()
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert_eq!(records[1]["results"][0]["state"], "unresolved");
-    assert_eq!(records[1]["results"][1]["state"], "unavailable");
+    assert_eq!(records[1]["results"][1]["state"], "skipped");
     assert_eq!(records[0]["targets"][1]["prepare_environment"], false);
     assert!(!root.path().join("workspace/.rustx").exists());
 }

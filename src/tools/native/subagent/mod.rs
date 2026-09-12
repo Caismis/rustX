@@ -62,7 +62,7 @@
 //! the registry; all configuration semantics live in the catalog/resolver.
 
 use crate::runtime::subagent::SubagentInvocationOverride;
-use crate::runtime::subagent::catalog::{SubagentCatalog, SubagentName};
+use crate::runtime::subagent::catalog::{AgentCatalog, SubagentName};
 use crate::runtime::subagent::resolver::render_agent_routing;
 use crate::runtime::subagent::{
     SubagentAccepted, SubagentRegistry, SubagentStartError, SubagentStartOutcome,
@@ -138,7 +138,7 @@ pub const SUBAGENT_TOOL_NAME: &str = "subagent";
 #[must_use]
 pub(super) fn registration(
     subagents: SubagentRegistry,
-    catalog: &SubagentCatalog,
+    catalog: &AgentCatalog,
 ) -> Option<NativeToolRegistration> {
     definition(catalog).map(|definition| {
         NativeToolRegistration::new(
@@ -154,7 +154,7 @@ pub(super) fn registration(
 /// An empty catalog produces no definition: capability composition must never
 /// expose a model-facing Tool which every possible invocation is guaranteed
 /// to reject.
-pub(super) fn definition(catalog: &SubagentCatalog) -> Option<ToolDefinition> {
+pub(super) fn definition(catalog: &AgentCatalog) -> Option<ToolDefinition> {
     if catalog.is_empty() {
         return None;
     }
@@ -353,13 +353,13 @@ impl ToolExecutor for SubagentExecutor {
 mod tests {
     use super::{SUBAGENT_TOOL_NAME, SubagentExecutor, SubagentInput, ToolInvocation, definition};
     use crate::runtime::subagent::catalog::{
-        SubagentCatalog, SubagentDefinition, SubagentName, SubagentProjectInstructionPolicy,
+        AgentCatalog, SubagentDefinition, SubagentName, SubagentProjectInstructionPolicy,
     };
     use crate::runtime::workspace::WorkspacePolicy;
     use crate::tools::types::{ToolExecutionStatus, ToolResultContent};
 
-    fn catalog() -> SubagentCatalog {
-        SubagentCatalog::new([
+    fn catalog() -> AgentCatalog {
+        AgentCatalog::new([
             SubagentDefinition::new(
                 SubagentName::parse("research").expect("name"),
                 "Deep multi-source research.".to_owned(),
@@ -716,7 +716,7 @@ chat_reasoning_replay = "omit"
                 crate::context::ContextAssembly::new(),
                 capabilities,
             )
-            .with_subagent_catalog(SubagentCatalog::new([definition]).expect("catalog"))
+            .with_subagent_catalog(AgentCatalog::new([definition]).expect("catalog"))
             .with_subagent_admissions(BTreeSet::from([isolated]), BTreeSet::new()),
         );
 
@@ -927,7 +927,7 @@ chat_reasoning_replay = "omit"
                 crate::context::ContextAssembly::new(),
                 capabilities,
             )
-            .with_subagent_catalog(SubagentCatalog::new([definition]).expect("catalog"))
+            .with_subagent_catalog(AgentCatalog::new([definition]).expect("catalog"))
             .with_subagent_admissions(BTreeSet::from([reviewer]), BTreeSet::new()),
         );
 
@@ -1193,7 +1193,7 @@ chat_reasoning_replay = "omit"
             described.description
         );
         assert!(
-            definition(&SubagentCatalog::empty()).is_none(),
+            definition(&AgentCatalog::empty()).is_none(),
             "an unsatisfiable subagent tool never enters the model-facing capability set"
         );
 

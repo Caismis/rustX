@@ -1,8 +1,0 @@
----
-description: Produce a typed text assessment from explicit inputs.
-tools:
-  builtin: []
-worktree:
-  enabled: false
----
-Use only the supplied inputs and fixed task. Return the declared structured result through workflow_output.

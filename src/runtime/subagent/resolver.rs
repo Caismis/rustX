@@ -128,7 +128,7 @@ use crate::tools::mcp::{McpServerBinding, McpServerBindings};
 use crate::tools::types::ToolDefinition;
 
 use super::catalog::{
-    SubagentCatalog, SubagentDefinition, SubagentDefinitionDigest, SubagentExecutionDeadline,
+    AgentCatalog, SubagentDefinition, SubagentDefinitionDigest, SubagentExecutionDeadline,
     SubagentName,
 };
 use super::invocation::{SubagentInvocationOverride, SubagentOverrideError};
@@ -1049,7 +1049,7 @@ impl SubagentResolver {
     ///
     /// Returns the first static violation, naming the offending agent.
     pub fn validate_catalog(
-        catalog: &SubagentCatalog,
+        catalog: &AgentCatalog,
         available_tools: &AvailableToolCatalog,
         availability: &CapabilityAvailability,
         skills: &SkillSnapshot,
@@ -1071,7 +1071,7 @@ impl SubagentResolver {
 
     /// Validate local Skill/model references independently of physical binding.
     pub(crate) fn validate_local_references(
-        catalog: &SubagentCatalog,
+        catalog: &AgentCatalog,
         skills: &SkillSnapshot,
         mut model_check: impl FnMut(&crate::model::catalog::ModelRef) -> Result<(), String>,
     ) -> Result<(), (SubagentName, SubagentResolutionError)> {
@@ -1949,7 +1949,7 @@ fn count(hasher: &mut Sha256, key: &str, value: usize) {
 /// Generation is deterministic and bounded: agent names appear in canonical
 /// order and each description is already bounded by definition admission.
 #[must_use]
-pub(crate) fn render_agent_routing(catalog: &SubagentCatalog) -> String {
+pub(crate) fn render_agent_routing(catalog: &AgentCatalog) -> String {
     if catalog.is_empty() {
         return "This runtime admits no named subagent; the call always fails.".to_owned();
     }
@@ -1978,7 +1978,7 @@ mod tests {
     };
     use crate::runtime::identity::{McpServerId, ToolId};
     use crate::runtime::subagent::catalog::{
-        SubagentCatalog, SubagentDefinition, SubagentName, SubagentProjectInstructionPolicy,
+        AgentCatalog, SubagentDefinition, SubagentName, SubagentProjectInstructionPolicy,
     };
     use crate::runtime::workspace::WorkspacePolicy;
     use crate::tools::types::{
@@ -2828,7 +2828,7 @@ mod tests {
 
     #[test]
     fn the_routing_description_is_deterministic_and_derived_from_the_catalog() {
-        let catalog = SubagentCatalog::new([
+        let catalog = AgentCatalog::new([
             SubagentDefinition::new(
                 SubagentName::parse("research").expect("name"),
                 "Deep research.".to_owned(),
@@ -2870,7 +2870,7 @@ mod tests {
             "Available agents:\n- explore: Read-only exploration.\n- research: Deep research."
         );
         assert_eq!(
-            render_agent_routing(&SubagentCatalog::empty()),
+            render_agent_routing(&AgentCatalog::empty()),
             "This runtime admits no named subagent; the call always fails."
         );
     }

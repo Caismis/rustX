@@ -1,16 +1,18 @@
 # Fixed keyed parallel checks
 
 Copy `.agents/workflows/parallel_checks.yaml` and
-`.agents/subagents/reviewer.md` into your trusted workspace. Select your model as
+`.agents/agents/reviewer.toml` into your trusted workspace. Select your model as
 described in [the setup guide](README.md).
 
 Minimum project configuration:
 
-```json
-{
-  "subagents": {"definitions": ["reviewer"], "workflow": ["reviewer"], "maxConcurrent": 2},
-  "workflows": {"definitions": ["parallel_checks"], "main": ["parallel_checks"]}
-}
+```toml
+[subagents]
+workflow = ["reviewer"]
+max_concurrent = 2
+
+[workflows]
+main = ["parallel_checks"]
 ```
 
 `rustx workflow explain parallel_checks` shows the fixed `brevity` and `clarity`

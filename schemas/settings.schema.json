@@ -484,21 +484,6 @@
       "description": "JSON text with an object at its top level. Arbitrary nested provider-native JSON is retained, including null. Protected wire keys are rejected during model resolution.",
       "type": "string"
     },
-    "SourceEnablement": {
-      "description": "Configuration authors can express intent, never host evaluation results.",
-      "oneOf": [
-        {
-          "const": "enabled",
-          "description": "Request activation, subject to host trust and resource authority.",
-          "type": "string"
-        },
-        {
-          "const": "disabled",
-          "description": "Keep the source inert.",
-          "type": "string"
-        }
-      ]
-    },
     "StatusLayer": {
       "additionalProperties": false,
       "properties": {
@@ -531,14 +516,6 @@
     "SubagentsLayer": {
       "additionalProperties": false,
       "properties": {
-        "definitions": {
-          "items": {
-            "$ref": "#/$defs/SubagentName"
-          },
-          "type": [
-            "array"
-          ]
-        },
         "main": {
           "items": {
             "$ref": "#/$defs/SubagentName"
@@ -733,14 +710,6 @@
     "WorkflowsLayer": {
       "additionalProperties": false,
       "properties": {
-        "definitions": {
-          "items": {
-            "$ref": "#/$defs/WorkflowId"
-          },
-          "type": [
-            "array"
-          ]
-        },
         "main": {
           "items": {
             "$ref": "#/$defs/WorkflowId"
@@ -840,14 +809,6 @@
         {
           "$ref": "#/$defs/NativeToolsLayer"
         }
-      ]
-    },
-    "python_sources": {
-      "additionalProperties": {
-        "$ref": "#/$defs/SourceEnablement"
-      },
-      "type": [
-        "object"
       ]
     },
     "runtime_root": {

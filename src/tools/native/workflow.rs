@@ -1,6 +1,6 @@
 //! Model-facing Workflow Tools over the native `WorkflowRuntime`.
 //!
-//! One registered Workflow id is one independent Tool. The executor captures
+//! One discovered Workflow id is one independent Tool. The executor captures
 //! the immutable compiled program at catalog publication time and delegates
 //! execution to `WorkflowRuntime`, which in turn owns only orchestration and
 //! uses the existing `SubagentRegistry` for child `AgentRuns`.

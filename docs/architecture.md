@@ -4972,16 +4972,14 @@ workspace/
 └── .agents/
     ├── skills/
     ├── tools/
-    ├── subagents/
+    ├── agents/*.toml
     └── workflows/
 ```
 
-This common ownership namespace does not collapse activation semantics.
-Skills and Python tools retain their automatic discovery behavior, while
-Subagent profiles and native Workflows remain explicit configuration surfaces.
-In particular, a Workflow id must be registered in
-`workflows.definitions` and a Subagent must be defined and admitted to the
-relevant domain. Filesystem presence alone never grants either capability.
+Canonical definitions establish existence through bounded deterministic discovery.
+AgentCatalog, the existing SkillSnapshot, ManagedPythonCatalog and WorkflowCatalog
+belong to one immutable resource generation. Configuration selects from those
+catalogs. Discovery grants neither runtime readiness nor execution authority.
 The configured runtime root (often `.rustx/`) is a separate runtime-owned
 namespace for generated state, immutable materializations, and Session data;
 it is not a canonical project-resource root or a fallback lookup location.
@@ -6801,7 +6799,7 @@ RuntimeResourceSnapshot Rn         one admitted resource generation
   │    ├─ available_tools()        the generation's authorized capabilities
   │    └─ active ToolRegistry      the *parent's* projection of them
   ├─ capability-source availability of the same generation
-  ├─ SubagentCatalog               immutable named definitions
+  ├─ AgentCatalog               immutable named definitions
   ├─ frozen project instructions
   └─ frozen Skills/resources
             |
@@ -6823,7 +6821,7 @@ real --subagent-child     ConversationRuntime + Agent Loop + Context + Tools
 ```
 
 Configuration semantics and live lifecycle are deliberately separate owners.
-`SubagentCatalog` owns the immutable named definitions of one resource
+`AgentCatalog` owns the immutable named definitions of one resource
 generation and their deterministic digests, and nothing live.
 `SubagentResolver` owns the single transformation
 `definition + invoking RuntimeResourceSnapshot + invoking attempt model
@@ -8362,11 +8360,11 @@ Subagent runtime. YAML is authoring serialization, never an execution AST:
 ```text
 rustx.toml
     |
-    +--> subagent definitions + main/workflow admission
-    +--> workflow registration + main exposure
+    +--> Agent main/workflow admission
+    +--> Workflow main exposure
                   |
                   v
-      .agents/workflows/<configured-id>.yaml
+      .agents/workflows/<id>.yaml (discovered by filename)
                   |
                   v
          WorkflowDefinition
@@ -8406,21 +8404,15 @@ Tool Plane, Subagent runtime, Workflow scheduler, or approval authority.
 
 ### Configuration and identity
 
-`subagents.definitions` explicitly registers canonical role filename identities.
-Each identity loads one typed-frontmatter Markdown resource; see
-[canonical Subagent resources](subagent-resources.md).
-`subagents.main` and `subagents.workflow` are independent admission domains;
-each is a subset of the registration list. A profile may be main-only,
-Workflow-only, both, or defined but admitted to neither. Main visibility does
-not make a profile valid for a Workflow Agent, and Workflow admission does not
-make it callable by the main Agent. `workflows.definitions` registers exact
-Workflow ids, while `workflows.main` independently exposes a subset as
-model-facing Tools. Unknown ids are configuration errors.
+Canonical `.agents/agents/<name>.toml` resources establish named Agent identities;
+see [canonical Agent resources](subagent-resources.md). Project Agent overrides
+user Agent as a whole resource, with no field-level merge. `subagents.main` and
+`subagents.workflow` retain independent admission domains resolved against discovery.
+Canonical `.agents/workflows/<id>.yaml` resources establish Workflow identities;
+`workflows.main` selects the model-facing subset. Unknown selected identities fail
+candidate validation. All discovery is bounded, deterministic and off-side, and
+only one complete resource-generation publication changes future admission.
 
-The configured Workflow id is the identity of the definition, catalog entry,
-and Tool. `parallel_review` resolves to
-`.agents/workflows/parallel_review.yaml` relative to the configured workspace. The
-loader never scans that directory for admission, and YAML has no duplicate
 authoritative `name` field. A Tool is an invocation surface, a Workflow is a
 compiled bounded program, and a Skill is reusable resource/instruction
 content; these are separate domains.
@@ -8492,7 +8484,7 @@ Workflow-owned active work; no detached child survives successful quiescence.
 ### Publication, reload, and recovery
 
 Startup and reload construct one complete candidate: configuration, exact
-registered YAML, compiled programs, both subagent admission sets, capability
+discovered YAML, compiled programs, both Agent admission sets, capability
 availability, and native Tool registrations. Validation happens off-side and
 one publication boundary makes the coherent generation visible. An invalid
 candidate leaves the previous valid generation untouched. A foreground

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::launch::{HostEnvironment, LaunchRequest, Origin, ProspectiveLaunch, PythonLocalStatus};
+use super::launch::{HostEnvironment, LaunchRequest, Origin, ProspectiveLaunch};
 use crate::capabilities::activation::SourceActivation;
 
 pub(super) const OUTPUT_LIMIT: usize = 256 * 1024;
@@ -151,8 +151,8 @@ impl std::error::Error for LaunchFailure {}
 #[derive(Debug, Serialize)]
 pub struct SourceProjection {
     pub activation: SourceActivation,
-    /// None means package contents were not inspected (or this is not Python).
-    pub local_status: Option<super::launch::PythonLocalStatus>,
+    /// Canonical package identity exists; readiness remains a separate fact.
+    pub discovered_package: bool,
     pub readiness: &'static str,
     pub reason: &'static str,
 }
@@ -160,7 +160,7 @@ pub struct SourceProjection {
 #[derive(Debug, Serialize)]
 pub struct LaunchProjection {
     pub roles:
-        BTreeMap<crate::runtime::subagent::SubagentName, super::subagent_resources::RoleSource>,
+        BTreeMap<crate::runtime::subagent::SubagentName, super::agent_resources::AgentSource>,
     pub workspace: PathBuf,
     pub runtime_root: PathBuf,
     pub trusted: bool,
@@ -169,7 +169,7 @@ pub struct LaunchProjection {
     pub provenance: BTreeMap<String, ProvenanceProjection>,
     pub sources: BTreeMap<String, SourceProjection>,
     pub tool_selection: Value,
-    pub registered_workflows: Vec<String>,
+    pub discovered_workflows: Vec<String>,
     pub local_skills: Vec<String>,
     pub provider: Value,
 }
@@ -449,8 +449,8 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
     let mut sources = BTreeMap::new();
     for (name, activation) in &launch.source_activations {
         let activation = *activation;
-        let local_status = launch.python_local_status.get(name).copied();
-        let (mut readiness, mut reason) = match activation {
+        let discovered_package = launch.managed_python.packages().contains_key(name);
+        let (readiness, reason) = match activation {
             SourceActivation::Enabled => {
                 report.readiness = Some(Readiness::Unresolved);
                 (
@@ -462,23 +462,10 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
             SourceActivation::Unconfigured => ("inert", "no explicit activation grant; not loaded"),
             SourceActivation::Untrusted => ("inert", "host trust has not admitted this source"),
         };
-        let local_failure = matches!(
-            local_status,
-            Some(PythonLocalStatus::Missing | PythonLocalStatus::Invalid)
-        );
-        if local_failure {
-            report.validity = Validity::Invalid;
-            readiness = "unavailable";
-            reason = if local_status == Some(PythonLocalStatus::Missing) {
-                "enabled managed Python package is not present locally"
-            } else {
-                "enabled managed Python package violates the local package contract"
-            };
-        }
         let path = if launch.config.mcp_servers.contains_key(name) {
             format!("mcp_servers.{name}")
         } else {
-            format!("python_sources.{name}")
+            format!("tools.{name}")
         };
         let file = launch
             .provenance
@@ -490,20 +477,16 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
                 Origin::Builtin | Origin::Cli { .. } => None,
             });
         report.diagnostics.push(Diagnostic {
-            classification: if local_failure {
-                "error"
-            } else if readiness == "unresolved" {
+            classification: if readiness == "unresolved" {
                 "warning"
             } else {
                 "info"
             },
-            category: if local_failure { "invalid" } else { readiness },
+            category: readiness,
             file,
             path,
             reason: reason.into(),
-            correction: if local_failure {
-                "create or repair .agents/tools/<package>: use a valid package name, regular server.py and requirements.txt, and bounded symlink-free package files; otherwise disable this source"
-            } else { match activation {
+            correction: match activation {
                 SourceActivation::Enabled => {
                     "use doctor --probe for explicitly authorized readiness checks"
                 }
@@ -511,9 +494,9 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
                     "review the workspace and grant trust explicitly before activation"
                 }
                 SourceActivation::Disabled | SourceActivation::Unconfigured => {
-                    "leave inert, or explicitly configure enablement after reviewing the source"
+                    "discovery grants no execution authority; preparation requires admitted source demand"
                 }
-            } }
+            }
             .into(),
             line: None,
             column: None,
@@ -522,7 +505,7 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
             name.to_string(),
             SourceProjection {
                 activation,
-                local_status,
+                discovered_package,
                 readiness,
                 reason,
             },
@@ -565,12 +548,7 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
             ),
             "extensionToolsReason":"provided by composed Native Agent Extensions; not selectable through default_tools/--tools/--exclude-tools, and not removed by --no-tools",
             "onlineIdentities":"unresolved until source discovery"}),
-        registered_workflows: launch
-            .config
-            .workflows
-            .definitions
-            .iter()
-            .map(ToString::to_string)
+        discovered_workflows: launch.workflows.definitions().keys().map(ToString::to_string)
             .collect(),
     });
     report

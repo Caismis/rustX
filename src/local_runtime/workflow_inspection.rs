@@ -15,7 +15,7 @@ pub struct WorkflowProjection {
     pub id: WorkflowId,
     pub source: PathBuf,
     pub source_layer: &'static str,
-    pub registered: bool,
+    pub discovered: bool,
     pub configured_main_admission: bool,
     pub prospective_main_exposure: Option<bool>,
     pub execution_admission: &'static str,
@@ -32,7 +32,7 @@ pub struct WorkflowProjection {
 
 #[derive(Debug, Serialize)]
 pub struct RoleProjection {
-    pub source: super::subagent_resources::RoleSource,
+    pub source: super::agent_resources::AgentSource,
     pub workflow_admitted: bool,
     pub selected_model: String,
     pub configured_timeout_ms: Option<u64>,
@@ -70,9 +70,9 @@ pub(super) fn inspect(
         return Report::failure(
             operation,
             Some(source),
-            "workflows.definitions",
-            "Workflow id is not registered",
-            "explicitly register this identity in workflows.definitions before inspection",
+            "workflows",
+            "Workflow id is not discovered",
+            "create its canonical .agents/workflows/<name>.yaml resource before inspection",
         );
     };
     let inspection = program.inspect();
@@ -88,7 +88,7 @@ pub(super) fn inspect(
             let definition = launch
                 .subagents
                 .get(name)
-                .expect("registered admitted role was resolved");
+                .expect("discovered admitted role was resolved");
             (
                 name.clone(),
                 RoleProjection {
@@ -203,7 +203,7 @@ pub(super) fn inspect(
         id: id.clone(),
         source,
         source_layer: "trusted_project",
-        registered: true,
+        discovered: true,
         configured_main_admission: launch.workflows.main().contains(id),
         prospective_main_exposure: launch
             .selected_tools

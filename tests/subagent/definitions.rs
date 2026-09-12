@@ -26,8 +26,8 @@ use rustx::runtime::subagent::{
 use rustx::runtime_client::settings::EffectiveNativeAgentExtensions;
 
 const KEY_ENV: &str = "RUSTX_ISSUE144_KEY";
-const EXPLORE_AGENTS: &str = ".agents/subagents/explore/AGENTS.md";
-const EXPLORE_EXTRA: &str = ".agents/subagents/explore/EXTRA.md";
+const EXPLORE_AGENTS: &str = ".agents/agents/explore/AGENTS.md";
+const EXPLORE_EXTRA: &str = ".agents/agents/explore/EXTRA.md";
 
 const MODELS: &str = r#"[providers.local]
 base_url = "http://127.0.0.1:9/v1"
@@ -135,7 +135,7 @@ impl Lab {
             dir: tempfile::tempdir().expect("lab directory"),
         };
         for profile in ["explore", "research", "pinned", "isolated"] {
-            std::fs::create_dir_all(lab.workspace().join(format!(".agents/subagents/{profile}")))
+            std::fs::create_dir_all(lab.workspace().join(format!(".agents/agents/{profile}")))
                 .expect("subagent resources");
         }
         std::fs::write(lab.root().join("models.toml"), MODELS).expect("models.toml");
@@ -173,11 +173,11 @@ impl Lab {
     fn subagent_file(&self, profile: &str, file: &str) -> std::path::PathBuf {
         if file == "instructions.md" {
             self.workspace()
-                .join(".agents/subagents")
-                .join(format!("{profile}.md"))
+                .join(".agents/agents")
+                .join(format!("{profile}.toml"))
         } else {
             self.workspace()
-                .join(".agents/subagents")
+                .join(".agents/agents")
                 .join(profile)
                 .join(file)
         }
@@ -410,7 +410,7 @@ async fn cfg236_gated_frozen_child_retains_r1_after_canonical_role_r2_publicatio
     });
     let frozen = admitted_rx.await.unwrap();
     std::fs::write(
-        lab.workspace().join(".agents/subagents/explore.md"),
+        lab.workspace().join(".agents/agents/explore.toml"),
         "R2 body\n",
     )
     .unwrap();
@@ -466,7 +466,7 @@ async fn cfg236_gated_frozen_child_retains_r1_after_canonical_role_r2_publicatio
 async fn only_named_catalog_definitions_are_admitted() {
     let lab = Lab::new();
     std::fs::write(
-        lab.workspace().join(".agents/subagents/research.md"),
+        lab.workspace().join(".agents/agents/research.toml"),
         "Research broadly.\n",
     )
     .expect("research instructions");
@@ -551,12 +551,12 @@ async fn an_attempt_frozen_on_r1_resolves_r1_after_r2_becomes_current() {
 
     // R2 redefines `explore` and adds `research`.
     std::fs::write(
-        lab.workspace().join(".agents/subagents/research.md"),
+        lab.workspace().join(".agents/agents/research.toml"),
         "Research broadly.\n",
     )
     .expect("research instructions");
     std::fs::write(
-        lab.workspace().join(".agents/subagents/explore.md"),
+        lab.workspace().join(".agents/agents/explore.toml"),
         "Explore the shared workspace read-only, and summarize.\n",
     )
     .expect("revised explore instructions");
@@ -917,7 +917,7 @@ async fn an_unavailable_source_keeps_the_runtime_healthy_but_blocks_the_agent_th
 async fn model_semantics_inherit_the_invoking_attempt_or_freeze_the_explicit_selection() {
     let lab = Lab::new();
     std::fs::write(
-        lab.workspace().join(".agents/subagents/pinned.md"),
+        lab.workspace().join(".agents/agents/pinned.toml"),
         "Run on the pinned model.\n",
     )
     .expect("pinned instructions");
@@ -1139,10 +1139,10 @@ async fn the_definition_digest_ignores_incidental_formatting_and_tracks_semantic
     let product = lab.compose().await;
     let baseline = digest_of(&product.runtime().runtime_resources(), "explore");
 
-    // YAML comments, field order and selector order do not change the native digest.
+    // TOML comments, field order and selector order do not change the native digest.
     std::fs::write(
-        lab.workspace().join(".agents/subagents/explore.md"),
-        "---\n# reordered frontmatter\ntools: {builtin: [grep, read]}\ndescription: Read-only repository exploration.\n---\nExplore the shared workspace read-only.\n",
+        lab.workspace().join(".agents/agents/explore.toml"),
+        "tools = {builtin = [\"grep\", \"read\"]}\ndescription = \"Read-only repository exploration.\"\ninstructions = \"Explore the shared workspace read-only.\\n\"\n",
     ).unwrap();
     product
         .runtime()

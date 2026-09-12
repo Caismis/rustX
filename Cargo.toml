@@ -60,7 +60,6 @@ nix = { version = "0.31.3", features = ["signal", "process", "fs", "dir", "inoti
 libc = "0.2"
 serde_yaml = "0.9"
 serde_path_to_error = "0.1"
-yaml-rust2 = { version = "0.11", default-features = false }
 toml = "0.8"
 url = "2"
 sha2 = "0.10"

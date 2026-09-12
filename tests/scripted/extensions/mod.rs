@@ -1117,7 +1117,7 @@ async fn published_tools(
     rustx::tools::native::register_native_tools(
         &mut ordinary,
         rustx::tools::NativeToolResources {
-            subagent_catalog: rustx::runtime::subagent::SubagentCatalog::empty(),
+            subagent_catalog: rustx::runtime::subagent::AgentCatalog::empty(),
             background: fixture.runtime.background().clone(),
             subagents: None,
         },
@@ -1728,7 +1728,7 @@ async fn ext259_a_resource_reload_cannot_install_or_remove_the_todo_extension() 
             rustx::tools::native::register_native_tools(
                 &mut registry,
                 rustx::tools::NativeToolResources {
-                    subagent_catalog: rustx::runtime::subagent::SubagentCatalog::empty(),
+                    subagent_catalog: rustx::runtime::subagent::AgentCatalog::empty(),
                     background: fixture.runtime.background().clone(),
                     subagents: None,
                 },

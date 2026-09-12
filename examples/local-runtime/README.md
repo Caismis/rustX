@@ -26,11 +26,11 @@ examples/local-runtime/
 │       │   └── review-guidance/SKILL.md
 │       ├── tools/
 │       │   └── echo/{server.py,requirements.txt}
-│       ├── subagents/
-│       │   ├── navigator/{instructions.md,AGENTS.md}
-│       │   ├── reviewer/{instructions.md,AGENTS.md}
-│       │   ├── planner/instructions.md
-│       │   └── implementer/instructions.md
+│       ├── agents/
+│       │   ├── navigator.toml
+│       │   ├── reviewer.toml
+│       │   ├── planner.toml
+│       │   └── implementer.toml
 │       └── workflows/
 │           ├── parallel_review.yaml
 │           └── implement_and_review.yaml
@@ -45,10 +45,10 @@ examples/local-runtime/
 | `settings.toml` | Copy to the host configuration directory: user model selection and host-only Tool approval/invocation policies. |
 | `rustx.toml` | Project configuration: default model selection, context, Agent Status modules/timezone, tool activation, project MCP sources, contained Skill roots, and tool environment. It cannot set Tool approval/invocation policies. |
 | `workspace/` | The authoritative execution cwd and conventional project/source tree, including Skills and editable custom Python tool packages. Relative native file-tool paths resolve here. This is not a general filesystem sandbox for Read/Write/Edit/Grep/Glob. |
-| `workspace/.agents/skills/*` | Canonical project Skills, automatically discovered through the Skill plane's own semantics; a directory does not register a Workflow or Subagent. |
-| `workspace/.agents/tools/*` | Inertly discovered managed Python packages. Explicit `python_sources` enablement is required before preparing their ordinary MCP servers. |
-| `workspace/.agents/subagents/*` | Explicitly defined/admitted Subagent instruction and project-guidance sources. The config controls admission; filesystem presence alone does not expose a profile. |
-| `workspace/.agents/workflows/*` | Explicitly registered native Workflow YAML sources. The config controls both registration and model visibility; the directory is never scanned. |
+| `workspace/.agents/skills/*` | Canonical project Skills, automatically discovered through the Skill plane's own semantics; discovery grants no execution authority. |
+| `workspace/.agents/tools/*` | Inertly discovered managed Python packages. Discovery does not prepare or activate their MCP servers. |
+| `workspace/.agents/agents/*` | Explicitly defined/admitted Subagent instruction and project-guidance sources. The config controls admission; filesystem presence alone does not expose a profile. |
+| `workspace/.agents/workflows/*` | Canonical Workflow YAML sources, discovered deterministically. Settings select model visibility. |
 | User state `workspaces/<identity>/` | Runtime-owned generated artifacts, prepared Python environments and Session storage, disjoint from `workspace/`. |
 
 Native Read/Write/Edit/Grep/Glob paths may be relative to the execution cwd or
@@ -139,7 +139,7 @@ must be changed if the real provider uses a different reasoning parameter.
 
 All project-origin local resource paths must resolve inside the selected
 workspace, including symlink targets. This includes Skills, Subagent instruction
-and `agentsMd.files`, and path-valued MCP command/cwd. `--config` only chooses
+and `agents_md.files`, and path-valued MCP command/cwd. `--config` only chooses
 the project document; it grants no authority to its neighboring resources.
 User/CLI resources retain separate host authority. Reload repeats containment
 checks and rejects the whole candidate on failure.
@@ -166,8 +166,8 @@ primary provider requests and compaction summary requests:
 admitted request and is not part of Session history or the provider model
 input.
 
-Each canonical `workspace/.agents/subagents/<name>.md` frontmatter may set an optional
-`timeoutMs` execution deadline. It is a positive integer number of
+Each canonical `workspace/.agents/agents/<name>.toml` TOML may set an optional
+`timeout_ms` execution deadline. It is a positive integer number of
 milliseconds, bounded at 86,400,000 (24 hours); when omitted, no
 definition-level deadline is installed. This limit covers the whole owned
 child lifecycle — startup, model streaming, tools, and physical/workspace
@@ -302,20 +302,17 @@ the child's independently frozen tool admission.
 
 ## Native YAML Workflows
 
-Workflows are registered explicitly in `rustx.toml`; the runtime does not
-discover every YAML file under the workspace. A registered id such as
+Workflows are discovered in their bounded canonical directory. An id such as
 `parallel_review` resolves exactly to:
 
 ```text
 workspace/.agents/workflows/parallel_review.yaml
 ```
 
-`workflows.definitions` is the registration set and `workflows.main` is the
-independent model-visible set. Every id in `workflows.main` becomes one
-concrete Tool named by that id, using the YAML `description` and `input`
-schema. A registered-but-not-main workflow remains available to native
-runtime composition but is not offered to the model. An unregistered YAML
-file, even a malformed one, is irrelevant.
+Workflow files define their own existence through canonical discovery.
+`workflows.main` selects the model-visible subset. Every selected id becomes a
+concrete Tool named by that id. Malformed canonical YAML rejects the complete
+candidate even when the Workflow is not exposed to the main Agent.
 
 The YAML is serialization only. It deserializes into a `WorkflowDefinition`,
 which is statically checked and compiled into an immutable `WorkflowProgram`;
@@ -426,9 +423,9 @@ interpret, or configure MCP independently.
 
 ## Custom Python tool
 
-The `echo` package is discovered inertly from its folder. The example disables
-it; set `"python_sources": {"python:echo": "enabled"}` to authorize preparation
-in a trusted project. `--no-tools` does not disable this preparation.
+The `echo` package is discovered inertly from its canonical folder. It remains
+unmaterialized: discovery does not authorize preparation, even with `--no-tools`
+absent. Demand-driven source preparation belongs to the subsequent CFG2-03 step.
 
 ```text
 <workspace>/.agents/tools/echo/
@@ -648,11 +645,11 @@ process restart never resumes old nodes or recreates actionable human decisions.
 
 ## Canonical role files
 
-`rustx.toml` registers `navigator`, `planner`, `implementer`, and `reviewer`
-by identity and independently admits the main and Workflow subsets. Their
+Canonical TOML files define `navigator`, `planner`, `implementer`, and `reviewer`.
+`rustx.toml` independently selects the main and Workflow subsets. Their
 metadata and primary instructions live together in
-`workspace/.agents/subagents/{navigator,planner,implementer,reviewer}.md`.
+`workspace/.agents/agents/{navigator,planner,implementer,reviewer}.toml`.
 Supplemental `AGENTS.md` files remain explicit project guidance. See the
 [authoring contract](../../docs/subagent-resources.md) and generated
-[frontmatter schema](../../schemas/subagent.schema.json). All fixed reference
+[Agent TOML schema](../../schemas/agent.schema.json). All fixed reference
 Workflows retain these canonical role identities.

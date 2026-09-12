@@ -160,7 +160,7 @@ pub const MAX_WORKFLOW_STEPS: usize = 4096;
 pub const MAX_WORKFLOW_AGENTS: usize = 256;
 /// Trusted ceiling for a single Loop's finite allowance.
 pub const MAX_LOOP_ITERATIONS: u32 = 256;
-/// The maximum number of registered workflow definitions in one generation.
+/// The maximum number of discovered workflow definitions in one generation.
 pub const MAX_WORKFLOW_DEFINITIONS: usize = 64;
 /// The maximum number of explicit parallel branches in one node.
 pub const MAX_PARALLEL_BRANCHES: usize = 32;
@@ -707,7 +707,7 @@ pub struct WorkflowEdgeProgram {
     pub port: WorkflowPort,
 }
 
-/// An immutable registered workflow catalog.
+/// An immutable discovered workflow catalog.
 #[derive(Debug, Clone, Default)]
 pub struct WorkflowCatalog {
     definitions: BTreeMap<WorkflowId, Arc<WorkflowProgram>>,
@@ -753,13 +753,13 @@ impl WorkflowCatalog {
         Self::default()
     }
 
-    /// Looks up a registered immutable program.
+    /// Looks up a discovered immutable program.
     #[must_use]
     pub fn get(&self, id: &WorkflowId) -> Option<&Arc<WorkflowProgram>> {
         self.definitions.get(id)
     }
 
-    /// All registered programs in identity order.
+    /// All discovered programs in identity order.
     #[must_use]
     pub fn definitions(&self) -> &BTreeMap<WorkflowId, Arc<WorkflowProgram>> {
         &self.definitions
@@ -771,7 +771,7 @@ impl WorkflowCatalog {
         &self.main
     }
 
-    /// Whether this catalog has no registered definitions.
+    /// Whether this catalog has no discovered definitions.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.definitions.is_empty()
@@ -783,7 +783,7 @@ impl WorkflowCatalog {
 pub enum WorkflowCatalogError {
     /// Two compiled programs used one configured identity.
     DuplicateDefinition,
-    /// A model-visible id is not registered.
+    /// A model-visible id is not discovered.
     UnknownMain(WorkflowId),
     /// A model-visible id was repeated in the admission list.
     DuplicateMain(WorkflowId),
@@ -3343,7 +3343,7 @@ chat_reasoning_replay = "omit"
             crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
         )
         .expect("workflow test subagent definition");
-        let catalog = crate::runtime::subagent::SubagentCatalog::new([definition])
+        let catalog = crate::runtime::subagent::AgentCatalog::new([definition])
             .expect("workflow test subagent catalog");
         let capabilities = Arc::new(CapabilitySnapshot::new(
             plane.conversation_id.clone(),

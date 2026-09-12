@@ -7,11 +7,10 @@ rustx workflow explain <id> [--workspace <dir>] [--config <path>]
   [--models <path>] [--model <provider/model>] [--json]
 ```
 
-Both commands inspect the prospective launch environment. `<id>` is a configured
-`workflows.definitions` identity resolved to the trusted workspace's
+Both commands inspect the prospective launch environment. `<id>` is a discovered canonical identity resolved to the trusted workspace's
 `.agents/workflows/<id>.yaml`. It is not a path, discovery request, or execution
 entry point. The configured environment is validated before the selected program
-is projected, so another invalid registered resource can prevent inspection.
+is projected, so another invalid canonical resource can prevent inspection.
 Trust/Session mutation, preparation/probe flags, runtime-state paths, and Tool or
 Skill selection overrides are rejected. `--help` contains the grammar.
 
@@ -20,7 +19,7 @@ adds a status line and formatted JSON. Argument or static errors exit **2**. A
 valid static structure exits **3**, because readiness remains `unresolved`.
 Missing online facts, inert dependencies or untrusted resources produce
 `validity: incomplete`, also exit **3**. Neither command issues a readiness
-certificate. File discovery, registration, role admission, main-model
+certificate. File discovery, Agent admission, main-model
 admission/exposure and concrete runtime admission are separate facts.
 
 ## One authority
@@ -87,7 +86,7 @@ Categories distinguish `workflow_language`, `resource_missing`,
 `resource_not_admitted`, `dependency_inert` and `unresolved`. Resolution stops at
 its first authoritative failure. Untrusted contents are not read or compiled.
 
-`check` gives registration/admission/exposure, role provenance and dependencies.
+`check` gives discovery/admission/exposure, role provenance and dependencies.
 `explain` additionally gives compiled identity/digest, explicit validation stage,
 root/block schemas, entries, nodes, deterministic edges, bindings and reference
 paths, keyed branches, loop limits, selected profiles/tools, timeout, workspace
@@ -120,7 +119,7 @@ approval and Review remain distinct. Cancellation, terminal uniqueness and
 terminal-last ordering are unchanged. Inspection creates no model/provider
 request, process/helper, Python environment, package synchronization, network/MCP
 connection, Session, WorkflowRun, interaction waiter/request, worktree/candidate,
-runtime-state write, registration/exposure mutation or resource publication.
+runtime-state write, catalog/exposure mutation or resource publication.
 
 ## Deterministic regression map
 

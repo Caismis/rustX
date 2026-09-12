@@ -91,7 +91,7 @@ pub(crate) use workflow::definition as workflow_definition;
 /// Canonical native metadata without constructing any execution resource.
 pub(crate) fn definitions(
     policies: NativeToolPolicies,
-    subagents: &crate::runtime::subagent::SubagentCatalog,
+    subagents: &crate::runtime::subagent::AgentCatalog,
 ) -> Vec<(
     crate::tools::types::ToolDefinition,
     crate::tools::deadline::ForegroundPolicy,
@@ -191,7 +191,7 @@ pub struct NativeToolResources {
     /// its model-facing routing description. The description a generation
     /// publishes therefore always names exactly the agents that generation
     /// admits, and an empty generation publishes no unsatisfiable Tool.
-    pub subagent_catalog: crate::runtime::subagent::SubagentCatalog,
+    pub subagent_catalog: crate::runtime::subagent::AgentCatalog,
 }
 
 /// The concrete, bounded per-tool policy configuration of the six ordinary

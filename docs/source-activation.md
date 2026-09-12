@@ -25,61 +25,28 @@ ordinary MCP origin with the identity `python:<folder>`. There is one Tool Plane
 
 ## TOML surface (runtime schema 8)
 
-Both configured MCP sources and managed Python are inert by default. An MCP
-entry must declare `enabled: true`. An absent `enabled` means discovered without
-a grant; `enabled: false` means explicitly disabled. Managed Python decisions
-are a named map, `python_sources`, keyed by exact synthesized source identity:
+MCP source definitions remain explicit settings and require `enabled = true`
+to be eligible for preparation. An absent or false value is inert.
 
 ```toml
 [mcp_servers.public-service]
 enabled = true
 type = "http"
 url = "https://service.example/mcp"
-
-[mcp_servers.public-service.headers]
-Accept-Language = "en"
-
-[mcp_servers.optional-process]
-enabled = false
-command = "optional-server"
-
-[python_sources]
-"python:echo" = "enabled"
-"python:unrelated-demo" = "disabled"
 ```
 
-Configuration accepts only `enabled` and `disabled` for Python identities;
-`unconfigured` and `untrusted` are rejected, not normalized. Declarative
-enablement is distinct from effective host-owned activation. An absent Python
-identity derives `unconfigured`; an explicit disable derives `disabled`; an
-enable request derives `enabled` only with accepted host trust/resource authority,
-otherwise `untrusted`. Neither discovery nor capability references alter this
-calculation. A newly
-discovered folder therefore cannot trigger a Python import, package manager
-probe, `uv`, installation, synchronization, environment creation, or MCP spawn.
-Inert Python discovery reads at most 1024 immediate directory entries and does
-not inspect package contents until admission. Enabled package discovery and
-preparation continue through the existing managed-package owner.
+Managed Python source existence comes solely from `.agents/tools/<package>`.
+Its identity is `python:<package>`. The generation-scoped `ManagedPythonCatalog`
+records bounded directory identities, without reading server code or dependency
+files. Missing roots, empty roots and packages without prepared environments do
+not block native-only startup. Non-directory incidental files have no identity;
+invalid package identities and redirected package roots fail static discovery.
 
-Declared identities remain observable even when no corresponding folder exists:
-
-| Declaration / authority | Discovery | Source state after preparation |
-|---|---|---|
-| Enabled, accepted | Present | Ready or unavailable with preparation reason |
-| Enabled, accepted | Missing | Unavailable: configured managed Python source was not discovered |
-| Disabled | Present or missing | Inactive(disabled) |
-| No declaration | Present | Inactive(unconfigured) |
-| Enabled, rejected | Either | Inactive(untrusted) at a host source-evaluation boundary |
-
-The local CFG-01 launch resolver rejects an untrusted project **before runtime
-composition**; it does not publish a running untrusted Session. `Untrusted` is a
-host evaluation result, never document input or a synthetic local launch state.
-The reusable coordinator can retain a host-rejected source as inert status.
-Missing-source diagnostics use only bounded directory discovery: they do not
-open Python storage, probe Python/uv, create package state, or spawn processes.
-Before the first preparation, the coordinator's prospective availability reports
-declared enabled sources as `unprepared` and disabled sources as inactive.
-Normal Session composition waits for that preparation before publication.
+There is no workspace `python_sources` settings map. Discovery does not enable
+every package, import Python, run uv, install dependencies, create environments,
+spawn MCP, or capture credentials. Current workspace launch supplies no Python
+materialization demand. Demand-driven preparation is owned by CFG2-03 and the
+existing source lifecycle; discovered packages remain inert in this step.
 
 ## Trust, layers, and replacement
 
@@ -94,8 +61,7 @@ untrusted + enabled is rejected; trusted + enabled is eligible for preparation.
 `mcp_servers` overlays names and replaces a same-name entry **as a whole**. A
 replacement includes its own enable decision, command/URL, ordinary environment,
 headers and credential references. Absent members never inherit from the
-replaced entry. An empty map clears the map. The `python_sources` named map follows
-the same absence, named replacement and empty-map semantics. Tool allowlists,
+replaced entry. An empty map clears the MCP map. Tool allowlists,
 Subagent selectors and Workflow references cannot supply an activation grant.
 
 Project-authored sources may declare ordinary transport configuration and
