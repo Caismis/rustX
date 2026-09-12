@@ -120,6 +120,39 @@ impl core::fmt::Debug for RuntimeResourceSnapshot {
 }
 
 impl RuntimeResourceSnapshot {
+    #[cfg(test)]
+    pub(crate) fn with_test_root_agents(mut self, agents: BTreeSet<SubagentName>) -> Self {
+        use crate::runtime::agent_profile::{
+            AgentProfile, AgentProfileAuthority, AgentScope, resolve_agent_profile,
+        };
+        let profile = AgentProfile::from_document(
+            &crate::local_runtime::config::AgentProfileDocument {
+                agents: agents.into_iter().collect(),
+                ..crate::local_runtime::config::builtin_root_profile()
+            },
+            Vec::new(),
+        )
+        .unwrap();
+        let resolved = resolve_agent_profile(
+            &profile,
+            &AgentProfileAuthority {
+                tools: self.capability.available_tools(),
+                availability: &self.capability_availability,
+                skills: self.capability.skills(),
+                agents: &self.subagents.names().into_iter().cloned().collect(),
+                workflows: &self.workflows.definitions().keys().cloned().collect(),
+                scope: AgentScope::Root,
+            },
+        );
+        self.capability = Arc::new(
+            self.capability
+                .as_ref()
+                .clone()
+                .with_resolved_profile(Some(Arc::new(resolved))),
+        );
+        self
+    }
+
     fn resolve_profiles(&mut self) {
         use crate::runtime::agent_profile::{
             AgentProfileAuthority, AgentScope, resolve_agent_profile,
@@ -169,25 +202,19 @@ impl RuntimeResourceSnapshot {
         crate::local_runtime::static_effects::observe(
             crate::local_runtime::static_effects::Effect::ResourcePublication,
         );
-        let (project_context_files, agent_profile) =
-            if let Some(profile) = capability.resolved_profile() {
-                let mut files = if profile.project_instructions.inherit {
-                    project_context_files
-                } else {
-                    Vec::new()
-                };
-                files.extend(profile.project_instructions.files.clone());
-                (
-                    files,
-                    agent_profile.or_else(|| {
-                        (!profile.instructions.is_empty()).then(|| profile.instructions.clone())
-                    }),
-                )
-            } else {
-                (project_context_files, agent_profile)
-            };
+        let mut effective_project_files = project_context_files.clone();
+        let mut agent_profile = agent_profile;
+        if let Some(profile) = capability.resolved_profile() {
+            if !profile.project_instructions.inherit {
+                effective_project_files.clear();
+            }
+            effective_project_files.extend(profile.project_instructions.files.clone());
+            if agent_profile.is_none() && !profile.instructions.is_empty() {
+                agent_profile = Some(profile.instructions.clone());
+            }
+        }
         let project_instructions =
-            concatenate_project_instructions(&project_context_files).map(Arc::<str>::from);
+            concatenate_project_instructions(&effective_project_files).map(Arc::<str>::from);
         let skill_catalog = capability.skill_catalog().map(Arc::<str>::from);
         let skill_sources = capability
             .skills()

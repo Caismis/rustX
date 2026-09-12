@@ -200,7 +200,7 @@ pub struct NamedAgentDefinitionDigest(String);
 /// It is part of the hashed preimage: a later milestone that admits a new
 /// behavior-affecting field bumps this constant, so two framings can never
 /// collide into the same digest.
-pub const SUBAGENT_DEFINITION_DIGEST_VERSION: &str = "rustx-subagent-definition-v4";
+pub const SUBAGENT_DEFINITION_DIGEST_VERSION: &str = "rustx-agent-definition-v5";
 
 impl NamedAgentDefinitionDigest {
     /// The stable textual form `sha256:<64 lowercase hex characters>`.
@@ -397,6 +397,8 @@ impl NamedAgentDefinition {
             &project_instructions,
             workspace_policy,
             &extensions,
+            &agents,
+            &workflows,
         );
         Ok(Self {
             name,
@@ -772,10 +774,18 @@ fn compute_digest(
     project_instructions: &SubagentProjectInstructionPolicy,
     workspace_policy: crate::runtime::workspace::WorkspacePolicy,
     extensions: &crate::extensions::NativeAgentExtensions,
+    agents: &BTreeSet<SubagentName>,
+    workflows: &BTreeSet<crate::runtime::workflow::WorkflowId>,
 ) -> NamedAgentDefinitionDigest {
     let mut hasher = Sha256::new();
     hasher.update(SUBAGENT_DEFINITION_DIGEST_VERSION.as_bytes());
     hasher.update(b"\n");
+    for agent in agents {
+        field(&mut hasher, "agent", agent.as_str());
+    }
+    for workflow in workflows {
+        field(&mut hasher, "workflow", workflow.as_str());
+    }
     field(&mut hasher, "name", name.as_str());
     field(&mut hasher, "description", description);
     field(&mut hasher, "instructions", instructions);

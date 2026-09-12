@@ -669,6 +669,8 @@ async fn selected_capabilities(
     for definition in registry.definitions() {
         if let Some(source) = definition.origin.source() {
             policy
+                .profile
+                .tools
                 .sources
                 .entry(source)
                 .or_insert(rustx::capabilities::selection::SourceToolSelection::All);

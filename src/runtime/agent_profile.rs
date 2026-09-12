@@ -37,8 +37,15 @@ impl AgentProfile {
         files: Vec<ProjectContextFile>,
     ) -> Result<Self, String> {
         document.tools.validate_spelling()?;
-        if document.skills.iter().any(|name| name.trim().is_empty()) {
-            return Err("Skill identity must be non-empty".into());
+        for name in &document.skills {
+            crate::skills::package::validate_skill_name(name)?;
+        }
+        if document.description.len()
+            > crate::runtime::subagent::catalog::MAX_SUBAGENT_DESCRIPTION_BYTES
+            || document.instructions.len()
+                > crate::runtime::subagent::catalog::MAX_SUBAGENT_INSTRUCTIONS_BYTES
+        {
+            return Err("Agent description or instructions exceeds its native bound".into());
         }
         Ok(Self {
             description: document.description.clone(),
@@ -77,7 +84,8 @@ pub struct AgentProfileAuthority<'a> {
 }
 
 /// Typed native facts retained with the generation, never emitted per model turn.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
 pub enum AgentProfileDiagnostic {
     Tool(ToolSelectionError),
     SkillUnavailable { name: String },
@@ -121,6 +129,14 @@ pub struct ResolvedAgentProfile {
     pub diagnostics: Vec<AgentProfileDiagnostic>,
 }
 
+pub(crate) fn is_dispatcher(definition: &ToolDefinition, workflows: &BTreeSet<WorkflowId>) -> bool {
+    definition.origin == ToolOrigin::Builtin
+        && (definition.id == crate::tools::native::subagent_tool_id()
+            || workflows
+                .iter()
+                .any(|id| definition.id == crate::tools::native::workflow_tool_id(id)))
+}
+
 /// Well-formed but unavailable selection warns and suppresses. Dynamic
 /// invocation authorization must check its requested replacement separately.
 #[must_use]
@@ -137,7 +153,8 @@ pub fn resolve_agent_profile(
                 .tools
                 .tools()
                 .iter()
-                .map(|entry| &entry.definition),
+                .map(|entry| &entry.definition)
+                .filter(|definition| !is_dispatcher(definition, authority.workflows)),
             authority.availability,
         ) {
             Ok(selected) => {
@@ -221,5 +238,393 @@ pub fn resolve_agent_profile(
         project_instructions: profile.project_instructions.clone(),
         workspace_policy: profile.workspace_policy,
         diagnostics,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capabilities::selection::{SourceResolutionFailure, ToolSelectionDocument};
+    use crate::capabilities::{CapabilitySourceState, ToolSourceId};
+    use crate::local_runtime::config::AgentProfileDocument;
+    use crate::runtime::identity::{McpServerId, ToolId};
+
+    fn available() -> AvailableToolCatalog {
+        AvailableToolCatalog::metadata(
+            crate::tools::native::definitions(
+                crate::tools::native::NativeToolPolicies::default(),
+                &crate::runtime::subagent::AgentCatalog::empty(),
+            )
+            .into_iter()
+            .map(|(definition, _)| definition),
+        )
+    }
+    fn profile(names: &[&str]) -> AgentProfile {
+        AgentProfile::from_document(
+            &AgentProfileDocument {
+                tools: ToolSelectionDocument {
+                    builtin: names.iter().map(|name| (*name).into()).collect(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            Vec::new(),
+        )
+        .unwrap()
+    }
+    fn resolve(
+        profile: &AgentProfile,
+        tools: &AvailableToolCatalog,
+        availability: &CapabilityAvailability,
+        scope: AgentScope,
+    ) -> ResolvedAgentProfile {
+        resolve_agent_profile(
+            profile,
+            &AgentProfileAuthority {
+                tools,
+                availability,
+                skills: &SkillSnapshot::new(Vec::new()),
+                agents: &BTreeSet::from([SubagentName::parse("reviewer").unwrap()]),
+                workflows: &BTreeSet::new(),
+                scope,
+            },
+        )
+    }
+    #[test]
+    fn cfg273_root_and_named_share_tools_skills_extensions_and_keep_independent_authority() {
+        let tools = available();
+        let mut root = profile(&["read"]);
+        root.agents.insert(SubagentName::parse("reviewer").unwrap());
+        let mut child = profile(&["read", "grep"]);
+        child.skills = vec!["missing".into()];
+        child.extensions = crate::extensions::NativeAgentExtensionSelection {
+            todo: Some(crate::extensions::TodoExtensionDocument::default()),
+            ..Default::default()
+        }
+        .resolve();
+        let root = resolve(
+            &root,
+            &tools,
+            &CapabilityAvailability::new(),
+            AgentScope::Root,
+        );
+        let named = resolve(
+            &child,
+            &tools,
+            &CapabilityAvailability::new(),
+            AgentScope::OneShotChild,
+        );
+        let same_as_root = resolve(
+            &child,
+            &tools,
+            &CapabilityAvailability::new(),
+            AgentScope::Root,
+        );
+        assert_eq!(named, same_as_root);
+        assert!(
+            root.agents
+                .contains(&SubagentName::parse("reviewer").unwrap())
+        );
+        assert!(named.tools.iter().any(|tool| tool.name == "grep"));
+        assert!(!root.tools.iter().any(|tool| tool.name == "grep"));
+        assert!(named.skills.is_empty());
+        assert_eq!(
+            named.diagnostics,
+            [AgentProfileDiagnostic::SkillUnavailable {
+                name: "missing".into()
+            }]
+        );
+        assert!(named.extensions.todo().is_some());
+    }
+    #[test]
+    fn cfg273_missing_builtin_and_catalog_selections_warn_in_canonical_order() {
+        let mut profile = profile(&["read", "missing"]);
+        profile.skills = vec!["zeta".into(), "alpha".into()];
+        profile.agents = ["zeta", "alpha"]
+            .map(|name| SubagentName::parse(name).unwrap())
+            .into();
+        profile.workflows = ["zeta", "alpha"]
+            .map(|name| WorkflowId::parse(name).unwrap())
+            .into();
+        let first = resolve(
+            &profile,
+            &available(),
+            &CapabilityAvailability::new(),
+            AgentScope::Root,
+        );
+        profile.tools.reverse();
+        profile.skills.reverse();
+        let second = resolve(
+            &profile,
+            &available(),
+            &CapabilityAvailability::new(),
+            AgentScope::Root,
+        );
+        assert_eq!(first, second);
+        assert_eq!(first.tools.len(), 1);
+        assert_eq!(first.diagnostics.len(), 7);
+        assert!(matches!(
+            first.diagnostics[0],
+            AgentProfileDiagnostic::Tool(ToolSelectionError::UnknownCapability { .. })
+        ));
+        assert_eq!(
+            first.diagnostics[1],
+            AgentProfileDiagnostic::SkillUnavailable {
+                name: "alpha".into()
+            }
+        );
+        assert!(first.agents.is_empty());
+        assert!(first.workflows.is_empty());
+    }
+    #[test]
+    fn cfg273_source_failures_are_distinct_and_selection_cannot_activate_sources() {
+        let source = ToolSourceId::Mcp(McpServerId::new("github"));
+        let mut profile = profile(&[]);
+        profile.tools.push(AgentToolSelection::Source {
+            source_id: source.clone(),
+            name: "get_diff".into(),
+        });
+        let states = [
+            (None, SourceResolutionFailure::Undefined),
+            (
+                Some(CapabilitySourceState::Inactive {
+                    activation: crate::capabilities::activation::SourceActivation::Disabled,
+                }),
+                SourceResolutionFailure::Inactive(
+                    crate::capabilities::activation::SourceActivation::Disabled,
+                ),
+            ),
+            (
+                Some(CapabilitySourceState::Inactive {
+                    activation: crate::capabilities::activation::SourceActivation::Untrusted,
+                }),
+                SourceResolutionFailure::Inactive(
+                    crate::capabilities::activation::SourceActivation::Untrusted,
+                ),
+            ),
+            (
+                Some(CapabilitySourceState::Unprepared),
+                SourceResolutionFailure::Unprepared,
+            ),
+            (
+                Some(CapabilitySourceState::Unavailable {
+                    reason: "offline".into(),
+                }),
+                SourceResolutionFailure::Unavailable {
+                    reason: "offline".into(),
+                },
+            ),
+        ];
+        for (state, expected) in states {
+            let availability: CapabilityAvailability = state
+                .map(|state| (source.clone(), state))
+                .into_iter()
+                .collect();
+            let before = availability.clone();
+            let resolved = resolve(&profile, &available(), &availability, AgentScope::Root);
+            assert!(resolved.tools.is_empty());
+            assert!(
+                matches!(&resolved.diagnostics[0], AgentProfileDiagnostic::Tool(ToolSelectionError::SourceUnavailable { reason, .. }) if *reason == expected)
+            );
+            assert_eq!(availability, before);
+        }
+        let ready = [(source.clone(), CapabilitySourceState::Ready)].into();
+        let missing = resolve(&profile, &available(), &ready, AgentScope::Root);
+        assert_eq!(
+            missing.diagnostics,
+            [AgentProfileDiagnostic::Tool(
+                ToolSelectionError::ExactToolAbsent {
+                    source,
+                    name: "get_diff".into()
+                }
+            )]
+        );
+    }
+    #[test]
+    fn cfg273_scope_ineligible_goal_suppresses_only_the_extension() {
+        let mut profile = profile(&["read"]);
+        let mut extensions = crate::extensions::NativeAgentExtensionsDocument::default();
+        extensions.goal.enabled = true;
+        profile.extensions = extensions.resolve();
+        let root = resolve(
+            &profile,
+            &available(),
+            &CapabilityAvailability::new(),
+            AgentScope::Root,
+        );
+        let child = resolve(
+            &profile,
+            &available(),
+            &CapabilityAvailability::new(),
+            AgentScope::OneShotChild,
+        );
+        assert!(root.extensions.goal().is_some());
+        assert!(child.extensions.goal().is_none());
+        assert_eq!(child.tools, root.tools);
+        assert_eq!(
+            child.diagnostics,
+            [AgentProfileDiagnostic::ScopeUnsupported {
+                capability: "extension:goal".into()
+            }]
+        );
+    }
+    #[test]
+    fn cfg273_resolved_generation_is_owned_and_preserves_host_tool_policy() {
+        let mut definition = available()
+            .definitions()
+            .into_iter()
+            .find(|tool| tool.name == "read")
+            .unwrap();
+        definition.id = ToolId::new("frozen-read");
+        definition.approval_policy = crate::tools::types::ToolApprovalPolicy::Always;
+        let first = resolve(
+            &profile(&["read"]),
+            &AvailableToolCatalog::metadata([definition.clone()]),
+            &CapabilityAvailability::new(),
+            AgentScope::Root,
+        );
+        assert_eq!(first.tools, [definition.clone()]);
+        definition.description = "later publication".into();
+        definition.approval_policy = crate::tools::types::ToolApprovalPolicy::Never;
+        let later = resolve(
+            &profile(&["read"]),
+            &AvailableToolCatalog::metadata([definition]),
+            &CapabilityAvailability::new(),
+            AgentScope::Root,
+        );
+        assert_ne!(first.tools, later.tools);
+        assert_eq!(
+            first.tools[0].approval_policy,
+            crate::tools::types::ToolApprovalPolicy::Always
+        );
+    }
+}
+
+#[cfg(test)]
+mod composition_tests {
+    use super::*;
+    #[test]
+    fn cfg273_delegation_composes_dispatcher_without_granting_child_tools() {
+        let reviewer = SubagentName::parse("reviewer").unwrap();
+        let named = crate::local_runtime::agent_resources::parse("description = 'Review'\ninstructions = 'Review code'\n[tools]\nbuiltin = ['read', 'grep']").unwrap();
+        let catalog = crate::runtime::subagent::AgentCatalog::new([
+            crate::runtime::subagent::NamedAgentDefinition::new(
+                reviewer.clone(),
+                AgentProfile::from_document(&named, Vec::new()).unwrap(),
+                "reviewer.toml".into(),
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+        let definitions = crate::tools::native::definitions(
+            crate::tools::native::NativeToolPolicies::default(),
+            &catalog,
+        )
+        .into_iter()
+        .map(|(definition, _)| definition)
+        .collect::<Vec<_>>();
+        let root = crate::local_runtime::agent_resources::parse(
+            "agents = ['reviewer']\n[tools]\nbuiltin = ['read']",
+        )
+        .unwrap();
+        let selected = crate::capabilities::select_definitions(
+            &definitions.iter().collect::<Vec<_>>(),
+            &crate::capabilities::ToolActivationPolicy {
+                profile: root,
+                admitted_agents: [reviewer].into(),
+                ..Default::default()
+            },
+            &SkillSnapshot::new(Vec::new()),
+            &CapabilityAvailability::new(),
+        )
+        .unwrap();
+        assert!(
+            selected
+                .iter()
+                .any(|tool| tool.id == crate::tools::native::subagent_tool_id())
+        );
+        assert!(selected.iter().any(|tool| tool.name == "read"));
+        assert!(!selected.iter().any(|tool| tool.name == "grep"));
+        assert_eq!(selected.len(), 2);
+    }
+    #[test]
+    fn cfg273_admitted_skill_selection_is_identical_in_root_and_named_scope() {
+        let directory = tempfile::tempdir().unwrap();
+        let skill = directory.path().join("review");
+        std::fs::create_dir(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: review\ndescription: Review code\n---\nReview carefully.\n",
+        )
+        .unwrap();
+        let workspace = crate::tools::workspace::Workspace::new(directory.path()).unwrap();
+        let packages = crate::skills::SkillDiscovery::with_config(
+            &workspace,
+            crate::skills::SkillDiscoveryConfig {
+                automatic_roots: Vec::new(),
+                explicit_paths: vec![skill],
+            },
+        )
+        .discover()
+        .unwrap();
+        let skills = SkillSnapshot::new(packages.into_iter().map(std::sync::Arc::new).collect());
+        let document = crate::local_runtime::agent_resources::parse(
+            "skills = ['review', 'missing']\n[tools]\nbuiltin = ['read']",
+        )
+        .unwrap();
+        let profile = AgentProfile::from_document(&document, Vec::new()).unwrap();
+        let tools = AvailableToolCatalog::metadata(
+            crate::tools::native::definitions(
+                crate::tools::native::NativeToolPolicies::default(),
+                &crate::runtime::subagent::AgentCatalog::empty(),
+            )
+            .into_iter()
+            .map(|(definition, _)| definition),
+        );
+        let mut authority = AgentProfileAuthority {
+            tools: &tools,
+            availability: &CapabilityAvailability::new(),
+            skills: &skills,
+            agents: &BTreeSet::new(),
+            workflows: &BTreeSet::new(),
+            scope: AgentScope::Root,
+        };
+        let root = resolve_agent_profile(&profile, &authority);
+        authority.scope = AgentScope::OneShotChild;
+        let named = resolve_agent_profile(&profile, &authority);
+        assert_eq!(root, named);
+        assert_eq!(root.skills, ["review"]);
+        assert_eq!(
+            root.diagnostics,
+            [AgentProfileDiagnostic::SkillUnavailable {
+                name: "missing".into()
+            }]
+        );
+    }
+    #[test]
+    fn cfg273_known_builtin_unavailable_in_generation_is_suppressed() {
+        let document =
+            crate::local_runtime::agent_resources::parse("[tools]\nbuiltin = ['read']").unwrap();
+        let profile = AgentProfile::from_document(&document, Vec::new()).unwrap();
+        let resolved = resolve_agent_profile(
+            &profile,
+            &AgentProfileAuthority {
+                tools: &AvailableToolCatalog::default(),
+                availability: &CapabilityAvailability::new(),
+                skills: &SkillSnapshot::new(Vec::new()),
+                agents: &BTreeSet::new(),
+                workflows: &BTreeSet::new(),
+                scope: AgentScope::Root,
+            },
+        );
+        assert!(resolved.tools.is_empty());
+        assert_eq!(
+            resolved.diagnostics,
+            [AgentProfileDiagnostic::Tool(
+                ToolSelectionError::UnknownCapability {
+                    selector: "builtin:read".into()
+                }
+            )]
+        );
     }
 }

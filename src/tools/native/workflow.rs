@@ -50,9 +50,15 @@ fn foreground_policy(program: &WorkflowProgram) -> crate::tools::deadline::Foreg
     }
 }
 
+pub(crate) fn tool_id(
+    id: &crate::runtime::workflow::WorkflowId,
+) -> crate::runtime::identity::ToolId {
+    crate::runtime::identity::ToolId::new(format!("tool-workflow-{id}"))
+}
+
 pub(crate) fn definition(program: &WorkflowProgram) -> ToolDefinition {
     ToolDefinition {
-        id: crate::runtime::identity::ToolId::new(format!("tool-workflow-{}", program.id())),
+        id: tool_id(program.id()),
         name: program.id().to_string(),
         description: program.description().to_owned(),
         input_schema: program.input_schema().clone(),

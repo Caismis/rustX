@@ -5525,7 +5525,10 @@ mod tests {
             project_instructions: Vec::new(),
             materialization:
                 crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
-            extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+            extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
+                Default::default(),
+            )
+            .and_todo(),
         }
     }
 

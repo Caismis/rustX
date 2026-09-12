@@ -7215,11 +7215,14 @@ keep_recent_tokens = 0
         let catalog = SessionCatalog::create(
             catalog_root.path(),
             &SessionPersistentState {
-                model: config.model.clone(),
+                model: config.initial_model().clone().clone(),
             },
         )
         .expect("catalog");
-        let supervisor = Arc::new(LocalSessionSupervisor::new(catalog, config.model.clone()));
+        let supervisor = Arc::new(LocalSessionSupervisor::new(
+            catalog,
+            config.initial_model().clone().clone(),
+        ));
         let host = RuntimeClientHost::new_with_session_control(
             RuntimeClientHostConfig {
                 runtime: fixture.runtime.clone(),

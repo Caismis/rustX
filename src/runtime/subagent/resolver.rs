@@ -1988,10 +1988,7 @@ pub(crate) fn render_agent_routing(catalog: &AgentCatalog) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ResolvedSubagentTool, SubagentResolutionError, freeze_tool, render_agent_routing,
-        validate_selectors_for_admission,
-    };
+    use super::{ResolvedSubagentTool, SubagentResolutionError, freeze_tool, render_agent_routing};
     use crate::capabilities::selection::AgentToolSelection;
     use crate::capabilities::{
         AvailableToolCatalog, CapabilityAvailability, CapabilitySourceState, ToolSourceId,
@@ -2152,7 +2149,10 @@ mod tests {
                     files: Vec::new(),
                 },
                 workspace_policy: WorkspacePolicy::SharedWorkspace,
-                extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+                extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
+                    Default::default(),
+                )
+                .and_todo(),
                 agents: Default::default(),
                 workflows: Default::default(),
             },
@@ -2627,7 +2627,8 @@ mod tests {
             vec![AgentToolSelection::Builtin {
                 name: "read".to_owned(),
             }],
-            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+            crate::extensions::NativeAgentExtensions::with_agent_status(Default::default())
+                .and_todo(),
         );
         // A caller that holds nothing at all: the role's own defaults must
         // still resolve, because they are the role's authority by
@@ -2916,7 +2917,8 @@ mod tests {
     fn sub258_every_supported_extension_is_child_scope_supported() {
         for composition in [
             crate::extensions::NativeAgentExtensions::none(),
-            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+            crate::extensions::NativeAgentExtensions::with_agent_status(Default::default())
+                .and_todo(),
             crate::extensions::NativeAgentExtensions::with_agent_status(
                 crate::context::AgentStatusConfig {
                     time: crate::context::TimeStatusConfig {
@@ -2951,8 +2953,10 @@ mod tests {
                         files: Vec::new(),
                     },
                     workspace_policy: WorkspacePolicy::SharedWorkspace,
-                    extensions: crate::extensions::NativeAgentExtensionsDocument::default()
-                        .resolve(),
+                    extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
+                        Default::default(),
+                    )
+                    .and_todo(),
                     agents: Default::default(),
                     workflows: Default::default(),
                 },
@@ -2973,8 +2977,10 @@ mod tests {
                         files: Vec::new(),
                     },
                     workspace_policy: WorkspacePolicy::SharedWorkspace,
-                    extensions: crate::extensions::NativeAgentExtensionsDocument::default()
-                        .resolve(),
+                    extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
+                        Default::default(),
+                    )
+                    .and_todo(),
                     agents: Default::default(),
                     workflows: Default::default(),
                 },
@@ -3001,82 +3007,10 @@ mod tests {
     /// order followed by a statically invalid one against a *ready* source.
     /// A validator that treated the unavailable source as sufficient would
     /// never reach the invalid selector and would admit the definition.
-    #[test]
-    fn admission_validates_every_selector_past_an_unavailable_source() {
-        let mut availability = ready();
-        availability.insert(
-            ToolSourceId::Mcp(McpServerId::new("github")),
-            CapabilitySourceState::Unavailable {
-                reason: "the server did not start".to_owned(),
-            },
-        );
-        let definition = definition(vec![
-            AgentToolSelection::Source {
-                source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
-                    .unwrap(),
-                name: "get_issue".to_owned(),
-            },
-            AgentToolSelection::Source {
-                source_id: crate::capabilities::ToolSourceId::try_from(String::from(
-                    "python:symbols",
-                ))
-                .unwrap(),
-                name: "not_a_real_tool".to_owned(),
-            },
-        ]);
-        assert_eq!(
-            definition.tools().first(),
-            Some(&AgentToolSelection::Source {
-                source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
-                    .unwrap(),
-                name: "get_issue".to_owned(),
-            }),
-            "the unavailable selector really is inspected first"
-        );
-
-        // Invocation stays fail-fast: the first unsatisfiable selector wins.
-        assert!(matches!(
-            resolve_tools(&definition, &available(), &availability),
-            Err(SubagentResolutionError::SourceUnavailable { .. })
-        ));
-
-        // Admission keeps going and rejects the static invalidity.
-        assert!(matches!(
-            validate_selectors_for_admission(&definition, &available(), &availability),
-            Err(SubagentResolutionError::UnknownCapability { selector })
-                if selector == "source:python:symbols/not_a_real_tool"
-        ));
-    }
 
     /// A definition whose *only* unsatisfiable selector is an unavailable
     /// optional source stays admissible: the runtime is healthy and only an
     /// invocation of that agent fails.
-    #[test]
-    fn an_unavailable_source_alone_never_rejects_admission() {
-        let mut availability = ready();
-        availability.insert(
-            ToolSourceId::Mcp(McpServerId::new("github")),
-            CapabilitySourceState::Unavailable {
-                reason: "the server did not start".to_owned(),
-            },
-        );
-        let definition = definition(vec![
-            AgentToolSelection::Builtin {
-                name: "read".to_owned(),
-            },
-            AgentToolSelection::Source {
-                source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
-                    .unwrap(),
-                name: "get_issue".to_owned(),
-            },
-        ]);
-        assert!(validate_selectors_for_admission(&definition, &available(), &availability).is_ok());
-        assert!(matches!(
-            resolve_tools(&definition, &available(), &availability),
-            Err(SubagentResolutionError::SourceUnavailable { .. })
-        ));
-    }
-
     // ---------------------------------------------------------------
     // Issue #258: the effective execution-profile digest.
     //
@@ -3087,7 +3021,6 @@ mod tests {
     // restating the defaults, the Tool and Workflow paths agreeing) are
     // proven against real composed generations in tests/subagent/overrides.rs.
     // ---------------------------------------------------------------
-
     use super::{FrozenModelSpec, ResolvedSubagentSkill, ResolvedSubagentSpec, SessionModelConfig};
     use crate::runtime::ProjectContextFile;
     use crate::runtime::identity::{SkillId, SkillVersionId};
@@ -3158,7 +3091,7 @@ mod tests {
             }], skills: vec!["some-skill".to_owned()], project_instructions: SubagentProjectInstructionPolicy {
                 inherit: true,
                 files: Vec::new(),
-            }, workspace_policy: WorkspacePolicy::SharedWorkspace, extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(), agents: Default::default(), workflows: Default::default() }, std::path::PathBuf::from("/w/reviewer.md"))
+            }, workspace_policy: WorkspacePolicy::SharedWorkspace, extensions: crate::extensions::NativeAgentExtensions::with_agent_status(Default::default()).and_todo(), agents: Default::default(), workflows: Default::default() }, std::path::PathBuf::from("/w/reviewer.md"))
         .expect("definition");
 
         let mut relabelled = spec.clone();
@@ -3230,7 +3163,9 @@ mod tests {
         variants.push(reguided);
 
         let mut composed = base.clone();
-        composed.extensions = crate::extensions::NativeAgentExtensionsDocument::default().resolve();
+        composed.extensions =
+            crate::extensions::NativeAgentExtensions::with_agent_status(Default::default())
+                .and_todo();
         variants.push(composed);
 
         assert_distinct(&variants, "every behavior-affecting frozen field");

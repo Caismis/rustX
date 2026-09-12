@@ -141,7 +141,7 @@ PRIVATE = "SECRET_SENTINEL"
         registry,
         launch.config().clone(),
         super::session::SessionPersistentState {
-            model: launch.config().model.clone(),
+            model: launch.config().initial_model().clone().clone(),
         },
         crate::runtime::identity::ConversationId::new("cfg238"),
         controller.root().join("artifacts"),
@@ -593,9 +593,13 @@ PRIVATE = "SECRET_SENTINEL"
             .is_none(),
         "the prospective next launch reads the edited extension configuration"
     );
-    assert_eq!(next_launch.config().model.model, b.model);
+    assert_eq!(next_launch.config().initial_model().clone().model, b.model);
     assert_eq!(
-        next_launch.config().model.reasoning_profile,
+        next_launch
+            .config()
+            .initial_model()
+            .clone()
+            .reasoning_profile,
         b.reasoning_profile
     );
     let fresh = super::LocalSessionProduct::compose(

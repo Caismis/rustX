@@ -1413,6 +1413,8 @@ pub async fn capability_lease_with(
     for definition in tools.definitions() {
         if let Some(source) = definition.origin.source() {
             tool_activation
+                .profile
+                .tools
                 .sources
                 .entry(source)
                 .or_insert(rustx::capabilities::selection::SourceToolSelection::All);

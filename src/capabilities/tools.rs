@@ -41,7 +41,7 @@ use crate::tools::types::{ToolDefinition, ToolOrigin};
 
 /// Startup activation controls supplied by current runtime/project settings
 /// and CLI options. They are never Session-persisted.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ToolActivationPolicy {
     /// Complete root profile intent, independent of admitted catalogs.
     pub profile: crate::local_runtime::config::AgentProfileDocument,
@@ -56,6 +56,21 @@ pub struct ToolActivationPolicy {
     pub tools: Option<Vec<String>>,
     /// Final subtraction from selection, resolved against applicable identities.
     pub exclude_tools: Vec<String>,
+}
+
+impl Default for ToolActivationPolicy {
+    fn default() -> Self {
+        Self {
+            profile: crate::local_runtime::config::builtin_root_profile(),
+            admitted_agents: BTreeSet::new(),
+            admitted_workflows: BTreeSet::new(),
+            project_files: Vec::new(),
+            no_builtin_tools: false,
+            no_tools: false,
+            tools: None,
+            exclude_tools: Vec::new(),
+        }
+    }
 }
 
 /// The extension that owns `name` as a Tool surface, when one does
@@ -379,9 +394,12 @@ fn apply_cli<'a>(
                 .tools
                 .iter()
                 .any(|selected| selected.id == definition.id)
-                || profile.workflows.iter().any(|id| {
-                    id.as_str() == definition.name && definition.origin == ToolOrigin::Builtin
-                })
+                || profile
+                    .workflows
+                    .iter()
+                    .any(|id| definition.id == crate::tools::native::workflow_tool_id(id))
+                || (!profile.agents.is_empty()
+                    && definition.id == crate::tools::native::subagent_tool_id())
         })
         .collect();
     let mut selected = if policy.no_tools {
@@ -407,7 +425,26 @@ fn apply_cli<'a>(
 mod tests {
     use std::sync::Arc;
 
-    use super::{ToolActivationPolicy, select_tools};
+    use super::ToolActivationPolicy;
+    fn select_tools(
+        available: &[ToolRegistration],
+        extensions: &[ToolRegistration],
+        policy: &ToolActivationPolicy,
+    ) -> Result<(super::AvailableToolCatalog, ToolRegistry), String> {
+        let availability = available
+            .iter()
+            .filter_map(|entry| entry.definition.origin.source())
+            .map(|id| (id, crate::capabilities::CapabilitySourceState::Ready))
+            .collect();
+        super::select_tools(
+            available,
+            extensions,
+            policy,
+            &crate::skills::SkillSnapshot::new(Vec::new()),
+            &availability,
+        )
+        .map(|(catalog, registry, _)| (catalog, registry))
+    }
     use crate::runtime::identity::ToolId;
     use crate::tools::deadline::ToolProgressCapability;
     use crate::tools::executor::{
@@ -450,13 +487,21 @@ mod tests {
 
     fn source_policy() -> ToolActivationPolicy {
         ToolActivationPolicy {
-            sources: [(
-                crate::capabilities::ToolSourceId::Mcp(crate::runtime::identity::McpServerId::new(
-                    "search",
-                )),
-                crate::capabilities::selection::SourceToolSelection::All,
-            )]
-            .into(),
+            profile: crate::local_runtime::config::AgentProfileDocument {
+                tools: crate::capabilities::selection::ToolSelectionDocument {
+                    builtin: crate::local_runtime::config::builtin_root_profile()
+                        .tools
+                        .builtin,
+                    sources: [(
+                        crate::capabilities::ToolSourceId::Mcp(
+                            crate::runtime::identity::McpServerId::new("search"),
+                        ),
+                        crate::capabilities::selection::SourceToolSelection::All,
+                    )]
+                    .into(),
+                },
+                ..crate::local_runtime::config::builtin_root_profile()
+            },
             ..ToolActivationPolicy::default()
         }
     }
@@ -515,7 +560,17 @@ mod tests {
     #[test]
     fn available_and_active_sets_are_distinct_and_selection_is_deterministic() {
         let policy = ToolActivationPolicy {
-            default_tools: Some(vec!["read".to_owned()]),
+            profile: crate::local_runtime::config::AgentProfileDocument {
+                tools: crate::capabilities::selection::ToolSelectionDocument {
+                    builtin: (Some(vec!["read".to_owned()])).unwrap_or_else(|| {
+                        crate::local_runtime::config::builtin_root_profile()
+                            .tools
+                            .builtin
+                    }),
+                    sources: Default::default(),
+                },
+                ..crate::local_runtime::config::builtin_root_profile()
+            },
             ..source_policy()
         };
         let (available, active) =
@@ -539,7 +594,17 @@ mod tests {
             &registrations(),
             &[],
             &ToolActivationPolicy {
-                default_tools: Some(Vec::new()),
+                profile: crate::local_runtime::config::AgentProfileDocument {
+                    tools: crate::capabilities::selection::ToolSelectionDocument {
+                        builtin: (Some(Vec::new())).unwrap_or_else(|| {
+                            crate::local_runtime::config::builtin_root_profile()
+                                .tools
+                                .builtin
+                        }),
+                        sources: Default::default(),
+                    },
+                    ..crate::local_runtime::config::builtin_root_profile()
+                },
                 ..source_policy()
             },
         )
@@ -631,17 +696,25 @@ mod tests {
             &registrations,
             &[],
             &ToolActivationPolicy {
+                profile: crate::local_runtime::config::AgentProfileDocument {
+                    tools: crate::capabilities::selection::ToolSelectionDocument {
+                        builtin: crate::local_runtime::config::builtin_root_profile()
+                            .tools
+                            .builtin,
+                        sources: ["one", "two"]
+                            .map(|id| {
+                                (
+                                    crate::capabilities::ToolSourceId::Mcp(
+                                        crate::runtime::identity::McpServerId::new(id),
+                                    ),
+                                    crate::capabilities::selection::SourceToolSelection::All,
+                                )
+                            })
+                            .into(),
+                    },
+                    ..crate::local_runtime::config::builtin_root_profile()
+                },
                 tools: Some(vec!["duplicate".to_owned()]),
-                sources: ["one", "two"]
-                    .map(|id| {
-                        (
-                            crate::capabilities::ToolSourceId::Mcp(
-                                crate::runtime::identity::McpServerId::new(id),
-                            ),
-                            crate::capabilities::selection::SourceToolSelection::All,
-                        )
-                    })
-                    .into(),
                 ..ToolActivationPolicy::default()
             },
         )
@@ -651,17 +724,25 @@ mod tests {
             &registrations,
             &[],
             &ToolActivationPolicy {
+                profile: crate::local_runtime::config::AgentProfileDocument {
+                    tools: crate::capabilities::selection::ToolSelectionDocument {
+                        builtin: crate::local_runtime::config::builtin_root_profile()
+                            .tools
+                            .builtin,
+                        sources: ["one", "two"]
+                            .map(|id| {
+                                (
+                                    crate::capabilities::ToolSourceId::Mcp(
+                                        crate::runtime::identity::McpServerId::new(id),
+                                    ),
+                                    crate::capabilities::selection::SourceToolSelection::All,
+                                )
+                            })
+                            .into(),
+                    },
+                    ..crate::local_runtime::config::builtin_root_profile()
+                },
                 exclude_tools: vec!["duplicate".to_owned()],
-                sources: ["one", "two"]
-                    .map(|id| {
-                        (
-                            crate::capabilities::ToolSourceId::Mcp(
-                                crate::runtime::identity::McpServerId::new(id),
-                            ),
-                            crate::capabilities::selection::SourceToolSelection::All,
-                        )
-                    })
-                    .into(),
                 ..ToolActivationPolicy::default()
             },
         )

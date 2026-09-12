@@ -753,7 +753,17 @@ mod tests {
             );
             for policy in [
                 ToolActivationPolicy {
-                    default_tools: Some(vec![name.into()]),
+                    profile: crate::local_runtime::config::AgentProfileDocument {
+                        tools: crate::capabilities::selection::ToolSelectionDocument {
+                            builtin: (Some(vec![name.into()])).unwrap_or_else(|| {
+                                crate::local_runtime::config::builtin_root_profile()
+                                    .tools
+                                    .builtin
+                            }),
+                            sources: Default::default(),
+                        },
+                        ..crate::local_runtime::config::builtin_root_profile()
+                    },
                     ..ToolActivationPolicy::default()
                 },
                 ToolActivationPolicy {

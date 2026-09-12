@@ -130,6 +130,9 @@ fn start_failure_result(error: &SubagentStartError) -> ToolExecutionResult {
 
 /// The canonical model-facing name of the intrinsic.
 pub const SUBAGENT_TOOL_NAME: &str = "subagent";
+pub(crate) fn tool_id() -> crate::runtime::identity::ToolId {
+    crate::runtime::identity::ToolId::new("tool-subagent")
+}
 
 /// The tool-owned registration of the `subagent` runtime intrinsic.
 ///
@@ -159,7 +162,7 @@ pub(super) fn definition(catalog: &AgentCatalog) -> Option<ToolDefinition> {
         return None;
     }
     Some(ToolDefinition {
-        id: crate::runtime::identity::ToolId::new("tool-subagent"),
+        id: tool_id(),
         name: SUBAGENT_TOOL_NAME.to_owned(),
         description: format!(
             "Delegate a bounded task to a one-shot child agent runtime. The child runs \
@@ -683,7 +686,7 @@ chat_reasoning_replay = "omit"
             crate::runtime::agent_profile::AgentProfile {
                 description: "Isolated worktree agent.".to_owned(),
                 instructions: "instructions".to_owned(),
-                model: Some(model.clone()),
+                model: Some(SessionModelConfig::of(model.clone())),
                 execution_deadline: None,
                 tools: Vec::new(),
                 skills: Vec::new(),
@@ -731,7 +734,7 @@ chat_reasoning_replay = "omit"
                 capabilities,
             )
             .with_subagent_catalog(AgentCatalog::new([definition]).expect("catalog"))
-            .with_subagent_admissions(BTreeSet::from([isolated]), BTreeSet::new()),
+            .with_test_root_agents(BTreeSet::from([isolated])),
         );
 
         DirtyParentPlane {
@@ -879,7 +882,7 @@ chat_reasoning_replay = "omit"
             crate::runtime::agent_profile::AgentProfile {
                 description: "Read-only reviewer.".to_owned(),
                 instructions: "instructions".to_owned(),
-                model: Some(model.clone()),
+                model: Some(SessionModelConfig::of(model.clone())),
                 execution_deadline: None,
                 tools: vec![AgentToolSelection::Builtin {
                     name: "read".to_owned(),
@@ -946,7 +949,7 @@ chat_reasoning_replay = "omit"
                 capabilities,
             )
             .with_subagent_catalog(AgentCatalog::new([definition]).expect("catalog"))
-            .with_subagent_admissions(BTreeSet::from([reviewer]), BTreeSet::new()),
+            .with_test_root_agents(BTreeSet::from([reviewer])),
         );
 
         DelegationPlane {

@@ -175,9 +175,6 @@ impl SubagentInvocationOverride {
     /// from it without parsing prose.
     pub fn validate_spelling(&self) -> Result<(), SubagentOverrideError> {
         if let Some(selection) = &self.tools {
-            selection
-                .validate_spelling()
-                .map_err(|detail| SubagentOverrideError::InvalidTools { detail })?;
             let selectors = selection.selectors();
             if selectors.len() > MAX_OVERRIDE_TOOLS {
                 return Err(SubagentOverrideError::TooManyTools {
@@ -198,6 +195,9 @@ impl SubagentInvocationOverride {
                     }
                 }
             }
+            selection
+                .validate_spelling()
+                .map_err(|detail| SubagentOverrideError::InvalidTools { detail })?;
         }
         if let Some(skills) = &self.skills {
             if skills.len() > MAX_OVERRIDE_SKILLS {
@@ -363,7 +363,8 @@ mod tests {
                 },
             ],
             vec!["code-review".to_owned()],
-            NativeAgentExtensionsDocument::default().resolve(),
+            crate::extensions::NativeAgentExtensions::with_agent_status(Default::default())
+                .and_todo(),
         )
     }
 
@@ -415,7 +416,8 @@ mod tests {
             "an explicit empty extension selection composes no extension at all"
         );
         assert_eq!(
-            NativeAgentExtensionsDocument::default().resolve(),
+            crate::extensions::NativeAgentExtensions::with_agent_status(Default::default())
+                .and_todo(),
             *role.extensions(),
             "the authored document default is unchanged by the override vocabulary"
         );

@@ -344,7 +344,9 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                         profile: config.agent.clone(),
                         admitted_agents: subagents.names().into_iter().cloned().collect(),
                         admitted_workflows: workflows.definitions().keys().cloned().collect(),
-                        project_files: Vec::new(),
+                        project_files: super::agent_resources::load_profile_files(
+                            &config.agent.agents_md.files,
+                        )?,
                         no_builtin_tools: self.paths.no_builtin_tools,
                         no_tools: self.paths.no_tools,
                         tools: self.paths.tools.clone(),
@@ -1270,7 +1272,12 @@ impl LocalConversationCore {
                 profile: runtime_config.agent.clone(),
                 admitted_agents: subagent_catalog.names().into_iter().cloned().collect(),
                 admitted_workflows: workflows.definitions().keys().cloned().collect(),
-                project_files: Vec::new(),
+                project_files: super::agent_resources::load_profile_files(
+                    &runtime_config.agent.agents_md.files,
+                )
+                .map_err(|error| LocalRuntimeError::Capability {
+                    detail: error.to_string(),
+                })?,
                 no_builtin_tools: paths.no_builtin_tools,
                 no_tools: paths.no_tools,
                 tools: paths.tools.clone(),
@@ -4789,7 +4796,7 @@ mod source_demand_tests {
         ]
         .into();
         assert_eq!(demand(&config, &workflows), expected);
-        config.agent.tools = None;
+        config.agent.tools = Default::default();
         assert_eq!(demand(&config, &workflows), expected);
         // Remove the Agent override: the exact leaf alone still demands github.
         authored["block"]["nodes"]["agent"]

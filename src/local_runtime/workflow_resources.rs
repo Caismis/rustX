@@ -194,10 +194,9 @@ mod tests {
                 std::fs::write(root.join(format!("{name}.yaml")), PROGRAM).unwrap();
             }
             std::fs::write(root.join("incidental.txt"), "invalid YAML: [").unwrap();
-            let document = Vec::new();
             let profiles = super::super::config::SubagentsDocument::default();
             let agents = crate::runtime::subagent::AgentCatalog::empty();
-            let catalog = load(&workspace, &document, &profiles, &agents).unwrap();
+            let catalog = load(&workspace, &profiles, &agents).unwrap();
             assert_eq!(
                 catalog
                     .definitions()
@@ -210,12 +209,9 @@ mod tests {
             for name in names {
                 std::fs::write(root.join(format!("{name}.yaml")), "invalid: [").unwrap();
             }
-            let error = load(&workspace, &document, &profiles, &agents).unwrap_err();
+            let error = load(&workspace, &profiles, &agents).unwrap_err();
             assert_eq!(error.source_file, Some(root.join("alpha.yaml")));
-            assert_eq!(
-                error,
-                load(&workspace, &document, &profiles, &agents).unwrap_err()
-            );
+            assert_eq!(error, load(&workspace, &profiles, &agents).unwrap_err());
             assert_eq!(catalog.definitions().len(), 2);
         }
     }

@@ -285,8 +285,8 @@ impl ProspectiveLaunch {
                 model: self.config.initial_model().model.clone(),
                 reasoning_profile: self.config.initial_model().reasoning_profile.clone(),
             },
-            model_origin: origin("model.model"),
-            reasoning_origin: origin("model.reasoning_profile"),
+            model_origin: origin("agent.model.model"),
+            reasoning_origin: origin("agent.model.reasoning_profile"),
             approval_mode: self.config.approval_mode,
             approval_origin: origin("approval_mode"),
             runtime_root_origin: origin("runtime_root"),
@@ -297,7 +297,7 @@ impl ProspectiveLaunch {
             {
                 SettingOrigin::Cli
             } else {
-                origin("default_tools")
+                origin("agent.tools")
             },
         }
     }
@@ -639,9 +639,9 @@ pub fn analyze(
             model: Some(crate::model::catalog::ModelRef::parse(model).map_err(|e| e.to_string())?),
             ..Default::default()
         });
-        provenance.retain(|key, _| !key.starts_with("model."));
+        provenance.retain(|key, _| !key.starts_with("agent.model."));
         provenance.insert(
-            "model.model".into(),
+            "agent.model.model".into(),
             Origin::Cli {
                 base: launch.clone(),
             },
@@ -655,7 +655,7 @@ pub fn analyze(
     {
         let mut error = LaunchFailure::at(
             Some(user_path.clone()),
-            "model.model",
+            "agent.model.model",
             "no unambiguous default model selected",
             "set model.model in user settings.toml or pass --model provider/model",
             "no unambiguous default model selected".into(),
@@ -945,7 +945,8 @@ pub fn analyze(
         profile: config.agent.clone(),
         admitted_agents: subagents.names().into_iter().cloned().collect(),
         admitted_workflows: workflows.definitions().keys().cloned().collect(),
-        project_files: Vec::new(),
+        project_files: super::agent_resources::load_profile_files(&config.agent.agents_md.files)
+            .map_err(LaunchFailure::resource)?,
         no_tools: locations.no_tools,
         no_builtin_tools: locations.no_builtin_tools,
         tools: locations.tools.clone(),

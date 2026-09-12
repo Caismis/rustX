@@ -322,13 +322,15 @@ impl RuntimeClientFixtureBuilder {
         }
 
         let mut tool_activation = self.tool_activation;
-        tool_activation.sources.insert(
+        tool_activation.profile.tools.sources.insert(
             rustx::capabilities::ToolSourceId::ManagedPython("py-echo".into()),
             rustx::capabilities::selection::SourceToolSelection::All,
         );
         for definition in base_tools.definitions() {
             if let Some(source) = definition.origin.source() {
                 tool_activation
+                    .profile
+                    .tools
                     .sources
                     .entry(source)
                     .or_insert(rustx::capabilities::selection::SourceToolSelection::All);
@@ -336,6 +338,8 @@ impl RuntimeClientFixtureBuilder {
         }
         for id in self.mcp_servers.keys() {
             tool_activation
+                .profile
+                .tools
                 .sources
                 .entry(rustx::capabilities::ToolSourceId::Mcp(id.clone()))
                 .or_insert(rustx::capabilities::selection::SourceToolSelection::All);

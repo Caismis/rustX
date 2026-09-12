@@ -6654,7 +6654,15 @@ mod tests {
                 base_tool_registry: Arc::new(base_tool_registry),
                 extension_tools: tool_runtime.extension_tool_plane(),
                 tool_activation: crate::capabilities::ToolActivationPolicy {
-                    sources: source_selection,
+                    profile: crate::local_runtime::config::AgentProfileDocument {
+                        tools: crate::capabilities::selection::ToolSelectionDocument {
+                            builtin: crate::local_runtime::config::builtin_root_profile()
+                                .tools
+                                .builtin,
+                            sources: source_selection,
+                        },
+                        ..crate::local_runtime::config::builtin_root_profile()
+                    },
                     ..Default::default()
                 },
                 skill_discovery: options.skill_discovery,
@@ -9413,11 +9421,19 @@ mod tests {
             ),
             base_tool_registry: Arc::new(ToolRegistry::new()),
             tool_activation: crate::capabilities::ToolActivationPolicy {
-                sources: [(
-                    crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
-                    crate::capabilities::selection::SourceToolSelection::All,
-                )]
-                .into(),
+                profile: crate::local_runtime::config::AgentProfileDocument {
+                    tools: crate::capabilities::selection::ToolSelectionDocument {
+                        builtin: crate::local_runtime::config::builtin_root_profile()
+                            .tools
+                            .builtin,
+                        sources: [(
+                            crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
+                            crate::capabilities::selection::SourceToolSelection::All,
+                        )]
+                        .into(),
+                    },
+                    ..crate::local_runtime::config::builtin_root_profile()
+                },
                 ..Default::default()
             },
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
@@ -9793,11 +9809,19 @@ mod tests {
             ),
             base_tool_registry: Arc::new(ToolRegistry::new()),
             tool_activation: crate::capabilities::ToolActivationPolicy {
-                sources: [(
-                    crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
-                    crate::capabilities::selection::SourceToolSelection::All,
-                )]
-                .into(),
+                profile: crate::local_runtime::config::AgentProfileDocument {
+                    tools: crate::capabilities::selection::ToolSelectionDocument {
+                        builtin: crate::local_runtime::config::builtin_root_profile()
+                            .tools
+                            .builtin,
+                        sources: [(
+                            crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
+                            crate::capabilities::selection::SourceToolSelection::All,
+                        )]
+                        .into(),
+                    },
+                    ..crate::local_runtime::config::builtin_root_profile()
+                },
                 ..Default::default()
             },
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
@@ -9932,11 +9956,19 @@ mod tests {
             ),
             base_tool_registry: Arc::new(ToolRegistry::new()),
             tool_activation: crate::capabilities::ToolActivationPolicy {
-                sources: [(
-                    crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
-                    crate::capabilities::selection::SourceToolSelection::All,
-                )]
-                .into(),
+                profile: crate::local_runtime::config::AgentProfileDocument {
+                    tools: crate::capabilities::selection::ToolSelectionDocument {
+                        builtin: crate::local_runtime::config::builtin_root_profile()
+                            .tools
+                            .builtin,
+                        sources: [(
+                            crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
+                            crate::capabilities::selection::SourceToolSelection::All,
+                        )]
+                        .into(),
+                    },
+                    ..crate::local_runtime::config::builtin_root_profile()
+                },
                 ..Default::default()
             },
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
@@ -10067,11 +10099,19 @@ mod tests {
             ),
             base_tool_registry: Arc::new(ToolRegistry::new()),
             tool_activation: crate::capabilities::ToolActivationPolicy {
-                sources: [(
-                    crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
-                    crate::capabilities::selection::SourceToolSelection::All,
-                )]
-                .into(),
+                profile: crate::local_runtime::config::AgentProfileDocument {
+                    tools: crate::capabilities::selection::ToolSelectionDocument {
+                        builtin: crate::local_runtime::config::builtin_root_profile()
+                            .tools
+                            .builtin,
+                        sources: [(
+                            crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
+                            crate::capabilities::selection::SourceToolSelection::All,
+                        )]
+                        .into(),
+                    },
+                    ..crate::local_runtime::config::builtin_root_profile()
+                },
                 ..Default::default()
             },
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
@@ -10340,11 +10380,19 @@ mod tests {
             ),
             base_tool_registry: Arc::new(ToolRegistry::new()),
             tool_activation: crate::capabilities::ToolActivationPolicy {
-                sources: [(
-                    crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
-                    crate::capabilities::selection::SourceToolSelection::All,
-                )]
-                .into(),
+                profile: crate::local_runtime::config::AgentProfileDocument {
+                    tools: crate::capabilities::selection::ToolSelectionDocument {
+                        builtin: crate::local_runtime::config::builtin_root_profile()
+                            .tools
+                            .builtin,
+                        sources: [(
+                            crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
+                            crate::capabilities::selection::SourceToolSelection::All,
+                        )]
+                        .into(),
+                    },
+                    ..crate::local_runtime::config::builtin_root_profile()
+                },
                 ..Default::default()
             },
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),

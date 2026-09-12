@@ -259,7 +259,17 @@ async fn lazy_skills_follow_frozen_read_authority_without_changing_discovery() {
             ..rustx::capabilities::ToolActivationPolicy::default()
         },
         rustx::capabilities::ToolActivationPolicy {
-            default_tools: Some(vec!["write".to_owned()]),
+            profile: crate::local_runtime::config::AgentProfileDocument {
+                tools: crate::capabilities::selection::ToolSelectionDocument {
+                    builtin: (Some(vec!["write".to_owned()])).unwrap_or_else(|| {
+                        crate::local_runtime::config::builtin_root_profile()
+                            .tools
+                            .builtin
+                    }),
+                    sources: Default::default(),
+                },
+                ..crate::local_runtime::config::builtin_root_profile()
+            },
             ..rustx::capabilities::ToolActivationPolicy::default()
         },
     ];
@@ -1667,17 +1677,25 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
             base_tool_registry: tools.clone(),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
             tool_activation: rustx::capabilities::ToolActivationPolicy {
-                sources: tools
-                    .definitions()
-                    .into_iter()
-                    .filter_map(|definition| definition.origin.source())
-                    .map(|source| {
-                        (
-                            source,
-                            rustx::capabilities::selection::SourceToolSelection::All,
-                        )
-                    })
-                    .collect(),
+                profile: crate::local_runtime::config::AgentProfileDocument {
+                    tools: crate::capabilities::selection::ToolSelectionDocument {
+                        builtin: crate::local_runtime::config::builtin_root_profile()
+                            .tools
+                            .builtin,
+                        sources: tools
+                            .definitions()
+                            .into_iter()
+                            .filter_map(|definition| definition.origin.source())
+                            .map(|source| {
+                                (
+                                    source,
+                                    rustx::capabilities::selection::SourceToolSelection::All,
+                                )
+                            })
+                            .collect(),
+                    },
+                    ..crate::local_runtime::config::builtin_root_profile()
+                },
                 ..Default::default()
             },
             skill_discovery: rustx::skills::SkillDiscoveryConfig {

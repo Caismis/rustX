@@ -3333,7 +3333,7 @@ chat_reasoning_replay = "omit"
             crate::runtime::agent_profile::AgentProfile {
                 description: "Workflow test reviewer".to_owned(),
                 instructions: instructions.to_owned(),
-                model: Some(model.clone()),
+                model: Some(SessionModelConfig::of(model.clone())),
                 execution_deadline: None,
                 tools: Vec::new(),
                 skills: Vec::new(),
@@ -3373,7 +3373,7 @@ chat_reasoning_replay = "omit"
                 capabilities,
             )
             .with_subagent_catalog(catalog)
-            .with_subagent_admissions(BTreeSet::new(), BTreeSet::from([reviewer]))
+            .with_workflow_admission(BTreeSet::from([reviewer]))
             .with_workflow_catalog(workflow_catalog),
         );
         crate::runtime::subagent::AttemptSubagentContext::new(

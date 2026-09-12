@@ -21,9 +21,34 @@ pub(crate) fn parse(text: &str) -> Result<AgentProfileDocument, String> {
         return Err("Agent resource exceeds 1 MiB".into());
     }
     let document: AgentProfileDocument = crate::toml_authoring::parse(text.as_bytes())?;
-    document.tools.validate_spelling()?;
+    crate::runtime::agent_profile::AgentProfile::from_document(&document, Vec::new())?;
     document.execution_deadline()?;
     Ok(document)
+}
+
+pub(crate) fn load_profile_files(
+    paths: &[PathBuf],
+) -> Result<Vec<ProjectContextFile>, RuntimeResourceLoadError> {
+    if paths.len() > crate::runtime::subagent::catalog::MAX_SUBAGENT_PROJECT_FILES {
+        return Err(RuntimeResourceLoadError::new(
+            "Agent project file count exceeds native bound",
+        ));
+    }
+    paths
+        .iter()
+        .map(|path| {
+            let bytes = crate::bounded_file::read_bounded(path).map_err(|error| {
+                RuntimeResourceLoadError::new(error).at(path, "agent.agents_md.files")
+            })?;
+            let content = String::from_utf8(bytes).map_err(|error| {
+                RuntimeResourceLoadError::new(error.to_string()).at(path, "agent.agents_md.files")
+            })?;
+            Ok(ProjectContextFile {
+                path: path.clone(),
+                content,
+            })
+        })
+        .collect()
 }
 
 fn candidates(

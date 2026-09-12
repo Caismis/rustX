@@ -1169,7 +1169,13 @@ async fn ext259_ordinary_tool_selection_neither_adds_nor_removes_the_extension_t
     for policy in [
         Selection::default(),
         Selection {
-            default_tools: Some(vec!["read".to_owned()]),
+            profile: rustx::local_runtime::config::AgentProfileDocument {
+                tools: rustx::capabilities::selection::ToolSelectionDocument {
+                    builtin: vec!["read".into()],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
             ..Selection::default()
         },
         Selection {
@@ -1261,7 +1267,13 @@ context = { reserve_tokens = 0, keep_recent_tokens = 0 }
     // The CLI-facing ordinary activation policy, on all three of its lists.
     for policy in [
         Selection {
-            default_tools: Some(vec!["todo".to_owned()]),
+            profile: rustx::local_runtime::config::AgentProfileDocument {
+                tools: rustx::capabilities::selection::ToolSelectionDocument {
+                    builtin: vec!["todo".into()],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
             ..Selection::default()
         },
         Selection {

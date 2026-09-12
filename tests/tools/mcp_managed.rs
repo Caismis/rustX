@@ -659,14 +659,24 @@ async fn a_server_failing_at_startup_is_isolated_and_diagnosed() {
             base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
             tool_activation: rustx::capabilities::ToolActivationPolicy {
-                sources: ["crasher", "exportless"]
-                    .map(|package| {
-                        (
-                            rustx::capabilities::ToolSourceId::ManagedPython(package.into()),
-                            rustx::capabilities::selection::SourceToolSelection::All,
-                        )
-                    })
-                    .into(),
+                profile: crate::local_runtime::config::AgentProfileDocument {
+                    tools: crate::capabilities::selection::ToolSelectionDocument {
+                        builtin: crate::local_runtime::config::builtin_root_profile()
+                            .tools
+                            .builtin,
+                        sources: ["crasher", "exportless"]
+                            .map(|package| {
+                                (
+                                    rustx::capabilities::ToolSourceId::ManagedPython(
+                                        package.into(),
+                                    ),
+                                    rustx::capabilities::selection::SourceToolSelection::All,
+                                )
+                            })
+                            .into(),
+                    },
+                    ..crate::local_runtime::config::builtin_root_profile()
+                },
                 ..Default::default()
             },
             // Keep this fixture independent of the developer's HOME.
@@ -816,14 +826,24 @@ def add(a: int, b: int) -> str:
             base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
             tool_activation: rustx::capabilities::ToolActivationPolicy {
-                sources: ["calc"]
-                    .map(|package| {
-                        (
-                            rustx::capabilities::ToolSourceId::ManagedPython(package.into()),
-                            rustx::capabilities::selection::SourceToolSelection::All,
-                        )
-                    })
-                    .into(),
+                profile: crate::local_runtime::config::AgentProfileDocument {
+                    tools: crate::capabilities::selection::ToolSelectionDocument {
+                        builtin: crate::local_runtime::config::builtin_root_profile()
+                            .tools
+                            .builtin,
+                        sources: ["calc"]
+                            .map(|package| {
+                                (
+                                    rustx::capabilities::ToolSourceId::ManagedPython(
+                                        package.into(),
+                                    ),
+                                    rustx::capabilities::selection::SourceToolSelection::All,
+                                )
+                            })
+                            .into(),
+                    },
+                    ..crate::local_runtime::config::builtin_root_profile()
+                },
                 ..Default::default()
             },
             // Keep this fixture independent of the developer's HOME.
@@ -1136,14 +1156,24 @@ def ping() -> str:
             base_tool_registry: Arc::new(base_tool_registry),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
             tool_activation: rustx::capabilities::ToolActivationPolicy {
-                sources: ["healthy", "conflicting"]
-                    .map(|package| {
-                        (
-                            rustx::capabilities::ToolSourceId::ManagedPython(package.into()),
-                            rustx::capabilities::selection::SourceToolSelection::All,
-                        )
-                    })
-                    .into(),
+                profile: crate::local_runtime::config::AgentProfileDocument {
+                    tools: crate::capabilities::selection::ToolSelectionDocument {
+                        builtin: crate::local_runtime::config::builtin_root_profile()
+                            .tools
+                            .builtin,
+                        sources: ["healthy", "conflicting"]
+                            .map(|package| {
+                                (
+                                    rustx::capabilities::ToolSourceId::ManagedPython(
+                                        package.into(),
+                                    ),
+                                    rustx::capabilities::selection::SourceToolSelection::All,
+                                )
+                            })
+                            .into(),
+                    },
+                    ..crate::local_runtime::config::builtin_root_profile()
+                },
                 ..Default::default()
             },
             // Keep this fixture independent of the developer's HOME.

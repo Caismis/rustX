@@ -71,6 +71,7 @@ mod search;
 pub(crate) mod subagent;
 mod support;
 mod todo;
+pub(crate) use subagent::tool_id as subagent_tool_id;
 mod workflow;
 #[cfg(test)]
 pub(crate) use workflow::test_executor as test_workflow_executor;
@@ -86,7 +87,7 @@ pub(crate) use read::ReadTool;
 use registration::NativeToolRegistration;
 
 pub use subagent::SUBAGENT_TOOL_NAME;
-pub(crate) use workflow::definition as workflow_definition;
+pub(crate) use workflow::{definition as workflow_definition, tool_id as workflow_tool_id};
 
 /// Canonical native metadata without constructing any execution resource.
 pub(crate) fn definitions(

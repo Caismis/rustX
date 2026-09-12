@@ -46,7 +46,7 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
             false,
         ),
     ] {
-        selection.sources.insert(
+        selection.profile.tools.sources.insert(
             ToolSourceId::ManagedPython("healthy".into()),
             rustx::capabilities::selection::SourceToolSelection::All,
         );

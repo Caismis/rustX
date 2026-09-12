@@ -1880,12 +1880,12 @@ fn relative_paths_keep_their_document_and_cli_bases() {
     f.project(json!({"subagents":{}}));
     let resolved = f.resolve();
     assert_eq!(
-        resolved.config.skills,
+        resolved.skill_paths,
         [f.host.config_directory.join("user-skills")]
     );
     f.request.skill_paths = vec!["cli-skill".into()];
     assert_eq!(
-        f.resolve().config.skills,
+        f.resolve().skill_paths,
         [f.host.launch_directory.join("cli-skill")]
     );
     for (name, source) in &resolved.role_sources {
@@ -2036,7 +2036,7 @@ async fn minimal_native_composition_and_frozen_launch_ignore_later_config_edits(
     assert_eq!(launch.config.initial_model().model.to_string(), "host/one");
     assert_eq!(launch.config.agent_id.as_str(), "rustx");
     assert!(launch.config.mcp_servers.is_empty());
-    assert!(launch.config.skills.is_empty());
+    assert!(launch.config.agent.skills.is_empty());
     product.runtime().shutdown().await.unwrap();
     assert!(
         resolve(&f.request, &f.host).is_err(),

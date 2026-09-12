@@ -374,7 +374,7 @@ impl Child {
             registry,
             runtime_config.clone(),
             SessionPersistentState {
-                model: runtime_config.model.clone(),
+                model: runtime_config.initial_model().clone().clone(),
             },
             conversation_id,
             artifacts_root,
@@ -532,7 +532,7 @@ async fn compose_session_child(
     let runtime_config =
         CurrentRuntimeConfig::from_toml_slice(&config_bytes).expect("valid runtime config");
     let template = SessionPersistentState {
-        model: runtime_config.model.clone(),
+        model: runtime_config.initial_model().clone().clone(),
     };
     let catalog = match SessionCatalog::open_existing(&paths.runtime_root)
         .expect("open the native Session catalog")
@@ -1223,7 +1223,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 registry,
                 runtime_config.clone(),
                 SessionPersistentState {
-                    model: runtime_config.model.clone(),
+                    model: runtime_config.initial_model().clone().clone(),
                 },
                 ConversationId::new(CONVERSATION),
                 artifacts_root,

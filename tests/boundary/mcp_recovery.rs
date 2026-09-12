@@ -109,11 +109,19 @@ async fn recovery_capability(
         base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
         extension_tools: tool_runtime.extension_tool_plane(),
         tool_activation: rustx::capabilities::ToolActivationPolicy {
-            sources: [(
-                rustx::capabilities::ToolSourceId::Mcp(server_id.clone()),
-                rustx::capabilities::selection::SourceToolSelection::All,
-            )]
-            .into(),
+            profile: crate::local_runtime::config::AgentProfileDocument {
+                tools: crate::capabilities::selection::ToolSelectionDocument {
+                    builtin: crate::local_runtime::config::builtin_root_profile()
+                        .tools
+                        .builtin,
+                    sources: [(
+                        rustx::capabilities::ToolSourceId::Mcp(server_id.clone()),
+                        rustx::capabilities::selection::SourceToolSelection::All,
+                    )]
+                    .into(),
+                },
+                ..crate::local_runtime::config::builtin_root_profile()
+            },
             ..Default::default()
         },
         skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
@@ -1915,11 +1923,19 @@ async fn http_capability(
         base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
         extension_tools: tool_runtime.extension_tool_plane(),
         tool_activation: rustx::capabilities::ToolActivationPolicy {
-            sources: [(
-                rustx::capabilities::ToolSourceId::Mcp(server_id.clone()),
-                rustx::capabilities::selection::SourceToolSelection::All,
-            )]
-            .into(),
+            profile: crate::local_runtime::config::AgentProfileDocument {
+                tools: crate::capabilities::selection::ToolSelectionDocument {
+                    builtin: crate::local_runtime::config::builtin_root_profile()
+                        .tools
+                        .builtin,
+                    sources: [(
+                        rustx::capabilities::ToolSourceId::Mcp(server_id.clone()),
+                        rustx::capabilities::selection::SourceToolSelection::All,
+                    )]
+                    .into(),
+                },
+                ..crate::local_runtime::config::builtin_root_profile()
+            },
             ..Default::default()
         },
         skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
@@ -2255,11 +2271,19 @@ fn reload_inputs(
         ),
         base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
         tool_activation: rustx::capabilities::ToolActivationPolicy {
-            sources: [(
-                rustx::capabilities::ToolSourceId::Mcp(server_id.clone()),
-                rustx::capabilities::selection::SourceToolSelection::All,
-            )]
-            .into(),
+            profile: crate::local_runtime::config::AgentProfileDocument {
+                tools: crate::capabilities::selection::ToolSelectionDocument {
+                    builtin: crate::local_runtime::config::builtin_root_profile()
+                        .tools
+                        .builtin,
+                    sources: [(
+                        rustx::capabilities::ToolSourceId::Mcp(server_id.clone()),
+                        rustx::capabilities::selection::SourceToolSelection::All,
+                    )]
+                    .into(),
+                },
+                ..crate::local_runtime::config::builtin_root_profile()
+            },
             ..Default::default()
         },
         skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),

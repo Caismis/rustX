@@ -342,6 +342,43 @@ impl NativeToolsLayer {
 macro_rules! apply {
     ($layer:ident, $target:ident, $($field:ident),* $(,)?) => { $(if let Some(value) = $layer.$field { $target.$field = value; })* }
 }
+pub(super) fn serialize_profile_model<S: serde::Serializer>(
+    model: &Option<SessionModelConfig>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    model
+        .as_ref()
+        .map(|model| ModelLayer {
+            model: Some(model.model.clone()),
+            reasoning_profile: model
+                .reasoning_profile
+                .clone()
+                .map(|name| ReasoningSelection::Profile { name }),
+            request_params_json: Some(RequestParamsJson(model.request_params.clone())),
+            max_output_tokens: model
+                .max_output_tokens
+                .map(|tokens| ModelOutput::Limit { tokens }),
+            summary_model: Some(match &model.summary_model {
+                SummaryModelPolicy::Session => SummaryAuthoring::Session {},
+                SummaryModelPolicy::Explicit {
+                    model,
+                    reasoning_profile,
+                    request_params,
+                    max_output_tokens,
+                } => SummaryAuthoring::Explicit {
+                    model: model.clone(),
+                    reasoning_profile: reasoning_profile
+                        .clone()
+                        .map(|name| ReasoningSelection::Profile { name }),
+                    request_params_json: RequestParamsJson(request_params.clone()),
+                    max_output_tokens: max_output_tokens
+                        .map(|tokens| ModelOutput::Limit { tokens }),
+                },
+            }),
+        })
+        .serialize(serializer)
+}
+
 pub(super) fn deserialize_profile_model<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<SessionModelConfig>, D::Error> {
@@ -397,11 +434,11 @@ impl RuntimeLayer {
             "approval_mode",
             "agent.tools",
             "agent.skills",
-            "model.model",
-            "model.reasoning_profile",
-            "model.request_params_json",
-            "model.max_output_tokens",
-            "model.summary_model",
+            "agent.model.model",
+            "agent.model.reasoning_profile",
+            "agent.model.request_params_json",
+            "agent.model.max_output_tokens",
+            "agent.model.summary_model",
             "context.reserve_tokens",
             "context.keep_recent_tokens",
             "context.summary_output_cap",
@@ -409,12 +446,12 @@ impl RuntimeLayer {
             "model_timeout_policy.stream_idle_timeout_ms",
             "tool_deadline_policy.hard_deadline_ms",
             "tool_deadline_policy.idle_liveness_ms",
-            "extensions.agent_status.enabled",
-            "extensions.agent_status.time.enabled",
-            "extensions.agent_status.time.timezone",
-            "extensions.agent_status.background.enabled",
-            "extensions.todo",
-            "extensions.goal",
+            "agent.extensions.agent_status.enabled",
+            "agent.extensions.agent_status.time.enabled",
+            "agent.extensions.agent_status.time.timezone",
+            "agent.extensions.agent_status.background.enabled",
+            "agent.extensions.todo",
+            "agent.extensions.goal",
             "subagents.max_concurrent",
             "agent.agents",
             "subagents.workflow",
@@ -533,6 +570,7 @@ impl RuntimeLayer {
         self.agent_id = None;
         if let Some(agent) = &mut self.agent {
             agent.model = None;
+            agent.extensions = None;
         }
         self.approval_mode = None;
 
@@ -545,7 +583,9 @@ impl RuntimeLayer {
         config.mcp_tool_policies = resources.mcp_tool_policies;
         config.native_tools = resources.native_tools;
         config.environment = resources.environment;
+        let extensions = config.agent.extensions.clone();
         config.agent = resources.agent;
+        config.agent.extensions = extensions;
         config.subagents = resources.subagents;
     }
 }
@@ -585,10 +625,18 @@ timezone = "Asia/Shanghai"
     fn omission_inherits_and_each_domain_can_explicitly_reset() {
         let (inherited, _) = resolve(LOWER, "");
         assert_eq!(
-            inherited.model.reasoning_profile.unwrap().as_str(),
+            inherited
+                .initial_model()
+                .clone()
+                .reasoning_profile
+                .unwrap()
+                .as_str(),
             "custom"
         );
-        assert_eq!(inherited.model.max_output_tokens, Some(512));
+        assert_eq!(
+            inherited.initial_model().clone().max_output_tokens,
+            Some(512)
+        );
         assert_eq!(inherited.context.summary_output_cap, Some(256));
         assert_eq!(inherited.tool_deadline_policy.idle_liveness_ms, Some(100));
         let (reset, origins) = resolve(
@@ -605,20 +653,25 @@ idle_liveness_ms = { mode = "disabled" }
 timezone = "UTC"
 "#,
         );
-        assert_eq!(reset.model.reasoning_profile, None);
-        assert_eq!(reset.model.max_output_tokens, None);
+        assert_eq!(reset.initial_model().clone().reasoning_profile, None);
+        assert_eq!(reset.initial_model().clone().max_output_tokens, None);
         assert_eq!(reset.context.summary_output_cap, None);
         assert_eq!(reset.tool_deadline_policy.idle_liveness_ms, None);
         assert_eq!(
-            reset.extensions.agent_status.time.effective_timezone(),
+            reset
+                .agent
+                .extensions
+                .agent_status
+                .time
+                .effective_timezone(),
             chrono_tz::UTC
         );
         for field in [
-            "model.reasoning_profile",
-            "model.max_output_tokens",
+            "agent.model.reasoning_profile",
+            "agent.model.max_output_tokens",
             "context.summary_output_cap",
             "tool_deadline_policy.idle_liveness_ms",
-            "extensions.agent_status.time.timezone",
+            "agent.extensions.agent_status.time.timezone",
         ] {
             assert!(matches!(origins[field], Origin::Project { .. }));
         }
@@ -638,10 +691,15 @@ idle_liveness_ms = { mode = "window", milliseconds = 200 }
 "#,
         );
         assert_eq!(
-            config.model.reasoning_profile.unwrap().as_str(),
+            config
+                .initial_model()
+                .clone()
+                .reasoning_profile
+                .unwrap()
+                .as_str(),
             "catalog_default"
         );
-        assert_eq!(config.model.max_output_tokens, Some(1024));
+        assert_eq!(config.initial_model().clone().max_output_tokens, Some(1024));
         assert_eq!(config.context.summary_output_cap, Some(512));
         assert_eq!(config.tool_deadline_policy.idle_liveness_ms, Some(200));
     }
@@ -704,15 +762,20 @@ model = "p/s"
 request_params_json = '''{"vendor":[null,[1,2],{"arbitrary":"yes"}]}'''
 "#).resolve().unwrap();
         assert_eq!(
-            config.model.request_params["future"]["nested"][1],
+            config.initial_model().clone().request_params["future"]["nested"][1],
             serde_json::Value::Null
         );
         assert_eq!(
-            config.model.request_params["future"]["nested"][2]["new"],
+            config.initial_model().clone().request_params["future"]["nested"][2]["new"],
             true
         );
         assert_eq!(
-            config.model.summary_selection().unwrap().request_params["vendor"][0],
+            config
+                .initial_model()
+                .clone()
+                .summary_selection()
+                .unwrap()
+                .request_params["vendor"][0],
             serde_json::Value::Null
         );
         for json in ["null", "[]", "[1]", "42", "true", "\"string\"", "{broken"] {

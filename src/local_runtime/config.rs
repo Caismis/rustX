@@ -155,7 +155,10 @@ pub struct AgentProfileDocument {
     /// The explicit model this agent runs on. Omit to inherit the invoking
     /// attempt's frozen effective model configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde(deserialize_with = "super::authoring::deserialize_profile_model")]
+    #[serde(
+        deserialize_with = "super::authoring::deserialize_profile_model",
+        serialize_with = "super::authoring::serialize_profile_model"
+    )]
     #[schemars(with = "Option<super::authoring::ModelLayer>")]
     pub model: Option<SessionModelConfig>,
     /// The optional maximum wall-clock duration of the complete child
@@ -427,7 +430,6 @@ fn root_builtin_tools() -> Vec<String> {
         "glob",
         "grep",
         "bash",
-        "subagent",
     ]
     .into_iter()
     .map(str::to_owned)
@@ -436,6 +438,22 @@ fn root_builtin_tools() -> Vec<String> {
 
 fn default_agent_id() -> AgentId {
     AgentId::new("rustx")
+}
+
+pub(crate) fn builtin_root_profile() -> AgentProfileDocument {
+    AgentProfileDocument {
+        model: None,
+        extensions: NativeAgentExtensionsDocument {
+            agent_status: crate::extensions::AgentStatusExtensionDocument::default(),
+            todo: crate::extensions::TodoExtensionDocument::default(),
+            goal: crate::extensions::GoalExtensionDocument::default(),
+        },
+        tools: ToolSelectionDocument {
+            builtin: root_builtin_tools(),
+            sources: BTreeMap::new(),
+        },
+        ..AgentProfileDocument::default()
+    }
 }
 
 impl CurrentRuntimeConfig {
@@ -455,16 +473,7 @@ impl CurrentRuntimeConfig {
             approval_mode: ApprovalMode::default(),
             agent: AgentProfileDocument {
                 model: Some(model),
-                extensions: NativeAgentExtensionsDocument {
-                    agent_status: crate::extensions::AgentStatusExtensionDocument::default(),
-                    todo: crate::extensions::TodoExtensionDocument::default(),
-                    goal: crate::extensions::GoalExtensionDocument::default(),
-                },
-                tools: ToolSelectionDocument {
-                    builtin: root_builtin_tools(),
-                    sources: BTreeMap::new(),
-                },
-                ..AgentProfileDocument::default()
+                ..builtin_root_profile()
             },
             context: ContextPolicyDocument::default(),
             model_timeout_policy: ModelTimeoutPolicyDocument::default(),
@@ -526,6 +535,14 @@ impl CurrentRuntimeConfig {
         if self.agent.model.is_none() {
             return Err(CurrentRuntimeConfigError::Invalid {
                 detail: "agent.model.model is required for root".into(),
+            });
+        }
+        crate::runtime::agent_profile::AgentProfile::from_document(&self.agent, Vec::new())
+            .map_err(|detail| CurrentRuntimeConfigError::Invalid { detail })?;
+        if self.agent.worktree.enabled || self.agent.timeout_ms.is_some() {
+            return Err(CurrentRuntimeConfigError::Invalid {
+                detail: "root scope cannot acquire a child worktree or child lifecycle deadline"
+                    .into(),
             });
         }
         self.agent
