@@ -130,7 +130,7 @@ pub(super) fn documents(arguments: &[String]) -> Result<[Vec<u8>; 2], String> {
                 tool_calls: boolean("--tool-calls")?,
                 reasoning: boolean("--reasoning")?,
             },
-            request_params_json: crate::toml_authoring::RequestParamsJson::default(),
+            request_params: crate::toml_authoring::RequestParamsToml::default(),
             reasoning: None,
             compat,
         }
@@ -402,6 +402,18 @@ mod tests {
             HostEnvironment::from_paths(workspace.clone(), root.path().join("home"), None, None)
                 .unwrap();
         let documents = documents(&declarations()).unwrap();
+        let catalog = std::str::from_utf8(&documents[0]).unwrap();
+        assert!(catalog.contains("request_params"));
+        assert!(!catalog.contains("request_params_json"));
+        let authored: crate::model::authoring::Catalog =
+            crate::toml_authoring::parse(&documents[0]).unwrap();
+        assert!(
+            authored.providers.values().next().unwrap().models[0]
+                .request_params
+                .0
+                .is_empty()
+        );
+
         let result = initialize(&host, &documents);
         assert_eq!(
             result.written,

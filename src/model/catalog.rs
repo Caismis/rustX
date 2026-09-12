@@ -34,7 +34,7 @@
 //! Provider wire parameters are opaque ([`crate::model::invocation`] owns
 //! the overlay and protected-key contract). Reasoning is expressed as
 //! model-declared named profiles whose behaviour is exactly their configured
-//! `request_params_json`; the runtime assigns no meaning to a profile name.
+//! `request_params`; the runtime assigns no meaning to a profile name.
 //! Structural translation behaviour lives in the bounded [`ModelCompat`],
 //! which is deliberately *not* a strategy framework and is never inferred
 //! from a hostname. Historical Chat reasoning replay is an explicit
@@ -72,7 +72,7 @@ pub struct ModelId(String);
 ///
 /// The runtime assigns no meaning to the name: `off`, `on`, `low`,
 /// `thinking-32k`, and `deep` are all just names whose wire behaviour is
-/// exactly the profile's configured `request_params_json`.
+/// exactly the profile's configured `request_params`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 #[derive(schemars::JsonSchema)]
@@ -1558,7 +1558,7 @@ impl fmt::Display for ModelCatalogError {
             }
             Self::ProtectedKey { model, key, layer } => write!(
                 f,
-                "model {model} {layer} (request_params_json) declares runtime-owned protected wire key {key:?}"
+                "model {model} {layer} (request_params) declares runtime-owned protected wire key {key:?}"
             ),
             Self::UnknownProvider { provider } => {
                 write!(f, "unknown catalog provider {provider}")

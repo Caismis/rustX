@@ -3790,7 +3790,7 @@ The provider-neutral output limit already exists and is already configured —
 `max_output_tokens` in catalog TOML, overridable per Session, resolved into
 `ResolvedModelInvocation` before the adapter boundary — and provider-native
 reasoning controls already have a home in a model's declared reasoning
-profiles, authored through `request_params_json`, whose decoded parameters an
+profiles, authored through `request_params`, whose decoded parameters an
 adapter maps to its own API. Issue #203
 adds no second output-limit mechanism and no new configuration.
 
@@ -6785,8 +6785,13 @@ explicit typed authority and merge rules produce native configuration before
 runtime composition. Unknown fields and malformed documents fail completely.
 Settings edits preserve TOML comments and unrelated allowed values while retaining
 persistent sibling locking, revision checks, staged validation, and same-directory
-atomic publication. Provider-native JSON is authored only as `request_params_json`
-strings and remains opaque JSON after parsing. Fixed Workflow programs use YAML;
+atomic publication. Provider-native JSON is authored only as `request_params`
+tables, normalized once by `RequestParamsToml` in `toml_authoring` into opaque
+JSON objects before protected-key validation, shallow overlays and admission.
+Only strings, integers, finite floats, booleans, arrays and tables are supported;
+dates, times, datetimes and non-finite floats fail with parameter paths. TOML
+cannot author explicit JSON null; programmatic JSON parameters still can.
+Fixed Workflow programs use YAML;
 model-facing resources use Markdown; wire data and generated schemas use JSON.
 
 #### Native async subagents (Issue #60 / M9.25)
@@ -7922,7 +7927,7 @@ id = "reasoner"
 protocol = "anthropic_messages"
 context_window = 200000
 max_output_tokens = 32000
-request_params_json = "{\"temperature\": 0.7, \"top_k\": 40}"
+request_params = { temperature = 0.7, top_k = 40 }
 
 [providers.gateway.models.capabilities]
 input_modalities = ["text", "image"]
@@ -7935,11 +7940,11 @@ default_profile = "on"
 
 [providers.gateway.models.reasoning.profiles.off]
 enabled = false
-request_params_json = "{\"thinking\": {\"type\": \"disabled\"}, \"temperature\": 0.7}"
+request_params = { thinking = { type = "disabled" }, temperature = 0.7 }
 
 [providers.gateway.models.reasoning.profiles.on]
 enabled = true
-request_params_json = "{\"thinking\": {\"type\": \"enabled\", \"budget_tokens\": 32000}, \"temperature\": 1.0}"
+request_params = { thinking = { type = "enabled", budget_tokens = 32000 }, temperature = 1.0 }
 
 [providers.gateway.models.compat]
 
@@ -7952,7 +7957,7 @@ id = "small"
 protocol = "openai_chat_completions"
 context_window = 32768
 max_output_tokens = 4096
-request_params_json = "{\"min_p\": 0.05, \"repetition_penalty\": 1.1}"
+request_params = { min_p = 0.05, repetition_penalty = 1.1 }
 
 [providers.compat-service.models.capabilities]
 input_modalities = ["text"]
@@ -7984,7 +7989,7 @@ builtin = ["read", "write", "edit", "glob", "grep", "bash"]
 
 [agent.model]
 model = "gateway/reasoner"
-request_params_json = "{\"top_p\": 0.95}"
+request_params = { top_p = 0.95 }
 
 [agent.model.reasoning_profile]
 mode = "profile"
@@ -7997,7 +8002,7 @@ tokens = 8000
 [agent.model.summary_model]
 mode = "explicit"
 model = "compat-service/small"
-request_params_json = "{\"temperature\": 0.1}"
+request_params = { temperature = 0.1 }
 
 [agent.extensions.agent_status]
 enabled = true
@@ -8113,7 +8118,7 @@ TUI.
 
 A session override may not declare a key the selected reasoning profile owns
 (`temperature` above belongs to the `on` profile, so the root profile's
-`agent.model.request_params_json` declares `top_p` instead) and may not declare a runtime-protected wire key.
+`agent.model.request_params` declares `top_p` instead) and may not declare a runtime-protected wire key.
 
 **Process output contract.**
 

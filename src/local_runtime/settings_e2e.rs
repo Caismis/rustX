@@ -60,8 +60,8 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
     let mut model = catalog["providers"]["local"]["models"][0].clone();
     model["capabilities"]["reasoning"] = json!(true);
     model["reasoning"] = json!({"default_profile":"on","profiles": {
-        "on":{"enabled":true,"request_params_json":r#"{"thinking":{"type":"enabled"}}"#},
-        "off":{"enabled":false,"request_params_json":r#"{"thinking":{"type":"disabled"}}"#}
+        "on":{"enabled":true,"request_params":{"thinking":{"type":"enabled"}}},
+        "off":{"enabled":false,"request_params":{"thinking":{"type":"disabled"}}}
     }});
     catalog["providers"]["local"]["models"] = json!(["a", "b", "c"].map(|id| {
         let mut m = model.clone();

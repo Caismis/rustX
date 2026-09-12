@@ -1445,7 +1445,7 @@ id = "model-a"
 protocol = "anthropic_messages"
 context_window = 1000
 max_output_tokens = 64
-request_params_json = "{\"temperature\": 0.9}"
+request_params = { temperature = 0.9 }
 
 [providers.local.models.capabilities]
 input_modalities = ["text"]

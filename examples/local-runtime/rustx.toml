@@ -31,7 +31,9 @@ workflows = ["parallel_review", "implement_and_review"]
 
 [agent.model]
 model = "example/demo-model"
-request_params_json = "{\"temperature\": 0.1}"
+
+[agent.model.request_params]
+temperature = 0.1
 
 [agent.model.reasoning_profile]
 mode = "profile"

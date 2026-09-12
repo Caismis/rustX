@@ -3602,9 +3602,10 @@ the launch-boundary policy inheritance.
 - **Configuration documents are strictly typed TOML.** `settings.toml`,
   `models.toml`, and `rustx.toml` deserialize into snake_case authoring structs.
   Explicit domain choices replace meaningful JSON-null layer behavior. Provider
-  overlays use only `request_params_json`, parsed into arbitrary JSON objects
-  before native validation. Runtime semantic composition never merges dynamic
-  TOML or JSON trees. Generated schemas and wire state remain JSON.
+  overlays use only `request_params`, normalized from JSON-compatible TOML tables
+  into JSON objects before native validation. Dates, times, datetimes and non-finite floats fail
+  with parameter paths. TOML cannot author explicit null; runtime JSON retains it.
+  Runtime semantic composition never merges dynamic TOML or JSON trees. Generated schemas and wire state remain JSON.
 - **Current runtime configuration is recomposed on every launch.**
   `--config <rustx.toml>` is parsed and validated before an existing Session
   catalog is opened. MCP definitions, native Tool policy and activation,

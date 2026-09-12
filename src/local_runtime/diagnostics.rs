@@ -100,8 +100,10 @@ impl LaunchFailure {
     ) -> Self {
         let mut result = Self::at(
             Some(file.into()),
-            "$",
-            if failure.syntax {
+            failure.path.as_deref().unwrap_or("$"),
+            if failure.path.is_some() {
+                "unsupported request parameter value"
+            } else if failure.syntax {
                 "malformed TOML"
             } else {
                 "invalid document shape or unknown field"
@@ -566,7 +568,7 @@ fn redact(value: &mut Value) {
                         | "headers"
                         | "args"
                         | "requestParams"
-                        | "request_params_json"
+                        | "request_params"
                         | "apiKey"
                         | "api_key"
                         | "command"

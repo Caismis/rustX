@@ -1,4 +1,4 @@
-# Explicit provider/model declarations. Provider request overlays are JSON strings.
+# Explicit provider/model declarations. Provider request overlays are structured TOML tables.
 # TOML configuration; fixed Workflows use YAML and model-facing resources use Markdown.
 [providers.example]
 base_url = "https://api.example.invalid/v1"

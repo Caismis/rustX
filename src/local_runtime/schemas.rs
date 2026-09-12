@@ -205,6 +205,22 @@ mod tests {
     }
 
     #[test]
+    fn structured_request_parameter_schemas_are_recursive_objects() {
+        for (name, schema) in super::generate() {
+            if name == "workflow.schema.json" {
+                continue;
+            }
+            assert!(!schema.to_string().contains("request_params_json"));
+            let parameter_schema =
+                json!({"$ref":"#/$defs/RequestParamsToml", "$defs":schema["$defs"]});
+            let validator = jsonschema::validator_for(&parameter_schema).unwrap();
+            assert!(validator.is_valid(&json!({"provider":{"order":["a"],"enabled":true},"documents":[{"title":"A"}],"temperature":0.7})));
+            for value in [json!("text"), json!([]), json!({"nested":[null]})] {
+                assert!(!validator.is_valid(&value));
+            }
+        }
+    }
+    #[test]
     fn cfg235_checked_in_schemas_match_authoritative_generation() {
         for (name, schema) in super::generate() {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
