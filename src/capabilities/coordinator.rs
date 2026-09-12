@@ -371,6 +371,7 @@ pub(crate) struct CommittedCapability {
 /// rejects it as stale when the active revision has advanced.
 #[derive(Debug)]
 pub struct PreparedCapabilityCandidate {
+    resolved_profile: Option<Arc<crate::runtime::agent_profile::ResolvedAgentProfile>>,
     base_revision: CapabilityRevision,
     skills: Arc<SkillSnapshot>,
     python: Option<crate::skills::environments::PythonEnvironment>,
@@ -417,6 +418,10 @@ pub struct PreparedCapabilityCandidate {
 }
 
 impl PreparedCapabilityCandidate {
+    pub fn resolved_profile(&self) -> Option<&crate::runtime::agent_profile::ResolvedAgentProfile> {
+        self.resolved_profile.as_deref()
+    }
+
     /// Settles every physical runtime of a prepared candidate that will
     /// never commit (Issue #145): pre-commit cancellation won the race
     /// against this candidate's completion, so the preparation that owns
@@ -999,14 +1004,17 @@ impl CapabilityCoordinator {
                 .into_iter()
                 .map(|(definition, executor)| ToolRegistration::plain(definition, executor)),
         );
-        let (available_tools, candidate_registry) = select_tools(
+        let (available_tools, candidate_registry, resolved_profile) = select_tools(
             &discovered_tools,
             self.inner.extension_tools.registrations(),
             &inputs.tool_activation,
+            &skills,
+            &availability,
         )
         .map_err(CapabilityPreparationError::ToolActivation)?;
         let candidate_registry = Arc::new(candidate_registry);
         Ok(PreparedCapabilityCandidate {
+            resolved_profile: Some(Arc::new(resolved_profile)),
             base_revision,
             skills,
             python,
@@ -1270,14 +1278,17 @@ impl CapabilityCoordinator {
             .expect("capability resource-input lock poisoned")
             .clone();
         let base_registrations = inputs.base_tool_registry.registrations();
-        let (available_tools, candidate_registry) = select_tools(
+        let (available_tools, candidate_registry, resolved_profile) = select_tools(
             &base_registrations,
             self.inner.extension_tools.registrations(),
             &inputs.tool_activation,
+            &SkillSnapshot::new(Vec::new()),
+            &CapabilityAvailability::new(),
         )
         .map_err(CapabilityPreparationError::ToolActivation)?;
         let candidate_registry = Arc::new(candidate_registry);
         Ok(PreparedCapabilityCandidate {
+            resolved_profile: Some(Arc::new(resolved_profile)),
             base_revision,
             skills: Arc::new(SkillSnapshot::new(Vec::new())),
             python: None,
@@ -1432,30 +1443,22 @@ impl CapabilityCoordinator {
         // Tools are composed alongside it from the extension set its invoking
         // generation froze into `ResolvedSubagentSpec` — never from its
         // ordinary selection, and never from a document it reads itself.
-        let mut selected_sources = BTreeMap::new();
-        for tool in &plan.source_tools {
-            let selection = selected_sources
-                .entry(tool.source_id.clone())
-                .or_insert_with(|| super::selection::SourceToolSelection::Exact(Vec::new()));
-            if let super::selection::SourceToolSelection::Exact(names) = selection {
-                names.push(tool.name.clone());
-            }
-        }
-        let (available_tools, candidate_registry) = match select_tools(
-            &registrations,
-            self.inner.extension_tools.registrations(),
-            &ToolActivationPolicy {
-                sources: selected_sources,
-                ..ToolActivationPolicy::default()
-            },
+        let available_tools = AvailableToolCatalog::new(registrations.clone());
+        let candidate_registry = match ToolRegistry::from_registrations(
+            registrations
+                .into_iter()
+                .chain(self.inner.extension_tools.registrations().iter().cloned()),
         ) {
-            Ok(selected) => selected,
+            Ok(registry) => registry,
             Err(error) => {
                 retire_candidate_runtimes(mcp_runtimes).await;
-                return Err(CapabilityPreparationError::ToolActivation(error));
+                return Err(CapabilityPreparationError::ToolActivation(
+                    error.to_string(),
+                ));
             }
         };
         Ok(PreparedCapabilityCandidate {
+            resolved_profile: None,
             base_revision,
             skills: Arc::new(SkillSnapshot::new(Vec::new())),
             python: None,
@@ -1981,7 +1984,14 @@ impl CapabilityCoordinator {
                     .expect("capability resource-input lock poisoned") = candidate_inputs.clone();
                 let availability_changed =
                     Self::install_availability(&mut state, &candidate.availability);
-                let snapshot = state.snapshot.clone();
+                let snapshot = Arc::new(
+                    state
+                        .snapshot
+                        .as_ref()
+                        .clone()
+                        .with_resolved_profile(candidate.resolved_profile.clone()),
+                );
+                state.snapshot = snapshot.clone();
                 let availability = state.availability.clone();
                 drop(invalidation);
                 if availability_changed && !defers_observation {
@@ -1999,19 +2009,22 @@ impl CapabilityCoordinator {
             let mcp_lease_authority = Arc::new(McpRuntimeLeaseAuthority::from_generations(
                 &candidate.mcp_runtimes,
             ));
-            let snapshot = Arc::new(CapabilitySnapshot::new(
-                self.inner.conversation_id.clone(),
-                self.inner.workspace.root().to_path_buf(),
-                revision,
-                candidate.candidate_registry,
-                candidate.available_tools,
-                candidate.skills,
-                candidate.python,
-                candidate.node,
-                candidate.effective_environment,
-                mcp_lease_authority,
-                Arc::new(candidate.effective_mcp_servers.clone()),
-            ));
+            let snapshot = Arc::new(
+                CapabilitySnapshot::new(
+                    self.inner.conversation_id.clone(),
+                    self.inner.workspace.root().to_path_buf(),
+                    revision,
+                    candidate.candidate_registry,
+                    candidate.available_tools,
+                    candidate.skills,
+                    candidate.python,
+                    candidate.node,
+                    candidate.effective_environment,
+                    mcp_lease_authority,
+                    Arc::new(candidate.effective_mcp_servers.clone()),
+                )
+                .with_resolved_profile(candidate.resolved_profile),
+            );
             // The published physical generation of a carried-forward server
             // is *retained*, not retired: its catalog is still the
             // authoritative last-known-good knowledge and its stable

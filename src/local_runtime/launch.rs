@@ -770,13 +770,8 @@ pub fn analyze(
         )
     };
     let workflows = if trusted {
-        super::workflow_resources::load(
-            &locations.workspace,
-            &config.agent.workflows,
-            &config.subagents,
-            &subagents,
-        )
-        .map_err(LaunchFailure::resource)?
+        super::workflow_resources::load(&locations.workspace, &config.subagents, &subagents)
+            .map_err(LaunchFailure::resource)?
     } else {
         crate::runtime::workflow::WorkflowCatalog::empty()
     };
@@ -843,9 +838,7 @@ pub fn analyze(
         )
     })?;
     let main_subagents = if trusted {
-        subagents
-            .admitted(&config.agent.agents.iter().cloned().collect())
-            .map_err(|e| e.to_string())?
+        subagents.selected_definitions(&config.agent.agents.iter().cloned().collect())
     } else {
         crate::runtime::subagent::AgentCatalog::empty()
     };
@@ -903,22 +896,6 @@ pub fn analyze(
             )
         })
         .collect();
-    for definition in subagents.definitions() {
-        crate::runtime::subagent::resolver::validate_metadata_selectors(
-            definition,
-            &definitions,
-            &availability,
-        )
-        .map_err(|e| {
-            LaunchFailure::at(
-                None,
-                &format!("agents.{}.tools", definition.name()),
-                "invalid local Tool reference",
-                "use a known source-qualified Tool selector",
-                e.to_string(),
-            )
-        })?;
-    }
     // Every Agent node's trusted static invocation override is validated
     // against the same prospective metadata, offline and side-effect free.
     // An unavailable source is tolerated per selector rather than ending the
@@ -960,15 +937,15 @@ pub fn analyze(
                 e.to_string(),
             )
         })?;
-    let mut defaults = config.agent.tools.builtin.clone();
-    defaults.extend(workflows.main().iter().map(ToString::to_string));
     let online = config
         .mcp_servers
         .values()
         .any(|source| source.enabled == Some(true));
     let policy = crate::capabilities::ToolActivationPolicy {
-        sources: config.agent.tools.sources.clone(),
-        default_tools: Some(defaults),
+        profile: config.agent.clone(),
+        admitted_agents: subagents.names().into_iter().cloned().collect(),
+        admitted_workflows: workflows.definitions().keys().cloned().collect(),
+        project_files: Vec::new(),
         no_tools: locations.no_tools,
         no_builtin_tools: locations.no_builtin_tools,
         tools: locations.tools.clone(),
@@ -981,6 +958,8 @@ pub fn analyze(
             crate::capabilities::select_definitions(
                 &definitions.iter().collect::<Vec<_>>(),
                 &policy,
+                &skills,
+                &availability,
             )?
             .into_iter()
             .map(|definition| definition.name.clone())

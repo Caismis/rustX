@@ -3064,7 +3064,7 @@ mod tests {
     use crate::runtime::subagent::process::StagedChild;
     #[cfg(unix)]
     use crate::runtime::subagent::{
-        SubagentDefinition, SubagentProjectInstructionPolicy, SubagentRegistry,
+        NamedAgentDefinition, SubagentProjectInstructionPolicy, SubagentRegistry,
         SubagentRegistryConfig, SubagentSpawnPlan,
     };
     #[cfg(unix)]
@@ -3328,21 +3328,25 @@ chat_reasoning_replay = "omit"
         .expect("workflow test model bindings");
         let model = ModelRef::parse("local/model").expect("workflow test model");
         let reviewer = profile("reviewer");
-        let definition = SubagentDefinition::new(
+        let definition = NamedAgentDefinition::new(
             reviewer.clone(),
-            "Workflow test reviewer".to_owned(),
-            instructions.to_owned(),
-            plane.dir.path().join("reviewer.md"),
-            Some(model.clone()),
-            None,
-            Vec::new(),
-            Vec::new(),
-            SubagentProjectInstructionPolicy {
-                inherit: false,
-                files: Vec::new(),
+            crate::runtime::agent_profile::AgentProfile {
+                description: "Workflow test reviewer".to_owned(),
+                instructions: instructions.to_owned(),
+                model: Some(model.clone()),
+                execution_deadline: None,
+                tools: Vec::new(),
+                skills: Vec::new(),
+                project_instructions: SubagentProjectInstructionPolicy {
+                    inherit: false,
+                    files: Vec::new(),
+                },
+                workspace_policy: workspace_policy,
+                extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+                agents: Default::default(),
+                workflows: Default::default(),
             },
-            workspace_policy,
-            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+            plane.dir.path().join("reviewer.md"),
         )
         .expect("workflow test subagent definition");
         let catalog = crate::runtime::subagent::AgentCatalog::new([definition])

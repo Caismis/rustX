@@ -3,9 +3,7 @@ use super::config::{AgentProfileDocument, SubagentsDocument};
 use crate::runtime::resources::{
     ProjectContextFile, RuntimeResourceLoadError, validate_project_resource_path,
 };
-use crate::runtime::subagent::{
-    AgentCatalog, SubagentDefinition, SubagentName, SubagentProjectInstructionPolicy,
-};
+use crate::runtime::subagent::{AgentCatalog, NamedAgentDefinition, SubagentName};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -98,29 +96,11 @@ pub(crate) fn load(
                 content,
             });
         }
-        let deadline = agent.execution_deadline().map_err(error)?;
+        let profile = crate::runtime::agent_profile::AgentProfile::from_document(&agent, files)
+            .map_err(error)?;
         definitions.push(
-            SubagentDefinition::new(
-                name.clone(),
-                agent.description,
-                agent.instructions.clone(),
-                path.clone(),
-                agent.model.clone(),
-                deadline,
-                agent.tools.selectors(),
-                agent.skills,
-                SubagentProjectInstructionPolicy {
-                    inherit: agent.agents_md.inherit,
-                    files,
-                },
-                agent.worktree.to_policy(),
-                // The role's own closed extension composition, frozen into
-                // its immutable definition and its semantic digest
-                // (Issue #256). The invoking runtime's root extension
-                // configuration is not an input here.
-                agent.extensions.resolve(),
-            )
-            .map_err(|e| error(e.to_string()))?,
+            NamedAgentDefinition::new(name.clone(), profile, path.clone())
+                .map_err(|e| error(e.to_string()))?,
         );
         sources.insert(
             name.clone(),

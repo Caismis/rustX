@@ -255,7 +255,7 @@ impl NativeAgentExtensionsDocument {
     /// This is the **only** transition from mutable configuration to
     /// executed composition. Root composition calls it once, at
     /// `LocalConversationCore::compose`; named-role loading calls it once,
-    /// while building the immutable `SubagentDefinition`.
+    /// while building the immutable `NamedAgentDefinition`.
     #[must_use]
     pub fn resolve(&self) -> NativeAgentExtensions {
         NativeAgentExtensions {
@@ -539,6 +539,11 @@ pub struct NativeAgentExtensions {
 }
 
 impl NativeAgentExtensions {
+    pub(crate) fn without_goal(mut self) -> Self {
+        self.goal = None;
+        self
+    }
+
     /// The composition with no native Agent Extension at all.
     #[must_use]
     pub const fn none() -> Self {

@@ -37,6 +37,8 @@ pub struct CapabilitySnapshot {
     tool_registry: Arc<ToolRegistry>,
     available_tools: Arc<AvailableToolCatalog>,
     skills: Arc<SkillSnapshot>,
+    resolved_profile: Option<Arc<crate::runtime::agent_profile::ResolvedAgentProfile>>,
+    selected_skill_entries: Vec<crate::skills::SkillCatalogEntry>,
     python_environment: Option<PythonEnvironment>,
     node_environment: Option<NodeEnvironment>,
     effective_environment: ToolEnvironment,
@@ -93,6 +95,28 @@ impl core::fmt::Debug for CapabilitySnapshot {
 }
 
 impl CapabilitySnapshot {
+    pub(crate) fn with_resolved_profile(
+        mut self,
+        profile: Option<Arc<crate::runtime::agent_profile::ResolvedAgentProfile>>,
+    ) -> Self {
+        self.selected_skill_entries = self
+            .skills
+            .catalog_entries()
+            .iter()
+            .filter(|entry| {
+                profile
+                    .as_ref()
+                    .is_none_or(|profile| profile.skills.contains(&entry.name))
+            })
+            .cloned()
+            .collect();
+        self.resolved_profile = profile;
+        self
+    }
+    pub fn resolved_profile(&self) -> Option<&crate::runtime::agent_profile::ResolvedAgentProfile> {
+        self.resolved_profile.as_deref()
+    }
+
     /// Builds the immutable snapshot from the prepared candidate pieces.
     #[must_use]
     #[allow(clippy::too_many_arguments)]
@@ -115,7 +139,9 @@ impl CapabilitySnapshot {
             revision,
             tool_registry,
             available_tools,
+            selected_skill_entries: skills.catalog_entries().to_vec(),
             skills,
+            resolved_profile: None,
             python_environment,
             node_environment,
             effective_environment,
@@ -206,7 +232,7 @@ impl CapabilitySnapshot {
     /// Lazy Skill metadata usable under this domain's frozen Tool authority.
     #[must_use]
     pub fn model_skill_entries(&self) -> &[crate::skills::SkillCatalogEntry] {
-        crate::skills::admitted_skill_entries(self.skills.catalog_entries(), &self.tool_registry)
+        crate::skills::admitted_skill_entries(&self.selected_skill_entries, &self.tool_registry)
     }
 
     /// The deterministic `CapabilitiesManifest` data of this snapshot.

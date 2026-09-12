@@ -41,14 +41,13 @@ use crate::tools::types::{ToolDefinition, ToolOrigin};
 
 /// Startup activation controls supplied by current runtime/project settings
 /// and CLI options. They are never Session-persisted.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ToolActivationPolicy {
-    /// Source-qualified main Agent exposure, independent of materialization demand.
-    pub sources:
-        std::collections::BTreeMap<super::ToolSourceId, super::selection::SourceToolSelection>,
-    /// Built-in names selected by default. None selects all applicable
-    /// built-ins; external Tools require explicit source selection.
-    pub default_tools: Option<Vec<String>>,
+    /// Complete root profile intent, independent of admitted catalogs.
+    pub profile: crate::local_runtime::config::AgentProfileDocument,
+    pub admitted_agents: BTreeSet<crate::runtime::subagent::SubagentName>,
+    pub admitted_workflows: BTreeSet<crate::runtime::workflow::WorkflowId>,
+    pub project_files: Vec<crate::runtime::resources::ProjectContextFile>,
     /// Remove all built-ins from default selection, including generated Tools.
     pub no_builtin_tools: bool,
     /// Expose and authorize zero ordinary main-model Tools.
@@ -118,11 +117,7 @@ impl ToolActivationPolicy {
     /// or an entry naming a Tool an Agent Extension owns rather than the
     /// ordinary capability plane (Issue #259).
     pub fn validate(&self) -> Result<(), String> {
-        super::selection::ToolSelectionDocument {
-            builtin: Vec::new(),
-            sources: self.sources.clone(),
-        }
-        .validate_spelling()?;
+        self.profile.tools.validate_spelling()?;
         if let Some((first, second)) = self.conflict() {
             return Err(format!("{first} conflicts with {second}"));
         }
@@ -138,7 +133,10 @@ impl ToolActivationPolicy {
         // `defaultTools: ["todo"]` look like it worked while deciding
         // nothing at all (Issue #259).
         for (names, label) in [
-            (self.default_tools.as_deref(), "default selection"),
+            (
+                Some(self.profile.tools.builtin.as_slice()),
+                "profile selection",
+            ),
             (self.tools.as_deref(), "allowlist"),
             (Some(self.exclude_tools.as_slice()), "exclusion"),
         ] {
@@ -209,6 +207,16 @@ impl PartialEq for AvailableToolCatalog {
 }
 
 impl AvailableToolCatalog {
+    pub(crate) fn metadata(definitions: impl IntoIterator<Item = ToolDefinition>) -> Self {
+        Self {
+            tools: definitions
+                .into_iter()
+                .map(|definition| AvailableTool { definition })
+                .collect(),
+            registrations: Vec::new(),
+        }
+    }
+
     /// Creates an available catalog in deterministic registration order.
     #[must_use]
     pub(crate) fn new(registrations: Vec<ToolRegistration>) -> Self {
@@ -274,7 +282,16 @@ pub(crate) fn select_tools(
     available: &[ToolRegistration],
     extensions: &[ToolRegistration],
     policy: &ToolActivationPolicy,
-) -> Result<(AvailableToolCatalog, ToolRegistry), String> {
+    skills: &crate::skills::SkillSnapshot,
+    availability: &super::CapabilityAvailability,
+) -> Result<
+    (
+        AvailableToolCatalog,
+        ToolRegistry,
+        crate::runtime::agent_profile::ResolvedAgentProfile,
+    ),
+    String,
+> {
     // Validate every candidate before projecting availability. Selection can
     // intentionally hide ordinary tools (`no_tools`, exclusions, or a strict
     // allowlist), but it must never hide an identity collision with a
@@ -291,7 +308,8 @@ pub(crate) fn select_tools(
         .iter()
         .map(|registration| &registration.definition)
         .collect::<Vec<_>>();
-    let selected = select_definitions(&definitions, policy)?;
+    let profile = resolve_profile(&available_catalog, policy, skills, availability)?;
+    let selected = apply_cli(&definitions, &profile, policy)?;
     let registrations = selected
         .into_iter()
         .map(|definition| {
@@ -308,35 +326,64 @@ pub(crate) fn select_tools(
         .chain(extensions.iter().cloned());
     let active = ToolRegistry::from_registrations(registrations)
         .map_err(|error| format!("active Tool selection is invalid: {error}"))?;
-    Ok((available_catalog, active))
+    Ok((available_catalog, active, profile))
 }
 
-/// Apply the same exact selection rules to known metadata, without executors.
+/// Prospective metadata projection uses the same profile boundary as execution.
 pub(crate) fn select_definitions<'a>(
     available: &[&'a ToolDefinition],
     policy: &ToolActivationPolicy,
+    skills: &crate::skills::SkillSnapshot,
+    availability: &super::CapabilityAvailability,
+) -> Result<Vec<&'a ToolDefinition>, String> {
+    let catalog =
+        AvailableToolCatalog::metadata(available.iter().map(|definition| (*definition).clone()));
+    let profile = resolve_profile(&catalog, policy, skills, availability)?;
+    apply_cli(available, &profile, policy)
+}
+fn resolve_profile(
+    available: &AvailableToolCatalog,
+    policy: &ToolActivationPolicy,
+    skills: &crate::skills::SkillSnapshot,
+    availability: &super::CapabilityAvailability,
+) -> Result<crate::runtime::agent_profile::ResolvedAgentProfile, String> {
+    use crate::runtime::agent_profile::{
+        AgentProfile, AgentProfileAuthority, AgentScope, resolve_agent_profile,
+    };
+    let profile = AgentProfile::from_document(&policy.profile, policy.project_files.clone())?;
+    Ok(resolve_agent_profile(
+        &profile,
+        &AgentProfileAuthority {
+            tools: available,
+            availability,
+            skills,
+            agents: &policy.admitted_agents,
+            workflows: &policy.admitted_workflows,
+            scope: AgentScope::Root,
+        },
+    ))
+}
+/// CLI controls are a final restriction of resolved profile exposure.
+fn apply_cli<'a>(
+    available: &[&'a ToolDefinition],
+    profile: &crate::runtime::agent_profile::ResolvedAgentProfile,
+    policy: &ToolActivationPolicy,
 ) -> Result<Vec<&'a ToolDefinition>, String> {
     policy.validate()?;
-    let eligible = available
+    let eligible: Vec<_> = available
         .iter()
         .copied()
-        .filter(|registration| {
-            !policy.no_builtin_tools || !matches!(registration.origin, ToolOrigin::Builtin)
-        })
+        .filter(|definition| !policy.no_builtin_tools || definition.origin != ToolOrigin::Builtin)
         .filter(|definition| {
-            definition
-                .origin
-                .source()
-                .is_none_or(|source| match policy.sources.get(&source) {
-                    Some(super::selection::SourceToolSelection::All) => true,
-                    Some(super::selection::SourceToolSelection::Exact(names)) => {
-                        names.contains(&definition.name)
-                    }
-                    None => false,
+            profile
+                .tools
+                .iter()
+                .any(|selected| selected.id == definition.id)
+                || profile.workflows.iter().any(|id| {
+                    id.as_str() == definition.name && definition.origin == ToolOrigin::Builtin
                 })
         })
-        .collect::<Vec<_>>();
-
+        .collect();
     let mut selected = if policy.no_tools {
         Vec::new()
     } else if let Some(names) = &policy.tools {
@@ -345,39 +392,14 @@ pub(crate) fn select_definitions<'a>(
             .map(|name| resolve_name(&eligible, name, "allowlist"))
             .collect::<Result<Vec<_>, _>>()?
     } else {
-        eligible
-            .iter()
-            .copied()
-            .filter(|registration| {
-                registration.origin.source().map_or_else(
-                    || {
-                        policy
-                            .default_tools
-                            .as_ref()
-                            .is_none_or(|names| names.contains(&registration.name))
-                    },
-                    |source| match policy.sources.get(&source) {
-                        Some(super::selection::SourceToolSelection::All) => true,
-                        Some(super::selection::SourceToolSelection::Exact(names)) => {
-                            names.contains(&registration.name)
-                        }
-                        None => false,
-                    },
-                )
-            })
-            .collect::<Vec<_>>()
+        eligible.clone()
     };
-
-    // Resolve exclusions against applicable availability, even if a default
-    // or an allowlist has already omitted the identity. Ambiguity never
-    // chooses an origin, and a typo never becomes a successful no-op.
     let excluded = policy
         .exclude_tools
         .iter()
-        .map(|name| resolve_name(&eligible, name, "exclusion").map(|entry| &entry.id))
+        .map(|name| resolve_name(available, name, "exclusion").map(|entry| &entry.id))
         .collect::<Result<BTreeSet<_>, _>>()?;
-    selected.retain(|registration| !excluded.contains(&registration.id));
-
+    selected.retain(|definition| !excluded.contains(&definition.id));
     Ok(selected)
 }
 

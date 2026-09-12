@@ -6,8 +6,8 @@
 //! ```text
 //! AgentCatalog (this module)
 //!   owns: the canonical SubagentName keyspace of one generation, the
-//!         immutable SubagentDefinition of each name, and the deterministic
-//!         SubagentDefinitionDigest of each definition
+//!         immutable NamedAgentDefinition of each name, and the deterministic
+//!         NamedAgentDefinitionDigest of each definition
 //!   never owns: capability resolution, model resolution, live child
 //!               lifecycle, capacity, or any mutable runtime-current state
 //! ```
@@ -193,16 +193,16 @@ pub struct SubagentProjectInstructionPolicy {
 /// insertion order cannot change it, while every semantic change does.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct SubagentDefinitionDigest(String);
+pub struct NamedAgentDefinitionDigest(String);
 
-/// The canonical framing version of [`SubagentDefinitionDigest`].
+/// The canonical framing version of [`NamedAgentDefinitionDigest`].
 ///
 /// It is part of the hashed preimage: a later milestone that admits a new
 /// behavior-affecting field bumps this constant, so two framings can never
 /// collide into the same digest.
 pub const SUBAGENT_DEFINITION_DIGEST_VERSION: &str = "rustx-subagent-definition-v4";
 
-impl SubagentDefinitionDigest {
+impl NamedAgentDefinitionDigest {
     /// The stable textual form `sha256:<64 lowercase hex characters>`.
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -210,7 +210,7 @@ impl SubagentDefinitionDigest {
     }
 }
 
-impl core::fmt::Display for SubagentDefinitionDigest {
+impl core::fmt::Display for NamedAgentDefinitionDigest {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(&self.0)
     }
@@ -309,22 +309,18 @@ impl std::error::Error for SubagentExecutionDeadlineError {}
 /// [`SubagentResolver`](super::resolver::SubagentResolver) applies at
 /// invocation time.
 #[derive(Debug, Clone, PartialEq)]
-pub struct SubagentDefinition {
+pub struct NamedAgentDefinition {
     name: SubagentName,
-    description: String,
-    instructions: String,
+    profile: crate::runtime::agent_profile::AgentProfile,
     instructions_source: PathBuf,
-    model: Option<SessionModelConfig>,
-    execution_deadline: Option<SubagentExecutionDeadline>,
-    tools: Vec<AgentToolSelection>,
-    skills: Vec<String>,
-    project_instructions: SubagentProjectInstructionPolicy,
-    workspace_policy: crate::runtime::workspace::WorkspacePolicy,
-    extensions: crate::extensions::NativeAgentExtensions,
-    digest: SubagentDefinitionDigest,
+    digest: NamedAgentDefinitionDigest,
 }
 
-impl SubagentDefinition {
+impl NamedAgentDefinition {
+    pub fn profile(&self) -> &crate::runtime::agent_profile::AgentProfile {
+        &self.profile
+    }
+
     /// Builds one immutable definition from already-loaded resources and
     /// computes its deterministic digest.
     ///
@@ -340,66 +336,44 @@ impl SubagentDefinition {
     #[allow(clippy::too_many_arguments)] // one definition, one construction boundary
     pub fn new(
         name: SubagentName,
-        description: String,
-        instructions: String,
+        profile: crate::runtime::agent_profile::AgentProfile,
         instructions_source: PathBuf,
-        model: Option<SessionModelConfig>,
-        execution_deadline: Option<SubagentExecutionDeadline>,
-        tools: Vec<AgentToolSelection>,
-        skills: Vec<String>,
-        project_instructions: SubagentProjectInstructionPolicy,
-        workspace_policy: crate::runtime::workspace::WorkspacePolicy,
-        extensions: crate::extensions::NativeAgentExtensions,
-    ) -> Result<Self, SubagentDefinitionError> {
+    ) -> Result<Self, NamedAgentDefinitionError> {
+        let crate::runtime::agent_profile::AgentProfile {
+            description,
+            instructions,
+            model,
+            execution_deadline,
+            tools,
+            skills,
+            project_instructions,
+            workspace_policy,
+            extensions,
+            agents,
+            workflows,
+        } = profile;
         if description.trim().is_empty() {
-            return Err(SubagentDefinitionError::EmptyDescription { agent: name });
+            return Err(NamedAgentDefinitionError::EmptyDescription { agent: name });
         }
         if description.len() > MAX_SUBAGENT_DESCRIPTION_BYTES {
-            return Err(SubagentDefinitionError::DescriptionOversized {
+            return Err(NamedAgentDefinitionError::DescriptionOversized {
                 agent: name,
                 bytes: description.len(),
             });
         }
         if instructions.trim().is_empty() {
-            return Err(SubagentDefinitionError::EmptyInstructions { agent: name });
+            return Err(NamedAgentDefinitionError::EmptyInstructions { agent: name });
         }
         if instructions.len() > MAX_SUBAGENT_INSTRUCTIONS_BYTES {
-            return Err(SubagentDefinitionError::InstructionsOversized {
+            return Err(NamedAgentDefinitionError::InstructionsOversized {
                 agent: name,
                 bytes: instructions.len(),
             });
         }
         if project_instructions.files.len() > MAX_SUBAGENT_PROJECT_FILES {
-            return Err(SubagentDefinitionError::TooManyProjectFiles {
+            return Err(NamedAgentDefinitionError::TooManyProjectFiles {
                 agent: name,
                 count: project_instructions.files.len(),
-            });
-        }
-        // Nested delegation is rejected structurally, at the definition
-        // boundary: no admitted definition can name the `subagent`
-        // intrinsic, so no resolution path has to defend against it later.
-        if let Some(selector) = tools.iter().find(|selector| {
-            matches!(
-                selector,
-                AgentToolSelection::Builtin { name }
-                    if name == crate::tools::native::SUBAGENT_TOOL_NAME
-            )
-        }) {
-            return Err(SubagentDefinitionError::RecursiveSelector {
-                agent: name,
-                selector: selector.canonical(),
-            });
-        }
-        if let Some(selector) = tools.iter().find(|selector| {
-            matches!(
-                selector,
-                AgentToolSelection::Builtin { name }
-                    if CHILD_UNSAFE_BUILTIN_TOOLS.contains(&name.as_str())
-            )
-        }) {
-            return Err(SubagentDefinitionError::ChildUnsafeSelector {
-                agent: name,
-                selector: selector.canonical(),
             });
         }
         let mut tools = tools;
@@ -410,7 +384,7 @@ impl SubagentDefinition {
         skills.dedup();
         if let Some(empty) = skills.iter().find(|skill| skill.trim().is_empty()) {
             let _ = empty;
-            return Err(SubagentDefinitionError::EmptySkillSelector { agent: name });
+            return Err(NamedAgentDefinitionError::EmptySkillSelector { agent: name });
         }
         let digest = compute_digest(
             &name,
@@ -426,17 +400,21 @@ impl SubagentDefinition {
         );
         Ok(Self {
             name,
-            description,
-            instructions,
             instructions_source,
-            model,
-            execution_deadline,
-            tools,
-            skills,
-            project_instructions,
-            workspace_policy,
-            extensions,
             digest,
+            profile: crate::runtime::agent_profile::AgentProfile {
+                description,
+                instructions,
+                model,
+                execution_deadline,
+                tools,
+                skills,
+                project_instructions,
+                workspace_policy,
+                extensions,
+                agents,
+                workflows,
+            },
         })
     }
 
@@ -449,13 +427,13 @@ impl SubagentDefinition {
     /// The bounded model-facing routing description.
     #[must_use]
     pub fn description(&self) -> &str {
-        &self.description
+        &self.profile.description
     }
 
     /// The exact child instruction document loaded for this generation.
     #[must_use]
     pub fn instructions(&self) -> &str {
-        &self.instructions
+        &self.profile.instructions
     }
 
     /// The canonical source identity of the instruction document.
@@ -467,38 +445,38 @@ impl SubagentDefinition {
     /// The explicit model selection, when the definition names one.
     #[must_use]
     pub const fn model(&self) -> Option<&SessionModelConfig> {
-        self.model.as_ref()
+        self.profile.model.as_ref()
     }
 
     /// The optional whole-lifecycle execution deadline frozen in this
     /// definition.
     #[must_use]
     pub const fn execution_deadline(&self) -> Option<SubagentExecutionDeadline> {
-        self.execution_deadline
+        self.profile.execution_deadline
     }
 
     /// The canonically ordered typed Tool selectors.
     #[must_use]
     pub fn tools(&self) -> &[AgentToolSelection] {
-        &self.tools
+        &self.profile.tools
     }
 
     /// The canonically ordered exact Skill allowlist.
     #[must_use]
     pub fn skills(&self) -> &[String] {
-        &self.skills
+        &self.profile.skills
     }
 
     /// The project-instruction inheritance policy and explicit resources.
     #[must_use]
     pub const fn project_instructions(&self) -> &SubagentProjectInstructionPolicy {
-        &self.project_instructions
+        &self.profile.project_instructions
     }
 
     /// The resolved project-workspace policy of this definition.
     #[must_use]
     pub const fn workspace_policy(&self) -> crate::runtime::workspace::WorkspacePolicy {
-        self.workspace_policy
+        self.profile.workspace_policy
     }
 
     /// The frozen native Agent Extension composition this role authored.
@@ -507,12 +485,12 @@ impl SubagentDefinition {
     /// extension configuration is not an input here and cannot widen it.
     #[must_use]
     pub const fn extensions(&self) -> &crate::extensions::NativeAgentExtensions {
-        &self.extensions
+        &self.profile.extensions
     }
 
     /// The deterministic semantic identity of this definition.
     #[must_use]
-    pub const fn digest(&self) -> &SubagentDefinitionDigest {
+    pub const fn digest(&self) -> &NamedAgentDefinitionDigest {
         &self.digest
     }
 }
@@ -534,7 +512,7 @@ pub const CHILD_UNSAFE_BUILTIN_TOOLS: [&str; 1] = [crate::tools::executor::EXECU
 
 /// A definition-level validation failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SubagentDefinitionError {
+pub enum NamedAgentDefinitionError {
     /// The routing description is empty.
     EmptyDescription {
         /// The offending agent.
@@ -600,7 +578,7 @@ pub enum SubagentDefinitionError {
     },
 }
 
-impl core::fmt::Display for SubagentDefinitionError {
+impl core::fmt::Display for NamedAgentDefinitionError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::EmptyDescription { agent } => {
@@ -649,7 +627,7 @@ impl core::fmt::Display for SubagentDefinitionError {
     }
 }
 
-impl std::error::Error for SubagentDefinitionError {}
+impl std::error::Error for NamedAgentDefinitionError {}
 
 /// The immutable named-definition catalog of one runtime resource
 /// generation.
@@ -658,10 +636,21 @@ impl std::error::Error for SubagentDefinitionError {}
 /// construction and iteration order is deterministic.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AgentCatalog {
-    agents: BTreeMap<SubagentName, Arc<SubagentDefinition>>,
+    agents: BTreeMap<SubagentName, Arc<NamedAgentDefinition>>,
 }
 
 impl AgentCatalog {
+    pub(crate) fn selected_definitions(&self, names: &BTreeSet<SubagentName>) -> Self {
+        Self {
+            agents: self
+                .agents
+                .iter()
+                .filter(|(name, _)| names.contains(*name))
+                .map(|(name, definition)| (name.clone(), definition.clone()))
+                .collect(),
+        }
+    }
+
     /// The empty catalog: a runtime generation that admits no named agent.
     #[must_use]
     pub fn empty() -> Self {
@@ -672,20 +661,20 @@ impl AgentCatalog {
     ///
     /// # Errors
     ///
-    /// Returns [`SubagentDefinitionError::TooManyDefinitions`] when the set
+    /// Returns [`NamedAgentDefinitionError::TooManyDefinitions`] when the set
     /// exceeds [`MAX_SUBAGENT_DEFINITIONS`].
     pub fn new(
-        definitions: impl IntoIterator<Item = SubagentDefinition>,
-    ) -> Result<Self, SubagentDefinitionError> {
+        definitions: impl IntoIterator<Item = NamedAgentDefinition>,
+    ) -> Result<Self, NamedAgentDefinitionError> {
         let mut agents = BTreeMap::new();
         for definition in definitions {
             let name = definition.name.clone();
             if agents.insert(name.clone(), Arc::new(definition)).is_some() {
-                return Err(SubagentDefinitionError::DuplicateDefinition { name });
+                return Err(NamedAgentDefinitionError::DuplicateDefinition { name });
             }
         }
         if agents.len() > MAX_SUBAGENT_DEFINITIONS {
-            return Err(SubagentDefinitionError::TooManyDefinitions {
+            return Err(NamedAgentDefinitionError::TooManyDefinitions {
                 count: agents.len(),
             });
         }
@@ -706,12 +695,12 @@ impl AgentCatalog {
 
     /// Looks one admitted definition up by canonical name.
     #[must_use]
-    pub fn get(&self, name: &SubagentName) -> Option<&Arc<SubagentDefinition>> {
+    pub fn get(&self, name: &SubagentName) -> Option<&Arc<NamedAgentDefinition>> {
         self.agents.get(name)
     }
 
     /// Every admitted definition in canonical name order.
-    pub fn definitions(&self) -> impl Iterator<Item = &Arc<SubagentDefinition>> {
+    pub fn definitions(&self) -> impl Iterator<Item = &Arc<NamedAgentDefinition>> {
         self.agents.values()
     }
 
@@ -768,7 +757,7 @@ impl std::error::Error for SubagentAdmissionError {}
 ///
 /// The preimage is a line-oriented, length-prefixed encoding of exactly the
 /// semantics that change child behavior. Map/set-like inputs are already
-/// canonically ordered by [`SubagentDefinition::new`], and every variable
+/// canonically ordered by [`NamedAgentDefinition::new`], and every variable
 /// length value is length-prefixed, so no two distinct definitions can frame
 /// to the same preimage by concatenation.
 #[allow(clippy::too_many_arguments)] // the digest framing is the semantic input boundary
@@ -783,7 +772,7 @@ fn compute_digest(
     project_instructions: &SubagentProjectInstructionPolicy,
     workspace_policy: crate::runtime::workspace::WorkspacePolicy,
     extensions: &crate::extensions::NativeAgentExtensions,
-) -> SubagentDefinitionDigest {
+) -> NamedAgentDefinitionDigest {
     let mut hasher = Sha256::new();
     hasher.update(SUBAGENT_DEFINITION_DIGEST_VERSION.as_bytes());
     hasher.update(b"\n");
@@ -864,7 +853,7 @@ fn compute_digest(
         "extensions",
         &extensions.authored_digest_framing(),
     );
-    SubagentDefinitionDigest(format!("sha256:{:x}", hasher.finalize()))
+    NamedAgentDefinitionDigest(format!("sha256:{:x}", hasher.finalize()))
 }
 
 fn field(hasher: &mut Sha256, key: &str, value: &str) {
@@ -882,8 +871,8 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        AgentCatalog, MAX_SUBAGENT_EXECUTION_DEADLINE_MS, SubagentDefinition,
-        SubagentDefinitionError, SubagentExecutionDeadline, SubagentExecutionDeadlineError,
+        AgentCatalog, MAX_SUBAGENT_EXECUTION_DEADLINE_MS, NamedAgentDefinition,
+        NamedAgentDefinitionError, SubagentExecutionDeadline, SubagentExecutionDeadlineError,
         SubagentName, SubagentNameError, SubagentProjectInstructionPolicy,
     };
     use crate::capabilities::selection::AgentToolSelection;
@@ -901,19 +890,23 @@ mod tests {
         name: &str,
         tools: Vec<AgentToolSelection>,
         skills: Vec<String>,
-    ) -> Result<SubagentDefinition, SubagentDefinitionError> {
-        SubagentDefinition::new(
+    ) -> Result<NamedAgentDefinition, NamedAgentDefinitionError> {
+        NamedAgentDefinition::new(
             SubagentName::parse(name).expect("canonical name"),
-            "a description".to_owned(),
-            "instructions".to_owned(),
+            crate::runtime::agent_profile::AgentProfile {
+                description: "a description".to_owned(),
+                instructions: "instructions".to_owned(),
+                model: None,
+                execution_deadline: None,
+                tools: tools,
+                skills: skills,
+                project_instructions: policy(),
+                workspace_policy: WorkspacePolicy::SharedWorkspace,
+                extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+                agents: Default::default(),
+                workflows: Default::default(),
+            },
             std::path::PathBuf::from("/w/.agents/subagents/explore.md"),
-            None,
-            None,
-            tools,
-            skills,
-            policy(),
-            WorkspacePolicy::SharedWorkspace,
-            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
         )
     }
 
@@ -1073,93 +1066,97 @@ mod tests {
     #[test]
     fn instruction_and_project_policy_changes_change_the_digest() {
         let inherit = definition("explore", Vec::new(), Vec::new()).expect("definition");
-        let explicit_only = SubagentDefinition::new(
+        let explicit_only = NamedAgentDefinition::new(
             SubagentName::parse("explore").expect("name"),
-            "a description".to_owned(),
-            "instructions".to_owned(),
-            std::path::PathBuf::from("/w/.agents/subagents/explore.md"),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            SubagentProjectInstructionPolicy {
-                inherit: false,
-                files: Vec::new(),
+            crate::runtime::agent_profile::AgentProfile {
+                description: "a description".to_owned(),
+                instructions: "instructions".to_owned(),
+                model: None,
+                execution_deadline: None,
+                tools: Vec::new(),
+                skills: Vec::new(),
+                project_instructions: SubagentProjectInstructionPolicy {
+                    inherit: false,
+                    files: Vec::new(),
+                },
+                workspace_policy: WorkspacePolicy::SharedWorkspace,
+                extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+                agents: Default::default(),
+                workflows: Default::default(),
             },
-            WorkspacePolicy::SharedWorkspace,
-            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+            std::path::PathBuf::from("/w/.agents/subagents/explore.md"),
         )
         .expect("definition");
-        let with_file = SubagentDefinition::new(
+        let with_file = NamedAgentDefinition::new(
             SubagentName::parse("explore").expect("name"),
-            "a description".to_owned(),
-            "instructions".to_owned(),
-            std::path::PathBuf::from("/w/.agents/subagents/explore.md"),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            SubagentProjectInstructionPolicy {
-                inherit: true,
-                files: vec![ProjectContextFile {
-                    path: std::path::PathBuf::from("/w/.agents/subagents/explore/AGENTS.md"),
-                    content: "explicit".to_owned(),
-                }],
+            crate::runtime::agent_profile::AgentProfile {
+                description: "a description".to_owned(),
+                instructions: "instructions".to_owned(),
+                model: None,
+                execution_deadline: None,
+                tools: Vec::new(),
+                skills: Vec::new(),
+                project_instructions: SubagentProjectInstructionPolicy {
+                    inherit: true,
+                    files: vec![ProjectContextFile {
+                        path: std::path::PathBuf::from("/w/.agents/subagents/explore/AGENTS.md"),
+                        content: "explicit".to_owned(),
+                    }],
+                },
+                workspace_policy: WorkspacePolicy::SharedWorkspace,
+                extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+                agents: Default::default(),
+                workflows: Default::default(),
             },
-            WorkspacePolicy::SharedWorkspace,
-            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+            std::path::PathBuf::from("/w/.agents/subagents/explore.md"),
         )
         .expect("definition");
-        let changed_content = SubagentDefinition::new(
+        let changed_content = NamedAgentDefinition::new(
             SubagentName::parse("explore").expect("name"),
-            "a description".to_owned(),
-            "instructions".to_owned(),
-            std::path::PathBuf::from("/w/.agents/subagents/explore.md"),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            SubagentProjectInstructionPolicy {
-                inherit: true,
-                files: vec![ProjectContextFile {
-                    path: std::path::PathBuf::from("/w/.agents/subagents/explore/AGENTS.md"),
-                    content: "explicit, revised".to_owned(),
-                }],
+            crate::runtime::agent_profile::AgentProfile {
+                description: "a description".to_owned(),
+                instructions: "instructions".to_owned(),
+                model: None,
+                execution_deadline: None,
+                tools: Vec::new(),
+                skills: Vec::new(),
+                project_instructions: SubagentProjectInstructionPolicy {
+                    inherit: true,
+                    files: vec![ProjectContextFile {
+                        path: std::path::PathBuf::from("/w/.agents/subagents/explore/AGENTS.md"),
+                        content: "explicit, revised".to_owned(),
+                    }],
+                },
+                workspace_policy: WorkspacePolicy::SharedWorkspace,
+                extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+                agents: Default::default(),
+                workflows: Default::default(),
             },
-            WorkspacePolicy::SharedWorkspace,
-            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+            std::path::PathBuf::from("/w/.agents/subagents/explore.md"),
         )
         .expect("definition");
-        let changed_instructions = SubagentDefinition::new(
+        let changed_instructions = NamedAgentDefinition::new(
             SubagentName::parse("explore").expect("name"),
-            "a description".to_owned(),
-            "different instructions".to_owned(),
+            crate::runtime::agent_profile::AgentProfile {
+                description: "a description".to_owned(),
+                instructions: "different instructions".to_owned(),
+                model: None,
+                execution_deadline: None,
+                tools: Vec::new(),
+                skills: Vec::new(),
+                project_instructions: policy(),
+                workspace_policy: WorkspacePolicy::SharedWorkspace,
+                extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+                agents: Default::default(),
+                workflows: Default::default(),
+            },
             std::path::PathBuf::from("/w/.agents/subagents/explore.md"),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            policy(),
-            WorkspacePolicy::SharedWorkspace,
-            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
         )
         .expect("definition");
-        let isolated = SubagentDefinition::new(
-            SubagentName::parse("explore").expect("name"),
-            "a description".to_owned(),
-            "instructions".to_owned(),
-            std::path::PathBuf::from("/w/.agents/subagents/explore.md"),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            policy(),
-            // The default isolated definition (Issue #188) is strict.
+        let isolated = NamedAgentDefinition::new(SubagentName::parse("explore").expect("name"), crate::runtime::agent_profile::AgentProfile { description: "a description".to_owned(), instructions: "instructions".to_owned(), model: None, execution_deadline: None, tools: Vec::new(), skills: Vec::new(), project_instructions: policy(), workspace_policy: // The default isolated definition (Issue #188) is strict.
             WorkspacePolicy::GitWorktree {
                 require_clean_parent: true,
-            },
-            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
-        )
+            }, extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(), agents: Default::default(), workflows: Default::default() }, std::path::PathBuf::from("/w/.agents/subagents/explore.md"))
         .expect("definition");
         let mut digests = vec![
             inherit.digest().clone(),
@@ -1176,32 +1173,40 @@ mod tests {
 
     #[test]
     fn the_instruction_source_path_is_not_a_semantic_digest_input() {
-        let here = SubagentDefinition::new(
+        let here = NamedAgentDefinition::new(
             SubagentName::parse("explore").expect("name"),
-            "a description".to_owned(),
-            "instructions".to_owned(),
+            crate::runtime::agent_profile::AgentProfile {
+                description: "a description".to_owned(),
+                instructions: "instructions".to_owned(),
+                model: None,
+                execution_deadline: None,
+                tools: Vec::new(),
+                skills: Vec::new(),
+                project_instructions: policy(),
+                workspace_policy: WorkspacePolicy::SharedWorkspace,
+                extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+                agents: Default::default(),
+                workflows: Default::default(),
+            },
             std::path::PathBuf::from("/w/a.md"),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            policy(),
-            WorkspacePolicy::SharedWorkspace,
-            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
         )
         .expect("definition");
-        let there = SubagentDefinition::new(
+        let there = NamedAgentDefinition::new(
             SubagentName::parse("explore").expect("name"),
-            "a description".to_owned(),
-            "instructions".to_owned(),
+            crate::runtime::agent_profile::AgentProfile {
+                description: "a description".to_owned(),
+                instructions: "instructions".to_owned(),
+                model: None,
+                execution_deadline: None,
+                tools: Vec::new(),
+                skills: Vec::new(),
+                project_instructions: policy(),
+                workspace_policy: WorkspacePolicy::SharedWorkspace,
+                extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+                agents: Default::default(),
+                workflows: Default::default(),
+            },
             std::path::PathBuf::from("/elsewhere/b.md"),
-            None,
-            None,
-            Vec::new(),
-            Vec::new(),
-            policy(),
-            WorkspacePolicy::SharedWorkspace,
-            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
         )
         .expect("definition");
         assert_eq!(
@@ -1232,18 +1237,22 @@ mod tests {
         assert!(serde_json::from_str::<SubagentExecutionDeadline>("\"30s\"").is_err());
 
         let without_deadline = definition("explore", Vec::new(), Vec::new()).expect("definition");
-        let with_deadline = SubagentDefinition::new(
+        let with_deadline = NamedAgentDefinition::new(
             SubagentName::parse("explore").expect("name"),
-            "a description".to_owned(),
-            "instructions".to_owned(),
+            crate::runtime::agent_profile::AgentProfile {
+                description: "a description".to_owned(),
+                instructions: "instructions".to_owned(),
+                model: None,
+                execution_deadline: Some(deadline),
+                tools: Vec::new(),
+                skills: Vec::new(),
+                project_instructions: policy(),
+                workspace_policy: WorkspacePolicy::SharedWorkspace,
+                extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+                agents: Default::default(),
+                workflows: Default::default(),
+            },
             std::path::PathBuf::from("/w/.agents/subagents/explore.md"),
-            None,
-            Some(deadline),
-            Vec::new(),
-            Vec::new(),
-            policy(),
-            WorkspacePolicy::SharedWorkspace,
-            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
         )
         .expect("definition");
         assert_eq!(with_deadline.execution_deadline(), Some(deadline));
@@ -1264,7 +1273,7 @@ mod tests {
                 }],
                 Vec::new(),
             ),
-            Err(SubagentDefinitionError::RecursiveSelector { .. })
+            Err(NamedAgentDefinitionError::RecursiveSelector { .. })
         ));
         assert!(matches!(
             definition(
@@ -1274,7 +1283,7 @@ mod tests {
                 }],
                 Vec::new(),
             ),
-            Err(SubagentDefinitionError::ChildUnsafeSelector { .. })
+            Err(NamedAgentDefinitionError::ChildUnsafeSelector { .. })
         ));
         assert!(
             definition(
@@ -1321,7 +1330,7 @@ mod tests {
             .expect("definitions");
         assert!(matches!(
             AgentCatalog::new(too_many),
-            Err(SubagentDefinitionError::TooManyDefinitions { .. })
+            Err(NamedAgentDefinitionError::TooManyDefinitions { .. })
         ));
     }
 }

@@ -289,17 +289,9 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                 .iter()
                 .cloned()
                 .collect::<BTreeSet<_>>();
-            let main_catalog = subagents
-                .admitted(&main_admission)
-                .map_err(|error| RuntimeResourceLoadError::new(format!("{error}")))?;
-            let workflows = super::workflow_resources::load(
-                &workspace,
-                &config.agent.workflows,
-                &config.subagents,
-                &subagents,
-            )?;
-            let default_tools =
-                default_tools_with_workflows(&config.agent.tools.builtin, &workflows);
+            let main_catalog = subagents.selected_definitions(&main_admission);
+            let workflows =
+                super::workflow_resources::load(&workspace, &config.subagents, &subagents)?;
             let mut registry = ToolRegistry::new();
             register_native_tools(
                 &mut registry,
@@ -349,8 +341,10 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                     ),
                     base_tool_registry: Arc::new(registry),
                     tool_activation: ToolActivationPolicy {
-                        sources: config.agent.tools.sources.clone(),
-                        default_tools: Some(default_tools),
+                        profile: config.agent.clone(),
+                        admitted_agents: subagents.names().into_iter().cloned().collect(),
+                        admitted_workflows: workflows.definitions().keys().cloned().collect(),
+                        project_files: Vec::new(),
                         no_builtin_tools: self.paths.no_builtin_tools,
                         no_tools: self.paths.no_tools,
                         tools: self.paths.tools.clone(),
@@ -375,7 +369,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
             )
             .with_subagent_catalog(subagents);
             let prepared = prepared
-                .with_subagent_admissions(main_admission, workflow_admission)
+                .with_workflow_admission(workflow_admission)
                 .with_workflow_catalog(workflows)
                 .with_managed_python_catalog(managed_python);
             // The catalog is admitted against the very candidate that is
@@ -878,7 +872,7 @@ fn admitted_source_demand(
         }
     }
     for program in workflows.definitions().values() {
-        if !workflows.main().contains(program.id()) {
+        if !config.agent.workflows.contains(program.id()) {
             continue;
         }
         sources.extend(
@@ -900,25 +894,6 @@ fn admitted_source_demand(
         }
     }
     crate::capabilities::source::ToolSourceDemand::new(sources, python)
-}
-
-/// Workflow `main` admission is model-facing capability admission. Include
-/// those concrete Tool names in the normal optional built-in default set so
-/// a discovered Workflow is available without duplicating its id in the
-/// unrelated `defaultTools` selector. Explicit `--no-tools`,
-/// `--no-builtin-tools`, or a strict `--tools` allowlist still has the
-/// existing higher-priority meaning.
-fn default_tools_with_workflows(
-    default_tools: &[String],
-    workflows: &WorkflowCatalog,
-) -> Vec<String> {
-    let mut result = default_tools.to_vec();
-    for id in workflows.main() {
-        if !result.iter().any(|name| name == id.as_str()) {
-            result.push(id.to_string());
-        }
-    }
-    result
 }
 
 pub(crate) fn mcp_bindings_with_authority(
@@ -1185,14 +1160,8 @@ impl LocalConversationCore {
             .iter()
             .cloned()
             .collect::<BTreeSet<_>>();
-        let main_catalog = subagent_catalog
-            .admitted(&main_admission)
-            .map_err(|error| LocalRuntimeError::Capability {
-                detail: error.to_string(),
-            })?;
+        let main_catalog = subagent_catalog.selected_definitions(&main_admission);
         let workflows = paths.workflows.as_ref().clone();
-        let default_tools =
-            default_tools_with_workflows(&runtime_config.agent.tools.builtin, &workflows);
         //
         // The frozen model timeout policy is resolved once here so the
         // parent runtime and every launched subagent child share exactly
@@ -1298,8 +1267,10 @@ impl LocalConversationCore {
             // composition decision of its own.
             extension_tools: tool_runtime.extension_tool_plane(),
             tool_activation: ToolActivationPolicy {
-                sources: runtime_config.agent.tools.sources.clone(),
-                default_tools: Some(default_tools),
+                profile: runtime_config.agent.clone(),
+                admitted_agents: subagent_catalog.names().into_iter().cloned().collect(),
+                admitted_workflows: workflows.definitions().keys().cloned().collect(),
+                project_files: Vec::new(),
                 no_builtin_tools: paths.no_builtin_tools,
                 no_tools: paths.no_tools,
                 tools: paths.tools.clone(),
@@ -1346,7 +1317,7 @@ impl LocalConversationCore {
             candidate,
         )
         .with_subagent_catalog(subagent_catalog)
-        .with_subagent_admissions(main_admission, workflow_admission)
+        .with_workflow_admission(workflow_admission)
         .with_workflow_catalog(workflows)
         .with_managed_python_catalog(paths.managed_python.clone());
         validate_subagent_catalog(&prepared, &registry).map_err(|error| {
@@ -4766,7 +4737,7 @@ mod source_demand_tests {
     use super::*;
     use crate::capabilities::{ToolSourceId, selection::AgentToolSelection};
     use crate::runtime::subagent::{
-        AgentCatalog, SubagentDefinition, SubagentName, SubagentProjectInstructionPolicy,
+        AgentCatalog, NamedAgentDefinition, SubagentName, SubagentProjectInstructionPolicy,
     };
 
     #[test]
@@ -4840,21 +4811,25 @@ mod source_demand_tests {
         let shared = ToolSourceId::ManagedPython("shared".into());
         let unused = ToolSourceId::ManagedPython("unused".into());
         let make = |name: &str, source: ToolSourceId| {
-            SubagentDefinition::new(
+            NamedAgentDefinition::new(
                 SubagentName::parse(name).unwrap(),
-                "Test Agent".into(),
-                "Test instructions".into(),
-                PathBuf::from("instructions.md"),
-                None,
-                None,
-                vec![AgentToolSelection::All { source_id: source }],
-                Vec::new(),
-                SubagentProjectInstructionPolicy {
-                    inherit: false,
-                    files: Vec::new(),
+                crate::runtime::agent_profile::AgentProfile {
+                    description: "Test Agent".into(),
+                    instructions: "Test instructions".into(),
+                    model: None,
+                    execution_deadline: None,
+                    tools: vec![AgentToolSelection::All { source_id: source }],
+                    skills: Vec::new(),
+                    project_instructions: SubagentProjectInstructionPolicy {
+                        inherit: false,
+                        files: Vec::new(),
+                    },
+                    workspace_policy: crate::runtime::workspace::WorkspacePolicy::default(),
+                    extensions: crate::extensions::NativeAgentExtensions::none(),
+                    agents: Default::default(),
+                    workflows: Default::default(),
                 },
-                crate::runtime::workspace::WorkspacePolicy::default(),
-                crate::extensions::NativeAgentExtensions::none(),
+                PathBuf::from("instructions.md"),
             )
             .unwrap()
         };

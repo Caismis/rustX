@@ -19,7 +19,7 @@ use rustx::model::invocation::ModelBindingRegistry;
 use rustx::model::session::SessionModelConfig;
 use rustx::runtime::RuntimeResourceSnapshot;
 use rustx::runtime::subagent::{
-    InvokingAgentAuthority, ResolvedSubagentSpec, ResolvedSubagentTool, SubagentDefinitionDigest,
+    InvokingAgentAuthority, NamedAgentDefinitionDigest, ResolvedSubagentSpec, ResolvedSubagentTool,
     SubagentDomain, SubagentName, SubagentOverrideAuthority, SubagentResolution,
     SubagentResolutionError, SubagentResolver,
 };
@@ -370,7 +370,7 @@ fn explore(builtin: &[&str]) -> serde_json::Value {
     })
 }
 
-fn digest_of(resources: &RuntimeResourceSnapshot, name: &str) -> SubagentDefinitionDigest {
+fn digest_of(resources: &RuntimeResourceSnapshot, name: &str) -> NamedAgentDefinitionDigest {
     resources
         .subagents()
         .get(&agent(name))

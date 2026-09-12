@@ -576,24 +576,28 @@ fn native_context_runtime(model: &Arc<support::fake::FakeModel>) -> rustx::conte
 /// Real generated dispatchers and representative already-prepared MCP
 /// identities enter the same available catalog as the native tools.
 fn selection_registry(fixture: &common::NativeFixture) -> rustx::tools::executor::ToolRegistry {
-    use rustx::runtime::subagent::{AgentCatalog, SubagentDefinition, SubagentName};
+    use rustx::runtime::subagent::{AgentCatalog, NamedAgentDefinition, SubagentName};
     use rustx::runtime::workflow::{WorkflowCatalog, WorkflowId, WorkflowProgram, WorkflowRuntime};
     let plane = support::execution::subagent_plane_for(fixture.runtime.conversation_id().as_str());
-    let catalog = AgentCatalog::new([SubagentDefinition::new(
+    let catalog = AgentCatalog::new([NamedAgentDefinition::new(
         SubagentName::parse("worker").unwrap(),
-        "Worker".into(),
-        "Do the task".into(),
-        "worker.md".into(),
-        None,
-        None,
-        vec![],
-        vec![],
-        rustx::runtime::subagent::SubagentProjectInstructionPolicy {
-            inherit: false,
-            files: vec![],
+        crate::runtime::agent_profile::AgentProfile {
+            description: "Worker".into(),
+            instructions: "Do the task".into(),
+            model: None,
+            execution_deadline: None,
+            tools: vec![],
+            skills: vec![],
+            project_instructions: rustx::runtime::subagent::SubagentProjectInstructionPolicy {
+                inherit: false,
+                files: vec![],
+            },
+            workspace_policy: rustx::runtime::workspace::WorkspacePolicy::default(),
+            extensions: rustx::extensions::NativeAgentExtensionsDocument::default().resolve(),
+            agents: Default::default(),
+            workflows: Default::default(),
         },
-        rustx::runtime::workspace::WorkspacePolicy::default(),
-        rustx::extensions::NativeAgentExtensionsDocument::default().resolve(),
+        "worker.md".into(),
     )
     .unwrap()])
     .unwrap();

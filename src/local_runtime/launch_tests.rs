@@ -504,10 +504,10 @@ async fn cfg236_gated_role_reload_cancels_or_publishes_one_complete_generation()
     let r2 = product.runtime().runtime_resources();
     let role = crate::runtime::subagent::SubagentName::parse("role").unwrap();
     assert_eq!(r2.subagents().get(&role).unwrap().instructions(), "R2 body");
-    assert!(r2.subagent_main_admission().is_empty());
+    assert!(r2.delegatable_agents().is_empty());
     assert!(r2.subagent_workflow_admission().contains(&role));
     assert_eq!(r1.subagents().get(&role).unwrap().instructions(), "R1 body");
-    assert!(r1.subagent_main_admission().contains(&role));
+    assert!(r1.delegatable_agents().contains(&role));
     assert!(r1.subagent_workflow_admission().is_empty());
     product.runtime().shutdown().await.unwrap();
 }

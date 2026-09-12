@@ -171,8 +171,8 @@ pub use activity::{
 };
 pub use catalog::{
     AgentCatalog, CHILD_UNSAFE_BUILTIN_TOOLS, MAX_SUBAGENT_DEFINITIONS,
-    MAX_SUBAGENT_EXECUTION_DEADLINE_MS, SUBAGENT_DEFINITION_DIGEST_VERSION, SubagentAdmissionError,
-    SubagentDefinition, SubagentDefinitionDigest, SubagentDefinitionError,
+    MAX_SUBAGENT_EXECUTION_DEADLINE_MS, NamedAgentDefinition, NamedAgentDefinitionDigest,
+    NamedAgentDefinitionError, SUBAGENT_DEFINITION_DIGEST_VERSION, SubagentAdmissionError,
     SubagentExecutionDeadline, SubagentExecutionDeadlineError, SubagentName, SubagentNameError,
     SubagentProjectInstructionPolicy,
 };
@@ -396,7 +396,7 @@ impl AttemptSubagentContext {
             .inner
             .resources
             .subagents()
-            .admitted(self.inner.resources.subagent_main_admission())
+            .admitted(self.inner.resources.delegatable_agents())
             .unwrap_or_else(|_| AgentCatalog::empty());
         resolver::render_agent_routing(&catalog)
     }
@@ -512,7 +512,7 @@ pub(crate) fn ownership_event(
     child_conversation_id: &ConversationId,
     tool_call_id: &ToolCallId,
     agent: &SubagentName,
-    definition_digest: &SubagentDefinitionDigest,
+    definition_digest: &NamedAgentDefinitionDigest,
     profile_digest: &resolver::SubagentExecutionProfileDigest,
     ownership: SubagentOwnershipKind,
     workspace: &WorkspaceSnapshot,

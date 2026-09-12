@@ -1,6 +1,5 @@
 //! Bounded trusted Workflow source resolution, shared by prospective analysis and reload.
 use crate::runtime::resources::RuntimeResourceLoadError;
-use crate::runtime::workflow::WorkflowId;
 use crate::runtime::workflow::{
     MAX_WORKFLOW_BYTES, WorkflowCatalog, WorkflowCompileError, WorkflowDefinition, WorkflowProgram,
 };
@@ -10,7 +9,6 @@ use std::path::Path;
 #[allow(clippy::too_many_lines)] // One deterministic compile transaction with structured diagnostics.
 pub(crate) fn load(
     workspace: &Path,
-    selection: &[WorkflowId],
     profiles: &super::config::SubagentsDocument,
     agents: &crate::runtime::subagent::AgentCatalog,
 ) -> Result<WorkflowCatalog, RuntimeResourceLoadError> {
@@ -122,7 +120,11 @@ pub(crate) fn load(
         })?;
         programs.push(program);
     }
-    WorkflowCatalog::new(programs, selection.iter().cloned()).map_err(|error| {
+    WorkflowCatalog::new(
+        programs.clone(),
+        programs.iter().map(|program| program.id().clone()),
+    )
+    .map_err(|error| {
         RuntimeResourceLoadError::new(format!("cannot admit Workflow catalog: {error}"))
     })
 }
