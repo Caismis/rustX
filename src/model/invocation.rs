@@ -33,7 +33,7 @@
 //!   -> adapter canonical -> protocol translation
 //!   -> final provider request JSON object
 //!   -> validate protected-key ownership
-//!   -> shallow-overlay effective requestParams
+//!   -> shallow-overlay effective request parameters
 //!   -> HTTP / SDK BYOT
 //! ```
 //!
@@ -98,11 +98,11 @@ pub enum RequestParamsLayer {
 impl fmt::Display for RequestParamsLayer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::ModelDefaults => "model default request_params_json",
-            Self::ReasoningProfile => "reasoning profile request_params_json",
-            Self::SessionOverrides => "session request_params_json overrides",
-            Self::SummaryOverrides => "explicit summary request_params_json overrides",
-            Self::EffectiveRequest => "effective requestParams",
+            Self::ModelDefaults => "model default request parameters",
+            Self::ReasoningProfile => "reasoning profile request parameters",
+            Self::SessionOverrides => "session request-parameter overrides",
+            Self::SummaryOverrides => "explicit summary request-parameter overrides",
+            Self::EffectiveRequest => "effective request parameters",
         })
     }
 }

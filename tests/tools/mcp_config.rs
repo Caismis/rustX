@@ -27,7 +27,9 @@ fn bindings(fragment: &str) -> McpServerBindings {
 }
 
 fn rejection(fragment: &str) -> CurrentRuntimeConfigError {
-    CurrentRuntimeConfig::from_toml_slice(session_toml(fragment).as_bytes())
+    let text = session_toml(fragment);
+    text.parse::<toml_edit::DocumentMut>().expect("valid TOML");
+    CurrentRuntimeConfig::from_toml_slice(text.as_bytes())
         .expect_err("the configuration must be rejected")
 }
 
@@ -259,10 +261,14 @@ fn unsupported_transport_types_are_rejected_with_the_accepted_set() {
 /// A typo must fail startup rather than silently change runtime semantics.
 #[test]
 fn unknown_entry_fields_are_rejected() {
-    let error = rejection(r#""mcpServers": {"exa": {"url": "https://x", "timeoutMs": 5000}}"#);
+    let error = rejection(r#"mcp_servers = { exa = { url = "https://x", timeout_ms = 5000 } }"#);
     assert!(
         matches!(error, CurrentRuntimeConfigError::Syntax { .. }),
         "unexpected error: {error}"
+    );
+    assert!(
+        error.to_string().contains("unknown field `timeout_ms`"),
+        "{error}"
     );
 }
 
@@ -317,20 +323,26 @@ fn embedded_policy_inside_a_connection_entry_is_rejected() {
 
 // ----------------------------------------------------- identity/policy ----
 
-/// Duplicate MCP identity is structurally impossible: a JSON object cannot
-/// yield two entries under one key, so no duplicate check exists anywhere.
+/// Duplicate TOML tables fail before semantic composition can produce bindings.
 #[test]
-fn duplicate_server_identity_cannot_produce_two_bindings() {
-    let bindings = bindings(r#"mcp_servers = { "exa" = { "url" = "https://second" } }"#);
-    let (server_id, binding) = single(&bindings);
-    assert_eq!(server_id.as_str(), "exa");
-    assert_eq!(
-        binding.transport,
-        McpTransportConfig::StreamableHttp {
-            endpoint: "https://second".to_owned(),
-            headers: BTreeMap::new(),
-        }
+fn duplicate_server_tables_are_rejected_before_binding_composition() {
+    let text = session_toml(
+        r#"[mcp_servers.exa]
+url = "https://first"
+
+[mcp_servers.exa]
+url = "https://second""#,
     );
+    let syntax = text
+        .parse::<toml_edit::DocumentMut>()
+        .expect_err("duplicate table");
+    assert!(syntax.message().contains("duplicate"), "{syntax}");
+    let error = CurrentRuntimeConfig::from_toml_slice(text.as_bytes())
+        .and_then(|config| config.mcp_bindings())
+        .expect_err("duplicate identities must produce no bindings");
+    assert!(matches!(error, CurrentRuntimeConfigError::Syntax { .. }));
+    assert!(error.to_string().contains("duplicate"), "{error}");
+    assert!(error.to_string().contains("exa"), "{error}");
 }
 
 /// An empty map key is not a usable server identity.
@@ -430,7 +442,7 @@ mcp_tool_policies = { "typo" = { "execution" = "background_only" } }"#,
 
 // --------------------------------------------------------- determinism ----
 
-/// JSON object insertion order never reaches the normalized binding set: the
+/// TOML declaration order never reaches the normalized binding set: the
 /// keyed representation is the ordering authority.
 #[test]
 fn toml_insertion_order_does_not_affect_the_binding_order() {

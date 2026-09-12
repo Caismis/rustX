@@ -275,17 +275,32 @@ request_params_json = '''{"vendor_reasoning":[null,{"enabled":false}]}'''
         }
         for key in ["model", "messages", "stream"] {
             let protected = format!("{{\"{key}\":null}}");
-            let text = CATALOG.replace(
-                r#"{"future":{"nested":[1,null,{"new":true}]},"temperature":0.1}"#,
-                &protected,
-            );
-            text.parse::<toml_edit::DocumentMut>().expect("valid TOML");
-            let error = ModelCatalog::from_toml_slice(text.as_bytes()).unwrap_err();
-            assert!(matches!(
-                error,
-                crate::model::catalog::ModelCatalogError::ProtectedKey { .. }
-            ));
-            assert!(error.to_string().contains("request_params_json"), "{error}");
+            for (original, layer) in [
+                (
+                    r#"{"future":{"nested":[1,null,{"new":true}]},"temperature":0.1}"#,
+                    "model default",
+                ),
+                (
+                    r#"{"vendor_reasoning":[null,{"enabled":false}]}"#,
+                    "reasoning profile",
+                ),
+            ] {
+                let text = CATALOG.replace(original, &protected);
+                assert_ne!(text, CATALOG);
+                text.parse::<toml_edit::DocumentMut>().expect("valid TOML");
+                let error = ModelCatalog::from_toml_slice(text.as_bytes()).unwrap_err();
+                assert!(matches!(
+                    error,
+                    crate::model::catalog::ModelCatalogError::ProtectedKey { .. }
+                ));
+                let message = error.to_string();
+                assert!(message.contains("request_params_json"), "{message}");
+                assert!(message.contains(layer), "{message}");
+                assert!(
+                    message.contains(&format!("protected wire key {key:?}")),
+                    "{message}"
+                );
+            }
         }
     }
 }

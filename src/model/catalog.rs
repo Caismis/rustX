@@ -1558,7 +1558,7 @@ impl fmt::Display for ModelCatalogError {
             }
             Self::ProtectedKey { model, key, layer } => write!(
                 f,
-                "model {model} {layer} declares runtime-owned protected wire key {key:?}"
+                "model {model} {layer} (request_params_json) declares runtime-owned protected wire key {key:?}"
             ),
             Self::UnknownProvider { provider } => {
                 write!(f, "unknown catalog provider {provider}")
