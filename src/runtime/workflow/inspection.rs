@@ -12,7 +12,7 @@ use serde_json::json;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolDependency {
-    pub selector: crate::capabilities::selection::ToolSelector,
+    pub selector: crate::capabilities::selection::ExactToolSelector,
     pub paths: Vec<String>,
     pub state: DependencyState,
 }
@@ -36,12 +36,12 @@ impl std::fmt::Display for CapabilityError {
 impl WorkflowProgram {
     pub(super) fn selector_paths(
         &self,
-        selector: &crate::capabilities::selection::ToolSelector,
+        selector: &crate::capabilities::selection::ExactToolSelector,
     ) -> Vec<String> {
         fn walk(
             block: &WorkflowBlockProgram,
             path: &str,
-            selector: &crate::capabilities::selection::ToolSelector,
+            selector: &crate::capabilities::selection::ExactToolSelector,
             paths: &mut Vec<String>,
         ) {
             for (id, node) in &block.nodes {
@@ -165,7 +165,7 @@ pub struct WorkflowInspection {
     pub conservative_retained_bytes: usize,
     pub caps: BTreeMap<&'static str, usize>,
     pub blocks: BTreeMap<String, BlockInspection>,
-    pub tools: BTreeSet<crate::capabilities::selection::ToolSelector>,
+    pub tools: BTreeSet<crate::capabilities::selection::ExactToolSelector>,
     pub profiles: BTreeSet<SubagentName>,
 }
 
@@ -188,7 +188,7 @@ pub struct BlockInspection {
 /// materialization secret.
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentOverrideInspection {
-    pub tools: Option<Vec<crate::capabilities::selection::ToolSelector>>,
+    pub tools: Option<Vec<crate::capabilities::selection::AgentToolSelection>>,
     pub skills: Option<Vec<String>>,
     pub extensions: Option<Vec<&'static str>>,
 }
@@ -201,7 +201,7 @@ pub struct NodeInspection {
     pub profile: Option<SubagentName>,
     /// The node's invocation override, when it carries one.
     pub invocation_override: Option<AgentOverrideInspection>,
-    pub selector: Option<crate::capabilities::selection::ToolSelector>,
+    pub selector: Option<crate::capabilities::selection::ExactToolSelector>,
     pub output_schema: Option<Value>,
     pub result_part: Option<usize>,
     pub result_kind: Option<&'static str>,

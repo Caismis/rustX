@@ -5233,7 +5233,7 @@ mod tests {
     use super::super::catalog::SubagentExecutionDeadline;
     use super::super::ipc::{ChildFrame, ChildResultStatus, ParentFrame, ResultFrame};
     use super::*;
-    use crate::capabilities::selection::ToolSelector;
+    use crate::capabilities::selection::AgentToolSelection;
     use crate::durable::ConversationStore;
     use crate::runtime::types::{CancellationReason, SystemClock};
 
@@ -5781,7 +5781,7 @@ mod tests {
         // The selector vocabulary is unchanged: #145 removed a physical
         // limitation, not a capability model.
         assert_eq!(
-            ToolSelector::Source {
+            AgentToolSelection::Source {
                 source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
                     .unwrap(),
                 name: "get_issue".to_owned(),

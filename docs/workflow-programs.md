@@ -152,7 +152,7 @@ the prompt. It does not depend on a Prepared execution event. A concrete node
 visit cannot acquire a replacement approval subject; another visit needs its own
 interaction. Publication failure is interaction authority loss, not human Denied.
 
-The capability plane owns `ToolSelector` and source-qualified resolution; neither
+The capability plane owns `ExactToolSelector` and source-qualified resolution; neither
 Workflow nor generic Tool selection depends on the Subagent feature's resolver.
 Registration/admission owns Leaf/Composite policy; executors cannot declare a
 Workflow timeout. Ancestor deadlines propagate through the native lifecycle's

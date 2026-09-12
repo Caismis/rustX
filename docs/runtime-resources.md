@@ -147,8 +147,11 @@ command/cwd targets before every process spawn; it does not rediscover settings.
 
 ## Resource ownership
 
-`capabilities::selection` owns `ToolSelector` and exact source-qualified Tool
-resolution. Named Subagents and fixed Workflows consume it directly. MCP and Managed Python share `tools.sources` with `All` or `Exact` selection.
+`capabilities::selection` owns source-qualified Tool resolution. Workflow Tool
+leaves use `ExactToolSelector`, which admits only one builtin or source Tool.
+Agents, including Workflow Agent overrides, use `ToolSelectionDocument` and its
+internal `AgentToolSelection` requests. MCP and Managed Python share
+`tools.sources` with `SourceToolSelection::All | Exact` capability selection.
 See [ordinary Tool source selection](tool-source-selection.md).
 
 Foreground Leaf/Composite policy is immutable registration metadata, not an

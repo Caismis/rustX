@@ -5,7 +5,7 @@ use super::{
     WorkflowRunError, WorkflowRuntime, bound_workflow_diagnostic, execution, expressions,
     workflow_event_id,
 };
-use crate::capabilities::selection::ToolSelector;
+use crate::capabilities::selection::ExactToolSelector;
 use crate::runtime::subagent::AttemptSubagentContext;
 use crate::tools::executor::{PreflightOutcome, ToolExecutionContext};
 use crate::tools::invocation::{ForegroundInvocation, NativeInvocationFact, terminal};
@@ -16,7 +16,7 @@ use crate::tools::types::{
 pub(super) fn freeze(
     program: &WorkflowProgram,
     context: &AttemptSubagentContext,
-) -> Result<BTreeMap<ToolSelector, ToolDefinition>, WorkflowRunError> {
+) -> Result<BTreeMap<ExactToolSelector, ToolDefinition>, WorkflowRunError> {
     let resources = context.resources();
     let catalog = resources.capability().available_tools();
     program
@@ -233,19 +233,20 @@ impl WorkflowCatalog {
                             ..
                         },
                     ) => match selector {
-                        ToolSelector::Source { source_id, .. }
-                        | ToolSelector::All { source_id } => match availability.get(source_id) {
-                            Some(crate::capabilities::CapabilitySourceState::Inactive {
-                                activation,
-                            }) => super::inspection::DependencyState::Inert {
-                                activation: *activation,
-                            },
-                            Some(crate::capabilities::CapabilitySourceState::Unavailable {
-                                ..
-                            }) => super::inspection::DependencyState::Unavailable,
-                            _ => super::inspection::DependencyState::Unresolved,
-                        },
-                        ToolSelector::Builtin { .. } => {
+                        ExactToolSelector::Source { source_id, .. } => {
+                            match availability.get(source_id) {
+                                Some(crate::capabilities::CapabilitySourceState::Inactive {
+                                    activation,
+                                }) => super::inspection::DependencyState::Inert {
+                                    activation: *activation,
+                                },
+                                Some(crate::capabilities::CapabilitySourceState::Unavailable {
+                                    ..
+                                }) => super::inspection::DependencyState::Unavailable,
+                                _ => super::inspection::DependencyState::Unresolved,
+                            }
+                        }
+                        ExactToolSelector::Builtin { .. } => {
                             unreachable!("builtin has no external source")
                         }
                     },
@@ -267,7 +268,7 @@ impl WorkflowRuntime {
     pub(super) fn tool_workspace_use(
         run: &WorkflowRun,
         context: &AttemptSubagentContext,
-        selector: &ToolSelector,
+        selector: &ExactToolSelector,
     ) -> Result<crate::tools::executor::WorkspaceUse, WorkflowRunError> {
         let definition = run.tools.get(selector).ok_or_else(|| {
             WorkflowRunError::CapabilityNotAdmitted("capability was not admitted".into())
@@ -287,7 +288,7 @@ impl WorkflowRuntime {
         run: &WorkflowRun,
         context: &AttemptSubagentContext,
         node: &WorkflowNodeInstance,
-        selector: &ToolSelector,
+        selector: &ExactToolSelector,
         arguments: expressions::CommittedValue,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
         admitted_access: &mut Option<crate::runtime::workspace::WorkspaceAccess>,
@@ -394,7 +395,7 @@ impl WorkflowRuntime {
         run: &WorkflowRun,
         context: &AttemptSubagentContext,
         node: &WorkflowNodeInstance,
-        selector: &ToolSelector,
+        selector: &ExactToolSelector,
         arguments: Value,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
         workspace: Option<&crate::tools::workspace::Workspace>,

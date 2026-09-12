@@ -4807,10 +4807,76 @@ compat = { chat_reasoning_replay = "omit" }
 #[cfg(test)]
 mod source_demand_tests {
     use super::*;
-    use crate::capabilities::{ToolSourceId, selection::ToolSelector};
+    use crate::capabilities::{ToolSourceId, selection::AgentToolSelection};
     use crate::runtime::subagent::{
         AgentCatalog, SubagentDefinition, SubagentName, SubagentProjectInstructionPolicy,
     };
+
+    #[test]
+    fn exact_workflow_leaves_and_agent_all_overrides_coalesce_source_demand() {
+        use crate::runtime::workflow::{WorkflowId, WorkflowProgram};
+        use serde_json::json;
+        let mut config: CurrentRuntimeConfig = serde_json::from_value(json!({
+            "model":{"model":"local/test"}, "tools":{"sources":{"github":"all"}}
+        }))
+        .unwrap();
+        let id = WorkflowId::parse("source-demand").unwrap();
+        let selector = json!({"origin":"source","source_id":"github","name":"get_issue"});
+        let mut authored = json!({
+            "description":"Demand contract", "tools":[selector],
+            "block":{
+                "input":{"type":"object"}, "output":{"type":"object"}, "entry":"leaf",
+                "nodes":{
+                    "leaf":{"type":"tool","selector":selector,"arguments":{"type":"literal","value":{}},
+                        "result":{"type":"json","part":0,"schema":{"type":"object"}}},
+                    "agent":{"type":"agent","profile":"reviewer","task":"Review","output":{"type":"object"},
+                        "override":{"tools":{"sources":{"github":"all","python:data-analysis":"all"}}}},
+                    "done":{"type":"return","output":{"type":"reference","path":["agent"]}}
+                },
+                "edges":[{"from":"leaf","to":"agent"},{"from":"agent","to":"done"}]
+            }
+        });
+        let compile = |authored| {
+            WorkflowProgram::compile(
+                id.clone(),
+                serde_json::from_value(authored).unwrap(),
+                &[SubagentName::parse("reviewer").unwrap()].into(),
+            )
+            .unwrap()
+        };
+        let workflows = WorkflowCatalog::new([compile(authored.clone())], [id.clone()]).unwrap();
+        let agents = AgentCatalog::new([]).unwrap();
+        let demand = |config: &CurrentRuntimeConfig, workflows: &WorkflowCatalog| {
+            admitted_source_demand(
+                config,
+                &agents,
+                workflows,
+                crate::runtime::resources::ManagedPythonCatalog::default(),
+            )
+            .sources
+        };
+        let expected = [
+            ToolSourceId::Mcp(crate::runtime::identity::McpServerId::new("github")),
+            ToolSourceId::ManagedPython("data-analysis".into()),
+        ]
+        .into();
+        assert_eq!(demand(&config, &workflows), expected);
+        config.tools = None;
+        assert_eq!(demand(&config, &workflows), expected);
+        // Remove the Agent override: the exact leaf alone still demands github.
+        authored["block"]["nodes"]["agent"]
+            .as_object_mut()
+            .unwrap()
+            .remove("override");
+        let workflows = WorkflowCatalog::new([compile(authored)], [id.clone()]).unwrap();
+        assert_eq!(
+            demand(&config, &workflows),
+            [ToolSourceId::Mcp(
+                crate::runtime::identity::McpServerId::new("github")
+            )]
+            .into()
+        );
+    }
 
     #[test]
     fn admitted_agents_share_one_source_demand_and_discovery_does_not_select() {
@@ -4824,7 +4890,7 @@ mod source_demand_tests {
                 PathBuf::from("instructions.md"),
                 None,
                 None,
-                vec![ToolSelector::All { source_id: source }],
+                vec![AgentToolSelection::All { source_id: source }],
                 Vec::new(),
                 SubagentProjectInstructionPolicy {
                     inherit: false,

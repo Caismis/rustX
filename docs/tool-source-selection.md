@@ -46,9 +46,16 @@ names and duplicates; spaces, Unicode and punctuation are literal characters,
 not wildcard or pattern syntax. TOML quoting/escaping represents these strings;
 there is no separate selector-only identity language.
 
-A Workflow Tool node selects one exact leaf with `origin: source`, `source_id`,
-and `name`; its Agent override uses the shared `tools.sources` map. A leaf cannot
-execute a source-wide `All` selection as if it were one Tool.
+`SourceToolSelection::All | Exact` owns Agent capability selection in the shared
+`ToolSelectionDocument`, lowered to typed `AgentToolSelection` requests for
+admission and immutable generation projection. Workflow Agent node overrides
+use this same document: `tools.sources.github: all` remains valid there.
+
+A Workflow Tool node uses `ExactToolSelector`: either `origin: builtin` with
+`name`, or `origin: source` with `source_id` and `name`. Both MCP and Managed
+Python use that same source-qualified shape. This type also owns the Workflow's
+direct Tool allowlist. Neither the Rust type, deserialization nor the generated
+schema can represent source-wide `All` at these exact executable locations.
 
 ## Demand and ownership
 

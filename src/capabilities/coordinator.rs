@@ -3248,7 +3248,7 @@ mod mcp_race_tests {
             );
             let snapshot = coordinator.commit(candidate).unwrap();
             assert!(snapshot.tool_registry().definitions().is_empty());
-            let selector = crate::capabilities::selection::ToolSelector::Source {
+            let selector = crate::capabilities::selection::ExactToolSelector::Source {
                 source_id: crate::capabilities::ToolSourceId::Mcp(id.clone()),
                 name: "echo".into(),
             };

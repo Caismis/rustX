@@ -22,7 +22,7 @@
 //!
 //! [`RuntimeResourceSnapshot`]: crate::runtime::resources::RuntimeResourceSnapshot
 
-use crate::capabilities::selection::ToolSelector;
+use crate::capabilities::selection::AgentToolSelection;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -316,7 +316,7 @@ pub struct SubagentDefinition {
     instructions_source: PathBuf,
     model: Option<ModelRef>,
     execution_deadline: Option<SubagentExecutionDeadline>,
-    tools: Vec<ToolSelector>,
+    tools: Vec<AgentToolSelection>,
     skills: Vec<String>,
     project_instructions: SubagentProjectInstructionPolicy,
     workspace_policy: crate::runtime::workspace::WorkspacePolicy,
@@ -345,7 +345,7 @@ impl SubagentDefinition {
         instructions_source: PathBuf,
         model: Option<ModelRef>,
         execution_deadline: Option<SubagentExecutionDeadline>,
-        tools: Vec<ToolSelector>,
+        tools: Vec<AgentToolSelection>,
         skills: Vec<String>,
         project_instructions: SubagentProjectInstructionPolicy,
         workspace_policy: crate::runtime::workspace::WorkspacePolicy,
@@ -381,7 +381,7 @@ impl SubagentDefinition {
         if let Some(selector) = tools.iter().find(|selector| {
             matches!(
                 selector,
-                ToolSelector::Builtin { name }
+                AgentToolSelection::Builtin { name }
                     if name == crate::tools::native::SUBAGENT_TOOL_NAME
             )
         }) {
@@ -393,7 +393,7 @@ impl SubagentDefinition {
         if let Some(selector) = tools.iter().find(|selector| {
             matches!(
                 selector,
-                ToolSelector::Builtin { name }
+                AgentToolSelection::Builtin { name }
                     if CHILD_UNSAFE_BUILTIN_TOOLS.contains(&name.as_str())
             )
         }) {
@@ -479,7 +479,7 @@ impl SubagentDefinition {
 
     /// The canonically ordered typed Tool selectors.
     #[must_use]
-    pub fn tools(&self) -> &[ToolSelector] {
+    pub fn tools(&self) -> &[AgentToolSelection] {
         &self.tools
     }
 
@@ -778,7 +778,7 @@ fn compute_digest(
     instructions: &str,
     model: Option<&ModelRef>,
     execution_deadline: Option<SubagentExecutionDeadline>,
-    tools: &[ToolSelector],
+    tools: &[AgentToolSelection],
     skills: &[String],
     project_instructions: &SubagentProjectInstructionPolicy,
     workspace_policy: crate::runtime::workspace::WorkspacePolicy,
@@ -882,7 +882,7 @@ mod tests {
         SubagentDefinitionError, SubagentExecutionDeadline, SubagentExecutionDeadlineError,
         SubagentName, SubagentNameError, SubagentProjectInstructionPolicy,
     };
-    use crate::capabilities::selection::ToolSelector;
+    use crate::capabilities::selection::AgentToolSelection;
     use crate::runtime::resources::ProjectContextFile;
     use crate::runtime::workspace::WorkspacePolicy;
 
@@ -895,7 +895,7 @@ mod tests {
 
     fn definition(
         name: &str,
-        tools: Vec<ToolSelector>,
+        tools: Vec<AgentToolSelection>,
         skills: Vec<String>,
     ) -> Result<SubagentDefinition, SubagentDefinitionError> {
         SubagentDefinition::new(
@@ -917,7 +917,7 @@ mod tests {
     fn source_selector_digest_preserves_identity_field_boundaries() {
         use crate::capabilities::ToolSourceId;
         use crate::runtime::identity::McpServerId;
-        let selector = |source: &str, name: &str| ToolSelector::Source {
+        let selector = |source: &str, name: &str| AgentToolSelection::Source {
             source_id: ToolSourceId::Mcp(McpServerId::new(source)),
             name: name.into(),
         };
@@ -925,7 +925,7 @@ mod tests {
         let b = definition("agent", vec![selector("a", "b/c")], vec![]).unwrap();
         let all = definition(
             "agent",
-            vec![ToolSelector::All {
+            vec![AgentToolSelection::All {
                 source_id: ToolSourceId::Mcp(McpServerId::new("a/b/c")),
             }],
             vec![],
@@ -965,13 +965,13 @@ mod tests {
         let ordered = definition(
             "explore",
             vec![
-                ToolSelector::Builtin {
+                AgentToolSelection::Builtin {
                     name: "glob".to_owned(),
                 },
-                ToolSelector::Builtin {
+                AgentToolSelection::Builtin {
                     name: "read".to_owned(),
                 },
-                ToolSelector::Source {
+                AgentToolSelection::Source {
                     source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
                         .unwrap(),
                     name: "get_issue".to_owned(),
@@ -983,18 +983,18 @@ mod tests {
         let shuffled = definition(
             "explore",
             vec![
-                ToolSelector::Source {
+                AgentToolSelection::Source {
                     source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
                         .unwrap(),
                     name: "get_issue".to_owned(),
                 },
-                ToolSelector::Builtin {
+                AgentToolSelection::Builtin {
                     name: "read".to_owned(),
                 },
-                ToolSelector::Builtin {
+                AgentToolSelection::Builtin {
                     name: "read".to_owned(),
                 },
-                ToolSelector::Builtin {
+                AgentToolSelection::Builtin {
                     name: "glob".to_owned(),
                 },
             ],
@@ -1009,7 +1009,7 @@ mod tests {
     fn semantically_different_definitions_have_different_digests() {
         let base = definition(
             "explore",
-            vec![ToolSelector::Builtin {
+            vec![AgentToolSelection::Builtin {
                 name: "read".to_owned(),
             }],
             Vec::new(),
@@ -1018,10 +1018,10 @@ mod tests {
         let more_tools = definition(
             "explore",
             vec![
-                ToolSelector::Builtin {
+                AgentToolSelection::Builtin {
                     name: "read".to_owned(),
                 },
-                ToolSelector::Builtin {
+                AgentToolSelection::Builtin {
                     name: "grep".to_owned(),
                 },
             ],
@@ -1030,7 +1030,7 @@ mod tests {
         .expect("definition");
         let other_origin = definition(
             "explore",
-            vec![ToolSelector::Source {
+            vec![AgentToolSelection::Source {
                 source_id: crate::capabilities::ToolSourceId::try_from(String::from("server-1"))
                     .unwrap(),
                 name: "read".to_owned(),
@@ -1040,7 +1040,7 @@ mod tests {
         .expect("definition");
         let other_name = definition(
             "research",
-            vec![ToolSelector::Builtin {
+            vec![AgentToolSelection::Builtin {
                 name: "read".to_owned(),
             }],
             Vec::new(),
@@ -1048,7 +1048,7 @@ mod tests {
         .expect("definition");
         let with_skill = definition(
             "explore",
-            vec![ToolSelector::Builtin {
+            vec![AgentToolSelection::Builtin {
                 name: "read".to_owned(),
             }],
             vec!["navigation".to_owned()],
@@ -1255,7 +1255,7 @@ mod tests {
         assert!(matches!(
             definition(
                 "explore",
-                vec![ToolSelector::Builtin {
+                vec![AgentToolSelection::Builtin {
                     name: "subagent".to_owned()
                 }],
                 Vec::new(),
@@ -1265,7 +1265,7 @@ mod tests {
         assert!(matches!(
             definition(
                 "explore",
-                vec![ToolSelector::Builtin {
+                vec![AgentToolSelection::Builtin {
                     name: "execution".to_owned()
                 }],
                 Vec::new(),
@@ -1275,7 +1275,7 @@ mod tests {
         assert!(
             definition(
                 "explore",
-                vec![ToolSelector::Builtin {
+                vec![AgentToolSelection::Builtin {
                     name: "ask_user".to_owned()
                 }],
                 Vec::new(),

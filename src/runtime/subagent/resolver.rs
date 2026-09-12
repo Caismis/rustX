@@ -132,7 +132,7 @@ use super::catalog::{
     SubagentName,
 };
 use super::invocation::{SubagentInvocationOverride, SubagentOverrideError};
-use crate::capabilities::selection::ToolSelector;
+use crate::capabilities::selection::AgentToolSelection;
 use crate::runtime::workspace::WorkspacePolicy;
 
 /// One frozen capability identity of a resolved child.
@@ -1107,7 +1107,7 @@ impl SubagentResolver {
 /// directly. A requested capability is therefore never silently dropped, and
 /// a *replaced-away* default is never required.
 fn resolve_tools(
-    selected: &[ToolSelector],
+    selected: &[AgentToolSelection],
     available: &AvailableToolCatalog,
     availability: &CapabilityAvailability,
 ) -> Result<Vec<ResolvedSubagentTool>, SubagentResolutionError> {
@@ -1348,7 +1348,10 @@ pub(crate) fn validate_metadata_selectors(
 }
 
 /// Freezes one admitted definition into its exact source-qualified identity.
-fn freeze_tool(_selector: &ToolSelector, definition: &ToolDefinition) -> ResolvedSubagentTool {
+fn freeze_tool(
+    _selector: &AgentToolSelection,
+    definition: &ToolDefinition,
+) -> ResolvedSubagentTool {
     match definition.origin.source() {
         Some(source_id) => ResolvedSubagentTool::Source {
             identity: crate::tools::mcp::source_tool_identity(&source_id, definition),
@@ -1970,7 +1973,7 @@ mod tests {
         ResolvedSubagentTool, SubagentResolutionError, freeze_tool, render_agent_routing,
         validate_selectors_for_admission,
     };
-    use crate::capabilities::selection::ToolSelector;
+    use crate::capabilities::selection::AgentToolSelection;
     use crate::capabilities::{
         AvailableToolCatalog, CapabilityAvailability, CapabilitySourceState, ToolSourceId,
     };
@@ -2025,6 +2028,69 @@ mod tests {
         )
     }
 
+    #[test]
+    fn agent_all_freezes_finite_exact_tools_from_only_the_supplied_generation() {
+        use crate::capabilities::ToolSourceId;
+        for source in [
+            ToolSourceId::Mcp(McpServerId::new("github")),
+            ToolSourceId::ManagedPython("data-analysis".into()),
+        ] {
+            let origin = match &source {
+                ToolSourceId::Mcp(id) => ToolOrigin::Mcp {
+                    server_id: id.clone(),
+                },
+                ToolSourceId::ManagedPython(package) => ToolOrigin::ManagedPython {
+                    package: package.clone(),
+                },
+            };
+            let r1 = catalog(vec![tool("b", origin.clone()), tool("a", origin.clone())]);
+            let r2 = catalog(vec![
+                tool("c", origin.clone()),
+                tool("a", origin.clone()),
+                tool("b", origin),
+            ]);
+            let availability = [(source.clone(), CapabilitySourceState::Ready)].into();
+            let all = definition(vec![AgentToolSelection::All {
+                source_id: source.clone(),
+            }]);
+            let frozen = resolve_tools(&all, &r1, &availability).unwrap();
+            let names = |tools: &[ResolvedSubagentTool]| {
+                tools
+                    .iter()
+                    .map(|tool| {
+                        let ResolvedSubagentTool::Source {
+                            source_id,
+                            name,
+                            definition,
+                            identity,
+                            ..
+                        } = tool
+                        else {
+                            panic!("All must freeze exact source Tools")
+                        };
+                        assert_eq!(source_id, &source);
+                        assert_eq!(name, &definition.name);
+                        assert_eq!(
+                            identity,
+                            &crate::tools::mcp::source_tool_identity(source_id, definition)
+                        );
+                        name.clone()
+                    })
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(names(&frozen), ["a", "b"]);
+            assert_eq!(
+                names(&resolve_tools(&all, &r2, &availability).unwrap()),
+                ["a", "b", "c"]
+            );
+            assert_eq!(
+                names(&resolve_tools(&all, &r1, &availability).unwrap()),
+                ["a", "b"]
+            );
+            assert_eq!(names(&frozen), ["a", "b"]);
+        }
+    }
+
     fn available() -> AvailableToolCatalog {
         catalog(vec![
             tool("read", ToolOrigin::Builtin),
@@ -2052,7 +2118,7 @@ mod tests {
         super::resolve_tools(definition.tools(), available, availability)
     }
 
-    fn definition(tools: Vec<ToolSelector>) -> SubagentDefinition {
+    fn definition(tools: Vec<AgentToolSelection>) -> SubagentDefinition {
         SubagentDefinition::new(
             SubagentName::parse("explore").expect("name"),
             "description".to_owned(),
@@ -2089,15 +2155,15 @@ mod tests {
     fn every_origin_freezes_its_exact_source_identity() {
         let resolved = resolve_tools(
             &definition(vec![
-                ToolSelector::Builtin {
+                AgentToolSelection::Builtin {
                     name: "read".to_owned(),
                 },
-                ToolSelector::Source {
+                AgentToolSelection::Source {
                     source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
                         .unwrap(),
                     name: "get_issue".to_owned(),
                 },
-                ToolSelector::Source {
+                AgentToolSelection::Source {
                     source_id: crate::capabilities::ToolSourceId::try_from(String::from(
                         "python:symbols",
                     ))
@@ -2161,13 +2227,13 @@ mod tests {
 
         let tools = vec![
             freeze_tool(
-                &ToolSelector::Builtin {
+                &AgentToolSelection::Builtin {
                     name: "read".to_owned(),
                 },
                 &tool("read", ToolOrigin::Builtin),
             ),
             freeze_tool(
-                &ToolSelector::Source {
+                &AgentToolSelection::Source {
                     source_id: crate::capabilities::ToolSourceId::Mcp(github.clone()),
                     name: "get_issue".to_owned(),
                 },
@@ -2194,7 +2260,7 @@ mod tests {
 
         // A Builtin-only agent needs no external plane whatsoever.
         let builtin_only = vec![freeze_tool(
-            &ToolSelector::Builtin {
+            &AgentToolSelection::Builtin {
                 name: "read".to_owned(),
             },
             &tool("read", ToolOrigin::Builtin),
@@ -2216,7 +2282,7 @@ mod tests {
             },
         );
         let frozen = freeze_tool(
-            &ToolSelector::Source {
+            &AgentToolSelection::Source {
                 source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
                     .unwrap(),
                 name: "get_issue".to_owned(),
@@ -2249,7 +2315,7 @@ mod tests {
             ),
         ]);
         let builtin = resolve_tools(
-            &definition(vec![ToolSelector::Builtin {
+            &definition(vec![AgentToolSelection::Builtin {
                 name: "search".to_owned(),
             }]),
             &catalog,
@@ -2258,7 +2324,7 @@ mod tests {
         .expect("builtin resolution");
         assert!(matches!(builtin[0], ResolvedSubagentTool::Builtin { .. }));
         let mcp = resolve_tools(
-            &definition(vec![ToolSelector::Source {
+            &definition(vec![AgentToolSelection::Source {
                 source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
                     .unwrap(),
                 name: "search".to_owned(),
@@ -2270,7 +2336,7 @@ mod tests {
         assert!(matches!(mcp[0], ResolvedSubagentTool::Source { .. }));
         assert_eq!(
             resolve_tools(
-                &definition(vec![ToolSelector::Source {
+                &definition(vec![AgentToolSelection::Source {
                     source_id: crate::capabilities::ToolSourceId::try_from(String::from("other"))
                         .unwrap(),
                     name: "search".to_owned(),
@@ -2299,7 +2365,7 @@ mod tests {
         let catalog = catalog(vec![tool("read", ToolOrigin::Builtin)]);
         assert!(matches!(
             resolve_tools(
-                &definition(vec![ToolSelector::Source {
+                &definition(vec![AgentToolSelection::Source {
                     source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
                         .unwrap(),
                     name: "get_issue".to_owned(),
@@ -2311,7 +2377,7 @@ mod tests {
         ));
         assert_eq!(
             resolve_tools(
-                &definition(vec![ToolSelector::Builtin {
+                &definition(vec![AgentToolSelection::Builtin {
                     name: "write".to_owned()
                 }]),
                 &catalog,
@@ -2332,7 +2398,7 @@ mod tests {
     // ---------------------------------------------------------------
 
     fn role_with(
-        tools: Vec<ToolSelector>,
+        tools: Vec<AgentToolSelection>,
         extensions: crate::extensions::NativeAgentExtensions,
     ) -> SubagentDefinition {
         SubagentDefinition::new(
@@ -2405,7 +2471,7 @@ mod tests {
     fn sub258_role_authority_and_parent_authority_both_delegate() {
         let available = available();
         let role = role_with(
-            vec![ToolSelector::Builtin {
+            vec![AgentToolSelection::Builtin {
                 name: "read".to_owned(),
             }],
             crate::extensions::NativeAgentExtensions::none(),
@@ -2449,7 +2515,7 @@ mod tests {
             tool("write", ToolOrigin::Builtin),
         ]);
         let role = role_with(
-            vec![ToolSelector::Builtin {
+            vec![AgentToolSelection::Builtin {
                 name: "read".to_owned(),
             }],
             crate::extensions::NativeAgentExtensions::none(),
@@ -2458,7 +2524,7 @@ mod tests {
         // this role's own selection and the invoking profile, never the
         // union of every admitted definition.
         let _other_role = role_with(
-            vec![ToolSelector::Builtin {
+            vec![AgentToolSelection::Builtin {
                 name: "write".to_owned(),
             }],
             crate::extensions::NativeAgentExtensions::none(),
@@ -2531,7 +2597,7 @@ mod tests {
     fn sub258_an_unoverridden_dimension_is_never_judged_against_parent_authority() {
         let available = available();
         let role = role_with(
-            vec![ToolSelector::Builtin {
+            vec![AgentToolSelection::Builtin {
                 name: "read".to_owned(),
             }],
             crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
@@ -2908,12 +2974,12 @@ mod tests {
             },
         );
         let definition = definition(vec![
-            ToolSelector::Source {
+            AgentToolSelection::Source {
                 source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
                     .unwrap(),
                 name: "get_issue".to_owned(),
             },
-            ToolSelector::Source {
+            AgentToolSelection::Source {
                 source_id: crate::capabilities::ToolSourceId::try_from(String::from(
                     "python:symbols",
                 ))
@@ -2923,7 +2989,7 @@ mod tests {
         ]);
         assert_eq!(
             definition.tools().first(),
-            Some(&ToolSelector::Source {
+            Some(&AgentToolSelection::Source {
                 source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
                     .unwrap(),
                 name: "get_issue".to_owned(),
@@ -2958,10 +3024,10 @@ mod tests {
             },
         );
         let definition = definition(vec![
-            ToolSelector::Builtin {
+            AgentToolSelection::Builtin {
                 name: "read".to_owned(),
             },
-            ToolSelector::Source {
+            AgentToolSelection::Source {
                 source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
                     .unwrap(),
                 name: "get_issue".to_owned(),
@@ -3057,7 +3123,7 @@ mod tests {
             std::path::PathBuf::from("/w/reviewer.md"),
             None,
             None,
-            vec![ToolSelector::Builtin {
+            vec![AgentToolSelection::Builtin {
                 name: "read".to_owned(),
             }],
             vec!["some-skill".to_owned()],
@@ -3614,7 +3680,7 @@ mod tests {
     fn sub258_the_tool_framing_covers_the_real_frozen_value_and_excludes_the_physical_plane() {
         let definition = frozen_builtin_definition();
         let frozen = freeze_tool(
-            &ToolSelector::Builtin {
+            &AgentToolSelection::Builtin {
                 name: "read".to_owned(),
             },
             &definition,

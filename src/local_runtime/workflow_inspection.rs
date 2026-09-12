@@ -36,7 +36,7 @@ pub struct RoleProjection {
     pub workflow_admitted: bool,
     pub selected_model: String,
     pub configured_timeout_ms: Option<u64>,
-    pub tools: Vec<crate::capabilities::selection::ToolSelector>,
+    pub tools: Vec<crate::capabilities::selection::AgentToolSelection>,
     pub workspace_policy: crate::runtime::workspace::WorkspacePolicy,
 }
 
