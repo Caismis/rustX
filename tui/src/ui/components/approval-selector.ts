@@ -1,7 +1,7 @@
 /** Focused approval intent; native state remains the only mode authority. */
 import { matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { approvalLabel } from "../../presentation/selectors.ts";
-import type { PresentationState } from "../../presentation/state.ts";
+import { isAttemptActive, type PresentationState } from "../../presentation/state.ts";
 import type { ApprovalMode } from "../../protocol/types.ts";
 import { role } from "../theme.ts";
 import type { PopupContent } from "./popup-frame.ts";
@@ -79,7 +79,10 @@ export class ApprovalSelector implements PopupContent {
   render(width: number): string[] {
     const state = this.#state();
     const facts: string[] = [];
-    if (state?.effectiveApprovalMode != null) facts.push(`Current attempt: ${approvalLabel(state.effectiveApprovalMode)}`);
+    if (state?.effectiveApprovalMode != null) {
+      const lifetime = isAttemptActive(state) ? "Current attempt" : "Effective";
+      facts.push(`${lifetime}: ${approvalLabel(state.effectiveApprovalMode)}`);
+    }
     if (state?.pendingApprovalMode != null) facts.push(`Next attempt: ${approvalLabel(state.pendingApprovalMode)}`);
     const rows = this.#confirm
       ? [`${this.#enable ? " " : "❯"} Cancel   ${this.#enable ? "❯" : " "} Enable full access`]

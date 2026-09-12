@@ -7704,7 +7704,12 @@ contracts and provider protocols. These invariants are frozen by M2:
 - **Approval intent is not policy authority (Issue #267).** `/approval` opens
   a focused picker without mutation. Policy commits once on selection; Full
   access commits once only after a second safe-default confirmation. Focus,
-  cancellation and pending-request deduplication are client presentation state.
+  cancellation before submission and pending-request deduplication are client
+  state. Esc after submission closes only the popup; the current owner still
+  receives success/error feedback. Submitted operations carry unique tokens and
+  attachment/presentation leases: stale completions cannot block a new owner,
+  repaint it, or clear its newer token. Only admitted/running native attempt
+  phases permit the label `Current attempt`; idle/settled uses `Effective`.
   Native effective and pending modes remain distinct; resync closes stale
   surfaces without replaying controls or promoting a highlight into policy.
 

@@ -3,10 +3,11 @@ import { describe, it } from "node:test";
 import { ApprovalSelector } from "../src/ui/components/approval-selector.ts";
 import { plainText } from "../src/ui/theme.ts";
 import { stateOf } from "./support/render.ts";
+import { attemptView } from "./support/fixtures.ts";
 import type { ApprovalMode } from "../src/protocol/types.ts";
 
 function harness() {
-  let state = stateOf({ effective_approval_mode: "policy", pending_approval_mode: "full_access" });
+  let state = stateOf({ attempt: attemptView(), effective_approval_mode: "policy", pending_approval_mode: "full_access" });
   let finish!: () => void;
   const held = new Promise<void>((resolve) => { finish = resolve; });
   const requests: ApprovalMode[] = [];
@@ -39,7 +40,7 @@ describe("approval picker intent boundary", () => {
     h.replace(stateOf({ effective_approval_mode: "full_access" }));
     h.selector.handleInput("\r"); h.selector.handleInput("\r");
     assert.deepEqual(h.requests, ["policy"]);
-    assert.match(h.text(), /Current attempt: Full access/);
+    assert.match(h.text(), /Effective: Full access/);
     assert.equal(h.closed(), 0);
     h.finish(); await h.held;
     assert.equal(h.closed(), 1);
@@ -66,14 +67,14 @@ describe("approval picker intent boundary", () => {
     assert.deepEqual(h.requests, ["full_access"]);
     assert.match(h.text(), /Current attempt: Policy/);
     h.replace(stateOf({ effective_approval_mode: "full_access" }));
-    assert.match(h.text(), /Current attempt: Full access/);
+    assert.match(h.text(), /Effective: Full access/);
     assert.doesNotMatch(h.text(), /Next attempt/);
     h.finish(); await h.held;
   });
   it("snapshot replacement while confirmation is open cannot promote stale highlighted state", () => {
     const h = harness();
     h.selector.handleInput("\x1b[B"); h.selector.handleInput("\r");
-    h.replace(stateOf({ effective_approval_mode: "full_access", pending_approval_mode: "policy" }));
+    h.replace(stateOf({ attempt: attemptView(), effective_approval_mode: "full_access", pending_approval_mode: "policy" }));
     assert.match(h.text(), /Current attempt: Full access/);
     assert.match(h.text(), /Next attempt: Policy/);
     h.selector.handleInput("\x1b");
@@ -88,4 +89,39 @@ describe("approval picker intent boundary", () => {
     assert.match(h.text(), /sandbox profile/);
     assert.deepEqual(h.requests, []);
   });
+});
+
+
+describe("approval native lifetime labels", () => {
+  for (const phase of ["absent", "settled"] as const) {
+    for (const pending of [undefined, "full_access"] as const) {
+      it(`${phase} attempt displays effective mode without inventing current work${pending ? " even with pending transition" : ""}`, () => {
+        const h = harness();
+        h.replace(stateOf({ effective_approval_mode: "policy", pending_approval_mode: pending,
+          attempt: phase === "absent" ? undefined : attemptView({
+            phase: { type: "settled", outcome: { type: "completed", finish_reason: { type: "stop" } } },
+          }),
+        }));
+        assert.match(h.text(), /Effective: Policy/);
+        assert.doesNotMatch(h.text(), /Current attempt/);
+        if (pending) assert.match(h.text(), /Next attempt: Full access/);
+        else assert.doesNotMatch(h.text(), /Next attempt/);
+        assert.deepEqual(h.requests, []);
+      });
+    }
+  }
+  for (const phase of ["admitted", "running"] as const) {
+    for (const pending of [undefined, "full_access"] as const) {
+      it(`${phase} attempt labels the frozen effective mode${pending ? " and distinct next attempt" : " without a fabricated transition"}`, () => {
+        const h = harness();
+        h.replace(stateOf({ attempt: attemptView({ phase: { type: phase } }),
+          effective_approval_mode: "policy", pending_approval_mode: pending,
+        }));
+        assert.match(h.text(), /Current attempt: Policy/);
+        if (pending) assert.match(h.text(), /Next attempt: Full access/);
+        else assert.doesNotMatch(h.text(), /Next attempt/);
+        assert.deepEqual(h.requests, []);
+      });
+    }
+  }
 });

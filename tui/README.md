@@ -557,7 +557,12 @@ receive result content only; the common card owns native lifecycle metadata.
 `/approval` opens without a mutation. Highlighting and Esc also send nothing.
 Policy selection sends one typed native request. Full access selection opens a
 confirmation with Cancel focused; only explicitly enabling sends one request.
-Repeated keys and reopening during a pending request cannot duplicate it.
+Repeated keys and reopening during a pending request cannot duplicate it for the
+same current owner. Esc after submission closes the popup only: the native request
+continues, and its current owner still receives acceptance or bounded error feedback.
+An attachment/Session replacement invalidates old presentation callbacks without
+erasing the submitted operation. Pending requests carry owner/identity tokens, so
+old requests cannot block new owners or clear their pending operations.
 Full access lets already-admitted Tools skip ordinary approval prompts, including
 command execution or file-changing operations when those Tools are available.
 It does not grant unavailable Tools/capabilities, answer Questionnaire or Workflow
@@ -567,7 +572,10 @@ The picker, confirmation and footer read native effective/pending facts. During 
 frozen Policy attempt, requesting Full access shows `Current attempt: Policy` and
 `Next attempt: Full access`; it does not change the admitted attempt. No optimistic
 mode is stored. Snapshot replacement closes stale overlays and reconstructs
-semantic display; it never replays a control request.
+semantic display; it never replays a control request. With no admitted/running
+attempt (including a settled historical attempt), the picker says `Effective:
+Policy`. A published pending mode still appears separately as `Next attempt`; it
+does not itself prove a current attempt exists.
 
 ## The model invariant
 

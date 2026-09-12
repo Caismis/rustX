@@ -184,6 +184,11 @@ interface PresentationLease {
   session: RuntimeClientAttachment;
 }
 
+/** One submitted approval operation; object identity is its completion token. */
+interface PendingApprovalRequest {
+  readonly owner: PresentationLease;
+}
+
 /** One presentation frame kept so Esc can return to the existing parent view. */
 interface NavigationFrame {
   handle: RuntimeAttachmentHandle;
@@ -229,7 +234,7 @@ export class RustxTuiApp {
 
   #preferences: PresentationPreferences = defaultPreferences();
   #overlay: OverlayHandle | undefined;
-  #approvalRequestPending = false;
+  #pendingApprovalRequest: PendingApprovalRequest | undefined;
   #hitlOverlay: HumanInteractionOverlay | undefined;
   /**
    * Presentation-only focus over `pendingInteractions`, reconciled against
@@ -1051,31 +1056,38 @@ export class RustxTuiApp {
    * editor on select or cancel, so the editor is never left unfocused.
    */
   #showApprovalSelector(lease: PresentationLease): void {
-    if (!this.#isCurrentPresentationLease(lease)) return;
-    if (this.#approvalRequestPending) {
+    const ownerCurrent = () => this.#isCurrentPresentationLease(lease);
+    const ownerPending = () => this.#pendingApprovalRequest !== undefined &&
+      this.#isCurrentPresentationLease(this.#pendingApprovalRequest.owner);
+    if (!ownerCurrent()) return;
+    if (ownerPending()) {
       this.#showTransient("info", "Approval change is still pending.");
       return;
     }
     let handle: OverlayHandle;
-    const alive = () => this.#isCurrentPresentationLease(lease) && this.#overlay === handle;
+    const overlayAlive = () => ownerCurrent() && this.#overlay === handle;
     const selector = new ApprovalSelector({
       state: () => lease.session.state,
-      change: () => { if (alive()) this.#tui.requestRender(); },
-      close: () => { if (alive()) this.#closeOverlay(); },
+      change: () => { if (overlayAlive()) this.#tui.requestRender(); },
+      close: () => { if (overlayAlive()) this.#closeOverlay(); },
       submit: async (mode) => {
-        if (!alive() || this.#approvalRequestPending) return;
-        this.#approvalRequestPending = true;
+        if (!overlayAlive() || ownerPending()) return;
+        const request: PendingApprovalRequest = { owner: lease };
+        this.#pendingApprovalRequest = request;
         try {
           const result = await lease.session.approvalModeSet(mode);
-          if (!alive()) return;
-          // A later authoritative projection supersedes an older control result.
+          // Esc ends the popup, not the submitted operation. Feedback belongs
+          // to its presentation owner even when that owner's popup is closed.
+          if (!ownerCurrent()) return;
           const latest = lease.session.state;
           const fact = latest && latest.approvalModeRevision > result.revision ? latest : result;
           this.#showTransient("info", `Approval request accepted: effective ${approvalLabel(fact.effectiveApprovalMode)}${fact.pendingApprovalMode == null ? "" : ` · next attempt ${approvalLabel(fact.pendingApprovalMode)}`}`);
         } catch (error) {
-          if (alive()) this.#showTransient("error", `Approval change failed: ${compactDiagnostic(error)}`);
+          if (ownerCurrent()) this.#showTransient("error", `Approval change failed: ${compactDiagnostic(error)}`);
         } finally {
-          this.#approvalRequestPending = false;
+          // A superseded owner may settle after a new owner submitted another
+          // request. Only this exact token may clear the stored operation.
+          if (this.#pendingApprovalRequest === request) this.#pendingApprovalRequest = undefined;
         }
       },
     });
@@ -1585,6 +1597,8 @@ export class RustxTuiApp {
 
   /** Invalidates attachment-local presentation work at one central boundary. */
   #invalidatePresentation(): void {
+    // Submitted approval requests retain their tokens until completion. The
+    // old lease becomes stale; it neither blocks nor clears a new owner's work.
     this.#presentationEpoch += 1;
     this.#resetLocalSurfaces();
   }

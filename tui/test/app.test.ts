@@ -8,10 +8,11 @@
  */
 
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, type TestContext } from "node:test";
 import { TUI, Editor } from "@earendil-works/pi-tui";
 
-import { plainText } from "../src/ui/theme.ts";
+import { plainText, plainWidth } from "../src/ui/theme.ts";
+import { stateOf } from "./support/render.ts";
 import { RustxTuiApp } from "../src/ui/app.ts";
 import { ConnectionClosedError, RuntimeRequestError } from "../src/runtime/connection.ts";
 import { emptyPresentationState } from "../src/presentation/projection.ts";
@@ -2055,7 +2056,7 @@ for (const replacement of ["HITL", "snapshot"] as const) {
 }
 
 it("approval overlay routes one typed request, consumes Esc, and discards stale snapshot surfaces", async () => {
-  const state = emptyPresentationState(sessionModel("alpha/model-a"));
+  const state = stateOf({ attempt: attemptView({ phase: { type: "running" } }) });
   const session = fakeSession(async () => {}, state) as RuntimeClientAttachment & {
     publishState(next: typeof state): void; publishSnapshot(): void;
   };
@@ -2112,3 +2113,153 @@ it("approval overlay routes one typed request, consumes Esc, and discards stale 
     await app.quit(); await running; TUI.prototype.showOverlay = original;
   }
 });
+
+/** Approval-specific gates over the existing real-app input/attachment seams. */
+async function approvalOwnerHarness(t: TestContext, sameAttachment = false) {
+  type Reply = Awaited<ReturnType<RuntimeClientAttachment["approvalModeSet"]>>;
+  function owner(model: string) {
+    const state = stateOf({ model: sessionModel(model), attempt: attemptView({ phase: { type: "running" } }) });
+    const session = fakeSession(async () => {}, state) as RuntimeClientAttachment & {
+      publishState(next: typeof state): void; publishSnapshot(): void;
+    };
+    const requests: Array<{ mode: string; response: ReturnType<typeof deferred<Reply>> }> = [];
+    let cancelled = 0;
+    session.approvalModeSet = (mode) => {
+      const response = deferred<Reply>(); requests.push({ mode, response }); return response.promise;
+    };
+    session.cancelCurrentAttempt = async () => { cancelled++; return "active-attempt"; };
+    session.refreshSession = async () => sessionView({ id: model, name: model });
+    session.detach = async () => {};
+    return { state, session, requests, cancelled: () => cancelled };
+  }
+  const a = owner("owner/a");
+  const b = owner("owner/b");
+  const bound = deferred<void>();
+  const bView = sessionView({ id: "owner/b", name: "owner/b" });
+  a.session.newSession = async () => {
+    if (sameAttachment) {
+      // Native Session transition can retain the attachment object. The app's
+      // accepted Session switch still advances its presentation owner epoch.
+      a.session.publishState(b.state);
+      a.session.approvalModeSet = b.session.approvalModeSet;
+    }
+    return { session: bView, restartRequired: !sameAttachment };
+  };
+  b.session.refreshSession = async () => { bound.resolve(); return bView; };
+  const surfaces: Array<{ content: Parameters<TUI["showOverlay"]>[0]; visible: boolean }> = [];
+  const originalOverlay = TUI.prototype.showOverlay;
+  t.mock.method(TUI.prototype, "showOverlay", function(this: TUI, content: Parameters<TUI["showOverlay"]>[0], options: Parameters<TUI["showOverlay"]>[1]) {
+    const surface = { content, visible: true }; surfaces.push(surface);
+    const handle = originalOverlay.call(this, content, options);
+    const hide = handle.hide;
+    handle.hide = () => { surface.visible = false; hide(); };
+    return handle;
+  });
+  const feedback: Array<{ level: string; text: string }> = [];
+  let transient: TransientFeedbackSurface | undefined;
+  const originalReplace = TransientFeedbackSurface.prototype.replace;
+  t.mock.method(TransientFeedbackSurface.prototype, "replace", function(this: TransientFeedbackSurface, value: Parameters<TransientFeedbackSurface["replace"]>[0]) {
+    transient = this; feedback.push(value); originalReplace.call(this, value);
+  });
+  const app = new RustxTuiApp({ session: a.session, connection: fakeConnection(), child: fakeChild([]),
+    restartRuntime: async () => ({ session: b.session, connection: fakeConnection(), child: fakeChild([]) }),
+  });
+  const running = app.run();
+  const input = async (data: string) => { process.stdin.emit("data", data); await waitForApplicationContinuation(); };
+  const active = () => surfaces.findLast((surface) => surface.visible);
+  return {
+    a, b, input, active, feedback,
+    text: () => active()?.content.render(100).map(plainText).join("\n") ?? "",
+    feedbackRows: () => transient?.render(50) ?? [],
+    enable: async () => {
+      await input("/approval\r"); await input("\x1b[B\r"); await input("\t\r");
+    },
+    switchOwner: async () => {
+      await input("/new\r");
+      if (!sameAttachment) await bound.promise;
+      await waitForApplicationContinuation();
+    },
+    finish: async () => { await app.quit(); await running; },
+  };
+}
+
+for (const outcome of ["success", "failure"] as const) {
+  it(`${outcome} after approval submission and Esc still reports to the current owner and settles its token`, async (t) => {
+    const h = await approvalOwnerHarness(t);
+    try {
+      await h.enable();
+      assert.deepEqual(h.a.requests.map((request) => request.mode), ["full_access"]);
+      assert.match(h.text(), /Current attempt: Policy/);
+      await h.input("\x1b[27u");
+      assert.equal(h.active(), undefined);
+      assert.equal(h.a.cancelled(), 0);
+      assert.equal(h.a.session.state?.effectiveApprovalMode, "policy");
+      await h.input("/approval\r");
+      assert.equal(h.active(), undefined, "Esc did not settle the still-pending native request");
+      const before = h.feedback.length;
+      const request = h.a.requests[0]!;
+      if (outcome === "success") request.response.resolve({ effectiveApprovalMode: "policy", pendingApprovalMode: "full_access", revision: 1 });
+      else request.response.reject(new Error("native rejection\n" + "detail ".repeat(100)));
+      await waitForApplicationContinuation();
+      assert.equal(h.feedback.length, before + 1);
+      const feedback = h.feedback.at(-1)!;
+      assert.equal(feedback.level, outcome === "success" ? "info" : "error");
+      assert.match(feedback.text, outcome === "success" ? /accepted: effective Policy · next attempt Full access/ : /Approval change failed: native rejection/);
+      assert.ok(h.feedbackRows().length <= 3);
+      assert.ok(h.feedbackRows().every((row) => plainWidth(row) <= 50));
+      assert.equal(h.a.session.state?.effectiveApprovalMode, "policy", "no optimistic mutation");
+      assert.equal(h.a.session.state?.pendingApprovalMode, undefined, "control reply is not copied into projection");
+      await h.input("/approval\r");
+      assert.match(h.text(), /Approval mode/, "its own completion released the token");
+      assert.equal(h.a.requests.length, 1);
+    } finally { await h.finish(); }
+  });
+}
+
+for (const sameAttachment of [false, true]) {
+  for (const outcome of ["success", "failure"] as const) {
+    it(`old approval ${outcome} cannot clear or repaint B's request after ${sameAttachment ? "Session ownership changes on the same attachment" : "attachment replacement"}`, async (t) => {
+      const h = await approvalOwnerHarness(t, sameAttachment);
+      try {
+        await h.enable();
+        const stale = h.active()!;
+        await h.input("\x1b[27u");
+        await h.switchOwner();
+        // Old popup input is stale even if called directly after replacement.
+        stale.content.handleInput?.("\r");
+        await h.enable();
+        assert.equal(h.a.requests.length, 1);
+        assert.equal(h.b.requests.length, 1, "A's pending operation does not block B");
+        assert.match(h.text(), /Current attempt: Policy/);
+        const before = [...h.feedback];
+        const aRequest = h.a.requests[0]!;
+        if (outcome === "success") aRequest.response.resolve({ effectiveApprovalMode: "full_access", revision: 99 });
+        else aRequest.response.reject(new Error("stale owner A failure"));
+        await waitForApplicationContinuation();
+        assert.deepEqual(h.feedback, before, "A's result/error cannot repaint B");
+        assert.match(h.text(), /Current attempt: Policy/);
+        assert.doesNotMatch(h.text(), /Current attempt: Full access|stale owner/);
+        await h.input("\r\r");
+        assert.equal(h.b.requests.length, 1);
+        await h.input("\x1b[27u"); await h.input("/approval\r");
+        assert.equal(h.active(), undefined, "A's finally cannot clear B's pending token");
+        assert.equal(h.b.requests.length, 1);
+        const current = sameAttachment ? h.a.session : h.b.session;
+        current.publishState({ ...h.b.state, pendingApprovalMode: "full_access", approvalModeRevision: 2 });
+        h.b.requests[0]!.response.resolve({ effectiveApprovalMode: "policy", pendingApprovalMode: "full_access", revision: 2 });
+        await waitForApplicationContinuation();
+        assert.match(h.feedback.at(-1)!.text, /accepted: effective Policy · next attempt Full access/);
+        await h.input("/approval\r");
+        assert.match(h.text(), /Current attempt: Policy/);
+        assert.match(h.text(), /Next attempt: Full access/);
+        assert.equal(current.state?.effectiveApprovalMode, "policy");
+        assert.equal(h.a.cancelled() + h.b.cancelled(), 0);
+        // B's own completion (and no other completion) admits the next request.
+        await h.input("\r");
+        assert.equal(h.b.requests.length, 2);
+        h.b.requests[1]!.response.resolve({ effectiveApprovalMode: "policy", revision: 3 });
+        await waitForApplicationContinuation();
+      } finally { await h.finish(); }
+    });
+  }
+}

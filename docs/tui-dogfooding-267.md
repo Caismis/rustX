@@ -26,26 +26,55 @@ requires at least 4.5:1 for title, output, metadata, and lifecycle accents.
 | --- | --- | --- |
 | `/approval` | Open picker, Policy highlighted | 0 |
 | Up/down | Move highlight; current checkmark still follows effective mode | 0 |
-| Esc | Close focused surface; never cancel Agent attempt | 0 |
+| Esc before submission | Close focused surface; never cancel Agent attempt | 0 |
+| Esc after submission | Close UI only; submitted operation continues | 0 additional |
 | Select Policy | Latch request pending | Exactly 1 `approvalModeSet("policy")` |
 | Select Full access | Open confirmation with Cancel focused | 0 |
 | Cancel confirmation | Close | 0 |
 | Explicitly enable | Latch request pending | Exactly 1 `approvalModeSet("full_access")` |
-| Repeated keys / reopen during request | Suppress submission | 0 additional |
+| Repeated keys / reopen during request | Suppress submission for the same current owner | 0 additional |
 | Snapshot replacement | Discard stale overlay; reconstruct native facts | 0 |
 
 Only the single typed request commits intent. No optimistic effective mode is
-stored. The callback captures the existing attachment/presentation lease and
-checks overlay identity. An older response cannot supersede a newer approval
-revision; late results from replaced surfaces cannot install feedback. Acceptance
-feedback describes the accepted request; the footer always renders live facts.
+stored. Three lifetimes remain distinct:
+
+```text
+picker/overlay state != submitted native request state != native ApprovalMode state
+```
+
+Each submitted operation has a unique object token carrying its submitting
+`PresentationLease` (attachment identity and presentation epoch). Only a pending
+request with a still-current owner blocks admission. Presentation invalidation
+closes stale overlays and invalidates leases; it does not erase submitted native
+operations. A new owner can submit while the old operation remains unresolved.
+Completion clears the stored pending request only by exact object identity, so
+A's late `finally` cannot clear B's token, including when the attachment object
+is retained across a Session ownership change.
+
+Popup redraw/close checks overlay identity. Success/error feedback instead checks
+the submitting presentation owner: Esc after submission closes the popup but a
+still-current owner receives the native acceptance or bounded failure. A replaced
+owner's late result/error cannot repaint the new owner. An older response cannot
+supersede a newer approval revision. Acceptance feedback describes the accepted
+request; the footer always renders live native facts.
+
+| Native attempt evidence | Effective label | Published pending label |
+| --- | --- | --- |
+| No attempt | `Effective: Policy` | `Next attempt: Full access`, only if published |
+| Admitted or running | `Current attempt: Policy` | `Next attempt: Full access`, only if published |
+| Settled historical attempt | `Effective: Policy` | `Next attempt: Full access`, only if published |
+
+A pending field alone never proves current work. The picker reports the published
+transition even without an active attempt rather than inventing one. The active
+check reuses the native-phase-derived `isAttemptActive()` predicate.
 
 Full access bypasses ordinary approval prompts for already-admitted Tools,
 including command execution or file-changing operations when those Tools are
 available. It does not grant unavailable Tools/capabilities, answer Questionnaire
 or Workflow Review, or define a filesystem/network sandbox profile. The native
-current attempt stays frozen: effective Policy plus pending Full access displays
-current Policy and next-attempt Full access separately.
+active attempt stays frozen: effective Policy plus pending Full access displays
+current Policy and next-attempt Full access separately. While idle, effective mode
+is labelled `Effective`, not `Current attempt`.
 
 ## Footer retention
 
@@ -143,3 +172,52 @@ failed native attachment with `conversation tool runtime: No such file or direct
 Deterministic read-only/parent-navigation and snapshot tests passed. This issue
 makes no native inspection changes. PTY output was inspected; this is not a claim
 of visual testing across physical terminal emulators or macOS execution.
+
+## PR #268 review correction validation
+
+The review follow-up starts from `8840ab94c89afa15aa632f31bed91339b8ac4cc1`.
+It changes approval interaction ownership and labels only. Tool rendering, footer
+priorities, native ApprovalMode semantics, and protocol fields are unchanged.
+
+New deterministic app regressions use deferred native replies and the existing
+`/new` + `restartRuntime`/state-publication seams. Both actual attachment
+replacement and a Session transition retaining the attachment object are covered:
+
+- `success after approval submission and Esc still reports to the current owner
+  and settles its token`;
+- the equivalent `failure after approval submission and Esc` regression, including
+  bounded error rendering and no optimistic projection update;
+- `old approval success cannot clear or repaint B's request after attachment
+  replacement`, plus its failure equivalent;
+- the same success/failure race after `Session ownership changes on the same
+  attachment`.
+
+The A/B races prove B submits while A is deferred, A's late success/error installs
+no feedback, repeated keys and reopening on B remain deduplicated after A settles,
+and B's own completion releases its exact token. Esc never cancels the Agent.
+
+`approval-selector.test.ts` explicitly covers absent/settled/admitted/running
+attempts, each with and without a published pending transition. Idle and historical
+fixtures use `Effective`; active fixtures use `Current attempt`. A pending field
+alone never invents current work. Existing generic fixtures were made explicit
+about their native phase instead of just replacing expected strings.
+
+Final local checks for this correction:
+
+| Command | Result |
+| --- | --- |
+| `node --test tui/test/approval-selector.test.ts tui/test/app.test.ts tui/test/reconstruction.test.ts` | 82 passed, 0 skipped |
+| `pnpm install --frozen-lockfile` in `tui` | Passed, lockfile unchanged |
+| `pnpm typecheck` in `tui` | Passed |
+| `pnpm test` in `tui` | 759 passed, 0 skipped |
+| `cargo fmt --all -- --check` | Passed |
+| `git diff --check` | Passed |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Passed |
+| `cargo build --bins` | Passed |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features` | 3,406 passed, 6 existing ignored |
+| Emulator `uv sync --frozen` and `uv run --frozen pytest` | Passed; 51 tests |
+
+The current CI workflow was reread. `origin/main` remained
+`b52b53956f76f50b1864c698a694029a62e43666`; no integration was required. No new
+manual-smoke claim is added by this follow-up; its asynchronous lifetime proof is
+the deferred-response regression suite.
