@@ -10,7 +10,8 @@ The source pipeline is:
 
 ```text
 bounded inert discovery
-  -> host trust and explicit source activation
+  -> host trust and source eligibility
+  -> admitted Agent/Workflow source demand
   -> credential resolution and instance freeze
   -> existing Python preparation / MCP process or HTTP connection
   -> capability availability
@@ -20,8 +21,9 @@ bounded inert discovery
 
 Each arrow is a separate decision. Discovery is not enablement; enablement does
 not prove availability; availability does not grant domain admission; admission
-does not necessarily expose a Tool to the main model. Managed Python remains an
-ordinary MCP origin with the identity `python:<folder>`. There is one Tool Plane.
+does not necessarily expose a Tool to the main model. Managed Python has typed source provenance `python:<folder>` and shares
+[ordinary source selection](tool-source-selection.md) with MCP. The existing
+materialization owners remain distinct within one Tool Plane.
 
 ## TOML surface (runtime schema 8)
 
@@ -44,9 +46,8 @@ invalid package identities and redirected package roots fail static discovery.
 
 There is no workspace `python_sources` settings map. Discovery does not enable
 every package, import Python, run uv, install dependencies, create environments,
-spawn MCP, or capture credentials. Current workspace launch supplies no Python
-materialization demand. Demand-driven preparation is owned by CFG2-03 and the
-existing source lifecycle; discovered packages remain inert in this step.
+spawn MCP, or capture credentials. Admitted Agent/Workflow selection supplies finite preparation demand to the
+existing source lifecycle; unreferenced discovered packages remain inert.
 
 ## Trust, layers, and replacement
 
@@ -174,9 +175,9 @@ Runtime Client protocol 23 projects inactive decisions (`disabled`,
 (`unavailable`, with a bounded reason), and available (`ready`) through the
 existing source availability owner. These states are not Tool identities.
 
-`--no-tools` controls ordinary main-model Tool exposure under the existing
-selection policy. It is **not** zero-preparation control. Disable sources using
-the settings above. Minimal native-only startup needs no Python, `uv`, MCP
+`--no-tools` controls ordinary main-model Tool exposure. Independently admitted
+Agent/Workflow source demand may still require preparation. Unreferenced sources
+are not prepared; source selection cannot override MCP disablement. Minimal native-only startup needs no Python, `uv`, MCP
 executables/endpoints or external-source secrets, even when an unrelated demo
 folder exists. It still requires the selected native model's own credential.
 

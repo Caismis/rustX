@@ -3,8 +3,8 @@
 //!
 //! A managed Python package is prepared by a real, network-bound `uv`
 //! environment build and served by a real `FastMCP` stdio child process.
-//! The contract under test — the package's tools projected as MCP-origin
-//! tools of the synthesized `python:<folder>` server — only exists once
+//! The contract under test — the package's Tools projected with Managed Python
+//! source provenance — only exists once
 //! that real build and real child serve the catalog, so these tests are
 //! boundary conformance even though the Runtime Client host side is driven
 //! in-process. They skip cleanly when `uv` is unavailable.
@@ -25,8 +25,7 @@ use rustx::tools::types::{
     ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
 };
 
-/// A capability view covering native + managed Python package (MCP-origin,
-/// Issue #174) + Skill origins: the revision, deterministic ordering, origin
+/// A capability view covering native + Managed Python + Skill origins: the revision, deterministic ordering, origin
 /// metadata, and Skill identity/version/name/description/exact virtual
 /// location, with no private internals on the wire.
 #[cfg(unix)]
@@ -104,7 +103,7 @@ async fn capability_projection_covers_native_python_and_skills() {
     assert!(capabilities.revision.get() >= 1);
 
     // Deterministic ordering: base registry order, then the managed Python
-    // package's MCP tools, all in one deterministic catalog; two reads are
+    // package's ordinary Tools, all in one deterministic catalog; two reads are
     // identical.
     let names: Vec<&str> = capabilities
         .tools
@@ -124,12 +123,11 @@ async fn capability_projection_covers_native_python_and_skills() {
     assert_eq!(second_view, capabilities, "deterministic ordering");
 
     // Origin metadata is correct and typed: the managed Python package
-    // (Issue #174) surfaces as an MCP-origin tool of its synthesized
-    // `python:<folder>` server.
+    // surfaces with its canonical Managed Python package provenance.
     assert_eq!(capabilities.tools[0].origin, ToolOrigin::Builtin);
     assert!(matches!(
         &capabilities.tools[1].origin,
-        ToolOrigin::Mcp { server_id } if server_id.as_str() == "python:py-echo"
+        ToolOrigin::ManagedPython { package } if package == "py-echo"
     ));
 
     // Skill identity/version/name/description/host location.

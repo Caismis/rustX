@@ -21,7 +21,7 @@ pub struct WorkflowProjection {
     pub execution_admission: &'static str,
     pub roles: BTreeMap<crate::runtime::subagent::SubagentName, RoleProjection>,
     pub sources: BTreeMap<
-        crate::runtime::identity::McpServerId,
+        crate::capabilities::ToolSourceId,
         crate::capabilities::activation::SourceActivation,
     >,
     pub dependencies: Vec<ToolDependency>,
@@ -109,14 +109,17 @@ pub(super) fn inspect(
         .collect();
     for role in roles.values() {
         for selector in &role.tools {
-            if let crate::capabilities::selection::ToolSelector::Mcp { server_id, name } = selector
-            {
+            if let Some(source_id) = selector.source() {
                 report.validity = Validity::Incomplete;
-                let activation = launch.source_activations[server_id];
+                let activation = launch
+                    .source_activations
+                    .get(source_id)
+                    .copied()
+                    .unwrap_or_default();
                 report.diagnostics.push(Diagnostic {
                     classification: "warning",
                     category: if activation == crate::capabilities::activation::SourceActivation::Enabled { "unresolved" } else { "dependency_inert" },
-                    file: Some(role.source.selected.clone()), path: format!("tools.mcp.{server_id}.{name}"),
+                    file: Some(role.source.selected.clone()), path: format!("tools.sources.{source_id}"),
                     reason: format!("named role capability {selector}: source {activation:?}; online schema compatibility is not established"),
                     correction: "review the canonical role and source policy; child admission must freeze actual capabilities".into(),
                     line: None, column: None,
@@ -134,10 +137,13 @@ pub(super) fn inspect(
             continue;
         };
         for selector in selection.selectors() {
-            if let crate::capabilities::selection::ToolSelector::Mcp { server_id, name } = &selector
-            {
+            if let Some(source_id) = selector.source() {
                 report.validity = Validity::Incomplete;
-                let activation = launch.source_activations[server_id];
+                let activation = launch
+                    .source_activations
+                    .get(source_id)
+                    .copied()
+                    .unwrap_or_default();
                 report.diagnostics.push(Diagnostic {
                     classification: "warning",
                     category: if activation
@@ -148,7 +154,7 @@ pub(super) fn inspect(
                         "dependency_inert"
                     },
                     file: Some(source.clone()),
-                    path: format!("{}.tools.mcp.{server_id}.{name}", node.path),
+                    path: format!("{}.tools.sources.{source_id}", node.path),
                     reason: format!(
                         "Agent override capability {selector}: source {activation:?}; online \
                          schema compatibility is not established"

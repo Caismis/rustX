@@ -877,7 +877,6 @@ mod tests {
         SubagentName, SubagentNameError, SubagentProjectInstructionPolicy,
     };
     use crate::capabilities::selection::ToolSelector;
-    use crate::runtime::identity::McpServerId;
     use crate::runtime::resources::ProjectContextFile;
     use crate::runtime::workspace::WorkspacePolicy;
 
@@ -944,8 +943,9 @@ mod tests {
                 ToolSelector::Builtin {
                     name: "read".to_owned(),
                 },
-                ToolSelector::Mcp {
-                    server_id: McpServerId::new("github"),
+                ToolSelector::Source {
+                    source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
+                        .unwrap(),
                     name: "get_issue".to_owned(),
                 },
             ],
@@ -955,8 +955,9 @@ mod tests {
         let shuffled = definition(
             "explore",
             vec![
-                ToolSelector::Mcp {
-                    server_id: McpServerId::new("github"),
+                ToolSelector::Source {
+                    source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
+                        .unwrap(),
                     name: "get_issue".to_owned(),
                 },
                 ToolSelector::Builtin {
@@ -1001,8 +1002,9 @@ mod tests {
         .expect("definition");
         let other_origin = definition(
             "explore",
-            vec![ToolSelector::Mcp {
-                server_id: crate::runtime::identity::McpServerId::new("server-1"),
+            vec![ToolSelector::Source {
+                source_id: crate::capabilities::ToolSourceId::try_from(String::from("server-1"))
+                    .unwrap(),
                 name: "read".to_owned(),
             }],
             Vec::new(),

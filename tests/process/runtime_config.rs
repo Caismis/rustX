@@ -4,7 +4,7 @@
 use crate::launch_fixture::LaunchFixture;
 use std::sync::Arc;
 
-use rustx::capabilities::CapabilitySourceId;
+use rustx::capabilities::ToolSourceId;
 use rustx::local_runtime::composition::{LocalRuntimeDependencies, LocalSessionProduct};
 use rustx::model::catalog::{MapCredentialEnvironment, ModelRef};
 use rustx::model::session::SessionModelConfig;
@@ -263,7 +263,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         !runtime
             .capability()
             .availability()
-            .contains_key(&CapabilitySourceId::Mcp(McpServerId::new("old")))
+            .contains_key(&ToolSourceId::Mcp(McpServerId::new("old")))
     );
     let snapshot = runtime.capability().current_snapshot();
     assert_eq!(
@@ -539,7 +539,7 @@ keep_recent_tokens = 4096
             .runtime()
             .capability()
             .availability()
-            .contains_key(&CapabilitySourceId::Mcp(McpServerId::new("exa"))),
+            .contains_key(&ToolSourceId::Mcp(McpServerId::new("exa"))),
         "a commented-out MCP entry must stay inert"
     );
 }

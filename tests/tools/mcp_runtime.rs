@@ -678,7 +678,7 @@ chat_reasoning_replay = "omit"
     }
 
     /// The whole ownership chain, end to end: one named `mcpServers` entry
-    /// plus one keyed `mcpToolPolicies` entry become exactly one runtime
+    /// plus explicit source selection and a keyed policy become exactly one runtime
     /// server identity whose stdio command/args/env reach the real stdio
     /// transport, and whose tools reach the committed capability snapshot as
     /// canonical tools carrying the overlaid policy.
@@ -700,6 +700,7 @@ chat_reasoning_replay = "omit"
         );
         let session = serde_json::json!({
             "agent_id": "agent-46",
+            "tools": {"sources": {"exa-local": "all"}},
             "model": {"model": "local/composed-model"},
             "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},
             "mcp_servers": {
@@ -1127,12 +1128,12 @@ chat_reasoning_replay = "omit"
         let server_id = McpServerId::new("raw-fixture");
         let coordinator = rustx::capabilities::CapabilityCoordinator::new(
             rustx::capabilities::CapabilityCoordinatorConfig {
-                python_sources: std::collections::BTreeMap::new(),
+                source_demand: rustx::capabilities::source::ToolSourceDemand::new([rustx::capabilities::ToolSourceId::Mcp(server_id.clone())], rustx::runtime::resources::ManagedPythonCatalog::default()),
                 conversation_id: rustx::runtime::identity::ConversationId::new("conv-raw-attribution"),
                 workspace: rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace"),
                 base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
                 extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-                tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+                tool_activation: rustx::capabilities::ToolActivationPolicy { sources: [(rustx::capabilities::ToolSourceId::Mcp(server_id.clone()), rustx::capabilities::selection::SourceToolSelection::All)].into(), ..Default::default() },
                 skill_discovery: rustx::skills::SkillDiscoveryConfig {
                     automatic_roots: vec![workspace_dir.path().join(".agents/skills")],
                     explicit_paths: Vec::new(),
@@ -1160,7 +1161,7 @@ chat_reasoning_replay = "omit"
         .expect("an isolated source failure must not fail the whole candidate");
         let Some(rustx::capabilities::CapabilitySourceState::Unavailable { reason }) = candidate
             .availability()
-            .get(&rustx::capabilities::CapabilitySourceId::Mcp(server_id))
+            .get(&rustx::capabilities::ToolSourceId::Mcp(server_id))
         else {
             panic!(
                 "the corrupted server is unavailable on its own source: {:?}",

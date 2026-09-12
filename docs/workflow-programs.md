@@ -76,9 +76,10 @@ block:
   edges: [{from: check, to: done}]
 ```
 
-Builtin selectors are `{origin: builtin, name: <name>}`; MCP selectors also
-require `server_id`. Managed Python uses its existing synthesized
-`python:<package>` MCP identity. Selectors must occur in the definition's
+Builtin selectors are `{origin: builtin, name: <name>}`. External Tool leaves
+use `{origin: source, source_id: <source>, name: <name>}` for both configured
+MCP sources and Managed Python sources (`python:<package>`). Agent overrides
+use the shared `tools.sources` All/Exact vocabulary. Selectors must occur in the definition's
 explicit `tools` admission set. The compiler checks admission, typed lexical
 bindings, object arguments, and the closed result schema. The invoking
 resource generation resolves the actual capability and native input schema;

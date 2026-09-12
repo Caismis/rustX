@@ -100,7 +100,7 @@ const MAX_RENDERED_CONNECTION_FACTS: usize = 4;
 /// The identity is the pair (server identity, generation number). Generation
 /// numbers start at 1 and increase by one per established transport; they
 /// are process-local diagnostic identity and are deliberately **not**
-/// cross-process capability identity (that remains `McpToolIdentity`).
+/// cross-process capability identity (that remains `SourceToolIdentity`).
 #[derive(Debug)]
 pub(crate) struct McpConnectionGeneration {
     generation: u64,

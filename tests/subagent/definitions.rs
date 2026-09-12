@@ -12,7 +12,7 @@
 use crate::launch_fixture::LaunchFixture;
 use std::sync::Arc;
 
-use rustx::capabilities::{CapabilitySourceId, CapabilitySourceState};
+use rustx::capabilities::{CapabilitySourceState, ToolSourceId};
 use rustx::local_runtime::composition::{LocalRuntimeDependencies, LocalSessionProduct};
 use rustx::model::catalog::{MapCredentialEnvironment, ModelCatalog, ModelRef};
 use rustx::model::invocation::ModelBindingRegistry;
@@ -764,10 +764,10 @@ async fn statically_invalid_references_fail_launch_analysis_closed() {
                 "roles": {"explore": {
                     "description": "d",
 
-                    "tools": {"mcp": {"unconfigured": ["anything"]}},
+                    "tools": {"sources": {"unconfigured": ["anything"]}},
                 }}
             }),
-            "mcp:unconfigured/anything",
+            "source:unconfigured/anything",
         ),
         (
             serde_json::json!({
@@ -778,10 +778,10 @@ async fn statically_invalid_references_fail_launch_analysis_closed() {
                     // A managed Python package (Issue #174) crosses as its
                     // synthesized MCP server (`python:<folder>`); one that
                     // does not exist is statically invalid.
-                    "tools": {"mcp": {"python:symbols": ["not_a_real_tool"]}},
+                    "tools": {"sources": {"python:symbols": ["not_a_real_tool"]}},
                 }}
             }),
-            "mcp:python:symbols/not_a_real_tool",
+            "source:python:symbols/not_a_real_tool",
         ),
         (
             serde_json::json!({
@@ -864,7 +864,7 @@ async fn an_unavailable_source_keeps_the_runtime_healthy_but_blocks_the_agent_th
                 "explore": {
                     "description": "Read-only repository exploration.",
 
-                    "tools": {"mcp": {"offline": ["get_issue"]}},
+                    "tools": {"sources": {"offline": ["get_issue"]}},
                 }
             },
             "main": ["explore"],
@@ -884,11 +884,9 @@ async fn an_unavailable_source_keeps_the_runtime_healthy_but_blocks_the_agent_th
     let resources = product.runtime().runtime_resources();
     assert!(
         matches!(
-            resources
-                .capability_availability()
-                .get(&CapabilitySourceId::Mcp(
-                    rustx::runtime::identity::McpServerId::new("offline")
-                )),
+            resources.capability_availability().get(&ToolSourceId::Mcp(
+                rustx::runtime::identity::McpServerId::new("offline")
+            )),
             Some(CapabilitySourceState::Unavailable { .. })
         ),
         "the failed source is recorded as availability state: {:?}",
@@ -1635,7 +1633,7 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
     .expect("the child resolves");
     let frozen = match &resolved.tools[0] {
         ResolvedSubagentTool::Builtin { definition, .. } => definition.clone(),
-        other @ ResolvedSubagentTool::Mcp { .. } => {
+        other @ ResolvedSubagentTool::Source { .. } => {
             panic!("expected a frozen Builtin, found {other:?}")
         }
     };
@@ -1699,7 +1697,7 @@ async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
                         // `offline` sorts before `python:ghost` in canonical
                         // selector order, so the unavailable source is
                         // inspected first.
-                        "mcp": {"offline": ["get_issue"], "python:ghost": ["not_a_real_tool"]},
+                        "sources": {"offline": ["get_issue"], "python:ghost": ["not_a_real_tool"]},
                     },
                 }
             },
@@ -1720,7 +1718,7 @@ async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
         .expect_err("a statically invalid selector rejects shared launch analysis");
     let rendered = error;
     assert!(
-        rendered.contains("mcp:python:ghost/not_a_real_tool"),
+        rendered.contains("source:python:ghost/not_a_real_tool"),
         "the selector after the unavailable source is still validated: {rendered}"
     );
 }

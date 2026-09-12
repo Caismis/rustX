@@ -2618,7 +2618,7 @@ after ChildGuidanceOutcome::Accepted:
 - **Optional-source tolerance never short-circuits admission.** Admission
   inspects *every* selector of a definition: an unavailable source is
   tolerated for that individual selector and validation continues, so an
-  offline MCP server listed before a misspelled Builtin/MCP selector
+  offline MCP server listed before a misspelled Builtin/source selector
   cannot smuggle a statically invalid definition into a published
   generation. Invocation-time resolution stays fail-fast on the first
   unsatisfiable selector. Both callers share one per-selector,
@@ -2671,14 +2671,13 @@ after ChildGuidanceOutcome::Accepted:
   snapshot, recovery diagnostic, and Runtime Client projection all carry both
   fields, so a later reload that redefines the same agent name can never
   reinterpret an already-running child by name alone.
-- **Builtin/MCP selectors use one source-qualified semantic capability
-  model.** One selection vocabulary and one resolution core produce frozen
-  identities that keep exact source identity: Builtin freezes its `ToolId`
-  and definition; MCP freezes `server_id` plus the canonical name and exact
-  definition. Managed Python tools are selected through the same `mcp`
-  namespace under their synthesized `python:<folder>` server identities —
-  there is no Python selector namespace. There
-  is no parallel per-origin registry and no wildcard selector.
+- **Ordinary external Tools share typed ToolSource selection.** MCP and
+  Managed Python use `tools.sources` with exactly `All` or `Exact` modes.
+  Source definition/eligibility never implies Agent exposure. Demand cannot
+  widen source authority. Discovery of unreferenced Python packages is inert.
+  The MCP and Python materialization owners remain distinct. Source-qualified
+  identity and frozen finite child plans prevent same-name substitution and
+  widening after publication. See [ToolSource selection](tool-source-selection.md).
 - **The `python:` MCP server namespace is structurally reserved.** Every
   discovered `.agents/tools/<folder>/` synthesizes `python:<folder>`, and a
   configured `mcpServers` entry whose identity starts with `python:` is
@@ -2689,7 +2688,7 @@ after ChildGuidanceOutcome::Accepted:
   collision treats it as an internal invariant violation, never as a
   supported availability state.
 - **MCP selections additionally freeze a deterministic cross-process
-  identity.** `McpToolIdentity` (`MCP_TOOL_IDENTITY_V1`) is what a separate
+  identity.** `SourceToolIdentity` (`MCP_TOOL_IDENTITY_V1`) is what a separate
   OS process can recompute and compare; see Issue #145 below.
 
 ## Issue #145: external subagent capabilities and nested process containment
@@ -2782,7 +2781,7 @@ after ChildGuidanceOutcome::Accepted:
 - **A workspace is not prepared-state authority after resolution.** A
   selected Python tool crosses to a child only as the frozen
   `McpServerBinding` of its synthesized `python:<folder>` server; the child
-  reconnects that binding and re-verifies the tool's `McpToolIdentity`
+  reconnects that binding and re-verifies the tool's `SourceToolIdentity`
   exactly like any MCP server. A workspace edit or a removed prepared state
   after the parent froze the binding fails child preparation closed instead
   of substituting a different server.
@@ -3162,7 +3161,7 @@ after ChildGuidanceOutcome::Accepted:
   or a different input schema are different effective profiles. The input
   schema is framed through the same rustX-owned canonical JSON writer the
   cross-process MCP Tool identity uses, so object key insertion order cannot
-  move a digest. An MCP tool additionally frames its frozen `McpToolIdentity`,
+  move a digest. An MCP tool additionally frames its frozen `SourceToolIdentity`,
   which gates the child's startup; the profile digest frames that frozen value
   and never performs the cross-process verification itself.
 - **A frozen string the child takes verbatim identifies the child.** A Skill's
@@ -3959,10 +3958,9 @@ A package rewrite is observed only at the next quiescent re-discovery.
   frozen from a violated connection, and physical settlement still goes
   through the ordinary runtime close/generation-retirement ownership. The
   capability plane attributes the failure to
-  `CapabilitySourceId::Mcp(server_id)` — for a managed Python package that
-  is its synthesized `python:<folder>` identity, so package stdout
-  corruption is diagnosed with the package identity through the generic
-  path alone.
+  `ToolSourceId::Mcp(server_id)` or `ToolSourceId::ManagedPython(package)`
+  according to the source owner. Package stdout corruption retains its typed
+  package provenance while using the same protocol adapter.
 - A capability revision freezes rustX's observed name, description, schema,
   policy, id, server identity, and executor binding; it cannot byte-snapshot
   or make deterministic the external server behavior behind that binding.

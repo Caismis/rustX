@@ -519,7 +519,7 @@ mod tests {
         let restated = SubagentInvocationOverride {
             tools: Some(crate::capabilities::selection::ToolSelectionDocument {
                 builtin: vec!["read".to_owned()],
-                mcp: std::collections::BTreeMap::new(),
+                sources: std::collections::BTreeMap::new(),
             }),
             skills: Some(vec!["code-review".to_owned()]),
             extensions: Some(crate::extensions::NativeAgentExtensionSelection::of(

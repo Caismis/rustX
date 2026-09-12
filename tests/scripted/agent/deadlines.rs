@@ -212,7 +212,7 @@ async fn runtime_with_manual_clock(
     .expect("tool runtime");
     let capability = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
-            python_sources: std::collections::BTreeMap::new(),
+            source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
             conversation_id: conversation_id.clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: Arc::new(ToolRegistry::new()),

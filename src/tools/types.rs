@@ -204,13 +204,23 @@ pub enum ToolOrigin {
     /// A tool built into the runtime. Platform communication tools such as
     /// future Fleet messaging are represented as built-in tools as well.
     Builtin,
-    /// A tool served by a bound MCP server. Managed Python tool packages
-    /// (Issue #174) compile into this origin through their synthesized
-    /// server identity (`python:<folder>`).
-    Mcp {
-        /// Identity of the MCP server exposing the tool.
-        server_id: McpServerId,
-    },
+    /// A configured MCP source, independent of its current connection.
+    Mcp { server_id: McpServerId },
+    /// A canonical package prepared by the Managed Python owner.
+    ManagedPython { package: String },
+}
+
+impl ToolOrigin {
+    /// Canonical source provenance; builtins do not belong to a `ToolSource`.
+    #[must_use]
+    pub fn source(&self) -> Option<crate::capabilities::ToolSourceId> {
+        use crate::capabilities::ToolSourceId;
+        match self {
+            Self::Builtin => None,
+            Self::Mcp { server_id } => Some(ToolSourceId::Mcp(server_id.clone())),
+            Self::ManagedPython { package } => Some(ToolSourceId::ManagedPython(package.clone())),
+        }
+    }
 }
 
 /// One tool call issued by the current agent.

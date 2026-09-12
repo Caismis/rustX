@@ -650,19 +650,25 @@ async fn a_server_failing_at_startup_is_isolated_and_diagnosed() {
 
     let coordinator = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
-            python_sources: ["crasher", "exportless"]
-                .map(|name| {
-                    (
-                        python_server_id(name),
-                        rustx::capabilities::activation::SourceActivation::Enabled,
-                    )
-                })
-                .into(),
+            source_demand: crate::common::source_demand(
+                &workspace_root,
+                ["crasher", "exportless"].map(|name| format!("python:{name}")),
+            ),
             conversation_id: ConversationId::new("conv-managed-startup"),
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            tool_activation: rustx::capabilities::ToolActivationPolicy {
+                sources: ["crasher", "exportless"]
+                    .map(|package| {
+                        (
+                            rustx::capabilities::ToolSourceId::ManagedPython(package.into()),
+                            rustx::capabilities::selection::SourceToolSelection::All,
+                        )
+                    })
+                    .into(),
+                ..Default::default()
+            },
             // Keep this fixture independent of the developer's HOME.
             skill_discovery: rustx::skills::SkillDiscoveryConfig {
                 automatic_roots: vec![workspace_root.join(".agents/skills")],
@@ -683,7 +689,7 @@ async fn a_server_failing_at_startup_is_isolated_and_diagnosed() {
         .expect("startup failure must not hang the capability preparation")
         .expect("isolated startup failures must not fail the candidate");
 
-    let crasher = rustx::capabilities::CapabilitySourceId::Mcp(python_server_id("crasher"));
+    let crasher = rustx::capabilities::ToolSourceId::ManagedPython("crasher".into());
     let Some(rustx::capabilities::CapabilitySourceState::Unavailable { reason }) =
         candidate.availability().get(&crasher)
     else {
@@ -701,7 +707,7 @@ async fn a_server_failing_at_startup_is_isolated_and_diagnosed() {
         "the diagnosis carries the server's stderr: {reason}"
     );
 
-    let exportless = rustx::capabilities::CapabilitySourceId::Mcp(python_server_id("exportless"));
+    let exportless = rustx::capabilities::ToolSourceId::ManagedPython("exportless".into());
     let Some(rustx::capabilities::CapabilitySourceState::Unavailable { reason }) =
         candidate.availability().get(&exportless)
     else {
@@ -804,16 +810,22 @@ def add(a: int, b: int) -> str:
 
     let coordinator = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
-            python_sources: [(
-                python_server_id("calc"),
-                rustx::capabilities::activation::SourceActivation::Enabled,
-            )]
-            .into(),
+            source_demand: crate::common::source_demand(&workspace_root, ["python:calc"]),
             conversation_id: ConversationId::new("conv-managed-freeze"),
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            tool_activation: rustx::capabilities::ToolActivationPolicy {
+                sources: ["calc"]
+                    .map(|package| {
+                        (
+                            rustx::capabilities::ToolSourceId::ManagedPython(package.into()),
+                            rustx::capabilities::selection::SourceToolSelection::All,
+                        )
+                    })
+                    .into(),
+                ..Default::default()
+            },
             // Keep this fixture independent of the developer's HOME.
             skill_discovery: rustx::skills::SkillDiscoveryConfig {
                 automatic_roots: vec![workspace_root.join(".agents/skills")],
@@ -1115,19 +1127,25 @@ def ping() -> str:
 
     let coordinator = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
-            python_sources: ["conflicting", "healthy"]
-                .map(|name| {
-                    (
-                        python_server_id(name),
-                        rustx::capabilities::activation::SourceActivation::Enabled,
-                    )
-                })
-                .into(),
+            source_demand: crate::common::source_demand(
+                &workspace_root,
+                ["conflicting", "healthy"].map(|name| format!("python:{name}")),
+            ),
             conversation_id: ConversationId::new("conv-managed-conflict"),
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(base_tool_registry),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            tool_activation: rustx::capabilities::ToolActivationPolicy {
+                sources: ["healthy", "conflicting"]
+                    .map(|package| {
+                        (
+                            rustx::capabilities::ToolSourceId::ManagedPython(package.into()),
+                            rustx::capabilities::selection::SourceToolSelection::All,
+                        )
+                    })
+                    .into(),
+                ..Default::default()
+            },
             // Keep this fixture independent of the developer's HOME.
             skill_discovery: rustx::skills::SkillDiscoveryConfig {
                 automatic_roots: vec![workspace_root.join(".agents/skills")],
@@ -1145,7 +1163,7 @@ def ping() -> str:
         .expect("a dependency conflict must not hang the capability preparation")
         .expect("a package-local dependency conflict must not fail the candidate");
 
-    let conflicting = rustx::capabilities::CapabilitySourceId::Mcp(python_server_id("conflicting"));
+    let conflicting = rustx::capabilities::ToolSourceId::ManagedPython("conflicting".into());
     let Some(rustx::capabilities::CapabilitySourceState::Unavailable { reason }) =
         candidate.availability().get(&conflicting)
     else {
@@ -1173,8 +1191,8 @@ def ping() -> str:
     assert_eq!(
         candidate
             .availability()
-            .get(&rustx::capabilities::CapabilitySourceId::Mcp(
-                healthy_id.clone()
+            .get(&rustx::capabilities::ToolSourceId::ManagedPython(
+                "healthy".into()
             )),
         Some(&rustx::capabilities::CapabilitySourceState::Ready),
         "an unrelated managed source is unaffected: {:?}",

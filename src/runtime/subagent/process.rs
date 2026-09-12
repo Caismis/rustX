@@ -602,7 +602,7 @@ pub(crate) async fn spawn_staged(
         .resolved
         .model
         .export_process_credentials(&mut credentials);
-    for binding in wire_spec.resolved.materialization.mcp_servers.values_mut() {
+    for binding in wire_spec.resolved.materialization.sources.values_mut() {
         binding
             .credentials
             .export_process_credentials(&mut credentials);

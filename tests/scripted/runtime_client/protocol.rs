@@ -394,7 +394,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
         matches!(
             host.attach(16),
             Err(RuntimeClientError::UnsupportedProtocolVersion {
-                supported: 31,
+                supported: 32,
                 requested: 16,
             })
         ),
@@ -403,7 +403,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         host.attach(24),
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 31,
+            supported: 32,
             requested: 24,
         })
     ));
@@ -411,8 +411,8 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         incompatible,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 31,
-            requested: 32,
+            supported: 32,
+            requested: 33,
         })
     ));
     // v28 is the immediately previous contract (Issue #255's crash-safe
@@ -426,7 +426,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_todo_extension,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 31,
+            supported: 32,
             requested: 28,
         })
     ));
@@ -435,7 +435,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_session_deletion,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 31,
+            supported: 32,
             requested: 27,
         })
     ));
@@ -447,7 +447,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_profile_digest,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 31,
+            supported: 32,
             requested: 26,
         })
     ));
@@ -458,7 +458,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_effective_extensions,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 31,
+            supported: 32,
             requested: 25,
         })
     ));
@@ -466,7 +466,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         old_protocol,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 31,
+            supported: 32,
             requested: 7,
         })
     ));
@@ -480,7 +480,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         interrupted_status,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 31,
+            supported: 32,
             requested: 15,
         })
     ));
@@ -493,7 +493,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_disposal,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 31,
+            supported: 32,
             requested: 14,
         })
     ));
@@ -506,7 +506,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         latest_only_status,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 31,
+            supported: 32,
             requested: 13,
         })
     ));
@@ -516,7 +516,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         profile_shaped,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 31,
+            supported: 32,
             requested: 6,
         })
     ));
@@ -528,7 +528,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_workspace_boundary,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 31,
+            supported: 32,
             requested: 12,
         })
     ));

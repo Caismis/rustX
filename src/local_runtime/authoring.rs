@@ -68,6 +68,7 @@ partial!(RuntimeLayer {
     mcp_servers: BTreeMap<crate::runtime::identity::McpServerId, McpAuthoring>,
     mcp_tool_policies: BTreeMap<crate::runtime::identity::McpServerId, InvocationPolicyDocument>,
     native_tools: NativeToolsLayer, environment: BTreeMap<String,String>, default_tools: Vec<String>,
+    tools: crate::capabilities::selection::ToolSelectionDocument,
     skills: Vec<PathBuf>, subagents: SubagentsLayer, workflows: WorkflowsLayer
 });
 partial!(ModelLayer {
@@ -271,6 +272,7 @@ merge_record!(
         agent_id,
         approval_mode,
         default_tools,
+        tools,
         skills
     ],
     [
@@ -454,6 +456,7 @@ impl RuntimeLayer {
             mcp_tool_policies,
             environment
         );
+        config.tools = self.tools;
         config.context = self.context.unwrap_or_default().resolve();
         if let Some(layer) = self.model_timeout_policy {
             let mut policy = config.model_timeout_policy;
@@ -537,6 +540,7 @@ impl RuntimeLayer {
         config.native_tools = resources.native_tools;
         config.environment = resources.environment;
         config.default_tools = resources.default_tools;
+        config.tools = resources.tools;
         config.skills = resources.skills;
         config.subagents = resources.subagents;
         config.workflows = resources.workflows;

@@ -312,3 +312,7 @@ MCP settlement/recovery and Workflow conformance tests remain authoritative and
 run in their existing CI partitions. Tests that previously waited for composition
 to reject static resource errors now assert the same rejection at launch analysis;
 no invalid reference has been made acceptable.
+
+MCP and Managed Python selection uses [the shared ToolSource contract](tool-source-selection.md).
+Definition/enablement is not Agent exposure; offline discovery is inert, and
+only admitted demand enters native source preparation.

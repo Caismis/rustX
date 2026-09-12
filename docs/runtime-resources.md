@@ -23,10 +23,12 @@ control and does not disable external preparation.
 An ordinary main Agent sees and can invoke exactly its frozen selected registry.
 Revision zero has no executable Tool authority; a prepared candidate publishes
 the selection. Default selection includes available built-ins named by
-`defaultTools` (Read is an ordinary member), admitted main Workflow tools, and
-eligible external tools. `--no-builtin-tools` removes all built-ins from this
+`default_tools` (Read is an ordinary member) and admitted main Workflow tools.
+External Tools require the main Agent's explicit `tools.sources` selection;
+materialization for another Agent never exposes them to main. `--no-builtin-tools` removes all built-ins from this
 default selection, including generated Subagent/Workflow tools.
-`--tools a,b` instead selects exactly those applicable registered names.
+`--tools a,b` narrows selection to those applicable registered names; external
+identities must first be selected through `tools.sources`.
 `--exclude-tools a,b` subtracts last, without reinsertion. Exclusions resolve
 against applicable availability, so excluding an already unselected available
 identity is valid, while unknown/ineligible or ambiguous names fail.
@@ -146,8 +148,8 @@ command/cwd targets before every process spawn; it does not rediscover settings.
 ## Resource ownership
 
 `capabilities::selection` owns `ToolSelector` and exact source-qualified Tool
-resolution. Named Subagents and fixed Workflows consume it directly. Selector
-serialization is unchanged; managed Python remains MCP-origin.
+resolution. Named Subagents and fixed Workflows consume it directly. MCP and Managed Python share `tools.sources` with `All` or `Exact` selection.
+See [ordinary Tool source selection](tool-source-selection.md).
 
 Foreground Leaf/Composite policy is immutable registration metadata, not an
 executor trait declaration or model-facing schema field. Catalog equality includes
@@ -160,7 +162,7 @@ WF-02 retains executable registrations (including frozen foreground policy) in
 the generation's `AvailableToolCatalog`, independently of its active model
 `ToolRegistry`. A fixed Workflow explicitly admits source-qualified Builtin/MCP
 selectors and resolves them using the same availability and identity rules as
-named subagents. Managed Python retains its synthesized MCP source identity.
+named subagents. Managed Python retains typed package source identity above its materializer.
 An inactive but available capability can serve a Workflow without widening the
 model surface. Unavailable sources, unknown selectors, changed identities and
 ineligible orchestration capabilities fail closed. Registration reconstruction
@@ -265,8 +267,7 @@ A resolved specification freezes everything the child needs: the
 `(agent, definition_digest)` identity, the optional whole-lifecycle execution
 deadline, the instruction document, the
 completely resolved model invocation, the exact source-qualified capability
-identities across Builtin/MCP (managed Python packages included, under their
-synthesized `python:<folder>` server identities) together with the exact
+identities across Builtin and typed MCP/Managed Python ToolSources together with the exact
 admitted
 `ToolDefinition` of each, the selected Skills' immutable
 `SkillId` + `SkillVersionId` bindings with their model-visible catalog
@@ -295,13 +296,13 @@ nominal:
   if the reconstruction does not equal the frozen definition;
 - each MCP capability crosses as `server_id` plus the canonical name, the
   exact admitted `ToolDefinition`, and a deterministic **cross-process**
-  `McpToolIdentity`. The process-local MCP invalidation epoch stabilizes one
+  `SourceToolIdentity`. The process-local MCP invalidation epoch stabilizes one
   process's catalog read and means nothing in another process, so the child
   connects the server itself, performs its own `tools/list`, recomputes the
   identity from what the server actually publishes, and refuses to start on
   a missing or changed definition. A selected Python tool crosses exactly
   this way: as the frozen binding of its synthesized `python:<folder>`
-  server, verified through the same `McpToolIdentity` — a workspace edit
+  server, verified through the same `SourceToolIdentity` — a workspace edit
   after the freeze fails the child's preparation closed instead of
   substituting a different server;
 - each Skill crosses as `SkillId` + `SkillVersionId` plus its catalog

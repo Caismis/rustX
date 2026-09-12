@@ -105,7 +105,7 @@ fn write_python_package(workspace: &std::path::Path, name: &str) {
 }
 
 /// A malformed managed Python tool package: `server.py` without the
-/// required `requirements.txt`, rejected in place by discovery.
+/// required `requirements.txt`, rejected during demanded preparation.
 fn write_broken_python_package(workspace: &std::path::Path, name: &str) {
     let package = workspace.join(".agents/tools").join(name);
     std::fs::create_dir_all(&package).expect("package directory");
@@ -118,8 +118,8 @@ fn write_broken_python_package(workspace: &std::path::Path, name: &str) {
 
 /// The capability source descriptor of one managed Python package folder.
 fn python_source(name: &str) -> CapabilitySourceDescriptor {
-    CapabilitySourceDescriptor::Mcp {
-        server_id: rustx::runtime::identity::McpServerId::new(format!("python:{name}")),
+    CapabilitySourceDescriptor::ManagedPython {
+        package: name.to_owned(),
     }
 }
 
@@ -218,13 +218,18 @@ async fn prove_native_tool_executes(runtime: &LocalConversationRuntime) {
 }
 
 /// A malformed Python tool package must not terminate startup: the runtime
-/// composes, the package's synthesized MCP source is observably unavailable,
+/// composes, the package's Managed Python source is observably unavailable,
 /// the native tool plane is committed and really executes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_python_capability_failure_is_isolated_from_runtime_startup() {
     let root = tempfile::tempdir().expect("temp root");
-    let (_canonical, paths) = startup(&root, SESSION_TOML);
-    // A package without `requirements.txt`: discovery rejects it in place,
+    let (_canonical, paths) = startup(
+        &root,
+        &format!(
+            "{SESSION_TOML}\n[tools]\nbuiltin = [\"read\", \"write\", \"edit\", \"glob\", \"grep\", \"bash\", \"execution\"]\n[tools.sources]\n\"python:broken-tool\" = \"all\"\n"
+        ),
+    );
+    // A package without `requirements.txt`: demanded preparation rejects it in place,
     // and its `python:broken-tool` source becomes unavailable.
     write_broken_python_package(&paths.workspace, "broken-tool");
 
@@ -244,7 +249,10 @@ async fn a_python_capability_failure_is_isolated_from_runtime_startup() {
         !names.iter().any(|name| name.contains("broken")),
         "no partially initialized Python server enters the committed registry: {names:?}"
     );
-    assert!(source_state(&snapshot, &python_source("broken-tool")).is_none());
+    assert!(matches!(
+        source_state(&snapshot, &python_source("broken-tool")),
+        Some(CapabilitySourceStateView::Unavailable { .. })
+    ));
     assert!(
         runtime
             .runtime()
@@ -252,7 +260,7 @@ async fn a_python_capability_failure_is_isolated_from_runtime_startup() {
             .managed_python_catalog()
             .packages()
             .keys()
-            .any(|id| id.as_str() == "python:broken-tool")
+            .any(|id| id.to_string() == "python:broken-tool")
     );
     prove_native_tool_executes(&runtime).await;
 }
@@ -269,7 +277,12 @@ async fn a_python_capability_failure_is_isolated_from_runtime_startup() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn python_store_initialization_failure_is_isolated_from_runtime_startup() {
     let root = tempfile::tempdir().expect("temp root");
-    let (_, paths) = startup(&root, SESSION_TOML);
+    let (_, paths) = startup(
+        &root,
+        &format!(
+            "{SESSION_TOML}\n[tools]\nbuiltin = [\"read\", \"bash\"]\n[tools.sources]\n\"python:fixture-tool\" = \"all\"\n"
+        ),
+    );
     // A valid Python package exists, so the failure cannot be attributed
     // to discovery: only opening the Python store can fail.
     write_python_package(&paths.workspace, "fixture-tool");
@@ -289,7 +302,10 @@ async fn python_store_initialization_failure_is_isolated_from_runtime_startup() 
         .expect("a Python store initialization failure must not terminate composition");
     let snapshot = attach_snapshot(&runtime);
 
-    assert!(source_state(&snapshot, &python_source("fixture-tool")).is_none());
+    assert!(matches!(
+        source_state(&snapshot, &python_source("fixture-tool")),
+        Some(CapabilitySourceStateView::Unavailable { .. })
+    ));
     assert!(
         runtime
             .runtime()
@@ -297,7 +313,7 @@ async fn python_store_initialization_failure_is_isolated_from_runtime_startup() 
             .managed_python_catalog()
             .packages()
             .keys()
-            .any(|id| id.as_str() == "python:fixture-tool")
+            .any(|id| id.to_string() == "python:fixture-tool")
     );
     assert_eq!(
         std::fs::read(environments.join("python-tools/packages")).unwrap(),
@@ -338,7 +354,7 @@ fn base_only_capability_setup_is_structurally_independent_of_python_storage() {
 
     let coordinator = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
-            python_sources: std::collections::BTreeMap::new(),
+            source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
             conversation_id: rustx::runtime::identity::ConversationId::new("conv-81-base-only"),
             workspace: rustx::tools::Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
@@ -425,6 +441,7 @@ mod mcp {
             "agent_id": "agent-81",
             "model": {"model": "local/composed-model"},
             "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},
+            "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"good": "all", "bad": "all"}},
             "mcp_servers": {
                 "good": {
                     "enabled": true,
@@ -472,8 +489,7 @@ mod mcp {
         assert!(
             !snapshot.capabilities.sources.iter().any(|source| matches!(
                 &source.source,
-                CapabilitySourceDescriptor::Mcp { server_id }
-                    if server_id.as_str().starts_with("python:")
+                CapabilitySourceDescriptor::ManagedPython { .. }
             )),
             "no packages means no managed Python source is evaluated: {:?}",
             snapshot.capabilities.sources
@@ -538,6 +554,7 @@ mod mcp {
             "agent_id": "agent-81",
             "model": {"model": "local/composed-model"},
             "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},
+            "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"alien": "all"}},
             "mcp_servers": {
                 "alien": {
                     "enabled": true,
@@ -606,6 +623,7 @@ mod mcp {
             "agent_id": "agent-81",
             "model": {"model": "local/composed-model"},
             "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},
+            "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"loud": "all"}},
             "mcp_servers": {
                 "loud": {
                     "enabled": true,
@@ -653,7 +671,7 @@ mod mcp {
         let authoritative = runtime.capability().availability();
         let Some(rustx::capabilities::CapabilitySourceState::Unavailable {
             reason: authoritative_reason,
-        }) = authoritative.get(&rustx::capabilities::CapabilitySourceId::Mcp(
+        }) = authoritative.get(&rustx::capabilities::ToolSourceId::Mcp(
             rustx::runtime::identity::McpServerId::new("loud"),
         ))
         else {
@@ -729,7 +747,7 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
     let root = tempfile::tempdir().expect("temp root");
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
-    // A broken Python package (its synthesized MCP source fails) ...
+    // A broken Python package (its Managed Python preparation fails) ...
     let package = workspace.join(".agents/tools/broken-tool");
     std::fs::create_dir_all(&package).expect("package directory");
     std::fs::write(
@@ -743,7 +761,8 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
         "agent_id": "agent-81",
         "model": {"model": "local/composed-model"},
         "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192},
-        "mcp_servers": {
+        "tools": {"builtin": ["read", "write", "edit", "glob", "grep", "bash", "execution"], "sources": {"exa": "all", "python:broken-tool": "all"}},
+            "mcp_servers": {
             "exa": {
                 "enabled": true,
                     "type": "stdio",
@@ -799,8 +818,11 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
         );
     }
     assert!(
-        source_state(&snapshot, &python_source("broken-tool")).is_none(),
-        "discovery creates no ready source"
+        matches!(
+            source_state(&snapshot, &python_source("broken-tool")),
+            Some(CapabilitySourceStateView::Unavailable { .. })
+        ),
+        "demanded malformed package is unavailable"
     );
     let exa = CapabilitySourceDescriptor::Mcp {
         server_id: rustx::runtime::identity::McpServerId::new("exa"),

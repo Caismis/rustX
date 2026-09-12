@@ -176,7 +176,7 @@ impl InteractionRequester {
     pub fn mcp_server(&self) -> Option<&crate::runtime::identity::McpServerId> {
         match &self.origin {
             ToolOrigin::Mcp { server_id } => Some(server_id),
-            ToolOrigin::Builtin => None,
+            ToolOrigin::Builtin | ToolOrigin::ManagedPython { .. } => None,
         }
     }
 }

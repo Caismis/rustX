@@ -83,9 +83,9 @@
 
 use sha2::Digest;
 
-use crate::runtime::identity::{McpServerId, McpToolIdentity};
+use crate::runtime::identity::{McpServerId, SourceToolIdentity};
 use crate::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin,
+    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
 };
 
 /// The versioned domain separator of the canonical MCP Tool identity.
@@ -108,7 +108,7 @@ pub fn mcp_tool_identity(
     execution: ToolExecutionPolicy,
     concurrency: ToolConcurrencyPolicy,
     approval: ToolApprovalPolicy,
-) -> McpToolIdentity {
+) -> SourceToolIdentity {
     let frame = identity_frame(
         server_id,
         name,
@@ -125,7 +125,7 @@ pub fn mcp_tool_identity(
         use std::fmt::Write as _;
         let _ = write!(hex, "{byte:02x}");
     }
-    McpToolIdentity::new(hex)
+    SourceToolIdentity::new(hex)
 }
 
 /// Builds the canonical V1 preimage bytes (see the module documentation for
@@ -171,19 +171,11 @@ fn identity_frame(
 /// Returns `None` for a definition whose origin is not MCP: a non-MCP
 /// definition has no server identity and therefore no MCP Tool identity.
 #[must_use]
-pub fn definition_identity(definition: &ToolDefinition) -> Option<McpToolIdentity> {
-    let ToolOrigin::Mcp { server_id } = &definition.origin else {
-        return None;
-    };
-    Some(mcp_tool_identity(
-        server_id,
-        &definition.name,
-        &definition.description,
-        &definition.input_schema,
-        definition.execution_policy,
-        definition.concurrency_policy,
-        definition.approval_policy,
-    ))
+pub fn definition_identity(definition: &ToolDefinition) -> Option<SourceToolIdentity> {
+    definition
+        .origin
+        .source()
+        .map(|source| super::source_tool_identity(&source, definition))
 }
 
 const fn execution_token(policy: ToolExecutionPolicy) -> &'static str {

@@ -87,7 +87,7 @@
 // Version 31: Goal joins coherent projection bootstrap and the bounded
 // `goal_changed` stream. Activation-only changes advance the client cursor
 // while preserving the independent durable Goal revision.
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 31;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 32;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -346,7 +346,7 @@ export type ToolReplayPolicy = "never" | "idempotent";
  * alter approval, concurrency, or replay behaviour. Those are Rust-owned and
  * reach the client only as published facts.
  */
-export type ToolOrigin = "builtin" | { mcp: { server_id: McpServerId } };
+export type ToolOrigin = "builtin" | { mcp: { server_id: McpServerId } } | { managed_python: { package: string } };
 
 /**
  * The lifecycle states of a detached background execution.
@@ -1326,7 +1326,7 @@ export interface CapabilityView {
 }
 
 /** The identity of one optional capability source (Issue #81). */
-export type CapabilitySourceDescriptor = { type: "mcp"; server_id: McpServerId };
+export type CapabilitySourceDescriptor = { type: "mcp"; server_id: McpServerId } | { type: "managed_python"; package: string };
 
 /** The availability of one optional capability source. */
 export type CapabilitySourceStateView =

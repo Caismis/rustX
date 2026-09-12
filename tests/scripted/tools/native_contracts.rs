@@ -624,13 +624,24 @@ fn selection_registry(fixture: &common::NativeFixture) -> rustx::tools::executor
     rustx::tools::native::register_workflow_tools(&mut registry, &runtime, &workflows).unwrap();
     // Transport preparation is separately covered by CFG-02. Here both
     // origins are already available; selection cannot activate either.
-    for (name, server) in [("external", "mcp-test"), ("python_echo", "python:echo")] {
+    for (name, origin) in [
+        (
+            "external",
+            rustx::tools::types::ToolOrigin::Mcp {
+                server_id: rustx::runtime::identity::McpServerId::new("mcp-test"),
+            },
+        ),
+        (
+            "python_echo",
+            rustx::tools::types::ToolOrigin::ManagedPython {
+                package: "echo".into(),
+            },
+        ),
+    ] {
         let mut definition = definition(fixture, "read");
         definition.id = rustx::runtime::identity::ToolId::new(format!("tool-{name}"));
         definition.name = name.into();
-        definition.origin = rustx::tools::types::ToolOrigin::Mcp {
-            server_id: rustx::runtime::identity::McpServerId::new(server),
-        };
+        definition.origin = origin;
         registry
             .register(
                 definition,
@@ -645,17 +656,26 @@ fn selection_registry(fixture: &common::NativeFixture) -> rustx::tools::executor
 
 async fn selected_capabilities(
     fixture: &common::NativeFixture,
-    policy: rustx::capabilities::ToolActivationPolicy,
+    mut policy: rustx::capabilities::ToolActivationPolicy,
 ) -> Result<
     rustx::capabilities::CapabilityCoordinator,
     rustx::capabilities::CapabilityPreparationError,
 > {
+    let registry = selection_registry(fixture);
+    for definition in registry.definitions() {
+        if let Some(source) = definition.origin.source() {
+            policy
+                .sources
+                .entry(source)
+                .or_insert(rustx::capabilities::selection::SourceToolSelection::All);
+        }
+    }
     let coordinator = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
-            python_sources: std::collections::BTreeMap::new(),
+            source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
             conversation_id: fixture.runtime.conversation_id().clone(),
             workspace: fixture.runtime.workspace().clone(),
-            base_tool_registry: Arc::new(selection_registry(fixture)),
+            base_tool_registry: Arc::new(registry),
             extension_tools: fixture.runtime.extension_tool_plane(),
             tool_activation: policy,
             skill_discovery: rustx::skills::SkillDiscoveryConfig {
@@ -1166,7 +1186,7 @@ async fn native_admission_pins_policy_axes_and_exposure_across_candidate_changes
     )
     .unwrap();
     let inputs = rustx::capabilities::CapabilityResourceInputs {
-        python_sources: std::collections::BTreeMap::new(),
+        source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
         base_tool_registry: Arc::new(replacement),
         tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
         skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),

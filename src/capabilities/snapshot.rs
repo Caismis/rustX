@@ -236,6 +236,9 @@ impl CapabilitySnapshot {
                 .filter_map(|definition| match definition.origin {
                     crate::tools::types::ToolOrigin::Mcp { server_id } => Some(server_id),
                     crate::tools::types::ToolOrigin::Builtin => None,
+                    crate::tools::types::ToolOrigin::ManagedPython { package } => {
+                        Some(crate::tools::python::python_server_id(&package))
+                    }
                 })
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()

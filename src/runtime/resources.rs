@@ -48,11 +48,13 @@ pub struct ProjectContextFile {
 /// Inert canonical Managed Python sources frozen with the full generation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ManagedPythonCatalog {
-    packages: std::collections::BTreeMap<crate::runtime::identity::McpServerId, PathBuf>,
+    packages: std::collections::BTreeMap<crate::capabilities::ToolSourceId, PathBuf>,
 }
 impl ManagedPythonCatalog {
-    pub(crate) fn new(
-        packages: std::collections::BTreeMap<crate::runtime::identity::McpServerId, PathBuf>,
+    /// Construct an inert catalog from canonical, authority-checked package paths.
+    #[must_use]
+    pub fn new(
+        packages: std::collections::BTreeMap<crate::capabilities::ToolSourceId, PathBuf>,
     ) -> Self {
         Self { packages }
     }
@@ -60,7 +62,7 @@ impl ManagedPythonCatalog {
     #[must_use]
     pub const fn packages(
         &self,
-    ) -> &std::collections::BTreeMap<crate::runtime::identity::McpServerId, PathBuf> {
+    ) -> &std::collections::BTreeMap<crate::capabilities::ToolSourceId, PathBuf> {
         &self.packages
     }
 }

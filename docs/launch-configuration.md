@@ -520,3 +520,7 @@ rustX deliberately has only the finite layers and fail-closed policy specified h
 External-source activation is separate from launch trust and Tool exposure.
 The [source activation contract](source-activation.md) defines schema 8's
 `mcp_servers.<name>.enabled` and host-only sensitive references. Managed Python existence comes from canonical package discovery.
+
+MCP and Managed Python selection uses [the shared ToolSource contract](tool-source-selection.md).
+Definition/enablement is not Agent exposure; offline discovery is inert, and
+only admitted demand enters native source preparation.

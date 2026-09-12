@@ -321,18 +321,37 @@ impl RuntimeClientFixtureBuilder {
             .expect("register native tools");
         }
 
+        let mut tool_activation = self.tool_activation;
+        tool_activation.sources.insert(
+            rustx::capabilities::ToolSourceId::ManagedPython("py-echo".into()),
+            rustx::capabilities::selection::SourceToolSelection::All,
+        );
+        for definition in base_tools.definitions() {
+            if let Some(source) = definition.origin.source() {
+                tool_activation
+                    .sources
+                    .entry(source)
+                    .or_insert(rustx::capabilities::selection::SourceToolSelection::All);
+            }
+        }
+        for id in self.mcp_servers.keys() {
+            tool_activation
+                .sources
+                .entry(rustx::capabilities::ToolSourceId::Mcp(id.clone()))
+                .or_insert(rustx::capabilities::selection::SourceToolSelection::All);
+        }
         let coordinator = rustx::capabilities::CapabilityCoordinator::with_backend(
             rustx::capabilities::CapabilityCoordinatorConfig {
-                python_sources: [(
-                    rustx::tools::python::python_server_id("py-echo"),
-                    rustx::capabilities::activation::SourceActivation::Enabled,
-                )]
-                .into(),
+                source_demand: crate::scripted_suites::common::source_demand(
+                    tool_runtime.workspace().root(),
+                    std::iter::once("python:py-echo".to_owned())
+                        .chain(self.mcp_servers.keys().map(ToString::to_string)),
+                ),
                 conversation_id: tool_runtime.conversation_id().clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(base_tools),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                tool_activation: self.tool_activation,
+                tool_activation,
                 skill_discovery: rustx::skills::SkillDiscoveryConfig {
                     automatic_roots: vec![tool_runtime.workspace().root().join(".agents/skills")],
                     explicit_paths: Vec::new(),

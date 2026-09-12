@@ -96,7 +96,7 @@ use crate::runtime::workspace::WorkspaceSnapshot;
 /// participation (Issue #254), alongside the version 20 extension composition.
 /// Version 22 removes the independent absolute child runtime path: the child
 /// derives its private allocation from product identity, `ConversationId` and incarnation.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 22;
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 23;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -927,8 +927,8 @@ mod tests {
                     name: "read".to_owned(),
                     definition: tool_definition("read", ToolOrigin::Builtin),
                 },
-                ResolvedSubagentTool::Mcp {
-                    server_id: McpServerId::new("github"),
+                ResolvedSubagentTool::Source {
+                    source_id: crate::capabilities::ToolSourceId::Mcp(McpServerId::new("github")),
                     tool_id: ToolId::new("tool-get_issue"),
                     name: "get_issue".to_owned(),
                     identity: crate::tools::mcp::identity::definition_identity(&tool_definition(
@@ -945,21 +945,21 @@ mod tests {
                         },
                     ),
                 },
-                ResolvedSubagentTool::Mcp {
-                    server_id: McpServerId::new("python:symbols"),
+                ResolvedSubagentTool::Source {
+                    source_id: crate::capabilities::ToolSourceId::ManagedPython("symbols".into()),
                     tool_id: ToolId::new("tool-symbols"),
                     name: "repository_symbols".to_owned(),
                     identity: crate::tools::mcp::identity::definition_identity(&tool_definition(
                         "repository_symbols",
-                        ToolOrigin::Mcp {
-                            server_id: McpServerId::new("python:symbols"),
+                        ToolOrigin::ManagedPython {
+                            package: "symbols".into(),
                         },
                     ))
                     .expect("an MCP definition has an MCP identity"),
                     definition: tool_definition(
                         "repository_symbols",
-                        ToolOrigin::Mcp {
-                            server_id: McpServerId::new("python:symbols"),
+                        ToolOrigin::ManagedPython {
+                            package: "symbols".into(),
                         },
                     ),
                 },
@@ -982,8 +982,8 @@ mod tests {
                 content: "workspace instructions".to_owned(),
             }],
             materialization: crate::runtime::subagent::resolver::ResolvedSubagentMaterialization {
-                mcp_servers: [(
-                    McpServerId::new("github"),
+                sources: [(
+                    crate::capabilities::ToolSourceId::Mcp(McpServerId::new("github")),
                     crate::tools::mcp::McpServerBinding {
                         credentials: crate::credentials::SourceCredentials::default(),
                         activation: crate::capabilities::activation::SourceActivation::Enabled,
@@ -1014,12 +1014,12 @@ mod tests {
         assert_eq!(decoded, spec);
         assert!(matches!(
             &decoded.tools[1],
-            ResolvedSubagentTool::Mcp { server_id, .. } if server_id.as_str() == "github"
+            ResolvedSubagentTool::Source { source_id, .. } if source_id.to_string() == "github"
         ));
         assert!(matches!(
             &decoded.tools[2],
-            ResolvedSubagentTool::Mcp { server_id, .. }
-                if server_id.as_str() == "python:symbols"
+            ResolvedSubagentTool::Source { source_id, .. }
+                if source_id.to_string() == "python:symbols"
         ));
     }
 

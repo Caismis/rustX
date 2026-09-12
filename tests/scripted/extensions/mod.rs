@@ -1767,7 +1767,7 @@ async fn ext259_a_resource_reload_cannot_install_or_remove_the_todo_extension() 
         // plane entirely — the strongest ordinary statement there is.
         let candidate = coordinator
             .prepare_candidate_with_inputs(rustx::capabilities::CapabilityResourceInputs {
-                python_sources: std::collections::BTreeMap::new(),
+                source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
                 base_tool_registry: Arc::new(ordinary_base()),
                 tool_activation: rustx::capabilities::ToolActivationPolicy {
                     no_tools: true,
@@ -1800,7 +1800,7 @@ async fn ext259_a_resource_reload_cannot_install_or_remove_the_todo_extension() 
         // composition that does not have it.
         let candidate = coordinator
             .prepare_candidate_with_inputs(rustx::capabilities::CapabilityResourceInputs {
-                python_sources: std::collections::BTreeMap::new(),
+                source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
                 base_tool_registry: Arc::new(ordinary_base()),
                 tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
@@ -1905,7 +1905,7 @@ fn extension_capability(
     let dir = tempfile::tempdir().expect("capability temp dir");
     let coordinator = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
-            python_sources: std::collections::BTreeMap::new(),
+            source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
             conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: std::sync::Arc::new(rustx::tools::executor::ToolRegistry::new()),

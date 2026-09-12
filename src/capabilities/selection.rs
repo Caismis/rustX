@@ -1,148 +1,198 @@
 //! Source-qualified selection from one immutable capability generation.
-use super::{
-    AvailableToolCatalog, CapabilityAvailability, CapabilitySourceId, CapabilitySourceState,
-};
-use crate::runtime::identity::McpServerId;
+use super::{AvailableToolCatalog, CapabilityAvailability, CapabilitySourceState, ToolSourceId};
 use crate::tools::types::{ToolDefinition, ToolOrigin};
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 
-/// Trusted selection syntax shared by Subagent and Workflow authoring.
-/// Managed Python uses the existing `python:<package>` MCP server identity.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+/// Exactly two trust granularities for one source. This is also the authoring
+/// boundary: only the literal "all" or an exact array is accepted.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(from = "SourceSelectionAuthoring", into = "SourceSelectionAuthoring")]
+#[schemars(with = "SourceSelectionAuthoring")]
+pub enum SourceToolSelection {
+    All,
+    Exact(Vec<String>),
+}
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(untagged)]
+enum SourceSelectionAuthoring {
+    All(AllTools),
+    Exact(Vec<String>),
+}
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum AllTools {
+    All,
+}
+impl From<SourceSelectionAuthoring> for SourceToolSelection {
+    fn from(value: SourceSelectionAuthoring) -> Self {
+        match value {
+            SourceSelectionAuthoring::All(_) => Self::All,
+            SourceSelectionAuthoring::Exact(names) => Self::Exact(names),
+        }
+    }
+}
+impl From<SourceToolSelection> for SourceSelectionAuthoring {
+    fn from(value: SourceToolSelection) -> Self {
+        match value {
+            SourceToolSelection::All => Self::All(AllTools::All),
+            SourceToolSelection::Exact(names) => Self::Exact(names),
+        }
+    }
+}
+
+/// Exact leaf references used by Workflow Tool nodes and frozen projections.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(tag = "origin", rename_all = "snake_case", deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
 pub enum ToolSelector {
     Builtin {
         name: String,
     },
-    Mcp {
-        server_id: McpServerId,
+    Source {
+        source_id: ToolSourceId,
         name: String,
     },
+    All {
+        source_id: ToolSourceId,
+    },
 }
-
 impl ToolSelector {
     #[must_use]
     pub fn canonical(&self) -> String {
         match self {
             Self::Builtin { name } => format!("builtin:{name}"),
-            Self::Mcp { server_id, name } => format!("mcp:{server_id}/{name}"),
+            Self::Source { source_id, name } => format!("source:{source_id}/{name}"),
+            Self::All { source_id } => format!("source:{source_id}"),
+        }
+    }
+    #[must_use]
+    pub const fn source(&self) -> Option<&ToolSourceId> {
+        match self {
+            Self::Builtin { .. } => None,
+            Self::Source { source_id, .. } | Self::All { source_id } => Some(source_id),
         }
     }
 }
-
 impl std::fmt::Display for ToolSelector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.canonical())
     }
 }
 
-/// The authored map form of an exact, source-qualified capability selection.
-///
-/// This is the one selection vocabulary shared by every trusted authoring
-/// surface: named Agent TOML (`[tools]`), a Workflow Agent node's
-/// invocation override, and the model-facing `subagent` Tool's `override`.
-/// Origins are named explicitly rather than collapsed into bare strings, so a
-/// Builtin `read` and an MCP server's `read` are never interchangeable.
-/// Wildcards are deliberately absent: a selection is an exact list. Managed
-/// Python tool packages are selected through `mcp` under their synthesized
-/// server identity (`python:<folder>`, Issue #174).
-///
-/// The `python:` namespace is reserved for those synthesized identities:
-/// `mcpServers` configuration may never declare a server under it (rejected
-/// during validation), so a selection naming `python:<folder>` always resolves
-/// to the managed package, never to a configured server.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
-#[derive(schemars::JsonSchema)]
+/// Shared Agent and Workflow Agent override selection. Extensions are composed
+/// by their native owner and never enter this ordinary capability vocabulary.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields, default)]
 pub struct ToolSelectionDocument {
-    /// Built-in/native capabilities, by canonical model-facing name.
     pub builtin: Vec<String>,
-    /// MCP capabilities, keyed by server identity.
-    pub mcp: std::collections::BTreeMap<McpServerId, Vec<String>>,
+    pub sources: BTreeMap<ToolSourceId, SourceToolSelection>,
 }
-
 impl ToolSelectionDocument {
-    /// The typed selectors this document expresses, in authored order.
     #[must_use]
     pub fn selectors(&self) -> Vec<ToolSelector> {
-        let mut selectors: Vec<ToolSelector> = self
+        let mut result: Vec<_> = self
             .builtin
             .iter()
             .map(|name| ToolSelector::Builtin { name: name.clone() })
             .collect();
-        for (server_id, names) in &self.mcp {
-            selectors.extend(names.iter().map(|name| ToolSelector::Mcp {
-                server_id: server_id.clone(),
-                name: name.clone(),
-            }));
+        for (source_id, selection) in &self.sources {
+            match selection {
+                SourceToolSelection::All => result.push(ToolSelector::All {
+                    source_id: source_id.clone(),
+                }),
+                SourceToolSelection::Exact(names) => {
+                    result.extend(names.iter().map(|name| ToolSelector::Source {
+                        source_id: source_id.clone(),
+                        name: name.clone(),
+                    }));
+                }
+            }
         }
-        selectors
+        result.sort();
+        result
     }
-
-    /// Whether this document selects nothing at all.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.builtin.is_empty() && self.mcp.values().all(Vec::is_empty)
+        self.selectors().is_empty()
     }
-
-    /// Rejects a structurally invalid selector before any authority check.
-    ///
-    /// Emptiness is a *spelling* violation, not a missing capability: an
-    /// empty name or server identity can never resolve, so it is refused at
-    /// the authoring boundary rather than reported later as an unknown
-    /// capability.
+    /// Validate exact names and extension-plane separation.
     ///
     /// # Errors
-    ///
-    /// Returns the canonical spelling diagnostic of the first violation.
+    /// Returns the first malformed or duplicate entry in deterministic order.
     pub fn validate_spelling(&self) -> Result<(), String> {
-        for selector in self.selectors() {
-            let empty = match &selector {
-                ToolSelector::Builtin { name } => name.trim().is_empty(),
-                ToolSelector::Mcp { server_id, name } => {
-                    server_id.as_str().is_empty() || name.trim().is_empty()
+        fn names(names: &[String]) -> Result<(), String> {
+            let mut seen = BTreeSet::new();
+            for name in names {
+                if name.is_empty()
+                    || name.trim() != name
+                    || name.chars().any(|c| {
+                        c.is_whitespace()
+                            || c.is_control()
+                            || matches!(c, '*' | '?' | '/' | '\\' | '[' | ']')
+                    })
+                {
+                    return Err(format!("malformed exact Tool name {name:?}"));
                 }
-            };
-            if empty {
-                return Err(
-                    "tools must name nonempty source-qualified capability identities".to_owned(),
-                );
+                if !seen.insert(name) {
+                    return Err(format!("duplicate exact Tool name {name:?}"));
+                }
+                if let Some(extension) = super::extension_provided_tool(name) {
+                    return Err(format!(
+                        "{name} is provided by the {extension:?} Agent Extension, not by ordinary Tool selection; compose it with extensions.{extension}.enabled instead"
+                    ));
+                }
             }
-            // An extension-provided Tool is not an ordinary Builtin identity,
-            // so it is refused at the authoring boundary on every surface
-            // that shares this vocabulary — role `tools.builtin`, a Workflow
-            // Agent node's override, and the model-facing `subagent` Tool's
-            // override alike (Issue #259). The diagnostic names the plane the
-            // capability actually lives in, instead of leaving the author to
-            // read "unknown capability" about a Tool they can see working.
-            if let ToolSelector::Builtin { name } = &selector
-                && let Some(extension) = super::extension_provided_tool(name)
-            {
-                return Err(format!(
-                    "builtin:{name} is provided by the {extension:?} Agent Extension, \
-                     not by ordinary Tool selection; compose it with \
-                     extensions.{extension}.enabled instead"
-                ));
+            Ok(())
+        }
+        names(&self.builtin)?;
+        for selection in self.sources.values() {
+            if let SourceToolSelection::Exact(exact) = selection {
+                names(exact)?;
             }
         }
         Ok(())
     }
 }
 
-/// Source health and invalid selection are deliberately distinct failures.
+/// Typed facts for admission owners; they choose their own failure policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceResolutionFailure {
+    Undefined,
+    Inactive(super::activation::SourceActivation),
+    Unprepared,
+    Unavailable { reason: String },
+}
+impl std::fmt::Display for SourceResolutionFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Undefined => f.write_str("source is not defined or discovered"),
+            Self::Inactive(activation) => {
+                f.write_str(activation.admit().err().unwrap_or("source is inactive"))
+            }
+            Self::Unprepared => f.write_str("source is eligible but not prepared"),
+            Self::Unavailable { reason } => f.write_str(reason),
+        }
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolSelectionError {
     SourceUnavailable {
         selector: String,
-        source: String,
-        reason: String,
+        source: ToolSourceId,
+        reason: SourceResolutionFailure,
+    },
+    ExactToolAbsent {
+        source: ToolSourceId,
+        name: String,
     },
     UnknownCapability {
         selector: String,
     },
 }
-
 impl std::fmt::Display for ToolSelectionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -154,13 +204,134 @@ impl std::fmt::Display for ToolSelectionError {
                 f,
                 "{selector} requires unavailable source {source}: {reason}"
             ),
+            Self::ExactToolAbsent { source, name } => write!(
+                f,
+                "ready source {source} does not publish exact Tool {name:?}"
+            ),
             Self::UnknownCapability { selector } => write!(f, "unknown capability {selector}"),
         }
     }
 }
 impl std::error::Error for ToolSelectionError {}
 
-/// Resolves an exact definition, never consulting the model-active registry.
+/// Read one generation's source readiness.
+///
+/// # Errors
+/// Returns the precise absence, authority, or materialization failure.
+pub fn source_state(
+    source: &ToolSourceId,
+    availability: &CapabilityAvailability,
+) -> Result<(), SourceResolutionFailure> {
+    match availability.get(source) {
+        None => Err(SourceResolutionFailure::Undefined),
+        Some(CapabilitySourceState::Inactive { activation }) => {
+            Err(SourceResolutionFailure::Inactive(*activation))
+        }
+        Some(CapabilitySourceState::Unprepared) => Err(SourceResolutionFailure::Unprepared),
+        Some(CapabilitySourceState::Unavailable { reason }) => {
+            Err(SourceResolutionFailure::Unavailable {
+                reason: reason.clone(),
+            })
+        }
+        Some(CapabilitySourceState::Ready) => Ok(()),
+    }
+}
+
+/// Complete typed source resolution for later Agent/Workflow admission policy.
+#[derive(Debug, PartialEq)]
+pub enum SourceToolResolution<'a> {
+    Unavailable(SourceResolutionFailure),
+    Ready {
+        selected: Vec<&'a ToolDefinition>,
+        missing_exact: Vec<String>,
+    },
+}
+/// Resolve source trust and exact identities without deciding admission policy.
+pub fn resolve_source<'a>(
+    source: &ToolSourceId,
+    selection: &SourceToolSelection,
+    definitions: impl IntoIterator<Item = &'a ToolDefinition>,
+    availability: &CapabilityAvailability,
+) -> SourceToolResolution<'a> {
+    if let Err(reason) = source_state(source, availability) {
+        return SourceToolResolution::Unavailable(reason);
+    }
+    let mut published: BTreeMap<_, _> = definitions
+        .into_iter()
+        .filter(|definition| {
+            definition.origin.source().as_ref() == Some(source)
+                && super::extension_provided_tool(&definition.name).is_none()
+        })
+        .map(|definition| (definition.name.clone(), definition))
+        .collect();
+    match selection {
+        SourceToolSelection::All => SourceToolResolution::Ready {
+            selected: published.into_values().collect(),
+            missing_exact: Vec::new(),
+        },
+        SourceToolSelection::Exact(names) => {
+            let mut selected = Vec::new();
+            let mut missing_exact = Vec::new();
+            for name in names {
+                if let Some(tool) = published.remove(name) {
+                    selected.push(tool);
+                } else {
+                    missing_exact.push(name.clone());
+                }
+            }
+            selected.sort_by(|a, b| a.name.cmp(&b.name));
+            missing_exact.sort();
+            SourceToolResolution::Ready {
+                selected,
+                missing_exact,
+            }
+        }
+    }
+}
+
+/// Expands source-wide trust only against this supplied immutable generation.
+pub(crate) fn project<'a>(
+    selector: &ToolSelector,
+    definitions: impl IntoIterator<Item = &'a ToolDefinition>,
+    availability: &CapabilityAvailability,
+) -> Result<Vec<&'a ToolDefinition>, ToolSelectionError> {
+    if let Some(source) = selector.source() {
+        let mode = match selector {
+            ToolSelector::All { .. } => SourceToolSelection::All,
+            ToolSelector::Source { name, .. } => SourceToolSelection::Exact(vec![name.clone()]),
+            ToolSelector::Builtin { .. } => unreachable!("builtin has no source"),
+        };
+        return match resolve_source(source, &mode, definitions, availability) {
+            SourceToolResolution::Unavailable(reason) => {
+                Err(ToolSelectionError::SourceUnavailable {
+                    selector: selector.canonical(),
+                    source: source.clone(),
+                    reason,
+                })
+            }
+            SourceToolResolution::Ready {
+                selected,
+                missing_exact,
+            } if missing_exact.is_empty() => Ok(selected),
+            SourceToolResolution::Ready { missing_exact, .. } => {
+                Err(ToolSelectionError::ExactToolAbsent {
+                    source: source.clone(),
+                    name: missing_exact[0].clone(),
+                })
+            }
+        };
+    }
+    let ToolSelector::Builtin { name } = selector else {
+        unreachable!("source handled above")
+    };
+    definitions
+        .into_iter()
+        .find(|definition| definition.origin == ToolOrigin::Builtin && definition.name == *name)
+        .map(|definition| vec![definition])
+        .ok_or_else(|| ToolSelectionError::UnknownCapability {
+            selector: selector.canonical(),
+        })
+}
 pub(crate) fn resolve_selector<'a>(
     selector: &ToolSelector,
     available: &'a AvailableToolCatalog,
@@ -172,55 +343,28 @@ pub(crate) fn resolve_selector<'a>(
         availability,
     )
 }
-
-/// Source-qualified semantic resolution over known definitions. Static callers
-/// carry genuine native metadata and unprepared source facts, never executors.
 pub(crate) fn resolve_metadata<'a>(
     selector: &ToolSelector,
     available: impl IntoIterator<Item = &'a ToolDefinition>,
     availability: &CapabilityAvailability,
 ) -> Result<&'a ToolDefinition, ToolSelectionError> {
-    if let ToolSelector::Mcp { server_id, .. } = selector {
-        let source = CapabilitySourceId::Mcp(server_id.clone());
-        let reason = match availability.get(&source) {
-            Some(CapabilitySourceState::Unavailable { reason }) => Some(reason.clone()),
-            Some(CapabilitySourceState::Inactive { activation }) => Some(
-                activation
-                    .admit()
-                    .err()
-                    .unwrap_or("source is not prepared")
-                    .to_owned(),
-            ),
-            Some(CapabilitySourceState::Unprepared) => {
-                Some("source is enabled but not prepared".to_owned())
-            }
-            _ => None,
-        };
-        if let Some(reason) = reason {
-            return Err(ToolSelectionError::SourceUnavailable {
-                selector: selector.canonical(),
-                source: source.to_string(),
-                reason,
-            });
-        }
+    let selected = project(selector, available, availability)?;
+    if matches!(selector, ToolSelector::All { .. }) {
+        return Err(ToolSelectionError::UnknownCapability {
+            selector: "a Workflow Tool leaf requires one exact Tool identity".into(),
+        });
     }
-    available
+    selected
         .into_iter()
-        .find(|definition| match (selector, &definition.origin) {
-            (ToolSelector::Builtin { name }, ToolOrigin::Builtin) => definition.name == *name,
-            (ToolSelector::Mcp { server_id, name }, ToolOrigin::Mcp { server_id: actual }) => {
-                actual == server_id && definition.name == *name
-            }
-            _ => false,
-        })
+        .next()
         .ok_or_else(|| ToolSelectionError::UnknownCapability {
             selector: selector.canonical(),
         })
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::identity::McpServerId;
     use crate::tools::deadline::{
         ForegroundPolicy, ToolExecutionDeadlinePolicy, ToolProgressCapability,
     };
@@ -271,11 +415,14 @@ mod tests {
         let local = ToolSelector::Builtin {
             name: "check".into(),
         };
-        let remote = ToolSelector::Mcp {
-            server_id: server_id.clone(),
+        let remote = ToolSelector::Source {
+            source_id: ToolSourceId::Mcp(server_id.clone()),
             name: "check".into(),
         };
-        let mut availability = CapabilityAvailability::default();
+        let mut availability = CapabilityAvailability::from([(
+            ToolSourceId::Mcp(server_id.clone()),
+            CapabilitySourceState::Ready,
+        )]);
         assert_eq!(
             resolve_selector(&local, &catalog, &availability).unwrap(),
             &builtin
@@ -284,16 +431,16 @@ mod tests {
             resolve_selector(&remote, &catalog, &availability).unwrap(),
             &mcp
         );
-        let invalid = ToolSelector::Mcp {
-            server_id: server_id.clone(),
+        let invalid = ToolSelector::Source {
+            source_id: ToolSourceId::Mcp(server_id.clone()),
             name: "unknown".into(),
         };
         assert!(matches!(
             resolve_selector(&invalid, &catalog, &availability),
-            Err(ToolSelectionError::UnknownCapability { .. })
+            Err(ToolSelectionError::ExactToolAbsent { .. })
         ));
         availability.insert(
-            CapabilitySourceId::Mcp(server_id),
+            ToolSourceId::Mcp(server_id),
             CapabilitySourceState::Unavailable {
                 reason: "offline".into(),
             },
@@ -357,5 +504,219 @@ mod tests {
         let workflow = include_str!("../runtime/workflow/tool.rs");
         assert!(!workflow.contains("subagent::resolver"));
         assert!(!include_str!("../tools/executor.rs").contains("fn foreground_policy(&self)"));
+    }
+    fn source_definition(source: &ToolSourceId, name: &str) -> ToolDefinition {
+        let origin = match source {
+            ToolSourceId::Mcp(id) => ToolOrigin::Mcp {
+                server_id: id.clone(),
+            },
+            ToolSourceId::ManagedPython(package) => ToolOrigin::ManagedPython {
+                package: package.clone(),
+            },
+        };
+        let mut result = definition(origin);
+        result.name = name.into();
+        result.id = crate::runtime::identity::ToolId::new(format!("{source}/{name}"));
+        result
+    }
+    #[test]
+    fn all_exact_and_same_names_use_canonical_source_provenance() {
+        let mcp = ToolSourceId::Mcp(McpServerId::new("github"));
+        let python = ToolSourceId::ManagedPython("data-analysis".into());
+        let tools = [
+            source_definition(&mcp, "b"),
+            source_definition(&python, "a"),
+            source_definition(&mcp, "a"),
+        ];
+        let availability = [
+            (mcp.clone(), CapabilitySourceState::Ready),
+            (python.clone(), CapabilitySourceState::Ready),
+        ]
+        .into();
+        for source in [&mcp, &python] {
+            let SourceToolResolution::Ready {
+                selected,
+                missing_exact,
+            } = resolve_source(source, &SourceToolSelection::All, &tools, &availability)
+            else {
+                panic!("ready source")
+            };
+            assert!(missing_exact.is_empty());
+            assert!(
+                selected
+                    .iter()
+                    .all(|tool| tool.origin.source().as_ref() == Some(source))
+            );
+            assert_eq!(selected.len(), if source == &mcp { 2 } else { 1 });
+            let exact = resolve_source(
+                source,
+                &SourceToolSelection::Exact(vec!["a".into()]),
+                &tools,
+                &availability,
+            );
+            assert_eq!(
+                exact,
+                SourceToolResolution::Ready {
+                    selected: vec![
+                        tools
+                            .iter()
+                            .find(|tool| tool.origin.source().as_ref() == Some(source)
+                                && tool.name == "a")
+                            .unwrap()
+                    ],
+                    missing_exact: vec![]
+                }
+            );
+        }
+    }
+    #[test]
+    fn resolution_classifies_absence_authority_materialization_and_exact_absence() {
+        use super::super::activation::SourceActivation;
+        let source = ToolSourceId::Mcp(McpServerId::new("github"));
+        let tools = [source_definition(&source, "a")];
+        for mode in [
+            SourceToolSelection::All,
+            SourceToolSelection::Exact(vec!["a".into()]),
+        ] {
+            for (state, expected) in [
+                (None, SourceResolutionFailure::Undefined),
+                (
+                    Some(CapabilitySourceState::Inactive {
+                        activation: SourceActivation::Disabled,
+                    }),
+                    SourceResolutionFailure::Inactive(SourceActivation::Disabled),
+                ),
+                (
+                    Some(CapabilitySourceState::Inactive {
+                        activation: SourceActivation::Untrusted,
+                    }),
+                    SourceResolutionFailure::Inactive(SourceActivation::Untrusted),
+                ),
+                (
+                    Some(CapabilitySourceState::Unprepared),
+                    SourceResolutionFailure::Unprepared,
+                ),
+                (
+                    Some(CapabilitySourceState::unavailable("offline")),
+                    SourceResolutionFailure::Unavailable {
+                        reason: "offline".into(),
+                    },
+                ),
+            ] {
+                let availability = state
+                    .map(|state| (source.clone(), state))
+                    .into_iter()
+                    .collect();
+                assert_eq!(
+                    resolve_source(&source, &mode, &tools, &availability),
+                    SourceToolResolution::Unavailable(expected)
+                );
+            }
+        }
+        let ready = [(source.clone(), CapabilitySourceState::Ready)].into();
+        assert_eq!(
+            resolve_source(
+                &source,
+                &SourceToolSelection::Exact(vec!["missing".into()]),
+                &tools,
+                &ready
+            ),
+            SourceToolResolution::Ready {
+                selected: vec![],
+                missing_exact: vec!["missing".into()]
+            }
+        );
+    }
+    #[test]
+    fn authoring_has_one_strict_source_vocabulary_and_rejects_duplicate_exact_names() {
+        #[derive(serde::Deserialize)]
+        struct Document {
+            tools: ToolSelectionDocument,
+        }
+        let valid = r#"[tools]
+builtin = ["read", "grep"]
+[tools.sources]
+github = "all"
+"python:data-analysis" = ["run_python", "inspect_dataframe"]
+"#;
+        let parsed: Document = toml::from_str(valid).unwrap();
+        parsed.tools.validate_spelling().unwrap();
+        assert_eq!(
+            parsed.tools.sources[&ToolSourceId::Mcp(McpServerId::new("github"))],
+            SourceToolSelection::All
+        );
+        for bad in [
+            "mcp = {}",
+            "python = {}",
+            "sources = {github = 'ALL'}",
+            "sources = {github = '*'}",
+            "sources = {'python:' = 'all'}",
+        ] {
+            assert!(
+                toml::from_str::<ToolSelectionDocument>(bad).is_err(),
+                "{bad}"
+            );
+        }
+        for bad in [
+            "sources = {github = ['a','a']}",
+            "sources = {github = ['']}",
+            "sources = {github = ['a*']}",
+            "builtin = ['todo']",
+            "sources = {github = ['todo']}",
+            "builtin = ['read','read']",
+        ] {
+            let parsed: ToolSelectionDocument = toml::from_str(bad).unwrap();
+            assert!(parsed.validate_spelling().is_err(), "{bad}");
+        }
+    }
+    #[test]
+    fn ordering_is_independent_of_source_and_definition_insertion_order() {
+        let a = ToolSourceId::Mcp(McpServerId::new("a"));
+        let b = ToolSourceId::ManagedPython("b".into());
+        let make = |entries: Vec<_>| ToolSelectionDocument {
+            builtin: vec!["read".into()],
+            sources: entries.into_iter().collect(),
+        };
+        let one = make(vec![
+            (a.clone(), SourceToolSelection::All),
+            (b.clone(), SourceToolSelection::Exact(vec!["x".into()])),
+        ]);
+        let two = make(vec![
+            (b.clone(), SourceToolSelection::Exact(vec!["x".into()])),
+            (a.clone(), SourceToolSelection::All),
+        ]);
+        assert_eq!(one.selectors(), two.selectors());
+        let tools = [source_definition(&a, "b"), source_definition(&a, "a")];
+        let ready = [(a.clone(), CapabilitySourceState::Ready)].into();
+        assert_eq!(
+            resolve_source(&a, &SourceToolSelection::All, &tools, &ready),
+            resolve_source(&a, &SourceToolSelection::All, tools.iter().rev(), &ready)
+        );
+    }
+    #[test]
+    fn exact_multi_entry_projects_only_the_named_tools_for_both_source_kinds() {
+        for source in [
+            ToolSourceId::Mcp(McpServerId::new("github")),
+            ToolSourceId::ManagedPython("data-analysis".into()),
+        ] {
+            let tools = [
+                source_definition(&source, "c"),
+                source_definition(&source, "a"),
+                source_definition(&source, "b"),
+            ];
+            let ready = [(source.clone(), CapabilitySourceState::Ready)].into();
+            assert_eq!(
+                resolve_source(
+                    &source,
+                    &SourceToolSelection::Exact(vec!["b".into(), "a".into()]),
+                    &tools,
+                    &ready
+                ),
+                SourceToolResolution::Ready {
+                    selected: vec![&tools[1], &tools[2]],
+                    missing_exact: vec![]
+                }
+            );
+        }
     }
 }

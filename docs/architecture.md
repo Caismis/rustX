@@ -3165,9 +3165,9 @@ MCP:      MCP schema                          -> ToolDefinition
 Python:   FastMCP-derived MCP schema          -> ToolDefinition
 ```
 
-Python packages arrive through the MCP row: each package is served as one
-synthesized MCP server (`python:<folder>`), and FastMCP derives its tool
-schemas from the decorated functions' names, docstrings, and type hints.
+Managed Python preparation uses the MCP adapter internally; FastMCP derives
+its Tool schemas from decorated function names, docstrings, and type hints.
+The published Tools retain Managed Python source provenance.
 
 All three converge at the same registry boundary, and the runtime keeps
 validating every invocation against the stored canonical schema before
@@ -4074,8 +4074,8 @@ adapter-local terminal buffering exists for Anthropic text or thinking.
 The tool plane exposes a single runtime-owned execution contract and multiple executor implementations:
 
 - Native tools
-- MCP tools (including managed Python tool packages, which are served as
-  synthesized MCP servers)
+- External source Tools: configured MCP sources and Managed Python packages,
+  with separate materialization owners and a shared ordinary Tool contract
 - Platform communication tools such as durable message sending
 
 Execution implementations may depend on `rmcp`, process APIs, `uv`, or other libraries. The agent kernel may not.
@@ -4083,8 +4083,7 @@ Execution implementations may depend on `rmcp`, process APIs, `uv`, or other lib
 #### M7 implementation (one external-capability tool plane)
 
 Every model-visible tool is one canonical `ToolDefinition` paired with one
-`Arc<dyn ToolExecutor>`. Native and MCP tools — custom Python tool packages
-included, since they arrive as synthesized MCP servers — use the same
+`Arc<dyn ToolExecutor>`. Native Tools and external source Tools from MCP and Managed Python use the same
 registry preflight, reserved `__rustx_*` stripping, JSON Schema validation,
 execution policy, concurrency policy, progress event, cancellation signal,
 foreground/background ownership, and result types. The Agent Loop has no
@@ -4138,9 +4137,9 @@ the in-flight connect/discovery/`tools/call` operation structurally and
 poisons the connection generation: it never serves another call as
 healthy, and physical settlement still belongs to the ordinary runtime
 close and generation-retirement machinery. The capability plane records
-the failure on `CapabilitySourceId::Mcp(server_id)`, so a managed Python
-package's stdout corruption is diagnosed through its synthesized
-`python:<folder>` identity by the generic runtime — there is no
+the failure on the typed `ToolSourceId` belonging to the materialization
+owner, so a managed Python package's stdout corruption is diagnosed with
+Managed Python provenance by the capability coordinator — there is no
 Python-specific parser and FastMCP has no separate framing contract.
 #### MCP liveness, connection generations, and recovery (Issue #205)
 
@@ -4600,10 +4599,11 @@ interpreter running `python -m fastmcp.cli run <state>/source/server.py:mcp
 silenced so stdout stays reserved for the MCP wire. The launch never
 re-resolves dependencies — it names the venv interpreter directly, never
 `uv run`, and never re-enters the store. From that binding on, everything —
-connect, `tools/list`, the frozen catalog epoch, availability as
-`CapabilitySourceId::Mcp(python:<folder>)`, `tools/call`, commit, leases, and
-the subagent frozen crossing — is the unmodified generic MCP machinery: a
-Python package is not a second runtime protocol. The revision a managed
+connect, `tools/list`, the frozen catalog epoch and `tools/call` — uses the
+existing MCP adapter. The coordinator publishes availability and ordinary
+Tool provenance as `ToolSourceId::ManagedPython(package)`. Commit, leases
+and the frozen child crossing preserve that semantic source identity; the
+transport binding never becomes the Agent/Workflow selection vocabulary. The revision a managed
 package speaks is therefore a property of that generic connection, not of the
 package: the rustX-owned peer (FastMCP 4, Issue #241) answers the modern
 `server/discover` probe, so a managed child negotiates MCP `2026-07-28`
@@ -6687,7 +6687,7 @@ materialization) — remain fatal composition errors. Failures of **optional
 external capability sources** — each managed Python tool package and each
 configured MCP server independently — are isolated by the capability plane
 into typed availability state (`CapabilitySourceState::Unavailable { reason }`
-keyed by `CapabilitySourceId`), and composition continues: the base/native
+keyed by `ToolSourceId`), and composition continues: the base/native
 capability set is never conditional on an optional source, one MCP server's
 failure never suppresses another, one malformed or unpreparable Python
 package never suppresses its siblings, and only successfully prepared capability
@@ -6695,7 +6695,7 @@ objects enter the committed active snapshot. Opening/creating the
 Python-private store itself (`<environment store>/python-tools`) is part of the
 optional Python preparation — the coordinator constructor owns only the
 store location plus one lazy slot — so a broken Python store degrades
-the availability of the discovered packages and can never fail core
+the availability of demanded packages and can never fail core
 construction, and the base-only
 subagent capability path (`prepare_base_only_candidate`) never touches
 Python storage at all. A subagent child that *does* select Python tools takes
@@ -6847,13 +6847,11 @@ capability-source availability of the same generation, never over the
 parent's active `ToolRegistry`. A named subagent is therefore an independent
 projection of the authority admitted into the invoking generation: it may
 select a capability that is available but inactive for the parent, and it can
-never select one the generation does not authorize at all. Selectors are
-source-qualified across all three origins through one selection vocabulary
-and one resolution core, and the frozen result keeps exact identity —
-`ToolId` for Builtin, and `server_id` plus canonical name, exact definition,
-and the deterministic cross-process `McpToolIdentity` for MCP — with managed
-Python tools selected through the same `mcp` namespace under their
-synthesized `python:<folder>` server identities. Issue #145 turned that frozen semantic
+never select one the generation does not authorize at all. Selectors use one ordinary ToolSource boundary with `All` or `Exact` modes.
+Builtin freezes its `ToolId` and definition; external Tools freeze typed
+`ToolSourceId`, canonical name, exact definition and `SourceToolIdentity`.
+MCP and Managed Python use the same `tools.sources` syntax and retain separate
+native materialization owners. Issue #145 turned frozen semantic
 authority into physical execution in the child; see *Selected-only child
 materialization* below.
 
@@ -7426,8 +7424,8 @@ invoking RuntimeResourceSnapshot Rn
         v
 ResolvedSubagentSpec                      (parent: decides)
   ├─ exact Builtin ToolDefinitions
-  ├─ exact MCP identities  (server_id + name + McpToolIdentity)
-  │    (managed Python packages are MCP identities under `python:<folder>`)
+  ├─ exact MCP identities  (server_id + name + SourceToolIdentity)
+  │    (MCP and Managed Python retain typed ToolSource identities)
   ├─ exact Skill SkillId + SkillVersionId (+ materialization source)
   ├─ frozen project instructions
   ├─ FrozenModelSpec
@@ -7437,7 +7435,7 @@ ResolvedSubagentSpec                      (parent: decides)
 child process                             (child: realizes)
   ├─ connects only the frozen MCP servers, verifies each identity
   │    (a selected Python tool reconnects its synthesized `python:<folder>`
-  │    server binding and re-verifies its McpToolIdentity, like any MCP tool)
+  │    server binding and re-verifies its SourceToolIdentity, like any MCP tool)
   ├─ materializes only the frozen Skill packages and re-proves each digest
   └─ registers exactly the frozen Builtins
         |
@@ -7547,8 +7545,8 @@ cross-process lock to pretend otherwise.
 
 A subagent child never opens this store. A selected Python tool crosses as
 the frozen `McpServerBinding` of its synthesized `python:<folder>` server
-inside `ResolvedSubagentMaterialization.mcp_servers`, and the child reconnects
-that binding and re-verifies the tool's `McpToolIdentity` exactly like any
+inside `ResolvedSubagentMaterialization.sources`, and the child reconnects
+that binding and re-verifies the tool's `SourceToolIdentity` exactly like any
 selected MCP server: a workspace edit or a deleted prepared state after the
 parent froze the binding fails the child's preparation closed instead of
 substituting a different server.
@@ -9483,3 +9481,91 @@ pending work before composing any live Conversation. ConversationAccess consults
 this same authority, so residual private files cannot revive deleted identities.
 See [Session deletion lifecycle](session-deletion-lifecycle.md) for the state machine,
 visibility/durability distinction and deterministic crash/concurrency evidence.
+
+### ToolSource selection and admitted demand (CFG2-03)
+
+
+MCP configuration and canonical Managed Python packages define two concrete kinds
+of `ToolSourceId`: a configured MCP identity such as `github`, and a Managed
+Python identity such as `python:data-analysis`. Namespace parsing happens at the
+strict authoring boundary. Resolution and materialization dispatch use typed
+identities, never display names or prefix matching.
+
+Agents and Workflow Agent overrides share one selection document:
+
+```toml
+[tools]
+builtin = ["read", "grep"]
+
+[tools.sources]
+github = "all"
+"python:data-analysis" = ["run_python", "inspect_dataframe"]
+```
+
+The main runtime configuration accepts the same `[tools]` document. When it is
+absent, existing native defaults apply, with no external source exposure. An
+explicit document replaces that main selection. Named Agent discovery does not
+select every discovered Agent; existing main/Workflow Agent admission lists
+remain responsible for which profiles create demand in this issue.
+
+`All` is coarse source trust: every eligible ordinary Tool published by that
+exact source in the admitted resource generation. `Exact` is fine-grained Tool
+trust: only the source-qualified names in the array. Arrays reject malformed and
+duplicate names. There are no wildcard, exclusion, inheritance, or alternate
+Python selectors. Native Tools remain an explicit list. Extension-provided Tools
+belong solely to native Agent Extension composition and cannot be selected
+through either `builtin` or `sources`.
+
+A Workflow Tool node selects one exact leaf with `origin: source`, `source_id`,
+and `name`; its Agent override uses the shared `tools.sources` map. A leaf cannot
+execute a source-wide `All` selection as if it were one Tool.
+
+## Demand and ownership
+
+Source definition/discovery is distinct from enabled/trusted eligibility,
+materialization, Agent exposure, frozen admission, and invocation approval.
+Selecting a source cannot define it, enable a disabled MCP server, grant host
+trust, or bypass approval policy.
+
+The composition owner collects finite demand from main selection, admitted
+named Agent profiles, and admitted Workflow references. A sorted set coalesces
+multiple references to one semantic source. The existing capability coordinator
+prepares one off-side candidate:
+
+- Enabled/trusted MCP definitions are connected only when demanded, by the
+  existing MCP connection and generation owner.
+- `.agents/tools/<package>` discovery records inert identities and paths.
+  Only demanded discovered packages enter the existing `PythonToolStore`
+  preparation owner. Unreferenced package code and dependencies are not parsed;
+  no environment, uv operation, credentials, import, or process is requested.
+- Python's prepared execution binding may use MCP internally. Its published
+  ordinary Tool provenance remains Managed Python. This does not create a
+  generic plugin runtime or a second connection manager.
+
+Materialization alone does not expose Tools to main. Each Agent/Workflow resolves
+its own source selection against the committed available catalog. Same-name
+Tools from different sources never substitute for each other. Source-local
+failures remain bounded and isolated from unrelated sources.
+
+## Frozen generations and children
+
+The existing resource publication owner commits capability and resource state
+atomically. Selection uses only the immutable generation admitted to that
+attempt or Workflow. R1 publishing `{a,b}` freezes `All` to `{a,b}`. R2 publishing
+`{a,b,c}` lets a future `All` admission select `{a,b,c}` while R1 stays unchanged.
+`Exact([a])` stays `{a}` in both generations.
+
+Child plans contain the finite selected source Tools and their canonical
+cross-process identities. They do not contain an instruction to expand `All`
+again. Child materialization connects only the frozen bindings and verifies each
+expected identity before constructing an executor. Missing or changed definitions
+fail preparation; a later same-name Tool cannot replace a parent-authorized one.
+
+## Resolution facts and policy
+
+`resolve_source` returns typed facts: undefined source; inactive source with its
+actual disabled/untrusted decision; unprepared source; materialization unavailable
+with a bounded reason; or a ready source with selected definitions and missing
+Exact names. Offline checks retain unprepared facts and never invent online Tool
+metadata. Agent warning/suppression policy and atomic Workflow disable policy
+remain owned by CFG2-04 and CFG2-05 respectively.

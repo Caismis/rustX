@@ -34,7 +34,10 @@ pub(super) fn freeze(
                 } => WorkflowRunError::SourceUnavailable(error.to_string()),
                 crate::capabilities::selection::ToolSelectionError::UnknownCapability {
                     ..
-                } => WorkflowRunError::InvalidSelector(error.to_string()),
+                }
+                | crate::capabilities::selection::ToolSelectionError::ExactToolAbsent { .. } => {
+                    WorkflowRunError::InvalidSelector(error.to_string())
+                }
             })?;
             let definition = selected;
             if definition.execution_policy
@@ -130,21 +133,19 @@ impl WorkflowCatalog {
                 };
                 if let Some(selection) = &node.invocation_override.tools {
                     for selector in selection.selectors() {
-                        match crate::capabilities::selection::resolve_metadata(
+                        match crate::capabilities::selection::project(
                             &selector,
                             available,
                             availability,
                         ) {
                             Ok(selected)
-                                if !selected
+                                if selected.iter().all(|selected| !selected
                                     .id
                                     .as_str()
-                                    .starts_with(super::WORKFLOW_TOOL_ID_PREFIX) => {}
+                                    .starts_with(super::WORKFLOW_TOOL_ID_PREFIX)) => {}
                             Err(
-                                crate::capabilities::selection::ToolSelectionError::SourceUnavailable {
-                                    ..
-                                },
-                            ) => {}
+                                crate::capabilities::selection::ToolSelectionError::SourceUnavailable { reason, .. },
+                            ) if !matches!(reason, crate::capabilities::selection::SourceResolutionFailure::Undefined) => {}
                             _ => {
                                 return Err(failure(format!(
                                     "Agent override selects {selector}, which this generation \
@@ -232,9 +233,8 @@ impl WorkflowCatalog {
                             ..
                         },
                     ) => match selector {
-                        ToolSelector::Mcp { server_id, .. } => match availability.get(
-                            &crate::capabilities::CapabilitySourceId::Mcp(server_id.clone()),
-                        ) {
+                        ToolSelector::Source { source_id, .. }
+                        | ToolSelector::All { source_id } => match availability.get(source_id) {
                             Some(crate::capabilities::CapabilitySourceState::Inactive {
                                 activation,
                             }) => super::inspection::DependencyState::Inert {

@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
 use rustx::capabilities::{
-    CapabilityCoordinator, CapabilityCoordinatorConfig, CapabilitySourceId, CapabilitySourceState,
+    CapabilityCoordinator, CapabilityCoordinatorConfig, CapabilitySourceState, ToolSourceId,
 };
 use rustx::runtime::identity::ConversationId;
 use rustx::tools::environment::ToolEnvironment;
@@ -123,148 +123,69 @@ struct Fixture {
 const SERVER_V1: &str = "from fastmcp import FastMCP\nmcp = FastMCP('demo')\n";
 const SERVER_V2: &str = "from fastmcp import FastMCP\nmcp = FastMCP('demo-v2')\n";
 
-/// Admission precedes every Python probe, install, environment build and MCP
-/// spawn. Returning from preparation is the ordering evidence; no sleeps.
 #[tokio::test]
-async fn disabled_untrusted_and_unconfigured_python_have_exactly_zero_preparation() {
-    use rustx::capabilities::activation::SourceActivation;
-    for decision in [
-        SourceActivation::Disabled,
-        SourceActivation::evaluate(
-            Some(rustx::capabilities::activation::SourceEnablement::Enabled),
-            false,
-        ),
-        SourceActivation::Unconfigured,
-    ] {
-        let fixture = fixture_with_decision(
-            &[("demo", "raise Exception('must never import')")],
-            std::collections::BTreeMap::new(),
-            decision,
-        );
-        for _ in 0..2 {
-            let candidate = fixture
-                .coordinator
-                .prepare_candidate()
-                .await
-                .expect("native preparation");
-            fixture
-                .coordinator
-                .commit(candidate)
-                .expect("publish inert state");
-        }
-        assert!(
-            fixture.runner.commands.lock().unwrap().is_empty(),
-            "zero probes, installs, syncs, or subprocesses"
-        );
-        assert!(state_dirs(&fixture.store_root).is_empty());
-        assert_eq!(
-            fixture
-                .coordinator
-                .availability()
-                .get(&CapabilitySourceId::Mcp(python_server_id("demo"))),
-            Some(&CapabilitySourceState::Inactive {
-                activation: decision
-            })
-        );
-        let inputs = rustx::capabilities::CapabilityResourceInputs {
-            python_sources: [(python_server_id("demo"), decision)].into(),
-            base_tool_registry: Arc::new(ToolRegistry::new()),
-            tool_activation: rustx::capabilities::ToolActivationPolicy {
-                tools: Some(vec!["hidden_python_tool".into()]),
-                ..Default::default()
-            },
-            skill_discovery: rustx::skills::SkillDiscoveryConfig {
-                automatic_roots: vec![],
-                explicit_paths: vec![],
-            },
-            mcp_servers: std::collections::BTreeMap::new(),
-            base_environment: ToolEnvironment::new(),
-        };
-        assert!(matches!(
-            fixture
-                .coordinator
-                .prepare_candidate_with_inputs(inputs)
-                .await,
-            Err(rustx::capabilities::CapabilityPreparationError::ToolActivation(_))
-        ));
-        assert!(fixture.runner.commands.lock().unwrap().is_empty());
-        assert!(state_dirs(&fixture.store_root).is_empty());
-        assert!(
-            fixture
-                .coordinator
-                .current_snapshot()
-                .tool_registry()
-                .is_empty()
-        );
-    }
+async fn unreferenced_discovered_python_packages_perform_zero_preparation() {
+    let fixture = fixture_with_selection(
+        &[("demo", "must never import")],
+        std::collections::BTreeMap::default(),
+        &[],
+    );
+    let candidate = fixture.coordinator.prepare_candidate().await.unwrap();
+    fixture.coordinator.commit(candidate).unwrap();
+    assert!(fixture.runner.commands.lock().unwrap().is_empty());
+    assert!(state_dirs(&fixture.store_root).is_empty());
+    assert_eq!(
+        fixture
+            .coordinator
+            .availability()
+            .get(&ToolSourceId::ManagedPython("demo".into())),
+        Some(&CapabilitySourceState::Unprepared)
+    );
+}
+
+#[tokio::test]
+async fn admitted_demand_prepares_only_the_referenced_package_once() {
+    let fixture = fixture_with_selection(
+        &[("a", SERVER_V1), ("b", "must never parse")],
+        std::collections::BTreeMap::default(),
+        &["a", "a"],
+    );
+    let b = fixture.workspace_root.join(".agents/tools/b/server.py");
+    std::fs::remove_file(&b).unwrap();
+    nix::unistd::mkfifo(&b, nix::sys::stat::Mode::S_IRUSR).unwrap();
+    let candidate = fixture.coordinator.prepare_candidate().await.unwrap();
+    fixture.coordinator.commit(candidate).unwrap();
+    assert_eq!(fixture.runner.lock_command_count(), 1);
+    assert_eq!(state_dirs(&fixture.store_root).len(), 1);
+    assert_eq!(
+        fixture
+            .coordinator
+            .availability()
+            .get(&ToolSourceId::ManagedPython("b".into())),
+        Some(&CapabilitySourceState::Unprepared)
+    );
+}
+
+#[tokio::test]
+async fn demanded_but_undefined_python_source_does_not_prepare_other_packages() {
+    let fixture = fixture_with_selection(
+        &[("other", "must never parse")],
+        std::collections::BTreeMap::default(),
+        &["missing"],
+    );
+    let candidate = fixture.coordinator.prepare_candidate().await.unwrap();
+    fixture.coordinator.commit(candidate).unwrap();
+    assert!(fixture.runner.commands.lock().unwrap().is_empty());
+    assert!(
+        !fixture
+            .coordinator
+            .availability()
+            .contains_key(&ToolSourceId::ManagedPython("missing".into()))
+    );
 }
 
 fn fixture() -> Fixture {
-    fixture_with_servers(std::collections::BTreeMap::new())
-}
-
-#[tokio::test]
-async fn cfg233_declared_missing_python_sources_remain_observable_without_preparation() {
-    use rustx::capabilities::activation::{SourceActivation, SourceEnablement};
-    for decision in [
-        SourceActivation::Enabled,
-        SourceActivation::Disabled,
-        SourceActivation::evaluate(Some(SourceEnablement::Enabled), false),
-    ] {
-        // The fixture declares one identity, then removes its resource before
-        // the first discovery. The runner records every physical preparation.
-        let fixture = fixture_with_decision(
-            &[("missing", "must never execute")],
-            std::collections::BTreeMap::new(),
-            decision,
-        );
-        let missing = fixture.workspace_root.join(".agents/tools/missing");
-        std::fs::remove_file(missing.join("server.py")).unwrap();
-        std::fs::remove_file(missing.join("requirements.txt")).unwrap();
-        std::fs::remove_dir(&missing).unwrap();
-        // An undeclared malformed entry must remain unread/inert, not become a
-        // package validation error. A FIFO would hang if contents were read.
-        let undeclared = fixture.workspace_root.join(".agents/tools/undeclared");
-        std::fs::create_dir(&undeclared).unwrap();
-        nix::unistd::mkfifo(&undeclared.join("server.py"), nix::sys::stat::Mode::S_IRUSR).unwrap();
-        let key = CapabilitySourceId::Mcp(python_server_id("missing"));
-        assert_eq!(
-            fixture.coordinator.availability().get(&key),
-            Some(&CapabilitySourceState::before_preparation(decision)),
-            "bootstrap state is observable before first preparation"
-        );
-        for _ in 0..2 {
-            let candidate = fixture.coordinator.prepare_candidate().await.unwrap();
-            fixture.coordinator.commit(candidate).unwrap();
-            let availability = fixture.coordinator.availability();
-            if decision == SourceActivation::Enabled {
-                let CapabilitySourceState::Unavailable { reason } = &availability[&key] else {
-                    panic!("missing status: {availability:?}");
-                };
-                assert!(reason.contains("python:missing") && reason.contains("not discovered"));
-                assert!(reason.len() <= rustx::capabilities::CAPABILITY_FAILURE_REASON_MAX_BYTES);
-            } else {
-                assert_eq!(
-                    availability[&key],
-                    CapabilitySourceState::Inactive {
-                        activation: decision
-                    }
-                );
-            }
-            assert_eq!(
-                availability[&CapabilitySourceId::Mcp(python_server_id("undeclared"))],
-                CapabilitySourceState::Inactive {
-                    activation: SourceActivation::Unconfigured
-                }
-            );
-            assert!(
-                fixture.runner.commands.lock().unwrap().is_empty(),
-                "zero Python/uv probes, installs, environments, or spawns"
-            );
-            assert!(state_dirs(&fixture.store_root).is_empty());
-            assert!(!missing.exists());
-        }
-    }
+    fixture_with_servers(std::collections::BTreeMap::default())
 }
 
 fn fixture_with_servers(mcp_servers: rustx::tools::mcp::McpServerBindings) -> Fixture {
@@ -279,17 +200,17 @@ fn fixture_with_packages(
     packages: &[(&str, &str)],
     mcp_servers: rustx::tools::mcp::McpServerBindings,
 ) -> Fixture {
-    fixture_with_decision(
+    fixture_with_selection(
         packages,
         mcp_servers,
-        rustx::capabilities::activation::SourceActivation::Enabled,
+        &packages.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
     )
 }
 
-fn fixture_with_decision(
+fn fixture_with_selection(
     packages: &[(&str, &str)],
     mcp_servers: rustx::tools::mcp::McpServerBindings,
-    decision: rustx::capabilities::activation::SourceActivation,
+    selected: &[&str],
 ) -> Fixture {
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace_root = dir.path().join("workspace");
@@ -302,10 +223,13 @@ fn fixture_with_decision(
     }
     let coordinator = CapabilityCoordinator::with_backend(
         CapabilityCoordinatorConfig {
-            python_sources: packages
-                .iter()
-                .map(|(name, _)| (python_server_id(name), decision))
-                .collect(),
+            source_demand: common::source_demand(
+                &workspace_root,
+                selected
+                    .iter()
+                    .map(|name| format!("python:{name}"))
+                    .chain(mcp_servers.keys().map(ToString::to_string)),
+            ),
             conversation_id: ConversationId::new("conv-python-tools"),
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(ToolRegistry::new()),
@@ -361,8 +285,8 @@ fn state_dirs(store_root: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-fn demo_source() -> CapabilitySourceId {
-    CapabilitySourceId::Mcp(python_server_id("demo"))
+fn demo_source() -> ToolSourceId {
+    ToolSourceId::ManagedPython("demo".into())
 }
 
 /// The package compiled into the generic MCP source plane and failed its
@@ -642,7 +566,7 @@ async fn byte_identical_folders_never_share_a_prepared_environment() {
         .await
         .expect("prepare");
     for name in ["alpha", "beta"] {
-        let source = CapabilitySourceId::Mcp(python_server_id(name));
+        let source = ToolSourceId::ManagedPython(name.into());
         let Some(CapabilitySourceState::Unavailable { reason }) =
             candidate.availability().get(&source)
         else {

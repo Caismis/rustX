@@ -26,6 +26,12 @@
       },
       "type": "object"
     },
+    "AllTools": {
+      "enum": [
+        "all"
+      ],
+      "type": "string"
+    },
     "BackgroundStatusConfig": {
       "additionalProperties": false,
       "description": "Configuration of the bounded Background status contributor.",
@@ -49,10 +55,6 @@
       },
       "type": "object"
     },
-    "McpServerId": {
-      "description": "Identifies an MCP server bound to the runtime.",
-      "type": "string"
-    },
     "NativeAgentExtensionSelection": {
       "additionalProperties": false,
       "description": "The **presence-aware** closed selection an invocation override expresses.\n\nThis is deliberately *not* [`NativeAgentExtensionsDocument`]. The authored\ndocument supplies launch/role **defaults** — its `agentStatus` member has\n`enabled: true` — which is exactly right for \"an unconfigured role composes\nAgent Status\" and exactly wrong for an override, where the whole point is\nthat a present `extensions` dimension **replaces** the role's composition:\n\n```text\nrole frontmatter   extensions: {}   ->  Agent Status composed (role default)\ninvocation override \"extensions\": {} ->  no extension composed at all\n```\n\nEvery member is therefore an explicit `Option`: absent means \"this\nextension is not part of the requested composition\", never \"use a default\".\nPresence is the only way to compose an extension, and a present member\nstill carries its own complete authored configuration.\n\nThe record stays closed exactly like the authored document: an unknown\nextension name is rejected by `deny_unknown_fields`, so a misspelled or\nnot-yet-implemented extension fails deterministically instead of being\nsilently ignored.",
@@ -70,6 +72,20 @@
         }
       },
       "type": "object"
+    },
+    "SourceToolSelection": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AllTools"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "Exactly two trust granularities for one source. This is also the authoring\nboundary: only the literal \"all\" or an exact array is accepted."
     },
     "SubagentInvocationOverride": {
       "additionalProperties": false,
@@ -130,32 +146,27 @@
     },
     "ToolSelectionDocument": {
       "additionalProperties": false,
-      "description": "The authored map form of an exact, source-qualified capability selection.\n\nThis is the one selection vocabulary shared by every trusted authoring\nsurface: named Agent TOML (`[tools]`), a Workflow Agent node's\ninvocation override, and the model-facing `subagent` Tool's `override`.\nOrigins are named explicitly rather than collapsed into bare strings, so a\nBuiltin `read` and an MCP server's `read` are never interchangeable.\nWildcards are deliberately absent: a selection is an exact list. Managed\nPython tool packages are selected through `mcp` under their synthesized\nserver identity (`python:<folder>`, Issue #174).\n\nThe `python:` namespace is reserved for those synthesized identities:\n`mcpServers` configuration may never declare a server under it (rejected\nduring validation), so a selection naming `python:<folder>` always resolves\nto the managed package, never to a configured server.",
+      "description": "Shared Agent and Workflow Agent override selection. Extensions are composed\nby their native owner and never enter this ordinary capability vocabulary.",
       "properties": {
         "builtin": {
           "default": [],
-          "description": "Built-in/native capabilities, by canonical model-facing name.",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
-        "mcp": {
+        "sources": {
           "additionalProperties": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
+            "$ref": "#/$defs/SourceToolSelection"
           },
           "default": {},
-          "description": "MCP capabilities, keyed by server identity.",
           "type": "object"
         }
       },
       "type": "object"
     },
     "ToolSelector": {
-      "description": "Trusted selection syntax shared by Subagent and Workflow authoring.\nManaged Python uses the existing `python:<package>` MCP server identity.",
+      "description": "Exact leaf references used by Workflow Tool nodes and frozen projections.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -181,21 +192,42 @@
               "type": "string"
             },
             "origin": {
-              "const": "mcp",
+              "const": "source",
               "type": "string"
             },
-            "server_id": {
-              "$ref": "#/$defs/McpServerId"
+            "source_id": {
+              "$ref": "#/$defs/ToolSourceId"
             }
           },
           "required": [
             "origin",
-            "server_id",
+            "source_id",
             "name"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "origin": {
+              "const": "all",
+              "type": "string"
+            },
+            "source_id": {
+              "$ref": "#/$defs/ToolSourceId"
+            }
+          },
+          "required": [
+            "origin",
+            "source_id"
           ],
           "type": "object"
         }
       ]
+    },
+    "ToolSourceId": {
+      "description": "A configured MCP source or a canonical Managed Python package.\nNamespace parsing happens only at the authoring boundary; runtime dispatch\nmatches these variants, never display strings.",
+      "type": "string"
     },
     "WorkflowBlock": {
       "additionalProperties": false,

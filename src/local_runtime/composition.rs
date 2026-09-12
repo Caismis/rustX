@@ -303,7 +303,13 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                 &config.subagents,
                 &subagents,
             )?;
-            let default_tools = default_tools_with_workflows(&config.default_tools, &workflows);
+            let default_tools = default_tools_with_workflows(
+                config
+                    .tools
+                    .as_ref()
+                    .map_or(&config.default_tools, |selection| &selection.builtin),
+                &workflows,
+            );
             let mut registry = ToolRegistry::new();
             register_native_tools(
                 &mut registry,
@@ -350,9 +356,19 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
             .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
             let candidate = capability
                 .prepare_candidate_with_inputs(CapabilityResourceInputs {
-                    python_sources: std::collections::BTreeMap::new(),
+                    source_demand: admitted_source_demand(
+                        &config,
+                        &subagents,
+                        &workflows,
+                        managed_python.clone(),
+                    ),
                     base_tool_registry: Arc::new(registry),
                     tool_activation: ToolActivationPolicy {
+                        sources: config
+                            .tools
+                            .as_ref()
+                            .map(|selection| selection.sources.clone())
+                            .unwrap_or_default(),
                         default_tools: Some(default_tools),
                         no_builtin_tools: self.paths.no_builtin_tools,
                         no_tools: self.paths.no_tools,
@@ -776,16 +792,18 @@ fn selected_capability_plan(
     for tool in &spec.resolved.tools {
         match tool {
             ResolvedSubagentTool::Builtin { .. } => {}
-            ResolvedSubagentTool::Mcp {
-                server_id,
+            ResolvedSubagentTool::Source {
+                source_id,
                 name,
                 identity,
                 ..
-            } => plan.mcp_tools.push(crate::capabilities::SelectedMcpTool {
-                server_id: server_id.clone(),
-                name: name.clone(),
-                identity: identity.clone(),
-            }),
+            } => plan
+                .source_tools
+                .push(crate::capabilities::SelectedSourceTool {
+                    source_id: source_id.clone(),
+                    name: name.clone(),
+                    identity: identity.clone(),
+                }),
         }
     }
     plan
@@ -847,6 +865,59 @@ impl RuntimeResourceLoader for FrozenSubagentResourceLoader {
             ))
         })
     }
+}
+
+/// Collect finite demand from the admitted main Agent, profiles and Workflows.
+fn admitted_source_demand(
+    config: &CurrentRuntimeConfig,
+    agents: &crate::runtime::subagent::AgentCatalog,
+    workflows: &WorkflowCatalog,
+    python: crate::runtime::resources::ManagedPythonCatalog,
+) -> crate::capabilities::source::ToolSourceDemand {
+    let mut sources = BTreeSet::new();
+    if let Some(selection) = &config.tools {
+        sources.extend(
+            selection
+                .selectors()
+                .iter()
+                .filter_map(|selector| selector.source().cloned()),
+        );
+    }
+    for agent in agents.definitions() {
+        if config.subagents.main.contains(agent.name())
+            || config.subagents.workflow.contains(agent.name())
+        {
+            sources.extend(
+                agent
+                    .tools()
+                    .iter()
+                    .filter_map(|selector| selector.source().cloned()),
+            );
+        }
+    }
+    for program in workflows.definitions().values() {
+        if !workflows.main().contains(program.id()) {
+            continue;
+        }
+        sources.extend(
+            program
+                .inspect()
+                .tools
+                .iter()
+                .filter_map(|selector| selector.source().cloned()),
+        );
+        for node in program.agent_override_nodes() {
+            if let Some(selection) = &node.invocation_override.tools {
+                sources.extend(
+                    selection
+                        .selectors()
+                        .iter()
+                        .filter_map(|selector| selector.source().cloned()),
+                );
+            }
+        }
+    }
+    crate::capabilities::source::ToolSourceDemand::new(sources, python)
 }
 
 /// Workflow `main` admission is model-facing capability admission. Include
@@ -1138,7 +1209,15 @@ impl LocalConversationCore {
                 detail: error.to_string(),
             })?;
         let workflows = paths.workflows.as_ref().clone();
-        let default_tools = default_tools_with_workflows(&runtime_config.default_tools, &workflows);
+        let default_tools = default_tools_with_workflows(
+            runtime_config
+                .tools
+                .as_ref()
+                .map_or(&runtime_config.default_tools, |selection| {
+                    &selection.builtin
+                }),
+            &workflows,
+        );
         //
         // The frozen model timeout policy is resolved once here so the
         // parent runtime and every launched subagent child share exactly
@@ -1235,7 +1314,12 @@ impl LocalConversationCore {
         // coordinator receives the activation policy
         // and applies it to the available capability registrations.
         let capability = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
-            python_sources: std::collections::BTreeMap::new(),
+            source_demand: admitted_source_demand(
+                &runtime_config,
+                &paths.subagents,
+                &workflows,
+                paths.managed_python.clone(),
+            ),
             conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: Arc::new(base_registry),
@@ -1245,6 +1329,11 @@ impl LocalConversationCore {
             // composition decision of its own.
             extension_tools: tool_runtime.extension_tool_plane(),
             tool_activation: ToolActivationPolicy {
+                sources: runtime_config
+                    .tools
+                    .as_ref()
+                    .map(|selection| selection.sources.clone())
+                    .unwrap_or_default(),
                 default_tools: Some(default_tools),
                 no_builtin_tools: paths.no_builtin_tools,
                 no_tools: paths.no_tools,
@@ -1540,12 +1629,18 @@ impl LocalConversationCore {
         // Managed Python packages cross as ordinary frozen MCP bindings
         // (Issue #174); the child never opens Python store state itself.
         let plan = selected_capability_plan(spec);
-        let mut mcp_servers = spec.resolved.materialization.mcp_servers.clone();
+        let mut mcp_servers: crate::tools::mcp::McpServerBindings = spec
+            .resolved
+            .materialization
+            .sources
+            .iter()
+            .map(|(source, binding)| (crate::tools::mcp::source_server_id(source), binding.clone()))
+            .collect();
         for binding in mcp_servers.values_mut() {
             binding.credentials.capture_from(credentials);
         }
         let capability = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
-            python_sources: std::collections::BTreeMap::new(),
+            source_demand: crate::capabilities::source::ToolSourceDemand::default(),
             conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: Arc::new(base_registry),
@@ -3855,8 +3950,8 @@ enabled = true
         let definition = frozen_fixture_tool(&server_id, &binding, &workspace, "alpha_echo").await;
         let identity = crate::tools::mcp::identity::definition_identity(&definition)
             .expect("an MCP definition has an MCP identity");
-        let mcp = ResolvedSubagentTool::Mcp {
-            server_id: server_id.clone(),
+        let mcp = ResolvedSubagentTool::Source {
+            source_id: crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
             tool_id: definition.id.clone(),
             name: definition.name.clone(),
             identity,
@@ -3871,8 +3966,8 @@ enabled = true
         child_spec
             .resolved
             .materialization
-            .mcp_servers
-            .insert(server_id, binding);
+            .sources
+            .insert(crate::capabilities::ToolSourceId::Mcp(server_id), binding);
 
         let core = LocalConversationCore::compose_subagent_child(
             &child_spec,
@@ -3925,8 +4020,8 @@ enabled = true
         definition.description = format!("{} (as the parent froze it)", definition.description);
         let identity = crate::tools::mcp::identity::definition_identity(&definition)
             .expect("an MCP definition has an MCP identity");
-        let mcp = ResolvedSubagentTool::Mcp {
-            server_id: server_id.clone(),
+        let mcp = ResolvedSubagentTool::Source {
+            source_id: crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
             tool_id: definition.id.clone(),
             name: definition.name.clone(),
             identity,
@@ -3941,8 +4036,8 @@ enabled = true
         child_spec
             .resolved
             .materialization
-            .mcp_servers
-            .insert(server_id, binding);
+            .sources
+            .insert(crate::capabilities::ToolSourceId::Mcp(server_id), binding);
 
         let error = LocalConversationCore::compose_subagent_child(
             &child_spec,
@@ -3953,7 +4048,7 @@ enabled = true
         .expect_err("a changed definition must not be executed");
         let rendered = format!("{error:?}");
         assert!(
-            rendered.contains("McpIdentityMismatch"),
+            rendered.contains("SourceIdentityMismatch"),
             "the failure is a typed cross-process identity mismatch: {rendered}"
         );
         assert!(
@@ -3993,8 +4088,8 @@ enabled = true
                 server_id: server_id.clone(),
             },
         };
-        let mcp = ResolvedSubagentTool::Mcp {
-            server_id: server_id.clone(),
+        let mcp = ResolvedSubagentTool::Source {
+            source_id: crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
             tool_id: definition.id.clone(),
             name: definition.name.clone(),
             identity: crate::tools::mcp::identity::definition_identity(&definition)
@@ -4010,8 +4105,8 @@ enabled = true
         child_spec
             .resolved
             .materialization
-            .mcp_servers
-            .insert(server_id, binding);
+            .sources
+            .insert(crate::capabilities::ToolSourceId::Mcp(server_id), binding);
 
         let error = LocalConversationCore::compose_subagent_child(
             &child_spec,
@@ -4021,7 +4116,7 @@ enabled = true
         .await
         .expect_err("a missing definition must not be silently omitted");
         assert!(
-            format!("{error:?}").contains("McpToolMissing"),
+            format!("{error:?}").contains("SourceToolMissing"),
             "the failure is a typed missing-definition refusal: {error:?}"
         );
     }
@@ -4047,8 +4142,8 @@ enabled = true
                 server_id: server_id.clone(),
             },
         };
-        let mcp = ResolvedSubagentTool::Mcp {
-            server_id: server_id.clone(),
+        let mcp = ResolvedSubagentTool::Source {
+            source_id: crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
             tool_id: definition.id.clone(),
             name: definition.name.clone(),
             identity: crate::tools::mcp::identity::definition_identity(&definition)
@@ -4061,8 +4156,8 @@ enabled = true
             Vec::new(),
             Vec::new(),
         );
-        child_spec.resolved.materialization.mcp_servers.insert(
-            server_id,
+        child_spec.resolved.materialization.sources.insert(
+            crate::capabilities::ToolSourceId::Mcp(server_id),
             crate::tools::mcp::McpServerBinding {
                 credentials: crate::credentials::SourceCredentials::default(),
                 activation: crate::capabilities::activation::SourceActivation::Enabled,
@@ -4108,8 +4203,8 @@ enabled = true
                 server_id: server_id.clone(),
             },
         };
-        let mcp = ResolvedSubagentTool::Mcp {
-            server_id,
+        let mcp = ResolvedSubagentTool::Source {
+            source_id: crate::capabilities::ToolSourceId::Mcp(server_id),
             tool_id: definition.id.clone(),
             name: definition.name.clone(),
             identity: crate::tools::mcp::identity::definition_identity(&definition)
@@ -4408,7 +4503,7 @@ compat = { chat_reasoning_replay = "omit" }
             "agent_id": "agent-parent",
             "model": {"model": "scripted/scripted"},
             "context": {"reserve_tokens": 0, "keep_recent_tokens": 0},
-            "default_tools": ["read", "subagent", TOOL_NAME],
+            "tools": {"builtin": ["read", "subagent"], "sources": {SERVER_NAME: [TOOL_NAME]}},
             "mcp_servers": {
                 SERVER_NAME: {
                     "enabled": true,
@@ -4706,5 +4801,61 @@ compat = { chat_reasoning_replay = "omit" }
             .shutdown()
             .await
             .expect("runtime shutdown");
+    }
+}
+
+#[cfg(test)]
+mod source_demand_tests {
+    use super::*;
+    use crate::capabilities::{ToolSourceId, selection::ToolSelector};
+    use crate::runtime::subagent::{
+        AgentCatalog, SubagentDefinition, SubagentName, SubagentProjectInstructionPolicy,
+    };
+
+    #[test]
+    fn admitted_agents_share_one_source_demand_and_discovery_does_not_select() {
+        let shared = ToolSourceId::ManagedPython("shared".into());
+        let unused = ToolSourceId::ManagedPython("unused".into());
+        let make = |name: &str, source: ToolSourceId| {
+            SubagentDefinition::new(
+                SubagentName::parse(name).unwrap(),
+                "Test Agent".into(),
+                "Test instructions".into(),
+                PathBuf::from("instructions.md"),
+                None,
+                None,
+                vec![ToolSelector::All { source_id: source }],
+                Vec::new(),
+                SubagentProjectInstructionPolicy {
+                    inherit: false,
+                    files: Vec::new(),
+                },
+                crate::runtime::workspace::WorkspacePolicy::default(),
+                crate::extensions::NativeAgentExtensions::none(),
+            )
+            .unwrap()
+        };
+        let agents = AgentCatalog::new([
+            make("alpha", shared.clone()),
+            make("beta", shared.clone()),
+            make("unused", unused),
+        ])
+        .unwrap();
+        let mut config: CurrentRuntimeConfig =
+            serde_json::from_value(serde_json::json!({"model": {"model": "local/test"}})).unwrap();
+        let empty = || crate::runtime::resources::ManagedPythonCatalog::default();
+        assert!(
+            admitted_source_demand(&config, &agents, &WorkflowCatalog::empty(), empty())
+                .sources
+                .is_empty()
+        );
+        config.subagents.main = ["beta", "alpha"]
+            .map(|name| SubagentName::parse(name).unwrap())
+            .into();
+        let first = admitted_source_demand(&config, &agents, &WorkflowCatalog::empty(), empty());
+        config.subagents.main.reverse();
+        let second = admitted_source_demand(&config, &agents, &WorkflowCatalog::empty(), empty());
+        assert_eq!(first.sources, [shared].into());
+        assert_eq!(first.sources, second.sources);
     }
 }
