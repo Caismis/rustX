@@ -33,7 +33,8 @@ import { invocationLabel } from "../../presentation/invocation.ts";
  * the terminal width with it, because the shell is the only layer that knows
  * how wide the line is. A band never carries meaning of its own that the
  * text does not also state: a denied tool call says `denied`, and the band
- * colour is a second reading of the same runtime fact, never the only one.
+ * surface is neutral across all settlements. Only local foreground accents
+ * reinforce native lifecycle words and glyphs.
  *
  * Canonical block order is preserved exactly. When a model emits
  * `reasoning, text, tool_call, text`, that is what the reader sees, in that
@@ -85,7 +86,6 @@ import { requesterLines } from "./questionnaire.ts";
 import { type BackgroundRole, role, style } from "../theme.ts";
 import {
   type ToolCardPart,
-  cardBackground,
   renderToolCard,
 } from "./tool-card.ts";
 
@@ -664,11 +664,9 @@ function toolBlock(
       },
       part,
     ),
-    // The band restates the lifecycle the card's own status words already
-    // carry. A `call` part is still in flight by construction — its result
-    // is rendered below, at the result's canonical position — so it keeps
-    // the pending band whatever the settlement below it says.
-    background: cardBackground(part === "call" ? undefined : tool.lifecycle),
+    // A single neutral surface for call, full card, and continuation. Native
+    // lifecycle controls only the card's bounded foreground glyph/status.
+    background: "tool",
   };
 }
 

@@ -7695,6 +7695,32 @@ contracts and provider protocols. These invariants are frozen by M2:
   fallback renderer,
   and a specialized renderer that does not recognise a shape degrades to it.
 
+- **Tool lifecycle is an accent, not a content surface (Issue #267).** One
+  neutral Tool surface holds arguments/output in all states. Native glyphs,
+  status words, duration, exit and certainty belong to the common card;
+  specialized result adapters receive content only. ANSI-stripped text still
+  distinguishes every native outcome, including stdout that happens to say `ok`.
+
+- **Approval intent is not policy authority (Issue #267).** `/approval` opens
+  a focused picker without mutation. Policy commits once on selection; Full
+  access commits once only after a second safe-default confirmation. Focus,
+  cancellation before submission and pending-request deduplication are client
+  state. Esc after submission closes only the popup; the current owner still
+  receives success/error feedback. Submitted operations carry unique tokens and
+  attachment/presentation leases: stale completions cannot block a new owner,
+  repaint it, or clear its newer token. Only admitted/running native attempt
+  phases permit the label `Current attempt`; idle/settled uses `Effective`.
+  Native effective and pending modes remain distinct; resync closes stale
+  surfaces without replaying controls or promoting a highlight into policy.
+
+- **Stable footer and transient work have distinct owners (Issue #267).** The
+  footer projects model/policy/context and exceptional connection/read-only
+  facts; workingStatus projects execution and human-input waits. Missing values
+  are omitted. Raw IDs remain in focused diagnostics. Layout uses ANSI cell
+  widths and whole-segment priority, never filesystem/Git/provider probes or
+  transcript tokenization. Full model details remain in /settings when they
+  cannot physically fit the bounded footer; no shortened model is invented.
+
 - **One tool call is one visual entity.** The assistant `tool_call` block,
   the attempt's foreground execution lifecycle, and the committed canonical
   result message are three different runtime facts about one logical call.

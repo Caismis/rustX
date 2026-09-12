@@ -99,11 +99,13 @@ import { ModelSelector } from "./components/model-selector.ts";
 import { InspectionView } from "./components/inspection-view.ts";
 import { SessionDeletionWorkflow } from "./session-deletion-workflow.ts";
 import { ResumeSelector } from "./components/resume-selector.ts";
+import { ApprovalSelector } from "./components/approval-selector.ts";
+import { approvalLabel } from "../presentation/selectors.ts";
 import { ConfirmationView } from "./components/confirmation.ts";
 import { PopupFrame, type PopupContent } from "./components/popup-frame.ts";
 import { TransientFeedbackSurface } from "./components/transient-feedback.ts";
 import {
-  renderFooter,
+  FooterView,
   renderStartup,
   startupVisible,
   workingStatus,
@@ -182,6 +184,11 @@ interface PresentationLease {
   session: RuntimeClientAttachment;
 }
 
+/** One submitted approval operation; object identity is its completion token. */
+interface PendingApprovalRequest {
+  readonly owner: PresentationLease;
+}
+
 /** One presentation frame kept so Esc can return to the existing parent view. */
 interface NavigationFrame {
   handle: RuntimeAttachmentHandle;
@@ -216,12 +223,18 @@ export class RustxTuiApp {
    */
   readonly #todos = new Container();
   readonly #transient = new TransientFeedbackSurface();
-  readonly #footer = new Text("", 1, 0);
+  readonly #footer = new FooterView(() => ({
+    state: this.#session.state,
+    connection: this.#connectionLabel(),
+    session: this.#session.sessionInfo,
+    conversation: this.#conversationContext(),
+  }));
   readonly #editor: Editor;
   readonly #loader: Loader;
 
   #preferences: PresentationPreferences = defaultPreferences();
   #overlay: OverlayHandle | undefined;
+  #pendingApprovalRequest: PendingApprovalRequest | undefined;
   #hitlOverlay: HumanInteractionOverlay | undefined;
   /**
    * Presentation-only focus over `pendingInteractions`, reconciled against
@@ -799,6 +812,9 @@ export class RustxTuiApp {
       case "transient":
         this.#showTransient(outcome.level, outcome.text);
         break;
+      case "choose_approval":
+        this.#showApprovalSelector(lease);
+        break;
       case "choose_model":
         this.#showModelSelector(outcome.models, lease);
         break;
@@ -1034,11 +1050,50 @@ export class RustxTuiApp {
   }
 
   /**
-   * Opens the model selector over the editor.
+   * Opens approval selection over the editor without changing runtime policy.
    *
    * The overlay owns focus while it is up and hands it straight back to the
    * editor on select or cancel, so the editor is never left unfocused.
    */
+  #showApprovalSelector(lease: PresentationLease): void {
+    const ownerCurrent = () => this.#isCurrentPresentationLease(lease);
+    const ownerPending = () => this.#pendingApprovalRequest !== undefined &&
+      this.#isCurrentPresentationLease(this.#pendingApprovalRequest.owner);
+    if (!ownerCurrent()) return;
+    if (ownerPending()) {
+      this.#showTransient("info", "Approval change is still pending.");
+      return;
+    }
+    let handle: OverlayHandle;
+    const overlayAlive = () => ownerCurrent() && this.#overlay === handle;
+    const selector = new ApprovalSelector({
+      state: () => lease.session.state,
+      change: () => { if (overlayAlive()) this.#tui.requestRender(); },
+      close: () => { if (overlayAlive()) this.#closeOverlay(); },
+      submit: async (mode) => {
+        if (!overlayAlive() || ownerPending()) return;
+        const request: PendingApprovalRequest = { owner: lease };
+        this.#pendingApprovalRequest = request;
+        try {
+          const result = await lease.session.approvalModeSet(mode);
+          // Esc ends the popup, not the submitted operation. Feedback belongs
+          // to its presentation owner even when that owner's popup is closed.
+          if (!ownerCurrent()) return;
+          const latest = lease.session.state;
+          const fact = latest && latest.approvalModeRevision > result.revision ? latest : result;
+          this.#showTransient("info", `Approval request accepted: effective ${approvalLabel(fact.effectiveApprovalMode)}${fact.pendingApprovalMode == null ? "" : ` · next attempt ${approvalLabel(fact.pendingApprovalMode)}`}`);
+        } catch (error) {
+          if (ownerCurrent()) this.#showTransient("error", `Approval change failed: ${compactDiagnostic(error)}`);
+        } finally {
+          // A superseded owner may settle after a new owner submitted another
+          // request. Only this exact token may clear the stored operation.
+          if (this.#pendingApprovalRequest === request) this.#pendingApprovalRequest = undefined;
+        }
+      },
+    });
+    handle = this.#showPopup(selector, { width: "85%", heightPercent: 85 });
+  }
+
   #showModelSelector(models: CatalogModelView[], lease: PresentationLease): void {
     if (!this.#isCurrentPresentationLease(lease)) return;
     const state = lease.session.state;
@@ -1542,6 +1597,8 @@ export class RustxTuiApp {
 
   /** Invalidates attachment-local presentation work at one central boundary. */
   #invalidatePresentation(): void {
+    // Submitted approval requests retain their tokens until completion. The
+    // old lease becomes stale; it neither blocks nor clears a new owner's work.
     this.#presentationEpoch += 1;
     this.#resetLocalSurfaces();
   }
@@ -1696,15 +1753,6 @@ export class RustxTuiApp {
       this.#activity.addChild(this.#loader);
     }
 
-    this.#footer.setText(
-      renderFooter(
-        state,
-        this.#connectionLabel(),
-        this.#tui.terminal.columns,
-        this.#session.sessionInfo,
-        this.#conversationContext(),
-      ),
-    );
     this.#syncHitlOverlay(state);
     this.#syncDeletionPresentation();
     this.#tui.requestRender();

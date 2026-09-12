@@ -172,13 +172,13 @@ describe("snapshot reconstruction", () => {
     // running execution, because it is what the runtime is actually waiting on.
     assert.match(screen, /Waiting for approval of bash…/);
 
-    // Footer: session model, the attempt's frozen model, usage, counts
+    // Footer: stable model/policy/usage; activity remains on the working surface.
     assert.match(screen, /beta\/model-b/);
     assert.match(screen, /attempt alpha\/model-a/);
     assert.match(screen, /Waiting for approval of bash…/);
     assert.match(screen, /↑12\.5k ↓840/);
-    assert.match(screen, /queued 1/);
-    assert.match(screen, /background 1/);
+    assert.doesNotMatch(screen, /queued 1|background 1/);
+    assert.equal(screen.match(/Waiting for approval of bash…/g)?.length, 1);
   });
 
   it("is identical whether the state is fresh or replaced in place", () => {
@@ -257,4 +257,40 @@ describe("snapshot reconstruction", () => {
       "rendering never writes back into runtime state",
     );
   });
+});
+
+it("pure Tool/footer/approval rendering performs no filesystem, process, or native control effects", async (t) => {
+  const fs = await import("node:fs");
+  const childProcess = await import("node:child_process");
+  const net = await import("node:net");
+  const { ApprovalSelector } = await import("../src/ui/components/approval-selector.ts");
+  const { renderToolCard } = await import("../src/ui/components/tool-card.ts");
+  const { rendererFor } = await import("../src/ui/components/tool-renderers.ts");
+  const state = replaceFromSnapshot(representative(), runtimeCursor(42));
+  const tools = correlateTools(state);
+  const nativeControls: unknown[] = [];
+  const picker = new ApprovalSelector({ state: () => state,
+    submit: async (mode) => { nativeControls.push(mode); }, close: () => {}, change: () => {},
+  });
+  // Imports/fixtures are complete before effect tripwires are installed.
+  t.mock.method(globalThis, "fetch", () => assert.fail("render called a provider/network service"));
+  t.mock.method(net.Socket.prototype, "connect", () => assert.fail("render opened a provider/runtime socket"));
+  for (const key of ["readFileSync", "readFile", "readdirSync", "statSync"] as const) {
+    t.mock.method(fs.default, key, () => assert.fail(`render performed filesystem ${key}`));
+  }
+  for (const key of ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync"] as const) {
+    t.mock.method(childProcess.default, key, () => assert.fail(`render invoked a Tool/Git/process through ${key}`));
+  }
+  const adapter = rendererFor("tool-bash");
+  const original = adapter.renderResult!;
+  t.mock.method(adapter as Required<typeof adapter>, "renderResult", (content: Parameters<typeof original>[0], args: unknown) => {
+    assert.deepEqual(Object.keys(content), ["content"], "specialized renderers receive no lifecycle authority");
+    return original(content, args);
+  });
+  const rendered = renderFooter(state, "connected");
+  assert.match(rendered, /approval POLICY/);
+  for (const tool of tools.byCallId.values()) renderToolCard(tool, { expanded: true, budget: prefs().previewBudget });
+  picker.render(100); picker.handleInput("\x1b[B"); picker.render(100);
+  picker.handleInput("\r"); picker.render(100); picker.handleInput("\x1b");
+  assert.deepEqual(nativeControls, []);
 });

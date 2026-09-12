@@ -41,7 +41,7 @@
 
 import type { ToolExecutionResult, ToolId } from "../../protocol/types.ts";
 import type { PreviewBudget } from "../preferences.ts";
-import { role, style, plainText, plainWidth } from "../theme.ts";
+import { role, plainText, plainWidth } from "../theme.ts";
 
 /**
  * What a renderer says about the call itself.
@@ -84,6 +84,9 @@ export interface ToolRenderContext {
   budget: PreviewBudget;
 }
 
+/** Body adapters receive no status, duration, exit, or effect-certainty authority. */
+export type ToolResultContent = Pick<ToolExecutionResult, "content">;
+
 /**
  * One tool's presentation adapter.
  *
@@ -96,7 +99,7 @@ export interface ToolRenderContext {
 export interface ToolPresentationRenderer {
   renderCall(args: unknown): ToolCallPresentation | undefined;
   renderResult?(
-    result: ToolExecutionResult,
+    result: ToolResultContent,
     args: unknown,
   ): ToolResultPresentation | undefined;
 }
@@ -263,7 +266,7 @@ export function preview(
 }
 
 /** The text of every textual result block, in publication order. */
-export function resultText(result: ToolExecutionResult): string[] {
+export function resultText(result: ToolResultContent): string[] {
   const lines: string[] = [];
   for (const content of result.content ?? []) {
     if (content.type === "text") {
@@ -274,7 +277,7 @@ export function resultText(result: ToolExecutionResult): string[] {
 }
 
 /** The first JSON result block, when the runtime published one. */
-export function resultJson(result: ToolExecutionResult): unknown {
+export function resultJson(result: ToolResultContent): unknown {
   for (const content of result.content ?? []) {
     if (content.type === "json") {
       return content.value;
@@ -336,7 +339,7 @@ export const genericRenderer: ToolPresentationRenderer = {
  * have been without one.
  */
 export function genericResultLines(
-  result: ToolExecutionResult,
+  result: ToolResultContent,
 ): ToolResultPresentation {
   const detail = resultText(result);
   const json = resultJson(result);
@@ -469,7 +472,7 @@ const grepRenderer: ToolPresentationRenderer = {
     }
     return {
       title: "Grep",
-      subject: style.yellow(JSON.stringify(pattern)),
+      subject: role.toolSubject(JSON.stringify(pattern)),
       detail: scope.length === 0 ? [] : [role.meta(scope.join(" · "))],
     };
   },
@@ -492,7 +495,7 @@ const globRenderer: ToolPresentationRenderer = {
     const path = text(fields?.["path"]);
     return {
       title: "Glob",
-      subject: style.yellow(pattern),
+      subject: role.toolSubject(pattern),
       detail: path === undefined ? [] : [role.meta(path)],
     };
   },
@@ -528,8 +531,8 @@ const editRenderer: ToolPresentationRenderer = {
       if (oldText === undefined || newText === undefined) {
         continue;
       }
-      detail.push(...toLines(oldText).map((line) => style.red(`- ${line}`)));
-      detail.push(...toLines(newText).map((line) => style.green(`+ ${line}`)));
+      detail.push(...toLines(oldText).map((line) => role.diffRemoved(`- ${line}`)));
+      detail.push(...toLines(newText).map((line) => role.diffAdded(`+ ${line}`)));
     }
     // A large replacement produces a large diff. It is call detail, so the
     // card shell bounds it: a collapsed Edit card never dumps a whole file.
@@ -596,7 +599,7 @@ const todoRenderer: ToolPresentationRenderer = {
     ].filter((part): part is string => part !== undefined);
     return {
       title: "Todo",
-      subject: `${style.yellow(action)}${parts.length === 0 ? "" : ` ${parts.join(" ")}`}`,
+      subject: `${role.toolSubject(action)}${parts.length === 0 ? "" : ` ${parts.join(" ")}`}`,
       detail: [],
     };
   },

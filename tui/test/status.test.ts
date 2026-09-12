@@ -20,6 +20,7 @@ import {
 } from "../src/ui/components/activity.ts";
 import {
   contextLabel,
+  FooterView,
   renderFooter,
   renderStartup,
   startupVisible,
@@ -203,7 +204,7 @@ describe("working status", () => {
 });
 
 describe("footer", () => {
-  it("shows the active model, provider, context, and connection state", () => {
+  it("shows stable model and context without redundant healthy plumbing", () => {
     const rendered = footer(
       stateOf({
         model: sessionModel("alpha/model-a"),
@@ -212,13 +213,13 @@ describe("footer", () => {
       "connected",
     );
     assert.match(rendered, /alpha\/model-a/);
-    assert.match(rendered, /provider alpha/);
+    assert.doesNotMatch(rendered, /provider alpha/);
     assert.match(rendered, /context —\/128k/);
-    assert.match(rendered, /online/);
+    assert.doesNotMatch(rendered, /online|ready|\/help/);
     assert.doesNotMatch(rendered, /cap r3/);
   });
 
-  it("shows the native active Session and node when published", () => {
+  it("shows only a published human Session name", () => {
     const rendered = footer(
       stateOf(),
       "connected",
@@ -234,7 +235,7 @@ describe("footer", () => {
       },
     );
     assert.match(rendered, /session review branch/);
-    assert.match(rendered, /node node-3/);
+    assert.doesNotMatch(rendered, /node node-3/);
   });
 
   it("surfaces unavailable optional capabilities without dying (Issue #81)", () => {
@@ -275,9 +276,9 @@ describe("footer", () => {
       }),
       "connected",
     );
-    assert.match(rendered, /cfg beta\/model-b/, "the desired session model");
+    assert.match(rendered, /next beta\/model-b/, "the desired session model");
     assert.match(rendered, /attempt alpha\/model-a/, "the frozen attempt model");
-    assert.match(rendered, /Working…/);
+    assert.doesNotMatch(rendered, /Working…/);
   });
 
   it("collapses to one model when all of them agree", () => {
@@ -321,38 +322,19 @@ describe("footer", () => {
       "connected",
     );
     assert.match(rendered, /cfg alpha\/model-a/);
-    assert.match(rendered, /eff beta\/model-b/, "the effective model is never dropped");
+    assert.match(rendered, /next beta\/model-b/, "the next effective model is explicit");
     assert.match(rendered, /attempt gamma\/model-c/);
   });
 
-  it("never drops a model identity to make a narrow terminal fit", () => {
-    // The layout degrades by dropping optional segments and by wrapping. It
-    // may not drop a model identity, and it may not truncate one into a
-    // shorter identity that names a different model.
-    const rendered = footer(
-      stateOf({
-        model: {
-          ...sessionModel("beta/model-b"),
-          configured: { model: "alpha/model-a" },
-        },
-        attempt: attemptView({ model: attemptModel("gamma/model-c") }),
-        capabilities: { revision: 3 },
-      }),
-      "connected",
-      24,
-    );
-    assert.match(rendered, /cfg alpha\/model-a/);
-    assert.match(rendered, /eff beta\/model-b/);
-    assert.match(rendered, /attempt gamma\/model-c/);
-    assert.ok(
-      !rendered.includes("cfg alpha/model-…") &&
-        !rendered.includes("eff beta/model-…") &&
-        !rendered.includes("attempt gamma/model-…"),
-      "an identity is never elided into a prefix",
-    );
+  it("defers whole model detail when essential facts cannot fit, never inventing a shorter identity", () => {
+    const rendered = footer(stateOf({
+      model: sessionModel("provider/" + "long-model-identity".repeat(5)),
+      effective_approval_mode: "policy", pending_approval_mode: "full_access",
+    }), "connected", 24);
+    assert.equal(rendered, "POLICY; next FULL ACCESS\nmodel: /settings");
   });
 
-  it("shows a settled attempt's outcome rather than a phase", () => {
+  it("omits settled outcomes from stable context", () => {
     const rendered = footer(
       stateOf({
         attempt: attemptView({
@@ -361,7 +343,7 @@ describe("footer", () => {
       }),
       "connected",
     );
-    assert.match(rendered, /cancelled/);
+    assert.doesNotMatch(rendered, /cancelled|ready/);
   });
 
   it("distinguishes known usage from usage the runtime has not published", () => {
@@ -376,13 +358,13 @@ describe("footer", () => {
       ),
       /↑12\.5k ↓840/,
     );
-    assert.match(
+    assert.doesNotMatch(
       footer(stateOf({ attempt: attemptView() }), "connected"),
       /tokens pending/,
     );
   });
 
-  it("counts pending inbound, background, and approvals", () => {
+  it("does not duplicate pending inbound, background, and approval activity", () => {
     const rendered = footer(
       stateOf({
         background: [backgroundExecution("exec-1", "running")],
@@ -403,9 +385,9 @@ describe("footer", () => {
       }),
       "connected",
     );
-    assert.match(rendered, /queued 1/);
-    assert.match(rendered, /background 1/);
-    assert.match(rendered, /human input 1/);
+    assert.doesNotMatch(rendered, /queued 1/);
+    assert.doesNotMatch(rendered, /background 1/);
+    assert.doesNotMatch(rendered, /human input 1/);
   });
 
   it("names the effective approval mode and a pending desired mode truthfully", () => {
@@ -433,7 +415,7 @@ describe("footer", () => {
   it("reports drain and a closed transport without implying cancellation", () => {
     const rendered = footer(stateOf({ shutting_down: true }), "closed: input_eof");
     assert.match(rendered, /draining/);
-    assert.match(rendered, /offline/);
+    assert.match(rendered, /closed: input_eof/);
     assert.ok(!/cancelled/i.test(rendered));
   });
 
@@ -478,8 +460,9 @@ describe("startup and context", () => {
       parentConversationId: "conversation-parent",
       readOnly: true,
     });
-    assert.match(parent, /parent conversation-parent/);
-    assert.match(child, /child conversation-child · read-only · Esc parent/);
+    assert.doesNotMatch(parent, /conversation-parent|parent /);
+    assert.match(child, /read-only · Esc parent/);
+    assert.doesNotMatch(child, /conversation-child/);
     assert.doesNotMatch(child, /parent conversation-parent/);
   });
 
@@ -885,4 +868,52 @@ describe("client collapse is finite and reversible", () => {
     assert.match(collapsed, /\/expand interaction <conversation-id>::<interaction-id>/);
     assert.match(collapsed, /Ctrl\+G opens the human-input surface/);
   });
+});
+
+it("absent metadata is omitted and footer never reads transcript history", () => {
+  for (const name of [undefined, null, "", "   "]) {
+    const state = stateOf();
+    Object.defineProperty(state, "transcript", { get: () => assert.fail("footer must not retokenize history") });
+    const session = { id: "internal-session", name, active_node: "internal-node" } as unknown as import("../src/protocol/types.ts").SessionView;
+    const rendered = footer(state, "connected", 120, session, { conversationId: "internal-conversation" });
+    assert.doesNotMatch(rendered, /undefined|null|session |internal-|online|ready|provider/);
+  }
+});
+
+it("unknown context window is omitted and snapshot replacement rebuilds approval/model truth", () => {
+  const before = stateOf({ model: sessionModel("old/model"), effective_approval_mode: "policy", pending_approval_mode: "full_access" });
+  const after = stateOf({ model: sessionModel("new/model"), effective_approval_mode: "full_access" });
+  assert.match(footer(before, "connected"), /next attempt FULL ACCESS/);
+  assert.match(footer(after, "connected"), /new\/model.*approval FULL ACCESS/);
+  assert.doesNotMatch(footer(after, "connected"), /old\/model|next attempt/);
+  const noWindow = stateOf({ model: { ...sessionModel("new/model"), effective: { ...sessionModel("new/model").effective, contextWindow: 0 } } });
+  assert.equal(contextLabel(noWindow), "");
+  assert.doesNotMatch(footer(noWindow, "connected"), /context/);
+});
+
+it("drops tokens then Session then context before essential facts require two rows", () => {
+  const state = stateOf({ attempt: attemptView({ phase: { type: "settled", outcome: { type: "completed", finish_reason: { type: "stop" } } }, last_usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 } }) });
+  const session = { name: "work" } as import("../src/protocol/types.ts").SessionView;
+  const wide = footer(state, "connected", 200, session);
+  assert.match(wide, /session work.*↑1 ↓2/);
+  const withoutTokens = footer(state, "connected", wide.length - 1, session);
+  assert.match(withoutTokens, /session work/); assert.doesNotMatch(withoutTokens, /↑/);
+  const withoutSession = footer(state, "connected", withoutTokens.length - 1, session);
+  assert.match(withoutSession, /context/); assert.doesNotMatch(withoutSession, /session/);
+  const essentials = footer(state, "connected", 30, session);
+  assert.doesNotMatch(essentials, /context|session|↑/);
+  assert.match(essentials, /alpha\/model-a.*approval POLICY/s);
+  assert.ok(essentials.split("\n").length <= 2);
+});
+
+
+it("footer view recomputes segment selection on resize without a native event", () => {
+  let state = stateOf();
+  const view = new FooterView(() => ({ state, connection: "connected" }));
+  assert.match(plainText(view.render(80).join("\n")), /context/);
+  const narrow = plainText(view.render(40).join("\n"));
+  assert.doesNotMatch(narrow, /context/);
+  assert.ok(narrow.split("\n").every((row) => row.length <= 40));
+  state = stateOf({ effective_approval_mode: "full_access" });
+  assert.match(plainText(view.render(80).join("\n")), /FULL ACCESS/);
 });

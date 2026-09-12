@@ -1,9 +1,9 @@
 /**
  * The working indicator and the footer/status bar.
  *
- * Both answer the same question — *what is the runtime doing right now?* —
- * and both answer it only from facts the runtime published. There is no timer
- * here, no inactivity threshold, no "it has been quiet so it must be
+ * Working status answers what is executing or waiting now. The footer answers
+ * which stable model, policy and context apply. Both use native facts only.
+ * There is no timer here, no inactivity threshold, no "it has been quiet so it must be
  * thinking". Every state below names the projection field that proves it:
  *
  * ```text
@@ -23,12 +23,11 @@
 import type { PresentationState } from "../../presentation/state.ts";
 import type {
   ModelInvocationView,
-  RuntimeClientOutcome,
   SessionView,
 } from "../../protocol/types.ts";
 import { correlateTools, runningTools } from "../../presentation/tools.ts";
 import {
-  activeBackground,
+  approvalLabel,
   describeReasoning,
   sessionLabel,
   unavailableCapabilities,
@@ -124,36 +123,34 @@ export function workingStatus(state: PresentationState): string | undefined {
  * attempt      what the running attempt froze       AttemptModelView.primary
  * ```
  *
- * When they coincide the footer compresses to one bare model name, which is
- * the common case. As soon as any two differ every one of them is labelled,
- * so `cfg A · eff B · attempt C` is unambiguous and no reader can conclude
- * that the running attempt already moved to the configured model.
- *
- * All three are priority 0: a narrow terminal drops other segments and
- * wraps, but it never silently omits a model identity and never truncates one
- * into a different, shorter, wrong identity.
+ * Current/frozen truth comes first; a different effective model is explicitly
+ * next. Configured disagreement is secondary (full diagnostics in /settings).
+ * Settled attempts remain history rather than pretending to govern new work.
+ * Width degradation drops whole segments, never prefixes of model references.
  */
 function modelSegments(state: PresentationState): Segment[] {
   if (state.sessionModel === null) return [{ text: "historical model unavailable", priority: 1 }];
   const configured = state.sessionModel.configured.model;
   const effective = state.sessionModel.effective.model;
-  const attempt = state.attempt?.model?.primary.model;
+  const attempt = state.attempt?.phase.type === "settled"
+    ? undefined : state.attempt?.model?.primary.model;
 
   const distinct =
     configured !== effective ||
     (attempt !== undefined && attempt !== effective);
   if (!distinct) {
-    return [{ text: role.accent(configured), priority: 0 }];
+    return [{ text: role.accent(configured), priority: 0, model: true }];
   }
 
-  const segments: Segment[] = [
-    { text: role.accent(`cfg ${configured}`), priority: 0 },
-  ];
-  if (effective !== configured) {
-    segments.push({ text: role.accent(`eff ${effective}`), priority: 0 });
-  }
+  const segments: Segment[] = [];
   if (attempt !== undefined && attempt !== effective) {
-    segments.push({ text: role.pending(`attempt ${attempt}`), priority: 0 });
+    segments.push({ text: role.accent(`attempt ${attempt}`), compact: role.accent(attempt), priority: 0, model: true });
+    segments.push({ text: role.accent(`next ${effective}`), priority: 0, model: true });
+  } else {
+    segments.push({ text: role.accent(`eff ${effective}`), priority: 0, model: true });
+  }
+  if (configured !== effective) {
+    segments.push({ text: role.meta(`cfg ${configured}`), priority: 1, model: true });
   }
   return segments;
 }
@@ -161,13 +158,16 @@ function modelSegments(state: PresentationState): Segment[] {
 /**
  * One footer segment.
  *
- * `priority` is how badly the segment deserves the space: 0 never drops, and
+ * `priority` is the retention order: 0 is essential, and
  * higher numbers are given up first when the terminal is narrow. Degrading is
  * dropping whole segments, never truncating a model name into a lie.
  */
 interface Segment {
   text: string;
   priority: number;
+  /** Complete alternative label, never a sliced identity. */
+  compact?: string;
+  model?: boolean;
 }
 
 /** The presentation label for the currently attached conversation. */
@@ -203,6 +203,27 @@ export function renderFooter(
   return layout(segments, width).join("\n");
 }
 
+interface FooterFacts {
+  state: PresentationState | undefined;
+  connection: string;
+  session?: SessionView;
+  conversation?: ConversationContext;
+}
+
+/** The shell asks for layout on every render, including terminal-only resizes. */
+export class FooterView {
+  readonly #facts: () => FooterFacts;
+  constructor(facts: () => FooterFacts) { this.#facts = facts; }
+  invalidate(): void {}
+  render(width: number): string[] {
+    const facts = this.#facts();
+    if (!facts.state) return [];
+    const pad = width > 2 ? " " : "";
+    return renderFooter(facts.state, facts.connection, Math.max(1, width - pad.length * 2), facts.session, facts.conversation)
+      .split("\n").map((line) => `${pad}${line}${pad}`);
+  }
+}
+
 /** The footer's segments, in display order. Exported for deterministic tests. */
 export function footerSegments(
   state: PresentationState,
@@ -210,103 +231,34 @@ export function footerSegments(
   session?: SessionView,
   conversation?: ConversationContext,
 ): Segment[] {
-  const segments: Segment[] = [];
-  const attempt = state.attempt;
-
-  if (conversation !== undefined) {
-    const parent = conversation.parentConversationId;
-    const label = parent === undefined
-      ? conversation.readOnly === true
-        ? `inspect ${conversation.conversationId} · read-only`
-        : `parent ${conversation.conversationId}`
-      : `child ${conversation.conversationId} · read-only · Esc parent`;
-    segments.push({ text: role.accent(label), priority: 0 });
+  const models = modelSegments(state);
+  const segments = models.slice(0, 1);
+  // No cached selection: snapshots/events are the only approval authority.
+  if (state.effectiveApprovalMode != null) {
+    const mode = approvalLabel(state.effectiveApprovalMode).toUpperCase();
+    const pending = state.pendingApprovalMode == null ? "" :
+      ` · next attempt ${approvalLabel(state.pendingApprovalMode).toUpperCase()}`;
+    segments.push({ text: (state.effectiveApprovalMode === "full_access" ? role.warning : role.meta)(`approval ${mode}${pending}`), priority: 0, compact: role.meta(`${mode}${state.pendingApprovalMode == null ? "" : `; next ${approvalLabel(state.pendingApprovalMode).toUpperCase()}`}`) });
   }
-  segments.push(...modelSegments(state));
-  if (session !== undefined) {
-    segments.push({
-      text: role.chrome(`session ${session.name} · node ${session.active_node}`),
-      priority: 1,
-    });
+  segments.push(...models.slice(1));
+  if (conversation?.parentConversationId != null) {
+    segments.push({ text: role.accent("read-only · Esc parent"), priority: 0 });
+  } else if (conversation?.readOnly) {
+    segments.push({ text: role.accent("read-only inspection"), priority: 0 });
   }
-
-  segments.push({
-    text: role.meta(`provider ${state.sessionModel ? providerLabel(state.sessionModel.effective) : "unavailable"}`),
-    priority: 1,
-  });
-
-  const working = workingStatus(state);
-  if (working !== undefined) {
-    segments.push({ text: role.pending(working), priority: 0 });
-  } else if (attempt?.phase.type === "settled") {
-    segments.push({
-      text: outcomeTone(attempt.phase.outcome),
-      priority: 1,
-    });
+  if (state.runtimeShutdown) segments.push({ text: role.warning("draining"), priority: 0 });
+  if (connectionState && connectionState !== "connected") {
+    segments.push({ text: role.warning(connectionState), priority: 0 });
   }
-
-  if (attempt?.lastUsage !== undefined) {
-    segments.push({
-      text: role.meta(
-        `↑${compact(attempt.lastUsage.input_tokens)} ↓${compact(attempt.lastUsage.output_tokens)}`,
-      ),
-      priority: 2,
-    });
-  } else if (attempt !== undefined && attempt.phase.type !== "settled") {
-    segments.push({ text: role.meta("tokens pending"), priority: 3 });
+  const context = contextLabel(state);
+  if (context) segments.push({ text: role.meta(context), priority: 1 });
+  const unavailable = unavailableCapabilities(state).length;
+  if (unavailable) segments.push({ text: role.warning(`${unavailable} optional ${unavailable === 1 ? "capability" : "capabilities"} unavailable`), priority: 2 });
+  if (typeof session?.name === "string" && session.name.trim()) {
+    segments.push({ text: role.meta(`session ${session.name}`), priority: 3 });
   }
-
-  segments.push({ text: role.meta(contextLabel(state)), priority: 1 });
-
-  // The effective mode governs the running attempt; a pending mode is the
-  // desired mode the runtime reconciles onto the *next* attempt. Both are
-  // named truthfully: changing the desired mode never mutates a running one.
-  const approvalLabel =
-    state.effectiveApprovalMode === "full_access" ? "FULL ACCESS" : "POLICY";
-  const approvalPending =
-    state.pendingApprovalMode === undefined
-      ? ""
-      : ` · next attempt ${state.pendingApprovalMode === "full_access" ? "FULL ACCESS" : "POLICY"}`;
-  segments.push({
-    text: role.pending(`approval ${approvalLabel}${approvalPending}`),
-    priority: 0,
-  });
-
-  const pending = (state.inbound.pending ?? []).length;
-  if (pending > 0) {
-    segments.push({ text: role.pending(`queued ${pending}`), priority: 1 });
-  }
-  const background = activeBackground(state).length;
-  if (background > 0) {
-    segments.push({ text: style.magenta(`background ${background}`), priority: 1 });
-  }
-  const interactions = state.pendingInteractions.length;
-  if (interactions > 0) {
-    segments.push({
-      text: role.pending(`human input ${interactions}`),
-      priority: 0,
-    });
-  }
-  if (state.runtimeShutdown) {
-    segments.push({ text: role.error("draining"), priority: 0 });
-  }
-  const unavailable = unavailableCapabilities(state);
-  if (unavailable.length > 0) {
-    segments.push({
-      text: role.warning(
-        `${unavailable.length} ${unavailable.length === 1 ? "optional capability" : "optional capabilities"} unavailable`,
-      ),
-      priority: 2,
-    });
-  }
-  segments.push({
-    text: role.chrome(connectionState === "connected" ? "online" : "offline"),
-    priority: 1,
-  });
-  segments.push({
-    text: role.meta("Ctrl+L model · /help commands"),
-    priority: 3,
-  });
+  const usage = state.attempt?.lastUsage;
+  if (usage) segments.push({ text: role.meta(`↑${compact(usage.input_tokens)} ↓${compact(usage.output_tokens)}`), priority: 4 });
   return segments;
 }
 
@@ -322,7 +274,7 @@ function layout(segments: Segment[], width: number): string[] {
   let kept = segments;
   for (;;) {
     const lines = pack(kept, width, separator);
-    if (lines.length <= MAX_FOOTER_LINES) {
+    if (lines.length <= (kept.some((segment) => segment.priority > 0) ? 1 : MAX_FOOTER_LINES) && lines.every((line) => plainWidth(line) <= width)) {
       return lines;
     }
     const droppable = kept
@@ -331,9 +283,20 @@ function layout(segments: Segment[], width: number): string[] {
       .sort((left, right) => right.segment.priority - left.segment.priority);
     const victim = droppable[0];
     if (victim === undefined) {
-      // Everything left is essential. A terminal too narrow for the essential
-      // facts gets more rows; it never gets a footer that quietly omits one.
-      return lines;
+      // First use complete compact labels, then explicitly defer model detail
+      // if the terminal cannot physically hold every essential identity. Never
+      // turn a long model reference into a plausible shorter reference.
+      const compact = kept.map((segment) => ({ ...segment, text: segment.compact ?? segment.text }));
+      const compactLines = pack(compact, width, separator);
+      if (compactLines.length <= MAX_FOOTER_LINES && compactLines.every((line) => plainWidth(line) <= width)) return compactLines;
+      const deferred = compact.filter((segment) => !segment.model);
+      deferred.push({ text: role.meta("model: /settings"), priority: 1 });
+      const bounded: Segment[] = [];
+      for (const segment of deferred) {
+        if (plainWidth(segment.text) > width) continue;
+        if (pack([...bounded, segment], width, separator).length <= MAX_FOOTER_LINES) bounded.push(segment);
+      }
+      return pack(bounded, width, separator);
     }
     kept = kept.filter((_, index) => index !== victim.index);
   }
@@ -385,7 +348,8 @@ export function contextLabel(state: PresentationState): string {
     usage === undefined
       ? (state.sessionModel?.effective.contextWindow ?? 0)
       : state.attempt?.model?.primary.contextWindow ?? 0;
-  if (usage === undefined || window <= 0) {
+  if (window <= 0) return "";
+  if (usage === undefined) {
     return `context —/${compact(window)}`;
   }
   const percentage = Math.min(100, Math.round((usage.input_tokens / window) * 100));
@@ -410,23 +374,6 @@ export function protocolLabel(protocol: ModelInvocationView["protocol"]): string
       return "Messages";
     default:
       return protocol;
-  }
-}
-
-function outcomeTone(outcome: RuntimeClientOutcome): string {
-  switch (outcome.type) {
-    case "completed":
-      return role.success("ready");
-    case "cancelled":
-      return role.warning("cancelled");
-    case "timed_out":
-      return role.warning("timed out");
-    case "limit_exceeded":
-      return role.warning("limit exceeded");
-    case "failed":
-      return role.error("failed");
-    default:
-      return role.meta("settled");
   }
 }
 

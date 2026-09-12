@@ -1233,27 +1233,15 @@ describe("CommandDispatcher", () => {
     assert.equal(peer.requests.length, 2);
   });
 
-  it("requests ApprovalMode through the runtime and reports pending reconciliation", async () => {
+  it("opens approval selection without a native mutation and rejects raw arguments", async () => {
     const { peer, dispatcher } = await harness();
-    const changing = dispatcher.submit("/approval full_access");
-    await peer.awaitRequests(3);
-    assert.deepEqual(
-      peer.requests[2]?.method === "approval_mode_set"
-        ? peer.requests[2].mode
-        : null,
-      "full_access",
-    );
-    peer.respond(3, {
-      type: "approval_mode_set",
-      effective_approval_mode: "policy",
-      pending_approval_mode: "full_access",
-      revision: 1,
-    });
-    const outcome = await changing;
-    assert.equal(outcome.kind, "transient");
-    if (outcome.kind === "transient") {
-      assert.match(outcome.text, /next attempt FULL ACCESS/);
+    assert.deepEqual(await dispatcher.submit("/approval"), { kind: "choose_approval" });
+    for (const argument of ["policy", "full_access"]) {
+      assert.deepEqual(await dispatcher.submit(`/approval ${argument}`), {
+        kind: "transient", level: "error", text: "usage: /approval",
+      });
     }
+    assert.equal(peer.requests.length, 2);
   });
 
   it("cancels one background execution by its runtime identity", async () => {

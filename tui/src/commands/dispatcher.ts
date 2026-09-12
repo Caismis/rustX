@@ -43,7 +43,6 @@ import { renderAgentStatusDetail } from "../ui/components/agent-status.ts";
 import { renderTodoInspection } from "../ui/components/todos.ts";
 import { COMMANDS, parseCommandLine } from "./registry.ts";
 import type {
-  ApprovalMode,
   CatalogModelView,
   InteractionRef,
   SessionNodeView,
@@ -59,6 +58,7 @@ export type CommandOutcome =
   | { kind: "none" }
   | { kind: "inspect"; title: string; body: string }
   | { kind: "transient"; level: "info" | "error"; text: string }
+  | { kind: "choose_approval" }
   | { kind: "choose_model"; models: CatalogModelView[] }
   | {
       kind: "choose_session";
@@ -265,7 +265,7 @@ export class CommandDispatcher {
         case "/cancel":
           return await this.#cancel(session, argument);
         case "/approval":
-          return await this.#approvalMode(session, argument);
+          return argument.length === 0 ? { kind: "choose_approval" } : usage("/approval");
         case "/quit":
           return { kind: "quit" };
         default:
@@ -617,29 +617,7 @@ export class CommandDispatcher {
     );
   }
 
-  async #approvalMode(
-    session: RuntimeClientAttachment,
-    argument: string,
-  ): Promise<CommandOutcome> {
-    let mode: ApprovalMode;
-    if (argument === "policy") {
-      mode = "policy";
-    } else if (argument === "full_access") {
-      mode = "full_access";
-    } else {
-      return transient("error", "usage: /approval <policy|full_access>");
-    }
-    const result = await session.approvalModeSet(mode);
-    const label = (value: ApprovalMode) =>
-      value === "full_access" ? "FULL ACCESS" : "POLICY";
-    if (result.pendingApprovalMode !== undefined) {
-      return transient(
-        "info",
-        `ApprovalMode request accepted: effective ${label(result.effectiveApprovalMode)} · next attempt ${label(result.pendingApprovalMode)}`,
-      );
-    }
-    return transient("info", `ApprovalMode is now ${label(result.effectiveApprovalMode)}`);
-  }
+
 }
 
 /**

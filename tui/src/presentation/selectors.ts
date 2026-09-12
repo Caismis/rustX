@@ -29,6 +29,7 @@ import { sanitizeField } from "../sanitize.ts";
 
 import type {
   AgentStatusView,
+  ApprovalMode,
   BackgroundLifecycle,
   CapabilitySourceView,
   InteractionSource,
@@ -377,4 +378,9 @@ export function unavailableInputModalities(
   return invocation.declaredCapabilities.inputModalities.filter(
     (modality) => !effective.has(modality),
   );
+}
+
+/** Product labels for native-supported modes; no desired/effective state is owned here. */
+export function approvalLabel(mode: ApprovalMode): string {
+  return mode === "full_access" ? "Full access" : "Policy";
 }
