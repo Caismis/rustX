@@ -1,4 +1,4 @@
-# Explicit provider/model declarations. Provider request overlays are JSON strings.
+# Explicit provider/model declarations. Provider request overlays are structured TOML tables.
 # TOML configuration; fixed Workflows use YAML and model-facing resources use Markdown.
 schema_version = 1
 
@@ -11,7 +11,8 @@ id = "demo-model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
-request_params_json = "{\"temperature\": 0.2}"
+[providers.example.models.request_params]
+temperature = 0.2
 
 [providers.example.models.capabilities]
 input_modalities = ["text"]
@@ -24,11 +25,11 @@ default_profile = "off"
 
 [providers.example.models.reasoning.profiles.off]
 enabled = false
-request_params_json = "{}"
+request_params = {}
 
 [providers.example.models.reasoning.profiles.on]
 enabled = true
-request_params_json = "{\"reasoning_effort\": \"low\"}"
+request_params = { reasoning_effort = "low" }
 
 [providers.example.models.compat]
 chat_max_tokens_field = "max_completion_tokens"

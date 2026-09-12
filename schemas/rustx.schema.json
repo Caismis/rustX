@@ -427,10 +427,10 @@
             }
           ]
         },
-        "request_params_json": {
+        "request_params": {
           "anyOf": [
             {
-              "$ref": "#/$defs/RequestParamsJson"
+              "$ref": "#/$defs/RequestParamsToml"
             }
           ]
         },
@@ -586,7 +586,7 @@
       "type": "object"
     },
     "ReasoningProfileId": {
-      "description": "The identity of one reasoning profile declared by a model.\n\nThe runtime assigns no meaning to the name: `off`, `on`, `low`,\n`thinking-32k`, and `deep` are all just names whose wire behaviour is\nexactly the profile's configured `request_params_json`.",
+      "description": "The identity of one reasoning profile declared by a model.\n\nThe runtime assigns no meaning to the name: `off`, `on`, `low`,\n`thinking-32k`, and `deep` are all just names whose wire behaviour is\nexactly the profile's configured `request_params`.",
       "type": "string"
     },
     "ReasoningSelection": {
@@ -623,9 +623,39 @@
         }
       ]
     },
-    "RequestParamsJson": {
-      "description": "JSON text with an object at its top level. Arbitrary nested provider-native JSON is retained, including null. Protected wire keys are rejected during model resolution.",
-      "type": "string"
+    "RequestParamsToml": {
+      "$defs": {
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "items": {
+                "$ref": "#/$defs/RequestParamsToml/$defs/value"
+              },
+              "type": "array"
+            },
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/RequestParamsToml/$defs/value"
+              },
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/RequestParamsToml/$defs/value"
+      },
+      "description": "Opaque provider-native structured TOML. Strings, integers, finite floats, booleans, arrays and tables only; no dates, times, datetimes, non-finite floats or explicit null. Protected wire keys are checked during model resolution.",
+      "type": "object"
     },
     "SourceToolSelection": {
       "anyOf": [
@@ -705,9 +735,9 @@
                 }
               ]
             },
-            "request_params_json": {
-              "$ref": "#/$defs/RequestParamsJson",
-              "default": "{}"
+            "request_params": {
+              "$ref": "#/$defs/RequestParamsToml",
+              "default": {}
             }
           },
           "required": [

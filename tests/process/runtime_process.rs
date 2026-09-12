@@ -159,7 +159,7 @@ id = "process-model"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
-request_params_json = "{{\"temperature\": 0.11}}"
+request_params = {{ temperature = 0.11 }}
 
 [providers.fixture.models.capabilities]
 input_modalities = ["text"]

@@ -857,7 +857,7 @@ async fn model_set_protected_keys_use_serialization_neutral_diagnostics() {
             message.contains("protected wire key \"messages\""),
             "{message}"
         );
-        for spelling in ["request_params_json", "requestParams", "TOML", "toml"] {
+        for spelling in ["request_params", "requestParams", "TOML", "toml"] {
             assert!(!message.contains(spelling), "{message}");
         }
         let (after, _) = host.snapshot().expect("snapshot");

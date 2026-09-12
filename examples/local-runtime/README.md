@@ -71,7 +71,7 @@ TOML is the only rustX settings, runtime configuration, and model catalog
 format. Author `settings.toml`, `rustx.toml`, and `models.toml` with snake_case
 keys and `#` comments. Unknown fields, duplicate keys, and malformed TOML fail
 before composition. See [launch configuration](../../docs/launch-configuration.md)
-for typed reset values and the `request_params_json` string boundary.
+for typed reset values and the `request_params` structured TOML boundary.
 
 YAML authors fixed Workflow programs. Markdown authors model-facing resources.
 JSON remains the wire, generated-schema, and provider-native opaque data format.
@@ -91,7 +91,7 @@ The catalog demonstrates the current `openai_chat_completions` protocol, a
 `example/demo-model` model with structured text/tool/reasoning capabilities,
 model limits, and `compat` metadata. A model ID may contain `/`, so a model
 such as `Qwen/Qwen3` is referenced as `example/Qwen/Qwen3` in the session.
-`request_params_json.temperature` is a
+`request_params.temperature` is a
 model-level provider wire parameter. It is opaque to rustX and is not a
 universal sampling-parameter schema; adapt it to the selected provider.
 
@@ -132,7 +132,7 @@ hostname, or model ID.
 
 The named `off` and `on` reasoning profiles likewise have no built-in meaning
 from their names. Their exact `enabled` state and provider-owned
-`request_params_json` are the contract. The illustrative `reasoning_effort` value
+`request_params` are the contract. The illustrative `reasoning_effort` value
 must be changed if the real provider uses a different reasoning parameter.
 
 ## `rustx.toml`

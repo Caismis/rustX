@@ -91,7 +91,7 @@ fn models_json() -> String {
                         "reasoning": false
                     },
                     "compat": {"chat_reasoning_replay": "omit"},
-                    "request_params_json": serde_json::to_string(&serde_json::json!({})).unwrap()}]
+                    "request_params": serde_json::json!({})}]
             }
         }
     }))

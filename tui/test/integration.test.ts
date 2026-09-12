@@ -80,7 +80,7 @@ id = "${id}"
 protocol = "openai_chat_completions"
 context_window = ${contextWindow}
 max_output_tokens = ${maxOutput}
-request_params_json = '${params}'
+request_params = ${params}
 capabilities = { input_modalities = ["text"], output_modalities = ["text"], tool_calls = true, reasoning = false }
 compat = { chat_reasoning_replay = "omit" }
 `;
@@ -90,7 +90,7 @@ function modelsToml(baseUrl: string): string {
   return `[providers.fixture]
 base_url = ${JSON.stringify(baseUrl)}
 api_key = "$${CREDENTIAL_VARIABLE}"
-${modelToml("integration-model", 128000, 512, '{"temperature":0.25}')}
+${modelToml("integration-model", 128000, 512, '{ temperature = 0.25 }')}
 ${modelToml("second-model", 32000, 256)}`;
 }
 

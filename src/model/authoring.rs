@@ -1,12 +1,12 @@
 //! Canonical TOML model catalog. Provider-native overlays cross exactly one
-//! JSON-string boundary; provider translation remains adapter-owned.
+//! structured TOML normalization boundary; provider translation remains adapter-owned.
 use super::ModelProtocol;
 use super::catalog::{
     ChatMaxTokensField, ChatReasoningReplay, ChatStreamUsage, ChatToolProtocol, CredentialSource,
     MODEL_CATALOG_SCHEMA_VERSION, Modality, ModelCapabilities, ModelCatalogDocument, ModelDocument,
     ProviderDocument, ReasoningConfig, ReasoningProfile, ReasoningProfileId, ResponsesStorageMode,
 };
-use crate::toml_authoring::RequestParamsJson;
+use crate::toml_authoring::RequestParamsToml;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -37,7 +37,7 @@ pub struct Model {
     pub max_output_tokens: u32,
     pub capabilities: Capabilities,
     #[serde(default)]
-    pub request_params_json: RequestParamsJson,
+    pub request_params: RequestParamsToml,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<Reasoning>,
     #[serde(default)]
@@ -76,7 +76,7 @@ pub struct Reasoning {
 pub struct Profile {
     pub enabled: bool,
     #[serde(default)]
-    pub request_params_json: RequestParamsJson,
+    pub request_params: RequestParamsToml,
 }
 impl From<Catalog> for ModelCatalogDocument {
     fn from(value: Catalog) -> Self {
@@ -112,7 +112,7 @@ impl From<Model> for ModelDocument {
                 tool_calls: value.capabilities.tool_calls,
                 reasoning: value.capabilities.reasoning,
             },
-            request_params: value.request_params_json.0,
+            request_params: value.request_params.0,
             compat: value.compat.into(),
             reasoning: value.reasoning.map(|r| ReasoningConfig {
                 default_profile: r.default_profile,
@@ -124,7 +124,7 @@ impl From<Model> for ModelDocument {
                             id,
                             ReasoningProfile {
                                 enabled: p.enabled,
-                                request_params: p.request_params_json.0,
+                                request_params: p.request_params.0,
                             },
                         )
                     })
@@ -148,7 +148,7 @@ id = "m"
 protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
-request_params_json = '''{"future":{"nested":[1,null,{"new":true}]},"temperature":0.1}'''
+request_params = { future = { nested = [1, "text", { new = true }] }, temperature = 0.1 }
 [providers.p.models.capabilities]
 input_modalities = ["text"]
 output_modalities = ["text"]
@@ -160,7 +160,7 @@ chat_reasoning_replay = "omit"
 default_profile = "off"
 [providers.p.models.reasoning.profiles.off]
 enabled = false
-request_params_json = '''{"vendor_reasoning":[null,{"enabled":false}]}'''
+request_params = { vendor_reasoning = [false, { enabled = false }] }
 "#;
     #[test]
     fn catalog_and_profile_json_remain_opaque_and_shallow_overlays_remain_owned() {
@@ -169,12 +169,12 @@ request_params_json = '''{"vendor_reasoning":[null,{"enabled":false}]}'''
         let definition = catalog.model(&model_ref).unwrap();
         assert_eq!(
             definition.request_params["future"]["nested"][1],
-            serde_json::Value::Null
+            serde_json::json!("text")
         );
         assert_eq!(
             definition.reasoning.as_ref().unwrap().profiles[&ReasoningProfileId::new("off")]
                 .request_params["vendor_reasoning"][0],
-            serde_json::Value::Null
+            serde_json::json!(false)
         );
         let mut selection = crate::model::invocation::ModelSelection::of(model_ref);
         selection.request_params = serde_json::from_str(
@@ -213,6 +213,37 @@ request_params_json = '''{"vendor_reasoning":[null,{"enabled":false}]}'''
         );
     }
     #[test]
+    fn catalog_and_reasoning_reject_toml_only_values_with_full_paths() {
+        for (original, path) in [
+            (
+                r#"{ future = { nested = [1, "text", { new = true }] }, temperature = 0.1 }"#,
+                "providers.p.models[0].request_params.items[1].when",
+            ),
+            (
+                "{ vendor_reasoning = [false, { enabled = false }] }",
+                "providers.p.models[0].reasoning.profiles.off.request_params.items[1].when",
+            ),
+        ] {
+            for value in [
+                "1979-05-27",
+                "07:32:00",
+                "1979-05-27T07:32:00Z",
+                "nan",
+                "+inf",
+                "-inf",
+            ] {
+                let text = CATALOG.replace(
+                    original,
+                    &format!("{{items = [{{when = true}}, {{when = {value}}}]}}"),
+                );
+                let error = ModelCatalog::from_toml_slice(text.as_bytes())
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.contains(path), "{error}");
+            }
+        }
+    }
+    #[test]
     fn semantic_toml_diagnostics_use_authoring_field_names() {
         for (old, new, expected) in [
             ("https://example.invalid/v1", "relative", "base_url"),
@@ -246,10 +277,10 @@ request_params_json = '''{"vendor_reasoning":[null,{"enabled":false}]}'''
         }
     }
     #[test]
-    fn invalid_json_unknown_toml_and_protected_keys_fail_at_their_owned_boundaries() {
-        for replacement in ["[]", "null", "42", "true", "{bad"] {
+    fn invalid_roots_unknown_toml_and_protected_keys_fail_at_their_owned_boundaries() {
+        for replacement in ["[]", "42", "true", "'SECRET_VALUE'"] {
             let text = CATALOG.replace(
-                r#"{"future":{"nested":[1,null,{"new":true}]},"temperature":0.1}"#,
+                r#"{ future = { nested = [1, "text", { new = true }] }, temperature = 0.1 }"#,
                 replacement,
             );
             text.parse::<toml_edit::DocumentMut>()
@@ -258,11 +289,11 @@ request_params_json = '''{"vendor_reasoning":[null,{"enabled":false}]}'''
             assert!(
                 error
                     .to_string()
-                    .contains("request_params_json must contain a valid JSON object"),
+                    .contains("request_params must be a TOML table"),
                 "{error}"
             );
         }
-        for field in ["unknown", "request_params"] {
+        for field in ["unknown", "request_params_json"] {
             let text = format!("{field} = {{}}\n{CATALOG}");
             text.parse::<toml_edit::DocumentMut>().expect("valid TOML");
             let error = ModelCatalog::from_toml_slice(text.as_bytes()).unwrap_err();
@@ -273,15 +304,22 @@ request_params_json = '''{"vendor_reasoning":[null,{"enabled":false}]}'''
                 "{error}"
             );
         }
+        let obsolete = CATALOG.replace("request_params =", "request_params_json =");
+        assert!(
+            ModelCatalog::from_toml_slice(obsolete.as_bytes())
+                .unwrap_err()
+                .to_string()
+                .contains("unknown field `request_params_json`")
+        );
         for key in ["model", "messages", "stream"] {
-            let protected = format!("{{\"{key}\":null}}");
+            let protected = format!("{{{key} = true}}");
             for (original, layer) in [
                 (
-                    r#"{"future":{"nested":[1,null,{"new":true}]},"temperature":0.1}"#,
+                    r#"{ future = { nested = [1, "text", { new = true }] }, temperature = 0.1 }"#,
                     "model default",
                 ),
                 (
-                    r#"{"vendor_reasoning":[null,{"enabled":false}]}"#,
+                    r"{ vendor_reasoning = [false, { enabled = false }] }",
                     "reasoning profile",
                 ),
             ] {
@@ -294,7 +332,7 @@ request_params_json = '''{"vendor_reasoning":[null,{"enabled":false}]}'''
                     crate::model::catalog::ModelCatalogError::ProtectedKey { .. }
                 ));
                 let message = error.to_string();
-                assert!(message.contains("request_params_json"), "{message}");
+                assert!(message.contains("request_params"), "{message}");
                 assert!(message.contains(layer), "{message}");
                 assert!(
                     message.contains(&format!("protected wire key {key:?}")),

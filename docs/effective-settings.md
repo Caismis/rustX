@@ -234,7 +234,7 @@ inspect resource files. Full prospective launch readiness remains the job of
 
 A model save changes only `agent.model.model` and `agent.model.reasoning_profile`, but validates
 **the complete model object parsed from the staged bytes**, including preserved
-`request_params_json` (the opaque JSON-object string authoring surface),
+`request_params` (the opaque structured TOML object authoring surface),
 `max_output_tokens` (the model output policy), and `summary_model` (the summary
 model policy). These are members of `agent.model` in `settings.toml`. The canonical
 `SessionModelConfig` schema supplies its defaults; `analyze_session_model_config`

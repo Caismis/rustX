@@ -490,6 +490,26 @@ model = "example/a"
     }
 
     #[test]
+    fn structured_params_survive_settings_edits_with_comments() {
+        let (_root, owner) = model_change_fixture(
+            "# provider parameters\nrequest_params = {temperature = 0.7, provider = {order = ['a'], allow_fallbacks = true}} # keep me",
+        );
+        owner
+            .save_sync(DefaultScope::User, &current(&owner), approval())
+            .unwrap();
+        let saved = std::fs::read_to_string(owner.target()).unwrap();
+        assert!(saved.contains("# provider parameters"));
+        assert!(saved.contains("# keep me"));
+        assert!(saved.contains("request_params = {temperature = 0.7"));
+        assert!(!saved.contains("request_params_json"));
+        let parsed: super::super::authoring::RuntimeLayer =
+            crate::toml_authoring::parse(saved.as_bytes()).unwrap();
+        assert_eq!(
+            parsed.resolve().unwrap().initial_model().request_params["provider"]["order"],
+            serde_json::json!(["a"])
+        );
+    }
+    #[test]
     fn cfg238_staged_model_preserved_output_budget_is_validated() {
         assert_preserved_model_setting_rejected(
             r#"max_output_tokens = { mode = "limit", tokens = 4096 }"#,
@@ -500,13 +520,13 @@ model = "example/a"
     fn cfg238_staged_model_preserved_request_params_are_validated() {
         // `messages` is opaque to Responses but runtime-owned by Chat Completions.
         assert_preserved_model_setting_rejected(
-            r#"request_params_json = '{"messages": ["SECRET_SENTINEL"]}'"#,
+            r#"request_params = {messages = ["SECRET_SENTINEL"]}"#,
         );
     }
 
     #[test]
     fn cfg238_staged_model_validates_user_context_with_builtin_defaults() {
-        let (_root, owner) = model_change_fixture(r"request_params_json = '{}'");
+        let (_root, owner) = model_change_fixture(r"request_params = {}");
         // Valid for A/128000; B/8192 cannot fit this reserve plus its 2048
         // output budget. Other context fields use the canonical built-in defaults.
         let bytes = br#"[context]

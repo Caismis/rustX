@@ -14,6 +14,43 @@ struct Fixture {
     request: LaunchRequest,
 }
 
+#[test]
+fn cfg279_structured_parameters_check_show_and_project_overlay_are_side_effect_free() {
+    let f = Fixture::new();
+    f.user(json!({"agent":{"model":{"model":"host/one", "request_params":{"provider":{"order":["a","b"],"allow_fallbacks":true}}}}}));
+    let file = f.host.launch_directory.join("rustx.toml");
+    for (parameters, expected_path) in [
+        (
+            "provider = {order = ['c']}\nsecret = 'SECRET_PROVIDER_VALUE'",
+            None,
+        ),
+        (
+            "items = [{when = true}, {when = 1979-05-27}]\nsecret = 'SECRET_PROVIDER_VALUE'",
+            Some("agent.model.request_params.items[1].when"),
+        ),
+    ] {
+        std::fs::write(&file, format!("[agent.model.request_params]\n{parameters}")).unwrap();
+        for operation in ["config_check", "config_show"] {
+            let ((report, launch), effects) = super::static_effects::measure(|| {
+                super::diagnostics::inspect(operation, &f.request, &f.host)
+            });
+            assert_eq!(effects, [0; 13]);
+            assert!(!report.render(true).contains("SECRET_PROVIDER_VALUE"));
+            if let Some(path) = expected_path {
+                assert_eq!(report.validity, super::diagnostics::Validity::Invalid);
+                assert_eq!(report.diagnostics[0].path, path);
+            } else {
+                assert_eq!(report.validity, super::diagnostics::Validity::Valid);
+                let launch = launch.unwrap();
+                assert_eq!(
+                    launch.config.initial_model().request_params["provider"],
+                    json!({"order":["c"]})
+                );
+            }
+        }
+    }
+}
+
 fn template_source(id: &str) -> String {
     std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
         "examples/local-runtime/workflow-templates/.agents/workflows/{id}.yaml"

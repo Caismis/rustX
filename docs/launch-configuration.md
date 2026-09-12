@@ -158,16 +158,27 @@ primary model overlays, and explicit summary model overlays:
 ```toml
 [agent.model]
 model = "example/demo-model"
-request_params_json = '''
-{"temperature":0.7,"future":{"nested":[1,null,{"enabled":true}]}}
-'''
+
+[agent.model.request_params]
+temperature = 0.7
+top_p = 0.95
+chat_template_kwargs.enable_thinking = true
+structured_outputs.choice = ["positive", "negative"]
+documents = [{ title = "A", text = "..." }, { title = "B", text = "..." }]
+
+[agent.model.request_params.provider]
+order = ["provider-a", "provider-b"]
+allow_fallbacks = true
 ```
 
-The string must contain a JSON object. Nested JSON arrays, objects, scalars, and
-nulls remain provider-owned and opaque. Malformed JSON and non-object roots fail;
-protected wire keys are checked by the existing model owner. Catalog/profile/
-Session overlays remain shallow: replacing a top-level object replaces that whole
-object. `[request_params]` is not an alternative authoring form.
+Tables (including dotted keys and inline tables), arrays, strings, integers,
+finite floats and booleans normalize once into opaque provider-native JSON.
+Dates, times, datetimes, NaN and infinities fail with the exact parameter path.
+TOML has no explicit JSON null: omission is not null, and there is no sentinel or
+raw JSON escape hatch. Programmatic JSON-domain parameters retain null support.
+Protected wire keys are checked by the existing model owner after normalization.
+Catalog/reasoning/session overlays remain shallow: replacing a top-level object
+replaces that whole object. Admission and frozen model state are unchanged.
 
 CLI-relative paths use the original launch directory. Agent Skill selections
 are names, not paths; canonical discovery and explicit CLI Skill paths establish
