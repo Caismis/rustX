@@ -3,8 +3,9 @@
 Copy `.agents/workflows/human_plan.yaml` into a trusted workspace and select a
 model for the ordinary invoking Agent turn. This template needs no Subagent role:
 
-```json
-{"workflows":{"definitions":["human_plan"],"main":["human_plan"]}}
+```toml
+[workflows]
+main = ["human_plan"]
 ```
 
 Inspect with `rustx workflow check human_plan` or `rustx workflow explain human_plan`.

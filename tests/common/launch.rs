@@ -4,33 +4,46 @@
 use rustx::local_runtime::{HostEnvironment, LaunchRequest, ResolvedLaunch, StartupSession};
 use std::path::{Path, PathBuf};
 
-/// Write canonical Markdown fixtures from an in-memory collection of frontmatters.
-/// `roles` is a test-builder input, removed before any runtime configuration is written.
+/// Write canonical TOML Agent fixtures from an in-memory fixture builder.
 pub fn write_roles(workspace: &Path, subagents: &mut serde_json::Value) {
     let Some(roles) = subagents.as_object_mut().and_then(|s| s.remove("roles")) else {
         return;
     };
-    let roles = roles.as_object().expect("fixture role frontmatters");
-    let directory = workspace.join(".agents/subagents");
+    let roles = roles.as_object().expect("fixture Agents");
+    let directory = workspace.join(".agents/agents");
     std::fs::create_dir_all(&directory).unwrap();
+    // This fixture builder authors the complete desired filesystem resource set.
+    // Removing a fixture Agent removes its canonical file, never a settings entry.
+    for entry in std::fs::read_dir(&directory).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|ext| ext == "toml")
+            && !roles.contains_key(path.file_stem().unwrap().to_str().unwrap())
+        {
+            std::fs::remove_file(path).unwrap();
+        }
+    }
     for (name, metadata) in roles {
-        let path = directory.join(format!("{name}.md"));
+        let path = directory.join(format!("{name}.toml"));
         let existing =
             std::fs::read_to_string(&path).unwrap_or_else(|_| "Role instructions.\n".into());
-        let body = existing
-            .strip_prefix("---\n")
-            .and_then(|text| text.split_once("\n---\n"))
-            .map_or(existing.as_str(), |(_, body)| body);
-        std::fs::write(
-            &path,
-            format!(
-                "---\n{}---\n{body}",
-                serde_yaml::to_string(metadata).unwrap()
-            ),
-        )
-        .unwrap();
+        let body = toml::from_str::<serde_json::Value>(&existing)
+            .ok()
+            .and_then(|v| {
+                v.get("instructions")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned)
+            })
+            .unwrap_or(existing);
+        let mut document = metadata.clone();
+        document["instructions"] = body.into();
+        if let Some(value) = document.as_object_mut().unwrap().remove("timeoutMs") {
+            document["timeout_ms"] = value;
+        }
+        if let Some(value) = document.as_object_mut().unwrap().remove("agentsMd") {
+            document["agents_md"] = value;
+        }
+        std::fs::write(path, toml::to_string_pretty(&document).unwrap()).unwrap();
     }
-    subagents["definitions"] = serde_json::json!(roles.keys().collect::<Vec<_>>());
 }
 
 /// Author the two fixture authorities explicitly. Callers name which fixture

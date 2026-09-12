@@ -2565,7 +2565,7 @@ after ChildGuidanceOutcome::Accepted:
 ## Issue #144: named attempt-scoped subagent definitions
 
 - **Named subagent definitions are immutable members of one admitted
-  runtime resource generation.** `SubagentCatalog` is
+  runtime resource generation.** `AgentCatalog` is
   configuration/resource-generation state that the loader builds off-side,
   validates against the very capability candidate it will publish, and
   freezes into `RuntimeResourceSnapshot` at the same atomic commit that
@@ -3467,12 +3467,11 @@ the launch-boundary policy inheritance.
 
 ## Issue #83: native YAML WorkflowRuntime
 
-- **YAML is serialization only.** A configured
+- **YAML is serialization only.** A discovered
   `.agents/workflows/<id>.yaml` deserializes into `WorkflowDefinition`, is
   compiled and validated once into an immutable `WorkflowProgram`, and is
-  never interpreted by the execution path. The configured id is the only
-  identity; unregistered files and a YAML `name` field cannot create
-  admission.
+  never interpreted by the execution path. The canonical filename is the only
+  identity. Discovery and a YAML `name` field cannot grant admission.
 - **Project Agent resources have one ownership namespace.** Project-authored
   Skills, Python tools, Subagent files, and native Workflow files use the
   workspace-owned `.agents/` tree as their canonical layout. Skill discovery
@@ -3502,20 +3501,14 @@ the launch-boundary policy inheritance.
   generation. Automatic project roots and instruction/Workflow reads follow the
   same rule. Host/CLI resources and execution paths remain separate authorities;
   this is not an OS sandbox.
-- **Workflow registration is path-deterministic.** Each id in
-  `workflows.definitions` maps to exactly
-  `<workspace>/.agents/workflows/<id>.yaml`; the loader never scans that
-  directory, and filesystem presence cannot grant registration or model
-  visibility.
-- **Definitions and admissions are independent.** `subagents.definitions`
-  registers canonical role filename identities, each backed by one Markdown
-  resource and one native definition. Whole project resources replace user
-  resources without merging bodies or permissions. `subagents.main` and
-  `subagents.workflow` are independent subsets, and
-  `workflows.definitions` and `workflows.main` are independent registration
-  and model-exposure sets. Unknown ids fail the candidate; a defined but
-  unadmitted profile remains valid and cannot be reached through either
-  domain.
+- **Canonical discovery establishes existence.** Bounded `.agents/agents/*.toml`,
+  `.agents/skills/*/SKILL.md`, `.agents/tools/*/` and `.agents/workflows/*.yaml`
+  produce deterministic generation-scoped catalogs. Settings never repeat their
+  existence. Invalid canonical Agent, Skill or Workflow content rejects the candidate.
+- **Discovery and admission are independent.** Whole project Agents replace user
+  Agents without merging instructions or capabilities. `subagents.main`,
+  `subagents.workflow` and `workflows.main` select discovered identities. Discovery
+  never prepares Python packages or grants execution or approval authority.
 - **One candidate publishes atomically.** Exact YAML loading, program
   compilation, profile admission, capability validation, and concrete
   Workflow Tool registration occur off-side. One publication boundary makes
@@ -3571,7 +3564,7 @@ the launch-boundary policy inheritance.
 - **Tool exposure is per Workflow.** Every `workflows.main` id is one
   independent concrete Tool named by the configured id, with its description
   and input schema. There is no generic dispatcher and no implicit exposure
-  of registered Workflows or Subagents. Parent canonical history receives one
+  of discovered Workflows or Subagents. Parent canonical history receives one
   bounded terminal Workflow ToolResult, not intermediate values or child
   transcripts.
 - **Native authorities remain native.** WorkflowRuntime composes the named

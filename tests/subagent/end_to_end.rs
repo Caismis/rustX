@@ -212,9 +212,9 @@ impl Process {
         inspect_conversation: Option<&str>,
         fail_live_inspection: bool,
     ) -> Self {
-        std::fs::create_dir_all(workspace.join(".agents/subagents/explore")).expect("workspace");
+        std::fs::create_dir_all(workspace.join(".agents/agents/explore")).expect("workspace");
         std::fs::write(
-            workspace.join(".agents/subagents/explore.md"),
+            workspace.join(".agents/agents/explore.toml"),
             EXPLORE_INSTRUCTIONS,
         )
         .expect("explore instructions");
@@ -509,10 +509,10 @@ async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary()
     let root = tempfile::tempdir().expect("temp root");
     let repository = root.path().join("repository");
     let logical_parent = repository.join("backend");
-    std::fs::create_dir_all(logical_parent.join(".agents/subagents/explore"))
+    std::fs::create_dir_all(logical_parent.join(".agents/agents/explore"))
         .expect("logical workspace");
     std::fs::write(
-        logical_parent.join(".agents/subagents/explore.md"),
+        logical_parent.join(".agents/agents/explore.toml"),
         EXPLORE_INSTRUCTIONS,
     )
     .expect("instructions");
@@ -539,10 +539,10 @@ async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary()
     )
     .unwrap();
     let wider = repository.join(".agents");
-    std::fs::create_dir_all(wider.join("subagents")).unwrap();
+    std::fs::create_dir_all(wider.join("agents")).unwrap();
     std::fs::create_dir_all(wider.join("skills/wider")).unwrap();
     std::fs::write(
-        wider.join("subagents/explore.md"),
+        wider.join("agents/explore.toml"),
         "CFG236_INVALID_WIDER_ROLE",
     )
     .unwrap();

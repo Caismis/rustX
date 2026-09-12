@@ -1391,7 +1391,7 @@ cross-conversation children, or recursion were added.
 M9.5 adds the bounded native Workflow layer over named SubagentRuntime. The
 authoring surface is `.agents/workflows/<configured-id>.yaml`, but YAML is only
 serialization. Configuration registers exact ids and separately admits
-`workflows.main`; `subagents.definitions` remains the one profile source of
+`workflows.main`; the discovered Agent catalog remains the one profile source of
 truth, with independent `subagents.main` and `subagents.workflow` domains.
 
 The loader compiles each registered definition into an immutable
@@ -1546,7 +1546,7 @@ Workflow = HOW one finite fixed program executes. Goal #84 = WHAT objective pers
 across ordinary rounds. Scheduler #85 = WHEN a target becomes eligible.
 `Workflow completed != business checks passed != Goal complete`.
 Workflow requires neither Goal nor Scheduler. A Goal-driven normal Agent round
-may call a registered Workflow Tool. Loop exhaustion does not start another round;
+may call a discovered Workflow Tool. Loop exhaustion does not start another round;
 Goal-level accounting and manual continuation belong to #84. Pausing/disarming future
 rounds is separate from cancelling current admitted execution. A pending Review or
 question is not automatically Goal Blocked. Recovering Goal state never recovers an

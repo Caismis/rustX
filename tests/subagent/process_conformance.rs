@@ -104,10 +104,10 @@ impl Process {
     fn spawn(root: &std::path::Path, models: &str, session: &str, key: &str) -> Self {
         let workspace = root.join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        std::fs::create_dir_all(workspace.join(".agents/subagents/conformance"))
+        std::fs::create_dir_all(workspace.join(".agents/agents/conformance"))
             .expect("subagent resources");
         std::fs::write(
-            workspace.join(".agents/subagents/conformance.md"),
+            workspace.join(".agents/agents/conformance.toml"),
             "Execute the delegated conformance task exactly as requested.\n",
         )
         .expect("subagent instructions");

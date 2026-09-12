@@ -129,7 +129,7 @@ fn conversation_with_options(
     register_native_tools(
         &mut base_tool_registry,
         NativeToolResources {
-            subagent_catalog: rustx::runtime::subagent::SubagentCatalog::empty(),
+            subagent_catalog: rustx::runtime::subagent::AgentCatalog::empty(),
             background: background.clone(),
             subagents: None,
         },
@@ -1646,7 +1646,7 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
     register_native_tools(
         &mut tools,
         NativeToolResources {
-            subagent_catalog: rustx::runtime::subagent::SubagentCatalog::empty(),
+            subagent_catalog: rustx::runtime::subagent::AgentCatalog::empty(),
             background: conversation.background.clone(),
             subagents: None,
         },

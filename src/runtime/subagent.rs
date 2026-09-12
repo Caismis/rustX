@@ -13,7 +13,7 @@
 //! # Ownership
 //!
 //! ```text
-//! SubagentCatalog (catalog)
+//! AgentCatalog (catalog)
 //!   owns: the immutable named definitions of one runtime resource
 //!         generation and their deterministic definition digests
 //!   never owns: live execution state of any kind
@@ -170,8 +170,8 @@ pub use activity::{
     SubagentWaitReason,
 };
 pub use catalog::{
-    CHILD_UNSAFE_BUILTIN_TOOLS, MAX_SUBAGENT_DEFINITIONS, MAX_SUBAGENT_EXECUTION_DEADLINE_MS,
-    SUBAGENT_DEFINITION_DIGEST_VERSION, SubagentAdmissionError, SubagentCatalog,
+    AgentCatalog, CHILD_UNSAFE_BUILTIN_TOOLS, MAX_SUBAGENT_DEFINITIONS,
+    MAX_SUBAGENT_EXECUTION_DEADLINE_MS, SUBAGENT_DEFINITION_DIGEST_VERSION, SubagentAdmissionError,
     SubagentDefinition, SubagentDefinitionDigest, SubagentDefinitionError,
     SubagentExecutionDeadline, SubagentExecutionDeadlineError, SubagentName, SubagentNameError,
     SubagentProjectInstructionPolicy,
@@ -397,7 +397,7 @@ impl AttemptSubagentContext {
             .resources
             .subagents()
             .admitted(self.inner.resources.subagent_main_admission())
-            .unwrap_or_else(|_| SubagentCatalog::empty());
+            .unwrap_or_else(|_| AgentCatalog::empty());
         resolver::render_agent_routing(&catalog)
     }
 }

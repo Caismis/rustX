@@ -1,5 +1,4 @@
 # Project runtime configuration. Paths remain subject to project trust and containment.
 # TOML configuration; fixed Workflows use YAML and model-facing resources use Markdown.
 [workflows]
-definitions = ["read_file"]
 main = ["read_file"]

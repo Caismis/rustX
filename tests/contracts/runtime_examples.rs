@@ -115,7 +115,18 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
     assert!(config.mcp_tool_policies.is_empty());
     assert_eq!(config.environment["RUSTX_EXAMPLE_MODE"], "local-runtime");
     assert!(config.default_tools.iter().any(|name| name == "subagent"));
-    assert_eq!(config.subagents.definitions.len(), 4);
+    assert_eq!(
+        std::fs::read_dir(examples_root().join("workspace/.agents/agents"))
+            .unwrap()
+            .filter(|entry| entry
+                .as_ref()
+                .unwrap()
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == "toml"))
+            .count(),
+        4
+    );
     assert_eq!(
         config
             .subagents
@@ -137,13 +148,12 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
     assert_eq!(
         config
             .workflows
-            .definitions
+            .main
             .iter()
             .map(rustx::runtime::workflow::WorkflowId::as_str)
             .collect::<Vec<_>>(),
         vec!["parallel_review", "implement_and_review"]
     );
-    assert_eq!(config.workflows.main, config.workflows.definitions);
 
     let host = CurrentRuntimeConfig::from_toml_slice(&read_example("settings.toml")).unwrap();
     let policies = host.native_tools.to_policies();
@@ -208,26 +218,32 @@ fn committed_example_skill_is_found_by_project_agents_discovery() {
 }
 
 #[test]
-fn every_shipped_workflow_is_registered_and_compiles() {
+fn every_shipped_workflow_is_discovered_and_compiles() {
     use rustx::runtime::workflow::{WorkflowDefinition, WorkflowProgram};
     let config = CurrentRuntimeConfig::from_toml_slice(&read_example("rustx.toml")).unwrap();
     let profiles = config.subagents.workflow.iter().cloned().collect();
     let directory = examples_root().join("workspace/.agents/workflows");
-    assert_eq!(
-        std::fs::read_dir(&directory).unwrap().count(),
-        config.workflows.definitions.len()
-    );
-    for id in &config.workflows.definitions {
-        let path = directory.join(format!("{id}.yaml"));
+    let mut paths = std::fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "yaml"))
+        .collect::<Vec<_>>();
+    paths.sort();
+    assert_eq!(paths.len(), 2);
+    for path in paths {
+        let id = rustx::runtime::workflow::WorkflowId::parse(
+            path.file_stem().unwrap().to_str().unwrap(),
+        )
+        .unwrap();
         let definition: WorkflowDefinition =
             serde_yaml::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         WorkflowProgram::compile(id.clone(), definition, &profiles)
             .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     }
-    for profile in &config.subagents.definitions {
+    for profile in &config.subagents.workflow {
         assert!(
             examples_root()
-                .join(format!("workspace/.agents/subagents/{profile}.md"))
+                .join(format!("workspace/.agents/agents/{profile}.toml"))
                 .is_file()
         );
     }

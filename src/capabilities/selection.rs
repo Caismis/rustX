@@ -40,7 +40,7 @@ impl std::fmt::Display for ToolSelector {
 /// The authored map form of an exact, source-qualified capability selection.
 ///
 /// This is the one selection vocabulary shared by every trusted authoring
-/// surface: named-role frontmatter (`tools:`), a Workflow Agent node's
+/// surface: named Agent TOML (`[tools]`), a Workflow Agent node's
 /// invocation override, and the model-facing `subagent` Tool's `override`.
 /// Origins are named explicitly rather than collapsed into bare strings, so a
 /// Builtin `read` and an MCP server's `read` are never interchangeable.

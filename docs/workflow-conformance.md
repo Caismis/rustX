@@ -1,7 +1,7 @@
 # Fixed Workflow product conformance
 
-See [canonical named Subagent resources](subagent-resources.md) for schema 8
-role files, registration/admission, bounded roots, source provenance, and frozen
+See [canonical named Agent resources](subagent-resources.md) for schema 8
+Agent files, discovery/admission, bounded roots, source provenance, and frozen
 reload/child contracts.
 
 
@@ -14,7 +14,7 @@ Branch, Parallel, Review, Loop and Return without new grammar or execution APIs.
 
 The four shipped-program scenarios live in
 [`tests/conformance/workflow.rs`](../tests/conformance/workflow.rs). They copy the
-actual workspace and registration, substitute only local provider configuration,
+actual workspace and selection, substitute only local provider configuration,
 and use real native child processes, file writes, Bash supervision and root HITL.
 The emulator emits model responses; it never executes tools or supplies check results.
 
@@ -39,11 +39,11 @@ candidate,human,loops}.rs`, `src/runtime/workflow/read_model.rs`, the existing
 workspace/interaction suites and `tui/test/integration.test.ts`. They remain the
 source of truth for detailed races; this slice does not duplicate their matrices.
 
-Every shipped YAML is enumerated against registration and compiled in the pure
+Every shipped YAML is discovered from its canonical root and compiled in the pure
 `contracts` target. Representative invalid references, unavailable profiles,
 unadmitted selectors, cross-scope reads, zero limits, unavailable producers and
 missing entries are rejected without model execution. The process example suite
-also composes all registered resources. `cargo test --all-targets --all-features`
+also composes all discovered resources. `cargo test --all-targets --all-features`
 includes both targets; CI's explicit target split retains them.
 
 ## Ownership and frontiers
@@ -102,7 +102,7 @@ across ordinary rounds. Scheduler #85 = WHEN a target becomes eligible.
 `Workflow completed != business checks passed != Goal complete`.
 
 Workflow requires neither Goal nor Scheduler. A Goal-driven normal Agent round may call a
-registered Workflow Tool. Loop exhaustion never automatically admits another round;
+discovered Workflow Tool. Loop exhaustion never automatically admits another round;
 Goal-level accounting/manual continuation belongs to #84. Pausing/disarming future
 rounds differs from cancelling current work. A pending Review/question is not
 implicitly Goal Blocked. Recovering Goal state cannot recover old Workflow continuation

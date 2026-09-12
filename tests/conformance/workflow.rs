@@ -26,7 +26,7 @@ use rustx::runtime_client::{
 };
 
 const MODEL: &str = "workflow-model";
-const TOOL_WORKFLOW: &str = r"description: Inspect registered workflow files.
+const TOOL_WORKFLOW: &str = r"description: Inspect discovered workflow files.
 tools: [{origin: builtin, name: glob}]
 timeout_ms: 10000
 block:
@@ -202,12 +202,10 @@ keep_recent_tokens = 0
 
 [subagents]
 max_concurrent = 4
-definitions = ["reviewer"]
 main = []
 workflow = ["reviewer"]
 
 [workflows]
-definitions = ["review_pr"]
 main = ["review_pr"]
 "#;
 
@@ -309,25 +307,23 @@ impl Driver {
     async fn start_with_workflow(emulator: &ProviderEmulator, workflow: &str) -> Self {
         let root = tempfile::tempdir().expect("temp root");
         let workspace = root.path().join("workspace");
-        std::fs::create_dir_all(workspace.join(".agents/subagents/reviewer"))
+        std::fs::create_dir_all(workspace.join(".agents/agents/reviewer"))
             .expect("subagent directory");
         std::fs::create_dir_all(workspace.join(".agents/workflows")).expect("workflow directory");
         std::fs::write(root.path().join("models.toml"), models_json(emulator))
             .expect("models.toml");
         std::fs::write(root.path().join("rustx.toml"), CONFIG).expect("rustx.toml");
         std::fs::write(
-            workspace.join(".agents/subagents/reviewer.md"),
-            "---\ndescription: The Workflow-only reviewer.\n---\nReview requests carefully.\n",
+            workspace.join(".agents/agents/reviewer.toml"),
+            "description = \"The Workflow-only reviewer.\"\ninstructions = \"Review requests carefully.\\n\"\n",
         )
         .expect("reviewer instructions");
         std::fs::write(workspace.join(".agents/workflows/review_pr.yaml"), workflow)
             .expect("workflow YAML");
-        // This deliberately is not registered. It is also malformed, proving
-        // that the loader uses configured ids rather than scanning the YAML
-        // directory as an implicit admission surface.
+        // Noncanonical incidental files have no Workflow identity.
         std::fs::write(
-            workspace.join(".agents/workflows/inactive.yaml"),
-            "this is not a registered Workflow definition: [",
+            workspace.join(".agents/workflows/inactive.txt"),
+            "this is not a canonical Workflow definition: [",
         )
         .expect("inactive workflow YAML");
 
@@ -440,11 +436,10 @@ impl Driver {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_registered_workflow_rejects_the_obsolete_workspace_rustx_path() {
+async fn workflow_selection_rejects_an_identity_outside_the_canonical_root() {
     let root = tempfile::tempdir().expect("temp root");
     let workspace = root.path().join("workspace");
-    std::fs::create_dir_all(workspace.join(".agents/subagents/reviewer"))
-        .expect("subagent directory");
+    std::fs::create_dir_all(workspace.join(".agents/agents/reviewer")).expect("subagent directory");
     std::fs::create_dir_all(workspace.join(".rustx/workflows")).expect("obsolete directory");
     std::fs::write(
         root.path().join("models.toml"),
@@ -453,8 +448,8 @@ async fn a_registered_workflow_rejects_the_obsolete_workspace_rustx_path() {
     .expect("models.toml");
     std::fs::write(root.path().join("rustx.toml"), CONFIG).expect("rustx.toml");
     std::fs::write(
-        workspace.join(".agents/subagents/reviewer.md"),
-        "---\ndescription: The Workflow-only reviewer.\n---\nReview requests carefully.\n",
+        workspace.join(".agents/agents/reviewer.toml"),
+        "description = \"The Workflow-only reviewer.\"\ninstructions = \"Review requests carefully.\\n\"\n",
     )
     .expect("reviewer instructions");
     std::fs::write(workspace.join(".rustx/workflows/review_pr.yaml"), WORKFLOW)
@@ -478,7 +473,7 @@ async fn a_registered_workflow_rejects_the_obsolete_workspace_rustx_path() {
         "static analysis rejects the obsolete workspace Workflow path without composing a runtime",
     );
     assert!(
-        detail.contains(".agents/workflows/review_pr.yaml"),
+        detail.contains("workflows.main") && detail.contains("review_pr"),
         "{detail}"
     );
     assert!(
@@ -488,11 +483,10 @@ async fn a_registered_workflow_rejects_the_obsolete_workspace_rustx_path() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn registered_workflow_can_remain_out_of_main_model_admission() {
+async fn discovered_workflow_can_remain_out_of_main_model_admission() {
     let root = tempfile::tempdir().expect("temp root");
     let workspace = root.path().join("workspace");
-    std::fs::create_dir_all(workspace.join(".agents/subagents/reviewer"))
-        .expect("subagent directory");
+    std::fs::create_dir_all(workspace.join(".agents/agents/reviewer")).expect("subagent directory");
     std::fs::create_dir_all(workspace.join(".agents/workflows")).expect("workflow directory");
     std::fs::write(
         root.path().join("models.toml"),
@@ -505,8 +499,8 @@ async fn registered_workflow_can_remain_out_of_main_model_admission() {
     )
     .expect("rustx.toml");
     std::fs::write(
-        workspace.join(".agents/subagents/reviewer.md"),
-        "---\ndescription: The Workflow-only reviewer.\n---\nReview requests carefully.\n",
+        workspace.join(".agents/agents/reviewer.toml"),
+        "description = \"The Workflow-only reviewer.\"\ninstructions = \"Review requests carefully.\\n\"\n",
     )
     .expect("reviewer instructions");
     std::fs::write(workspace.join(".agents/workflows/review_pr.yaml"), WORKFLOW)
@@ -529,7 +523,7 @@ async fn registered_workflow_can_remain_out_of_main_model_admission() {
     let resources =
         LocalConversationCore::compose(&(paths).resolve(), &LocalRuntimeDependencies::default())
             .await
-            .expect("registered but non-main Workflow composes")
+            .expect("discovered but non-main Workflow composes")
             .runtime()
             .runtime_resources();
     assert!(
@@ -577,8 +571,8 @@ block:
     )
     .expect("replace future program");
     std::fs::write(
-        workspace.join(".agents/subagents/reviewer.md"),
-        "---\ndescription: Future reviewer.\n---\nCHANGED FUTURE PROFILE\n",
+        workspace.join(".agents/agents/reviewer.toml"),
+        "description = \"Future reviewer.\"\ninstructions = \"CHANGED FUTURE PROFILE\\n\"\n",
     )
     .expect("replace future profile");
     std::fs::write(
@@ -838,7 +832,7 @@ impl Driver {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/local-runtime");
         copy_reference(&source, root.path());
         let workspace = root.path().join("workspace");
-        let reviewer = workspace.join(".agents/subagents/reviewer.md");
+        let reviewer = workspace.join(".agents/agents/reviewer.toml");
         let role = std::fs::read_to_string(&reviewer)
             .unwrap()
             .replace("example/demo-model", "emulator/workflow-model");

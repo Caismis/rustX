@@ -368,7 +368,7 @@ fn collect_files(root: &Path) -> Result<Vec<(PathBuf, Vec<u8>)>, PythonToolError
     Ok(output)
 }
 
-fn validate_identifier(identifier: &str) -> Result<(), PythonToolError> {
+pub(crate) fn validate_identifier(identifier: &str) -> Result<(), PythonToolError> {
     if identifier.is_empty()
         || identifier.starts_with('-')
         || identifier.ends_with('-')

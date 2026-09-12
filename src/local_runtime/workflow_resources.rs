@@ -4,46 +4,51 @@ use crate::runtime::resources::RuntimeResourceLoadError;
 use crate::runtime::workflow::{
     MAX_WORKFLOW_BYTES, WorkflowCatalog, WorkflowCompileError, WorkflowDefinition, WorkflowProgram,
 };
-use std::path::{Path, PathBuf};
-const AGENT_RESOURCES_DIRECTORY: &str = ".agents";
-const WORKFLOW_RESOURCES_DIRECTORY: &str = "workflows";
+use std::path::Path;
 
-/// Loads and compiles exactly the configured Workflow definitions.
-///
-/// The configured id is the only filesystem identity: a registered `id` is
-/// read from `.agents/workflows/{id}.yaml`. Directory contents are never
-/// scanned, so an unregistered YAML file cannot become model-visible by
-/// accident. Compilation happens before the candidate reaches the runtime
-/// resource publication boundary.
+/// Discover and compile canonical Workflow files before resource publication.
+#[allow(clippy::too_many_lines)] // One deterministic compile transaction with structured diagnostics.
 pub(crate) fn load(
     workspace: &Path,
     document: &WorkflowsDocument,
     profiles: &super::config::SubagentsDocument,
+    agents: &crate::runtime::subagent::AgentCatalog,
 ) -> Result<WorkflowCatalog, RuntimeResourceLoadError> {
-    let mut programs = Vec::with_capacity(document.definitions.len());
-    for id in &document.definitions {
-        let path = workspace_workflow_path(workspace, id);
+    let mut programs = Vec::new();
+    let paths =
+        super::resource_directory::files(workspace, &workspace.join(".agents/workflows"), "yaml")?;
+    let mut candidates = std::collections::BTreeMap::new();
+    for path in paths {
+        let name = path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| RuntimeResourceLoadError::new("Workflow filename must be UTF-8"))?;
+        let id = crate::runtime::workflow::WorkflowId::parse(name)
+            .map_err(|e| RuntimeResourceLoadError::new(e.to_string()).at(&path, "workflows"))?;
+        candidates.insert(id, path);
+    }
+    for (id, path) in candidates {
         crate::runtime::resources::validate_project_resource_path(workspace, &path)
-            .map_err(|error| error.at(&path, format!("workflows.definitions.{id}")))?;
+            .map_err(|error| error.at(&path, format!("workflows.{id}")))?;
         let bytes = crate::bounded_file::read_bounded(&path).map_err(|error| {
             RuntimeResourceLoadError::new(format!(
-                "cannot read registered workflow {id} at {}: {error}",
+                "cannot read discovered workflow {id} at {}: {error}",
                 path.display()
             ))
-            .at(&path, format!("workflows.definitions.{id}"))
+            .at(&path, format!("workflows.{id}"))
         })?;
         if bytes.len() > MAX_WORKFLOW_BYTES {
             return Err(RuntimeResourceLoadError::new(format!(
                 "workflow {id} at {} exceeds the {MAX_WORKFLOW_BYTES}-byte bound",
                 path.display()
             ))
-            .at(&path, format!("workflows.definitions.{id}")));
+            .at(&path, format!("workflows.{id}")));
         }
         let definition: WorkflowDefinition =
             serde_path_to_error::deserialize(serde_yaml::Deserializer::from_slice(&bytes))
                 .map_err(|error| {
                     let mut failure = RuntimeResourceLoadError::new(format!(
-                        "cannot deserialize registered workflow {id} at {}: {error}",
+                        "cannot deserialize discovered workflow {id} at {}: {error}",
                         path.display()
                     ))
                     .at(&path, safe_parser_path(error.path()))
@@ -65,7 +70,7 @@ pub(crate) fn load(
         )
         .map_err(|error| {
             let mut failure = RuntimeResourceLoadError::new(format!(
-                "cannot compile registered workflow {id} at {}: {error}",
+                "cannot compile discovered workflow {id} at {}: {error}",
                 path.display()
             ))
             .at(&path, error.path())
@@ -73,8 +78,8 @@ pub(crate) fn load(
                 crate::runtime::workflow::WorkflowCompileError::ProfileNotAdmitted {
                     profile,
                     ..
-                } if !profiles.definitions.contains(profile) => {
-                    "named role is missing from subagents.definitions"
+                } if agents.get(profile).is_none() => {
+                    "named Agent has no canonical discovered resource"
                 }
                 crate::runtime::workflow::WorkflowCompileError::ProfileNotAdmitted { .. } => {
                     "named role exists but is not admitted by subagents.workflow"
@@ -92,7 +97,7 @@ pub(crate) fn load(
             });
             failure.inspection.category = Some(match error.cause() {
                 WorkflowCompileError::ProfileNotAdmitted { profile, .. }
-                    if !profiles.definitions.contains(profile) =>
+                    if agents.get(profile).is_none() =>
                 {
                     "resource_missing"
                 }
@@ -100,7 +105,7 @@ pub(crate) fn load(
                 _ => "workflow_language",
             });
             failure.inspection.correction = Some(match error.cause() {
-                WorkflowCompileError::ProfileNotAdmitted { .. } => "register the canonical .agents/subagents/<name>.md resource and explicitly admit its name in subagents.workflow",
+                WorkflowCompileError::ProfileNotAdmitted { .. } => "create the canonical .agents/agents/<name>.toml resource and explicitly admit its name in subagents.workflow",
                 WorkflowCompileError::InvalidReference(_) => "bind args or earlier values guaranteed on every incoming path; nested blocks only see their explicitly projected input",
                 WorkflowCompileError::IncompatibleReference(_) => "make the binding type, required fields and finite values satisfy the destination schema",
                 WorkflowCompileError::InvalidSchema(_) => "use only the closed Workflow schema vocabulary: type, properties, required, additionalProperties, items, const and enum",
@@ -120,16 +125,6 @@ pub(crate) fn load(
     WorkflowCatalog::new(programs, document.main.clone()).map_err(|error| {
         RuntimeResourceLoadError::new(format!("cannot admit Workflow catalog: {error}"))
     })
-}
-
-/// Maps one explicitly registered Workflow identity to its one source file.
-/// This is intentionally not a discovery helper: the caller must provide the
-/// id from `workflows.definitions`.
-fn workspace_workflow_path(workspace: &Path, id: &crate::runtime::workflow::WorkflowId) -> PathBuf {
-    workspace
-        .join(AGENT_RESOURCES_DIRECTORY)
-        .join(WORKFLOW_RESOURCES_DIRECTORY)
-        .join(format!("{}.yaml", id.as_str()))
 }
 
 // Unknown failing field names are untrusted content (and may themselves contain
@@ -179,5 +174,47 @@ fn safe_parser_path(path: &serde_path_to_error::Path) -> String {
         "$".into()
     } else {
         output
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const PROGRAM: &str = "description: Return a literal\nblock:\n  input: {type: object, properties: {}, additionalProperties: false}\n  output: {type: object, properties: {}, additionalProperties: false}\n  entry: done\n  nodes:\n    done:\n      type: return\n      output: {type: literal, value: {}}\n";
+    #[test]
+    fn workflow_discovery_and_errors_are_independent_of_creation_order() {
+        for names in [["zeta", "alpha"], ["alpha", "zeta"]] {
+            let dir = tempfile::tempdir().unwrap();
+            let workspace = dir.path().canonicalize().unwrap();
+            let root = workspace.join(".agents/workflows");
+            std::fs::create_dir_all(&root).unwrap();
+            for name in names {
+                std::fs::write(root.join(format!("{name}.yaml")), PROGRAM).unwrap();
+            }
+            std::fs::write(root.join("incidental.txt"), "invalid YAML: [").unwrap();
+            let document = WorkflowsDocument::default();
+            let profiles = super::super::config::SubagentsDocument::default();
+            let agents = crate::runtime::subagent::AgentCatalog::empty();
+            let catalog = load(&workspace, &document, &profiles, &agents).unwrap();
+            assert_eq!(
+                catalog
+                    .definitions()
+                    .keys()
+                    .map(crate::runtime::workflow::WorkflowId::as_str)
+                    .collect::<Vec<_>>(),
+                ["alpha", "zeta"]
+            );
+            assert!(catalog.main().is_empty());
+            for name in names {
+                std::fs::write(root.join(format!("{name}.yaml")), "invalid: [").unwrap();
+            }
+            let error = load(&workspace, &document, &profiles, &agents).unwrap_err();
+            assert_eq!(error.source_file, Some(root.join("alpha.yaml")));
+            assert_eq!(
+                error,
+                load(&workspace, &document, &profiles, &agents).unwrap_err()
+            );
+            assert_eq!(catalog.definitions().len(), 2);
+        }
     }
 }

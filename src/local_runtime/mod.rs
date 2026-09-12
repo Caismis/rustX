@@ -28,6 +28,7 @@
 //!
 //! `println!` is never used for diagnostics anywhere in the process.
 
+pub(crate) mod agent_resources;
 mod authoring;
 pub mod cli;
 pub mod composition;
@@ -39,9 +40,11 @@ pub mod launch;
 #[cfg(test)]
 mod launch_tests;
 pub(crate) mod live_inspection;
+mod managed_python_resources;
 #[cfg(all(test, unix))]
 mod preparation_e2e;
 mod probes;
+mod resource_directory;
 pub mod schemas;
 pub mod serve;
 pub mod session;
@@ -49,7 +52,6 @@ pub mod settings;
 #[cfg(test)]
 pub(crate) mod static_effects;
 pub mod subagent_child;
-pub(crate) mod subagent_resources;
 pub mod supervisor;
 mod workflow_inspection;
 pub(crate) mod workflow_resources;

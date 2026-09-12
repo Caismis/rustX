@@ -4,7 +4,7 @@
 //! # Ownership
 //!
 //! ```text
-//! SubagentCatalog (this module)
+//! AgentCatalog (this module)
 //!   owns: the canonical SubagentName keyspace of one generation, the
 //!         immutable SubagentDefinition of each name, and the deterministic
 //!         SubagentDefinitionDigest of each definition
@@ -657,11 +657,11 @@ impl std::error::Error for SubagentDefinitionError {}
 /// The catalog is keyed by canonical [`SubagentName`], so a name is unique by
 /// construction and iteration order is deterministic.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SubagentCatalog {
+pub struct AgentCatalog {
     agents: BTreeMap<SubagentName, Arc<SubagentDefinition>>,
 }
 
-impl SubagentCatalog {
+impl AgentCatalog {
     /// The empty catalog: a runtime generation that admits no named agent.
     #[must_use]
     pub fn empty() -> Self {
@@ -872,7 +872,7 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        MAX_SUBAGENT_EXECUTION_DEADLINE_MS, SubagentCatalog, SubagentDefinition,
+        AgentCatalog, MAX_SUBAGENT_EXECUTION_DEADLINE_MS, SubagentDefinition,
         SubagentDefinitionError, SubagentExecutionDeadline, SubagentExecutionDeadlineError,
         SubagentName, SubagentNameError, SubagentProjectInstructionPolicy,
     };
@@ -1256,7 +1256,7 @@ mod tests {
 
     #[test]
     fn the_catalog_is_keyed_and_bounded() {
-        let catalog = SubagentCatalog::new([
+        let catalog = AgentCatalog::new([
             definition("research", Vec::new(), Vec::new()).expect("definition"),
             definition("explore", Vec::new(), Vec::new()).expect("definition"),
         ])
@@ -1286,7 +1286,7 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .expect("definitions");
         assert!(matches!(
-            SubagentCatalog::new(too_many),
+            AgentCatalog::new(too_many),
             Err(SubagentDefinitionError::TooManyDefinitions { .. })
         ));
     }

@@ -28,8 +28,8 @@ use crate::model::deadline::{
 use crate::model::session::SessionModelConfig;
 use crate::runtime::ApprovalMode;
 use crate::runtime::identity::{AgentId, McpServerId};
-use crate::runtime::subagent::{MAX_SUBAGENT_DEFINITIONS, SubagentExecutionDeadline, SubagentName};
-use crate::runtime::workflow::{MAX_WORKFLOW_DEFINITIONS, WorkflowId};
+use crate::runtime::subagent::{SubagentExecutionDeadline, SubagentName};
+use crate::runtime::workflow::WorkflowId;
 use crate::runtime::workspace::WorkspacePolicy;
 use crate::tools::environment::{ToolEnvironment, ToolEnvironmentError};
 use crate::tools::mcp::{McpServerBinding, McpServerBindings, McpTransportConfig};
@@ -89,9 +89,6 @@ pub struct CurrentRuntimeConfig {
     /// identity exactly as mainstream MCP clients spell it.
     #[serde(default)]
     pub mcp_servers: BTreeMap<McpServerId, McpServerDocument>,
-    /// Explicit managed Python source decisions keyed by `python:<folder>`.
-    #[serde(default)]
-    pub python_sources: BTreeMap<McpServerId, crate::capabilities::activation::SourceEnablement>,
     /// The host-owned per-server tool invocation policy overlay; forbidden in project layers.
     ///
     /// Deliberately not part of `mcpServers`: an `mcpServers` entry must stay
@@ -121,7 +118,7 @@ pub struct CurrentRuntimeConfig {
     /// (Issue #144).
     #[serde(default)]
     pub subagents: SubagentsDocument,
-    /// The explicitly registered Workflow definitions and model-visible
+    /// The Workflow model-visible
     /// admission set (Issue #83).
     #[serde(default)]
     pub workflows: WorkflowsDocument,
@@ -139,9 +136,6 @@ pub struct SubagentsDocument {
     /// under already-committed children would either orphan ownership or
     /// silently lie about the bound.
     pub max_concurrent: usize,
-    /// Explicit canonical role identities. Each resolves to one `{name}.md`
-    /// resource; registration grants neither main nor Workflow admission.
-    pub definitions: Vec<SubagentName>,
     /// Profiles admitted to the main Agent's existing `subagent` capability.
     pub main: Vec<SubagentName>,
     /// Profiles admitted to Workflow Agent and Parallel nodes.
@@ -152,7 +146,6 @@ impl Default for SubagentsDocument {
     fn default() -> Self {
         Self {
             max_concurrent: DEFAULT_MAX_CONCURRENT_SUBAGENTS,
-            definitions: Vec::new(),
             main: Vec::new(),
             workflow: Vec::new(),
         }
@@ -164,9 +157,7 @@ impl Default for SubagentsDocument {
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 #[derive(schemars::JsonSchema)]
 pub struct WorkflowsDocument {
-    /// Workflow ids whose YAML files are explicitly registered.
-    pub definitions: Vec<WorkflowId>,
-    /// Registered workflow ids exposed as concrete model-facing Tools.
+    /// Discovered Workflow ids selected for exposure as concrete model-facing Tools.
     pub main: Vec<WorkflowId>,
 }
 
@@ -176,20 +167,22 @@ pub const DEFAULT_MAX_CONCURRENT_SUBAGENTS: usize = 4;
 /// The hard upper bound of the launch-scoped subagent capacity.
 pub const MAX_MAX_CONCURRENT_SUBAGENTS: usize = 64;
 
-/// Strict canonical role Markdown frontmatter. The body supplies primary instructions.
+/// Strict canonical Agent TOML document with explicit primary instructions.
 ///
 /// Everything here is *definition* state, and the definition is the child's
 /// canonical **default** execution profile. One invocation may replace
 /// `tools`, `skills`, and `extensions` for exactly that child through the
 /// shared `SubagentInvocationOverride` (Issue #258), within an explicit
 /// delegation ceiling. Every other field here — model, instructions,
-/// `timeoutMs`, `agentsMd`, `worktree` — has no per-call form at all.
+/// `timeout_ms`, `agents_md`, `worktree` — has no per-call form at all.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
-pub struct SubagentDocument {
+pub struct AgentDocument {
     /// The bounded model-facing routing description.
     pub description: String,
+    /// Explicit primary Agent instructions authored as TOML data.
+    pub instructions: String,
     /// The explicit model this agent runs on. Omit to inherit the invoking
     /// attempt's frozen effective model configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -220,8 +213,8 @@ pub struct SubagentDocument {
     pub extensions: NativeAgentExtensionsDocument,
 }
 
-impl SubagentDocument {
-    /// Converts the frontmatter millisecond field into the validated runtime type.
+impl AgentDocument {
+    /// Converts the TOML millisecond field into the validated runtime type.
     ///
     /// # Errors
     ///
@@ -237,7 +230,7 @@ impl SubagentDocument {
 
 /// The source-qualified capability selection of one named definition.
 ///
-/// Role frontmatter, a Workflow Agent node's invocation override, and the
+/// Agent TOML, a Workflow Agent node's invocation override, and the
 /// model-facing `subagent` Tool's `override` all express a capability
 /// selection with exactly this vocabulary, so the type is the shared
 /// [`ToolSelectionDocument`] rather than a second structurally identical
@@ -469,7 +462,6 @@ impl CurrentRuntimeConfig {
             model_timeout_policy: ModelTimeoutPolicyDocument::default(),
             tool_deadline_policy: ToolDeadlinePolicyDocument::default(),
             mcp_servers: BTreeMap::default(),
-            python_sources: BTreeMap::default(),
             mcp_tool_policies: BTreeMap::default(),
             native_tools: NativeToolPoliciesDocument::default(),
             environment: BTreeMap::default(),
@@ -480,25 +472,6 @@ impl CurrentRuntimeConfig {
         }
     }
 
-    /// Normalize source intent after the launch resolver has accepted project
-    /// trust and resource authority. No configuration can author host-only states.
-    #[must_use]
-    pub fn python_activations(
-        &self,
-    ) -> BTreeMap<McpServerId, crate::capabilities::activation::SourceActivation> {
-        self.python_sources
-            .iter()
-            .map(|(id, intent)| {
-                (
-                    id.clone(),
-                    crate::capabilities::activation::SourceActivation::evaluate(
-                        Some(*intent),
-                        true,
-                    ),
-                )
-            })
-            .collect()
-    }
     /// Parses and validates current runtime configuration from TOML bytes.
     ///
     /// Strict `snake_case` authoring types resolve into native configuration.
@@ -523,13 +496,9 @@ impl CurrentRuntimeConfig {
     ///
     /// Returns the first validation failure.
     pub fn validate(&self) -> Result<(), CurrentRuntimeConfigError> {
-        if self.mcp_servers.len() + self.python_sources.len() > 128
-            || self.subagents.definitions.len() > 128
-            || self.workflows.definitions.len() > 128
-        {
+        if self.mcp_servers.len() > 128 {
             return Err(CurrentRuntimeConfigError::Invalid {
-                detail: "configuration supports at most 128 sources, 128 roles, and 128 Workflows"
-                    .into(),
+                detail: "configuration supports at most 128 MCP sources".into(),
             });
         }
         if self.schema_version != CURRENT_RUNTIME_SCHEMA_VERSION {
@@ -595,30 +564,8 @@ impl CurrentRuntimeConfig {
                 ),
             });
         }
-        if self.subagents.definitions.len() > MAX_SUBAGENT_DEFINITIONS {
-            return Err(CurrentRuntimeConfigError::Invalid {
-                detail: format!(
-                    "subagents.definitions declares {} agents; at most \
-                     {MAX_SUBAGENT_DEFINITIONS} are admitted",
-                    self.subagents.definitions.len()
-                ),
-            });
-        }
-        Self::validate_subagent_admission(
-            "subagents.main",
-            &self.subagents.main,
-            &self.subagents.definitions,
-        )?;
-        Self::validate_subagent_admission(
-            "subagents.workflow",
-            &self.subagents.workflow,
-            &self.subagents.definitions,
-        )?;
-        Self::validate_subagent_admission(
-            "subagents.definitions",
-            &self.subagents.definitions,
-            &self.subagents.definitions,
-        )?;
+        Self::validate_subagent_admission("subagents.main", &self.subagents.main)?;
+        Self::validate_subagent_admission("subagents.workflow", &self.subagents.workflow)?;
         Ok(())
     }
 
@@ -626,7 +573,6 @@ impl CurrentRuntimeConfig {
     fn validate_subagent_admission(
         label: &str,
         admission: &[SubagentName],
-        definitions: &[SubagentName],
     ) -> Result<(), CurrentRuntimeConfigError> {
         let mut seen = std::collections::BTreeSet::new();
         for name in admission {
@@ -635,43 +581,13 @@ impl CurrentRuntimeConfig {
                     detail: format!("{label} contains duplicate profile {name:?}"),
                 });
             }
-            if !definitions.contains(name) {
-                return Err(CurrentRuntimeConfigError::Invalid {
-                    detail: format!("{label} references undefined profile {name:?}"),
-                });
-            }
         }
         Ok(())
     }
 
-    /// Validates registered Workflow ids and their model-visible subset.
+    /// Validates Workflow selection identity uniqueness.
     fn validate_workflows(&self) -> Result<(), CurrentRuntimeConfigError> {
-        if self.workflows.definitions.len() > MAX_WORKFLOW_DEFINITIONS {
-            return Err(CurrentRuntimeConfigError::Invalid {
-                detail: format!(
-                    "workflows.definitions declares too many workflows ({} > {})",
-                    self.workflows.definitions.len(),
-                    MAX_WORKFLOW_DEFINITIONS
-                ),
-            });
-        }
-        validate_unique_workflow_ids("workflows.definitions", &self.workflows.definitions)?;
         validate_unique_workflow_ids("workflows.main", &self.workflows.main)?;
-        let registered = self
-            .workflows
-            .definitions
-            .iter()
-            .collect::<std::collections::BTreeSet<_>>();
-        if let Some(unknown) = self
-            .workflows
-            .main
-            .iter()
-            .find(|workflow| !registered.contains(workflow))
-        {
-            return Err(CurrentRuntimeConfigError::Invalid {
-                detail: format!("workflows.main references unregistered workflow {unknown:?}"),
-            });
-        }
         Ok(())
     }
 
@@ -756,18 +672,6 @@ impl CurrentRuntimeConfig {
     /// ambiguous, contradictory, or incomplete, or when the policy overlay
     /// names a server that `mcpServers` does not declare.
     pub fn mcp_bindings(&self) -> Result<McpServerBindings, CurrentRuntimeConfigError> {
-        for id in self.python_sources.keys() {
-            if !id.as_str().strip_prefix("python:").is_some_and(|name| {
-                !name.is_empty()
-                    && name
-                        .bytes()
-                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
-            }) {
-                return Err(CurrentRuntimeConfigError::Invalid {
-                    detail: "python_sources keys must be python:<folder> identities".into(),
-                });
-            }
-        }
         for server_id in self.mcp_tool_policies.keys() {
             if !self.mcp_servers.contains_key(server_id) {
                 return Err(CurrentRuntimeConfigError::Invalid {
@@ -1420,16 +1324,13 @@ keep_recent_tokens = 4096
         use crate::runtime::workspace::WorkspacePolicy as Policy;
 
         fn policy(worktree: &str) -> Policy {
-            let field = if worktree.is_empty() {
-                String::new()
-            } else {
-                format!(", \"worktree\": {worktree}")
-            };
-            let text =
-                format!("---\n{{\"description\": \"worker\"{field}}}\n---\nWorker instructions\n");
-            crate::local_runtime::subagent_resources::parse(&text)
-                .expect("valid role")
-                .0
+            let mut document =
+                serde_json::json!({"description":"worker", "instructions":"Worker instructions"});
+            if !worktree.is_empty() {
+                document["worktree"] = serde_json::from_str(worktree).unwrap();
+            }
+            crate::local_runtime::agent_resources::parse(&toml::to_string(&document).unwrap())
+                .expect("valid Agent")
                 .worktree
                 .to_policy()
         }
@@ -1490,17 +1391,17 @@ model_timeout_policy = { "response_start_timeout_ms" = 7, "stream_idle_timeout_m
         );
     }
 
-    fn worker_config(timeout: &str) -> Result<super::SubagentDocument, String> {
-        crate::local_runtime::subagent_resources::parse(&format!(
-            "---\ndescription: worker\ntimeoutMs: {timeout}\n---\nWorker\n"
+    fn worker_config(timeout: &str) -> Result<super::AgentDocument, String> {
+        crate::local_runtime::agent_resources::parse(&format!(
+            "description = \"worker\"\ninstructions = \"Worker\"\ntimeout_ms = {timeout}\n"
         ))
-        .map(|(role, _)| role)
     }
 
     #[test]
     fn named_subagent_execution_deadline_is_optional_and_typed_at_admission() {
-        let (absent, _) = crate::local_runtime::subagent_resources::parse(
-            "---\ndescription: worker\n---\nWorker\n",
+        let absent = crate::local_runtime::agent_resources::parse(
+            r#"description = "worker"
+instructions = "Worker""#,
         )
         .unwrap();
         assert_eq!(absent.execution_deadline().unwrap(), None);
@@ -1915,35 +1816,34 @@ endpoint = "https://x"
         let json = MINIMAL.replace(
             r#"agent_id = "agent-a""#,
             r#"agent_id = "agent-a"
-subagents = { "definitions" = ["worker"], "main" = [], "workflow" = ["worker"] }"#,
+subagents = {  "main" = [], "workflow" = ["worker"] }"#,
         );
         let config = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect("valid");
         assert!(config.subagents.main.is_empty());
         assert_eq!(config.subagents.workflow.len(), 1);
-        assert_eq!(config.subagents.definitions.len(), 1);
+        assert!(config.subagents.main.is_empty());
 
         let defined_but_unadmitted = MINIMAL.replace(
             r#"agent_id = "agent-a""#,
             r#"agent_id = "agent-a"
-subagents = { "definitions" = ["worker"], "main" = [], "workflow" = [] }"#,
+subagents = {  "main" = [], "workflow" = [] }"#,
         );
         assert!(CurrentRuntimeConfig::from_toml_slice(defined_but_unadmitted.as_bytes()).is_ok());
     }
 
     #[test]
-    fn unknown_or_duplicate_admission_ids_are_rejected() {
+    fn selection_identity_resolution_is_deferred_but_duplicates_are_rejected() {
         let unknown = MINIMAL.replace(
             r#"agent_id = "agent-a""#,
             r#"agent_id = "agent-a"
-subagents = { "definitions" = [], "main" = ["missing"], "workflow" = [] }"#,
+subagents = {  "main" = ["missing"], "workflow" = [] }"#,
         );
-        let error = CurrentRuntimeConfig::from_toml_slice(unknown.as_bytes()).expect_err("unknown");
-        assert!(error.to_string().contains("subagents.main"));
+        assert!(CurrentRuntimeConfig::from_toml_slice(unknown.as_bytes()).is_ok());
 
         let duplicate = MINIMAL.replace(
             r#"agent_id = "agent-a""#,
             r#"agent_id = "agent-a"
-subagents = { "definitions" = ["worker"], "main" = ["worker", "worker"], "workflow" = [] }"#,
+subagents = {  "main" = ["worker", "worker"], "workflow" = [] }"#,
         );
         let error =
             CurrentRuntimeConfig::from_toml_slice(duplicate.as_bytes()).expect_err("duplicate");
@@ -1951,22 +1851,21 @@ subagents = { "definitions" = ["worker"], "main" = ["worker", "worker"], "workfl
     }
 
     #[test]
-    fn workflow_registration_and_main_exposure_are_separate() {
+    fn workflow_selection_resolves_after_discovery() {
         let valid = MINIMAL.replace(
             r#"agent_id = "agent-a""#,
             r#"agent_id = "agent-a"
-workflows = { "definitions" = ["review_pr"], "main" = [] }"#,
+workflows = {  "main" = [] }"#,
         );
         let config = CurrentRuntimeConfig::from_toml_slice(valid.as_bytes()).expect("valid");
-        assert_eq!(config.workflows.definitions.len(), 1);
+        assert!(config.workflows.main.is_empty());
         assert!(config.workflows.main.is_empty());
 
         let unknown = MINIMAL.replace(
             r#"agent_id = "agent-a""#,
             r#"agent_id = "agent-a"
-workflows = { "definitions" = ["review_pr"], "main" = ["investigate"] }"#,
+workflows = {  "main" = ["investigate"] }"#,
         );
-        let error = CurrentRuntimeConfig::from_toml_slice(unknown.as_bytes()).expect_err("unknown");
-        assert!(error.to_string().contains("workflows.main"));
+        assert!(CurrentRuntimeConfig::from_toml_slice(unknown.as_bytes()).is_ok());
     }
 }

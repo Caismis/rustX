@@ -1,7 +1,7 @@
 # Runtime resources and executable authority
 
-See [canonical named Subagent resources](subagent-resources.md) for schema 8
-role files, registration/admission, bounded roots, source provenance, and frozen
+See [canonical named Agent resources](subagent-resources.md) for schema 8
+Agent files, discovery/admission, bounded roots, source provenance, and frozen
 reload/child contracts.
 
 
@@ -124,7 +124,7 @@ Project trust permits project resources, never Tool approval policy.
 `approvalMode`, `nativeTools`, and `mcpToolPolicies` belong exclusively to host
 settings, including execution/concurrency members of those policy objects.
 
-Project-origin Skills, canonical Subagent Markdown/`agentsMd.files`, and
+Project-origin Skills, canonical Agent TOML/`agents_md.files`, and
 path-valued MCP `command`/`cwd` must resolve inside the canonical trusted
 workspace. Project instructions, Workflow files and automatic `.agents` resource
 roots obey the same containment boundary. Absolute paths, traversal, symlink
@@ -171,7 +171,7 @@ substitution. No later resource reload replaces in-flight authority.
 resource-derived authority. One generation contains the ordered project
 context files and concatenated bytes, the compact Skill catalog and discovered
 Skill source identities, the agent profile and extension System Sections, the
-admitted `SubagentCatalog` of named subagent definitions with the
+admitted `AgentCatalog` of named subagent definitions with the
 capability-source availability of that same generation, and the compatible
 immutable `CapabilitySnapshot` containing the Tool definitions and executors.
 
@@ -225,7 +225,7 @@ past evidence, but the summary is never current runtime authority.
 
 ## Named subagent definitions
 
-A generation's `SubagentCatalog` is configuration/resource-generation state,
+A generation's `AgentCatalog` is configuration/resource-generation state,
 never live execution state. A loader builds it off-side — reading each
 canonical role Markdown resource and explicit project-instruction files —
 validates every definition against the very capability candidate it is about
@@ -233,7 +233,7 @@ to publish, and only then does the candidate commit. A definition that names
 an unknown capability, model, or Skill therefore rejects the whole candidate,
 and the previous complete generation stays authoritative in every half.
 
-`SubagentDocument.timeoutMs` is an optional, definition-level positive
+`AgentDocument.timeout_ms` is an optional, definition-level positive
 millisecond value. Admission rejects zero, malformed values, and values above
 the rustX-owned 86,400,000 millisecond (24 hour) maximum; it never clamps an
 invalid value. The validated `SubagentExecutionDeadline` is part of the
@@ -432,17 +432,23 @@ workspace/
 └── .agents/
     ├── skills/
     ├── tools/
-    ├── subagents/
+    ├── agents/*.toml
     └── workflows/
 ```
 
-This is an ownership namespace, not one implicit activation mechanism. Skills
-and Python tools retain their automatic discovery contracts. Subagent profiles
-and native Workflows remain explicit configuration surfaces: a Subagent must
-be defined and admitted, and a Workflow id must be listed in
-`workflows.definitions`. The configured runtime root (often `.rustx/`) is
-runtime-owned/generated state and is not the canonical home for these
-project-authored resources.
+Resources define themselves by existing in their canonical resource location.
+Settings and Agent Profiles express selection, not existence. Agent TOML, Skill
+packages, Managed Python directories and Workflow YAML form deterministic catalogs.
+AgentCatalog and WorkflowCatalog are built off-side by local resource loading;
+ManagedPythonCatalog records inert package identities alongside them. The existing
+SkillSnapshot remains the sole authoritative frozen Skill catalog in the capability
+candidate. All four publish through one PreparedRuntimeResources commit. A malformed
+candidate publishes none of its catalogs, and existing snapshots remain unchanged.
+
+Discovery is distinct from runtime readiness, selected Agent capability, frozen
+active capability and invocation approval. Managed Python discovery never enters
+package parsing or preparation. The runtime root (often `.rustx/`) remains generated
+state, separate from these canonical authored resources.
 
 Native launch resolves automatic Skill roots to the user configuration
 directory's `skills/` and `<workspace>/.agents/skills/`. Explicit Skill paths
@@ -473,7 +479,7 @@ Discovery never runs during ordinary request assembly.
 | explicit `/reload` or runtime reload API | prepare a complete candidate and atomically publish it for future attempts |
 
 Before reload or cold recreation, edits to project instructions, Skill
-addition/removal/rename/frontmatter, and extension/Tool configuration have no
+addition/removal/rename/metadata, and extension/Tool configuration have no
 effect. A Skill catalog freezes only compact metadata and the discovered host
 path/source identity. An already-discovered `SKILL.md` remains ordinary file
 content: native Read observes its current body at execution time and returns

@@ -344,7 +344,7 @@ fn native_tools_preserve_legal_execution_policies_and_fixed_execution_intrinsic_
         register_native_tools(
             &mut registry,
             NativeToolResources {
-                subagent_catalog: rustx::runtime::subagent::SubagentCatalog::empty(),
+                subagent_catalog: rustx::runtime::subagent::AgentCatalog::empty(),
                 background: runtime.background().clone(),
                 subagents: None,
             },
@@ -453,7 +453,7 @@ fn independent_native_execution_policies_coexist_in_one_registry() {
     register_native_tools(
         &mut registry,
         NativeToolResources {
-            subagent_catalog: rustx::runtime::subagent::SubagentCatalog::empty(),
+            subagent_catalog: rustx::runtime::subagent::AgentCatalog::empty(),
             background: runtime.background().clone(),
             subagents: None,
         },
@@ -576,10 +576,10 @@ fn native_context_runtime(model: &Arc<support::fake::FakeModel>) -> rustx::conte
 /// Real generated dispatchers and representative already-prepared MCP
 /// identities enter the same available catalog as the native tools.
 fn selection_registry(fixture: &common::NativeFixture) -> rustx::tools::executor::ToolRegistry {
-    use rustx::runtime::subagent::{SubagentCatalog, SubagentDefinition, SubagentName};
+    use rustx::runtime::subagent::{AgentCatalog, SubagentDefinition, SubagentName};
     use rustx::runtime::workflow::{WorkflowCatalog, WorkflowId, WorkflowProgram, WorkflowRuntime};
     let plane = support::execution::subagent_plane_for(fixture.runtime.conversation_id().as_str());
-    let catalog = SubagentCatalog::new([SubagentDefinition::new(
+    let catalog = AgentCatalog::new([SubagentDefinition::new(
         SubagentName::parse("worker").unwrap(),
         "Worker".into(),
         "Do the task".into(),
@@ -1160,7 +1160,7 @@ async fn native_admission_pins_policy_axes_and_exposure_across_candidate_changes
         rustx::tools::NativeToolResources {
             background: fixture.runtime.background().clone(),
             subagents: None,
-            subagent_catalog: rustx::runtime::subagent::SubagentCatalog::empty(),
+            subagent_catalog: rustx::runtime::subagent::AgentCatalog::empty(),
         },
         policies,
     )

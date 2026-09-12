@@ -1,17 +1,18 @@
 # One role, two differently specialized children
 
 `.agents/workflows/specialized_agent.yaml` runs the same canonical
-`.agents/subagents/reviewer.md` role twice. The first node takes the role's
+`.agents/agents/reviewer.toml` role twice. The first node takes the role's
 defaults; the second carries an invocation `override` that specializes exactly
 that one child.
 
-Minimum project registration:
+Minimum project selection:
 
-```json
-{
-  "subagents": {"definitions": ["reviewer"], "workflow": ["reviewer"]},
-  "workflows": {"definitions": ["specialized_agent"], "main": ["specialized_agent"]}
-}
+```toml
+[subagents]
+workflow = ["reviewer"]
+
+[workflows]
+main = ["specialized_agent"]
 ```
 
 ## What the override means

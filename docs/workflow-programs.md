@@ -10,9 +10,9 @@ For small executable starting points and offline `workflow check` / `workflow ex
 see [Workflow authoring](workflow-authoring.md). The complete reference workflows
 remain native execution and settlement conformance evidence.
 
-The fixed Workflow architecture (#216–#223) extends the native Workflow foundation (#83). A registered
-Workflow remains one foreground Tool. Configuration explicitly registers
-`.agents/workflows/<id>.yaml` and separately exposes it through
+The fixed Workflow architecture (#216–#223) extends the native Workflow foundation (#83). A selected
+Workflow remains one foreground Tool. Canonical discovery reads
+`.agents/workflows/<id>.yaml`; settings expose it through
 `workflows.main`. Profiles must belong to `subagents.workflow`. Files do not
 grant admission, and a block never rediscovers capabilities or resources.
 

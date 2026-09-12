@@ -44,7 +44,7 @@ async fn goal84_root_only_scope_is_enforced_for_definition_model_and_workflow_ov
     lab.write_config(&serde_json::json!({
         "goal_role": {"description": "Root-only extension in a named child", "tools": {"builtin": []}, "extensions": {"goal": {"enabled": true}}},
         "plain": {"description": "Ordinary child", "tools": {"builtin": []}}
-    }), &["subagent"], &[]);
+    }), &["subagent"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
     let parent = parent_with_extensions(&resources, NativeAgentExtensions::none().and_goal());
@@ -198,7 +198,7 @@ impl Lab {
         let lab = Self {
             dir: tempfile::tempdir().expect("lab directory"),
         };
-        std::fs::create_dir_all(lab.workspace().join(".agents/subagents")).expect("role directory");
+        std::fs::create_dir_all(lab.workspace().join(".agents/agents")).expect("role directory");
         std::fs::create_dir_all(lab.workspace().join(".agents/workflows"))
             .expect("workflow directory");
         std::fs::write(lab.root().join("models.toml"), MODELS).expect("models.toml");
@@ -241,7 +241,7 @@ impl Lab {
     /// selection, which is deliberately narrower than the generation's
     /// available catalog: the difference between the two is what makes
     /// "generation-only authority" a real, testable state.
-    fn write_config(&self, roles: &serde_json::Value, default_tools: &[&str], workflows: &[&str]) {
+    fn write_config(&self, roles: &serde_json::Value, default_tools: &[&str]) {
         let mut subagents = serde_json::json!({"max_concurrent": 4, "roles": roles});
         let names = subagents["roles"]
             .as_object()
@@ -260,7 +260,6 @@ impl Lab {
             "default_tools": default_tools,
             "subagents": subagents,
             "workflows": {
-                "definitions": workflows,
                 "main": [],
             },
         });
@@ -331,7 +330,7 @@ fn reviewer_roles() -> serde_json::Value {
 async fn sub258_no_override_and_an_empty_override_both_reproduce_the_definition() {
     let lab = Lab::new();
     lab.write_skill("review-guidance", "How to review", "guidance body");
-    lab.write_config(&reviewer_roles(), &["read", "subagent"], &[]);
+    lab.write_config(&reviewer_roles(), &["read", "subagent"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
     let parent = parent_of(&resources);
@@ -366,7 +365,7 @@ async fn sub258_each_present_dimension_replaces_and_missing_dimensions_inherit()
     let lab = Lab::new();
     lab.write_skill("review-guidance", "How to review", "guidance body");
     lab.write_skill("security-review", "How to review security", "security body");
-    lab.write_config(&reviewer_roles(), &["read", "grep", "subagent"], &[]);
+    lab.write_config(&reviewer_roles(), &["read", "grep", "subagent"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
     let parent = parent_of(&resources);
@@ -437,7 +436,7 @@ async fn sub258_each_present_dimension_replaces_and_missing_dimensions_inherit()
 async fn sub258_explicit_empty_dimensions_have_their_documented_meaning() {
     let lab = Lab::new();
     lab.write_skill("review-guidance", "How to review", "guidance body");
-    lab.write_config(&reviewer_roles(), &["read", "subagent"], &[]);
+    lab.write_config(&reviewer_roles(), &["read", "subagent"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
     let parent = parent_of(&resources);
@@ -483,7 +482,7 @@ async fn sub258_explicit_empty_dimensions_have_their_documented_meaning() {
 async fn sub258_concurrent_invocations_do_not_mutate_each_other_or_the_role() {
     let lab = Lab::new();
     lab.write_skill("review-guidance", "How to review", "guidance body");
-    lab.write_config(&reviewer_roles(), &["read", "grep", "subagent"], &[]);
+    lab.write_config(&reviewer_roles(), &["read", "grep", "subagent"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
     let parent = parent_of(&resources);
@@ -576,7 +575,6 @@ async fn sub258_the_delegation_ceiling_is_role_union_parent_and_nothing_more() {
         // The invoking model holds grep and glob, and deliberately not read:
         // a role default must stay delegable regardless.
         &["grep", "glob", "subagent"],
-        &[],
     );
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
@@ -675,7 +673,7 @@ async fn sub258_skill_delegation_follows_frozen_model_visible_authority() {
     let lab = Lab::new();
     lab.write_skill("review-guidance", "How to review", "guidance body");
     lab.write_skill("security-review", "How to review security", "security body");
-    lab.write_config(&reviewer_roles(), &["read", "subagent"], &[]);
+    lab.write_config(&reviewer_roles(), &["read", "subagent"]);
     let with_read = lab.compose().await;
     let seeing = with_read.runtime().runtime_resources();
     let seeing_parent = parent_of(&seeing);
@@ -704,7 +702,7 @@ async fn sub258_skill_delegation_follows_frozen_model_visible_authority() {
     let blind = Lab::new();
     blind.write_skill("review-guidance", "How to review", "guidance body");
     blind.write_skill("security-review", "How to review security", "security body");
-    blind.write_config(&reviewer_roles(), &["grep", "subagent"], &[]);
+    blind.write_config(&reviewer_roles(), &["grep", "subagent"]);
     let product = blind.compose().await;
     let resources = product.runtime().runtime_resources();
     let parent = parent_of(&resources);
@@ -755,7 +753,6 @@ async fn sub258_skill_delegation_follows_frozen_model_visible_authority() {
             }
         }),
         &["read", "subagent"],
-        &[],
     );
     let bare_product = bare.compose().await;
     let bare_resources = bare_product.runtime().runtime_resources();
@@ -833,7 +830,7 @@ async fn sub258_skill_delegation_follows_frozen_model_visible_authority() {
 async fn sub258_unknown_references_keep_their_own_failure_class() {
     let lab = Lab::new();
     lab.write_skill("review-guidance", "How to review", "guidance body");
-    lab.write_config(&reviewer_roles(), &["read", "subagent"], &[]);
+    lab.write_config(&reviewer_roles(), &["read", "subagent"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
     let parent = parent_of(&resources);
@@ -932,7 +929,7 @@ async fn goal84_workflow_program_cannot_enable_goal_for_an_agent_node() {
         "goal-child",
         &OVERRIDE_WORKFLOW.replace("agentStatus:", "goal:"),
     );
-    lab.write_config(&reviewer_roles(), &["subagent"], &["goal-child"]);
+    lab.write_config(&reviewer_roles(), &["subagent"]);
     let launch = lab.paths().try_resolve();
     let error = match launch {
         Err(error) => error,
@@ -957,7 +954,7 @@ async fn sub258_a_trusted_workflow_override_exceeds_the_main_model_capabilities(
     lab.write_skill("security-review", "How to review security", "security body");
     lab.write_workflow("specialized", OVERRIDE_WORKFLOW);
     // The invoking main model holds neither grep nor bash.
-    lab.write_config(&reviewer_roles(), &["read", "subagent"], &["specialized"]);
+    lab.write_config(&reviewer_roles(), &["read", "subagent"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
     let parent = parent_of(&resources);
@@ -1013,7 +1010,7 @@ async fn sub258_a_trusted_workflow_override_exceeds_the_main_model_capabilities(
 async fn sub258_equivalent_workflow_and_tool_inputs_resolve_equivalently() {
     let lab = Lab::new();
     lab.write_skill("review-guidance", "How to review", "guidance body");
-    lab.write_config(&reviewer_roles(), &["read", "grep", "subagent"], &[]);
+    lab.write_config(&reviewer_roles(), &["read", "grep", "subagent"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
     let parent = parent_of(&resources);
@@ -1103,7 +1100,7 @@ block:
     let lab = Lab::new();
     lab.write_skill("review-guidance", "How to review", "guidance body");
     lab.write_workflow("nested", nested);
-    lab.write_config(&reviewer_roles(), &["read", "subagent"], &["nested"]);
+    lab.write_config(&reviewer_roles(), &["read", "subagent"]);
     let error = lab.offline_error();
     assert!(
         error.contains("definitely_not_a_capability"),
@@ -1131,7 +1128,7 @@ async fn sub258_a_workflow_override_cannot_smuggle_nested_delegation() {
     lab.write_skill("review-guidance", "How to review", "guidance body");
     lab.write_skill("security-review", "How to review security", "security body");
     lab.write_workflow("specialized", &recursive);
-    lab.write_config(&reviewer_roles(), &["read", "subagent"], &["specialized"]);
+    lab.write_config(&reviewer_roles(), &["read", "subagent"]);
     let error = lab.offline_error();
     assert!(
         error.contains("nested subagent delegation is unsupported"),
@@ -1154,7 +1151,7 @@ async fn sub258_a_workflow_override_cannot_smuggle_nested_delegation() {
 async fn sub258_r1_resolution_and_authority_survive_r2_publication() {
     let lab = Lab::new();
     lab.write_skill("review-guidance", "How to review", "R1 guidance");
-    lab.write_config(&reviewer_roles(), &["read", "grep", "subagent"], &[]);
+    lab.write_config(&reviewer_roles(), &["read", "grep", "subagent"]);
     let product = lab.compose().await;
     let r1 = product.runtime().runtime_resources();
     let r1_parent = parent_of(&r1);
@@ -1178,7 +1175,6 @@ async fn sub258_r1_resolution_and_authority_survive_r2_publication() {
             }
         }),
         &["read", "subagent"],
-        &[],
     );
     product
         .runtime()
@@ -1245,7 +1241,7 @@ async fn sub258_r1_resolution_and_authority_survive_r2_publication() {
 async fn sub258_a_replaced_away_default_is_no_longer_a_requirement() {
     let lab = Lab::new();
     lab.write_skill("review-guidance", "How to review", "guidance body");
-    lab.write_config(&reviewer_roles(), &["read", "grep", "subagent"], &[]);
+    lab.write_config(&reviewer_roles(), &["read", "grep", "subagent"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
     let parent = parent_of(&resources);
@@ -1285,7 +1281,7 @@ async fn sub258_the_effective_profile_digest_follows_its_documented_contract() {
     let lab = Lab::new();
     lab.write_skill("review-guidance", "How to review", "guidance body");
     lab.write_skill("security-review", "How to review security", "security body");
-    lab.write_config(&reviewer_roles(), &["read", "grep", "subagent"], &[]);
+    lab.write_config(&reviewer_roles(), &["read", "grep", "subagent"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
     let parent = parent_of(&resources);
@@ -1375,7 +1371,7 @@ async fn sub258_replaced_defaults_and_routing_prose_do_not_change_the_profile_di
     let lab = Lab::new();
     lab.write_skill("review-guidance", "How to review", "guidance body");
     lab.write_skill("security-review", "How to review security", "security body");
-    lab.write_config(&reviewer_roles(), &["read", "grep", "subagent"], &[]);
+    lab.write_config(&reviewer_roles(), &["read", "grep", "subagent"]);
     let product = lab.compose().await;
 
     // Every dimension the two definitions differ in is replaced by this one
@@ -1407,7 +1403,6 @@ async fn sub258_replaced_defaults_and_routing_prose_do_not_change_the_profile_di
             }
         }),
         &["read", "grep", "subagent"],
-        &[],
     );
     product
         .runtime()
@@ -1474,7 +1469,7 @@ async fn sub258_replaced_defaults_and_routing_prose_do_not_change_the_profile_di
 async fn sub258_extension_composition_is_not_an_ordinary_tool_selection() {
     let lab = Lab::new();
     lab.write_skill("review-guidance", "How to review", "guidance body");
-    lab.write_config(&reviewer_roles(), &["read", "subagent"], &[]);
+    lab.write_config(&reviewer_roles(), &["read", "subagent"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
     let parent = parent_with_extensions(
@@ -1519,7 +1514,7 @@ async fn sub258_extension_composition_is_not_an_ordinary_tool_selection() {
 async fn sub258_a_child_override_never_mutates_the_parent() {
     let lab = Lab::new();
     lab.write_skill("review-guidance", "How to review", "guidance body");
-    lab.write_config(&reviewer_roles(), &["read", "grep", "subagent"], &[]);
+    lab.write_config(&reviewer_roles(), &["read", "grep", "subagent"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
     let parent = parent_of(&resources);
@@ -1595,7 +1590,6 @@ async fn ext259_a_role_todo_default_and_its_invocation_override_freeze_exactly()
             }
         }),
         &["read", "subagent"],
-        &[],
     );
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
@@ -1704,7 +1698,6 @@ async fn ext259_todo_obeys_the_shared_override_authority_distinction() {
             }
         }),
         &["read", "subagent"],
-        &[],
     );
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();

@@ -30,8 +30,8 @@ pub fn generate() -> BTreeMap<&'static str, Value> {
     }
     let mut schemas = BTreeMap::from([
         (
-            "subagent.schema.json",
-            serde_json::to_value(schemars::schema_for!(super::config::SubagentDocument))
+            "agent.schema.json",
+            serde_json::to_value(schemars::schema_for!(super::config::AgentDocument))
                 .expect("schema serializes"),
         ),
         (
@@ -52,7 +52,10 @@ pub fn generate() -> BTreeMap<&'static str, Value> {
     for (name, schema) in &mut schemas {
         if matches!(
             *name,
-            "settings.schema.json" | "rustx.schema.json" | "models.schema.json"
+            "settings.schema.json"
+                | "rustx.schema.json"
+                | "models.schema.json"
+                | "agent.schema.json"
         ) {
             toml_domain(schema);
         }

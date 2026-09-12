@@ -12,8 +12,8 @@ cannot filter these Tools. Disabling it preserves durable Goal records; re-enabl
 restores state disarmed. [Goal extension](goal-extension.md) defines the scope and
 control contract. Effective child compositions with Goal enabled are refused.
 
-See [canonical named Subagent resources](subagent-resources.md) for schema 8
-role files, registration/admission, bounded roots, source provenance, and frozen
+See [canonical named Agent resources](subagent-resources.md) for schema 8
+Agent files, discovery/admission, bounded roots, source provenance, and frozen
 reload/child contracts.
 
 
@@ -98,8 +98,8 @@ higher layer would override them. Unknown fields fail at every schema boundary.
 | `mcp_servers`, `environment` | Yes | Yes | — | Named entries replace whole entries; empty map clears |
 | `native_tools`, `mcp_tool_policies` | Yes | Forbidden | — | Host-only whole named entries; empty map clears |
 | `subagents.max_concurrent`, `.main`, `.workflow` | Yes | Yes | — | Scalar/list replacement |
-| `subagents.definitions` | Yes | Yes | — | Registration lists replace; empty list clears. Canonical role resources replace whole across user/project layers. |
-| `workflows.definitions`, `.main` | Yes | Yes | — | Lists replace; YAML resources belong to workspace `.agents/workflows` |
+| `subagents.main`, `.workflow` | Yes | Yes | — | Selection lists replace and resolve against discovered Agents. |
+| `workflows.main` | Yes | Yes | — | Lists replace; YAML resources belong to workspace `.agents/workflows` |
 | Runtime state root (`runtime_root`) | Yes | Forbidden | `--runtime-root` | Path replacement |
 | Workspace identity | No settings authority | Forbidden | `--workspace` | Canonical root selection |
 | Trust records/store, credential-store redirection | No settings authority | Forbidden | `--trust grant/revoke` only | Host-owned membership operation |
@@ -197,7 +197,7 @@ itself with a symlink does not transfer its existing trust to the new target.
 
 Workspace-owned automatic `.agents/tools` and `.agents/skills` roots receive the
 same containment check before resource preparation. Selected project instruction
-files and registered Workflow files are checked at their read boundaries.
+files and discovered Workflow files are checked at their read boundaries.
 User/CLI-origin explicit resource paths are host authority and are not subject
 to project containment; existing domain validation still applies (including MCP
 cwd rules). Ordinary native tool file arguments, shell/command argument strings,
@@ -418,8 +418,8 @@ it rewrites no canonical Session history to match a changed extension set.
 > authored compositions.
 
 The root Agent's composition comes from this document. A named Subagent's comes
-from its own canonical role frontmatter (see
-[canonical named Subagent resources](subagent-resources.md)). A role that
+from its own canonical Agent TOML (see
+[canonical named Agent resources](subagent-resources.md)). A role that
 declares no `extensions` composes its own built-in defaults, never the root's
 configuration.
 
@@ -519,4 +519,4 @@ established terminal-agent practice; see the
 rustX deliberately has only the finite layers and fail-closed policy specified here.
 External-source activation is separate from launch trust and Tool exposure.
 The [source activation contract](source-activation.md) defines schema 8's
-`mcp_servers.<name>.enabled`, `python_sources`, and host-only sensitive references.
+`mcp_servers.<name>.enabled` and host-only sensitive references. Managed Python existence comes from canonical package discovery.

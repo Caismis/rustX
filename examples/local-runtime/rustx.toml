@@ -47,17 +47,13 @@ stream_idle_timeout_ms = 15000
 
 [mcp_servers]
 
-[python_sources]
-"python:echo" = "disabled"
 
 [subagents]
 max_concurrent = 4
-definitions = ["navigator", "planner", "implementer", "reviewer"]
 main = ["navigator"]
 workflow = ["reviewer", "planner", "implementer"]
 
 [workflows]
-definitions = ["parallel_review", "implement_and_review"]
 main = ["parallel_review", "implement_and_review"]
 
 [environment]

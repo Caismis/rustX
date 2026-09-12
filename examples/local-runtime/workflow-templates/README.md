@@ -33,7 +33,7 @@ only one, use the minimum configuration in its guide:
 
 Invoke each by its concrete Tool name from an ordinary foreground Agent turn,
 using the JSON input in its guide. There is no `workflow run` command. Main Tool
-selection can further exclude an exposed Workflow; registration alone grants
+selection can further exclude an exposed Workflow; discovery alone grants
 neither model exposure nor a running Workflow's frozen execution authority.
 
 Keep the full `../workspace/.agents/workflows/implement_and_review.yaml` and

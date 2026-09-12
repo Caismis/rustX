@@ -1,21 +1,22 @@
 # Typed Agent → Return
 
 Copy `.agents/workflows/typed_agent.yaml` and the canonical
-`.agents/subagents/reviewer.md` into your trusted workspace. Select a model in
-user settings (`{"model":{"model":"your-provider/your-model"}}`), or supply
+`.agents/agents/reviewer.toml` into your trusted workspace. Select a model in
+user settings (`model.model = "your-provider/your-model"`), or supply
 `--models <catalog> --model <provider/model>` at launch and inspection.
 
-Minimum project registration:
+Minimum project selection:
 
-```json
-{
-  "subagents": {"definitions": ["reviewer"], "workflow": ["reviewer"]},
-  "workflows": {"definitions": ["typed_agent"], "main": ["typed_agent"]}
-}
+```toml
+[subagents]
+workflow = ["reviewer"]
+
+[workflows]
+main = ["typed_agent"]
 ```
 
-The role need not appear in `subagents.main`. `definitions` registers the named
-resource; `subagents.workflow` admits it to Workflow Agent nodes. `workflows.main`
+The role need not appear in `subagents.main`. The canonical Agent TOML file defines the resource;
+`subagents.workflow` admits it to Workflow Agent nodes. `workflows.main`
 permits this concrete Workflow Tool to be exposed to the main model. Inspection
 changes none of those lists.
 

@@ -120,8 +120,8 @@ model = "fixture/process-model"
         workspace.join("rustx.toml"),
         toml::to_string_pretty(&serde_json::json!({
             "mcp_servers":{"project":{"command":"touch","args":[sentinel]}},
-            "subagents":{"definitions":["child"],"main":["child"]},
-            "workflows":{"definitions":["must_not_load"],"main":["must_not_load"]}
+            "subagents":{"main":["child"]},
+            "workflows":{"main":["must_not_load"]}
         }))
         .unwrap(),
     )

@@ -39,19 +39,19 @@ fn cfg237_check_explain_zero_effects_precise_errors_and_authority() {
         json!({"description":"Review","tools":{"builtin":[]},"worktree":{"enabled":false}}),
         "SECRET_ROLE_PROMPT",
     );
-    let config = json!({"subagents":{"definitions":["reviewer"],"workflow":["reviewer"]},"workflows":{"definitions":["example"],"main":[]}});
+    let config = json!({"subagents":{"workflow":["reviewer"]},"workflows":{"main":[]}});
     let original = template_source("typed_agent");
     let scenarios = [
         (original.clone(), config.clone(), Validity::Valid, None),
         (
             original.clone(),
-            json!({"workflows":{"definitions":["example"]}}),
+            json!({"workflows":{}}),
             Validity::Invalid,
             Some("block.nodes.summarize.profile"),
         ),
         (
             original.clone(),
-            json!({"subagents":{"definitions":["reviewer"]},"workflows":{"definitions":["example"]}}),
+            json!({"subagents":{},"workflows":{}}),
             Validity::Invalid,
             Some("block.nodes.summarize.profile"),
         ),
@@ -97,7 +97,7 @@ fn cfg237_check_explain_zero_effects_precise_errors_and_authority() {
                 assert_eq!(report.diagnostics[0].path, path);
             } else {
                 let projection = report.workflow.as_ref().unwrap();
-                assert!(projection.registered);
+                assert!(projection.discovered);
                 assert!(!projection.configured_main_admission);
                 assert_eq!(projection.prospective_main_exposure, Some(false));
                 assert_eq!(projection.program.is_some(), explain);
@@ -108,13 +108,13 @@ fn cfg237_check_explain_zero_effects_precise_errors_and_authority() {
             assert!(!f.resolve_locations_only().runtime_root.exists());
         }
     }
-    // Unregistered files never become registrations; untrusted files are not parsed.
+    // Malformed canonical files fail even without selection; untrusted files are not parsed.
     f.project(json!({}));
     install_workflow(&f, "invalid: [");
     let id = crate::runtime::workflow::WorkflowId::parse("example").unwrap();
     assert_eq!(
-        super::workflow_inspection::inspect(&id, true, &f.request, &f.host).diagnostics[0].path,
-        "workflows.definitions"
+        super::workflow_inspection::inspect(&id, true, &f.request, &f.host).validity,
+        Validity::Invalid
     );
     f.project(config);
     f.trust(TrustAction::Revoke);
@@ -137,7 +137,7 @@ fn cfg237_graph_paths_reach_diagnostics_with_zero_side_effects() {
         json!({"description":"Review","tools":{"builtin":[]}}),
         "Review.",
     );
-    f.project(json!({"subagents":{"definitions":["reviewer"],"workflow":["reviewer"]},"workflows":{"definitions":["example"]}}));
+    f.project(json!({"subagents":{"workflow":["reviewer"]},"workflows":{}}));
     let original: serde_json::Value = serde_json::to_value(
         serde_yaml::from_str::<crate::runtime::workflow::WorkflowDefinition>(&template_source(
             "parallel_checks",
@@ -209,7 +209,7 @@ block:
 ";
     install_workflow(&f, text);
     for enabled in [true, false] {
-        f.project(json!({"mcp_servers":{"external":{"enabled":enabled,"command":"must-never-spawn"}},"workflows":{"definitions":["example"]}}));
+        f.project(json!({"mcp_servers":{"external":{"enabled":enabled,"command":"must-never-spawn"}},"workflows":{}}));
         for explain in [false, true] {
             let (report, effects) = super::static_effects::measure(|| {
                 super::workflow_inspection::inspect(
@@ -253,7 +253,7 @@ fn cfg237_nested_paths_parser_locations_and_compiler_agreement() {
         json!({"description":"Review","tools":{"builtin":[]}}),
         "Review.",
     );
-    f.project(json!({"subagents":{"definitions":["reviewer"],"workflow":["reviewer"]},"workflows":{"definitions":["example"]}}));
+    f.project(json!({"subagents":{"workflow":["reviewer"]},"workflows":{}}));
     let definition: crate::runtime::workflow::WorkflowDefinition =
         serde_yaml::from_str(&template_source("parallel_checks")).unwrap();
     let original = serde_json::to_value(definition).unwrap();
@@ -310,7 +310,7 @@ fn cfg237_nested_paths_parser_locations_and_compiler_agreement() {
 #[test]
 fn cfg237_workflow_projection_omission_preserves_validity_and_size_bound() {
     let f = Fixture::new();
-    f.project(json!({"workflows":{"definitions":["example"]}}));
+    f.project(json!({"workflows":{}}));
     install_workflow(&f, &template_source("human_plan"));
     let mut report = super::workflow_inspection::inspect(
         &crate::runtime::workflow::WorkflowId::parse("example").unwrap(),
@@ -355,7 +355,7 @@ fn cfg236_offline_role_provenance_rejections_and_trust_have_zero_effects() {
         json!({"description":"Project","tools":{"builtin":["read"]}}),
         "Project body",
     );
-    f.project(json!({"subagents":{"definitions":["reviewer"],"main":[],"workflow":["reviewer"]}}));
+    f.project(json!({"subagents":{"main":[],"workflow":["reviewer"]}}));
     for operation in ["config_check", "config_show"] {
         let ((report, launch), effects) = super::static_effects::measure(|| {
             super::diagnostics::inspect(operation, &f.request, &f.host)
@@ -379,7 +379,7 @@ fn cfg236_offline_role_provenance_rejections_and_trust_have_zero_effects() {
     assert_eq!(effects, [0; 13]);
     assert_eq!(report.validity, super::diagnostics::Validity::Invalid);
     assert_eq!(report.diagnostics[0].file, Some(project));
-    assert_eq!(report.diagnostics[0].path, "subagents.definitions.reviewer");
+    assert_eq!(report.diagnostics[0].path, "agents.reviewer");
     assert!(!report.render(true).contains("SENTINEL"));
     f.trust(TrustAction::Revoke);
     let ((report, launch), effects) = super::static_effects::measure(|| {
@@ -395,19 +395,19 @@ fn cfg236_offline_role_provenance_rejections_and_trust_have_zero_effects() {
 fn cfg236_user_role_authority_resolves_alias_once_for_launch_and_diagnostics() {
     let mut f = Fixture::new();
     let selected = f.role(true, "reviewer", json!({"description":"User"}), "User body");
-    f.project(json!({"subagents":{"definitions":["reviewer"]}}));
+    f.project(json!({"subagents":{}}));
     let physical_config = f.host.config_directory.clone();
     let alias = f.root.path().join("config-alias");
     std::os::unix::fs::symlink(&physical_config, &alias).unwrap();
     f.host.config_directory = alias.clone();
     let launch = f.resolve();
-    assert_eq!(launch.role_root, physical_config.join("subagents"));
+    assert_eq!(launch.agent_root, physical_config.join("agents"));
     for operation in ["config_check", "config_show"] {
         let ((report, prospective), effects) = super::static_effects::measure(|| {
             super::diagnostics::inspect(operation, &f.request, &f.host)
         });
         assert_eq!(effects, [0; 13]);
-        assert_eq!(prospective.unwrap().role_root, launch.role_root);
+        assert_eq!(prospective.unwrap().agent_root, launch.agent_root);
         assert_eq!(
             report
                 .launch
@@ -425,9 +425,9 @@ fn cfg236_user_role_authority_resolves_alias_once_for_launch_and_diagnostics() {
     std::fs::create_dir(&replacement).unwrap();
     std::fs::remove_file(&alias).unwrap();
     std::os::unix::fs::symlink(&replacement, &alias).unwrap();
-    let (catalog, _) = super::subagent_resources::load(
+    let (catalog, _) = super::agent_resources::load(
         &launch.workspace,
-        &launch.role_root,
+        &launch.agent_root,
         &launch.config.subagents,
     )
     .unwrap();
@@ -436,17 +436,17 @@ fn cfg236_user_role_authority_resolves_alias_once_for_launch_and_diagnostics() {
         "User body"
     );
     // Replacing the physical authority itself must fail, not capture its new target.
-    std::fs::rename(&launch.role_root, f.root.path().join("retired-roles")).unwrap();
+    std::fs::rename(&launch.agent_root, f.root.path().join("retired-roles")).unwrap();
     std::fs::write(
-        replacement.join("reviewer.md"),
+        replacement.join("reviewer.toml"),
         "---\ndescription: outside\n---\nOutside",
     )
     .unwrap();
-    std::os::unix::fs::symlink(&replacement, &launch.role_root).unwrap();
+    std::os::unix::fs::symlink(&replacement, &launch.agent_root).unwrap();
     assert!(
-        super::subagent_resources::load(
+        super::agent_resources::load(
             &launch.workspace,
-            &launch.role_root,
+            &launch.agent_root,
             &launch.config.subagents
         )
         .unwrap_err()
@@ -464,7 +464,7 @@ async fn cfg236_gated_role_reload_cancels_or_publishes_one_complete_generation()
         json!({"description":"R1", "tools":{"builtin":["read"]}}),
         "R1 body",
     );
-    f.project(json!({"subagents":{"definitions":["role"],"main":["role"],"workflow":[]}}));
+    f.project(json!({"subagents":{"main":["role"],"workflow":[]}}));
     let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
         .await
         .unwrap();
@@ -475,8 +475,8 @@ async fn cfg236_gated_role_reload_cancels_or_publishes_one_complete_generation()
         json!({"description":"R2", "tools":{"builtin":["grep"]}}),
         "R2 body",
     );
-    f.project(json!({"subagents":{"definitions":["role"],"main":[],"workflow":["role"]}}));
-    let gate = super::subagent_resources::test_support::arm(&f.host.launch_directory);
+    f.project(json!({"subagents":{"main":[],"workflow":["role"]}}));
+    let gate = super::agent_resources::test_support::arm(&f.host.launch_directory);
     let runtime = product.runtime().clone();
     let reload = tokio::spawn(async move { runtime.reload_resources().await });
     gate.entered().await; // complete parsed/validated R2, before publication
@@ -491,7 +491,7 @@ async fn cfg236_gated_role_reload_cancels_or_publishes_one_complete_generation()
         &product.runtime().runtime_resources()
     ));
     drop(gate);
-    let gate = super::subagent_resources::test_support::arm(&f.host.launch_directory);
+    let gate = super::agent_resources::test_support::arm(&f.host.launch_directory);
     let runtime = product.runtime().clone();
     let reload = tokio::spawn(async move { runtime.reload_resources().await });
     gate.entered().await;
@@ -512,139 +512,45 @@ async fn cfg236_gated_role_reload_cancels_or_publishes_one_complete_generation()
     product.runtime().shutdown().await.unwrap();
 }
 
-fn check_python_package(
-    intent: Option<&str>,
-    trusted: bool,
-    files: Option<(&str, &str)>,
-    expected: Option<PythonLocalStatus>,
-    parses: usize,
-) {
-    let f = Fixture::new();
-    if let Some((server, requirements)) = files {
-        let package = f.host.launch_directory.join(".agents/tools/foo");
-        std::fs::create_dir_all(&package).unwrap();
-        if !server.is_empty() {
-            std::fs::write(package.join("server.py"), server).unwrap();
+#[test]
+fn cfg271_offline_python_discovery_never_parses_or_prepares_packages() {
+    for trusted in [false, true] {
+        let f = Fixture::new();
+        let root = f.host.launch_directory.join(".agents/tools/foo");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("server.py"),
+            "raise Exception('must never import')",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("requirements.txt"),
+            "--invalid RUSTX_SECRET_SENTINEL_DO_NOT_LEAK",
+        )
+        .unwrap();
+        if !trusted {
+            f.trust(TrustAction::Revoke);
         }
-        std::fs::write(package.join("requirements.txt"), requirements).unwrap();
-    }
-    if let Some(intent) = intent {
-        f.project(json!({"python_sources":{"python:foo":intent}}));
-    }
-    if !trusted {
-        f.trust(TrustAction::Revoke);
-    }
-    for operation in ["config_check", "config_show"] {
         crate::tools::python::PACKAGE_PARSE_COUNT.with(|count| count.set(0));
         let ((report, launch), effects) = super::static_effects::measure(|| {
-            super::diagnostics::inspect(operation, &f.request, &f.host)
+            super::diagnostics::inspect("config_check", &f.request, &f.host)
         });
         assert_eq!(effects, [0; 13]);
-        for output in [
-            report.render(false),
-            report.render(true),
-            format!("{report:?}"),
-        ] {
-            assert!(!output.contains("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"));
-        }
-        crate::tools::python::PACKAGE_PARSE_COUNT.with(|count| assert_eq!(count.get(), parses));
-        let launch = launch.expect("optional source failures retain the prospective launch");
-        assert!(!launch.environment_store_root().exists());
+        crate::tools::python::PACKAGE_PARSE_COUNT.with(|count| assert_eq!(count.get(), 0));
+        assert!(
+            !report
+                .render(true)
+                .contains("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK")
+        );
+        let launch = launch.unwrap();
+        assert_eq!(launch.managed_python.packages().len(), usize::from(trusted));
         assert!(!launch.runtime_root.exists());
-        let source = &report.launch.as_ref().unwrap().sources["python:foo"];
-        assert_eq!(source.local_status, expected);
-        let invalid = matches!(
-            expected,
-            Some(PythonLocalStatus::Missing | PythonLocalStatus::Invalid)
-        );
-        assert_eq!(report.exit_code(), if invalid { 2 } else { 3 });
-        assert_eq!(
-            source.readiness,
-            if invalid {
-                "unavailable"
-            } else if expected.is_some() {
-                "unresolved"
-            } else {
-                "inert"
-            }
-        );
-        if invalid {
-            let diagnostic = report
-                .diagnostics
-                .iter()
-                .find(|d| d.path == "python_sources.python:foo")
-                .unwrap();
-            assert_eq!(diagnostic.category, "invalid");
-            assert_eq!(diagnostic.classification, "error");
-            assert!(diagnostic.file.is_some());
-            assert!(
-                diagnostic
-                    .reason
-                    .contains(if expected == Some(PythonLocalStatus::Missing) {
-                        "not present locally"
-                    } else {
-                        "local package contract"
-                    })
-            );
-            assert!(diagnostic.correction.contains("server.py"));
-            // Static source failure does not become a global runtime admission failure.
-            assert!(
-                launch
-                    .admit(crate::credentials::CredentialSnapshot::default)
-                    .is_ok()
-            );
+        if trusted {
+            let source = &report.launch.as_ref().unwrap().sources["python:foo"];
+            assert!(source.discovered_package);
+            assert_eq!(source.readiness, "inert");
         }
     }
-}
-
-#[test]
-fn cfg235_enabled_python_package_is_locally_validated_without_preparation() {
-    check_python_package(
-        Some("enabled"),
-        true,
-        Some(("# inert server", "")),
-        Some(PythonLocalStatus::Valid),
-        1,
-    );
-}
-#[test]
-fn cfg235_enabled_missing_python_package_is_a_precise_static_source_failure() {
-    check_python_package(
-        Some("enabled"),
-        true,
-        None,
-        Some(PythonLocalStatus::Missing),
-        0,
-    );
-}
-#[test]
-fn cfg235_enabled_malformed_python_package_is_a_precise_static_source_failure() {
-    check_python_package(
-        Some("enabled"),
-        true,
-        Some(("", "")),
-        Some(PythonLocalStatus::Invalid),
-        1,
-    );
-    check_python_package(
-        Some("enabled"),
-        true,
-        Some(("# server", "--index-url RUSTX_SECRET_SENTINEL_DO_NOT_LEAK")),
-        Some(PythonLocalStatus::Invalid),
-        1,
-    );
-}
-#[test]
-fn cfg235_disabled_malformed_python_package_remains_inert() {
-    check_python_package(Some("disabled"), true, Some(("", "invalid")), None, 0);
-}
-#[test]
-fn cfg235_unconfigured_malformed_python_package_remains_inert() {
-    check_python_package(None, true, Some(("", "invalid")), None, 0);
-}
-#[test]
-fn cfg235_untrusted_python_package_contents_are_not_read() {
-    check_python_package(Some("enabled"), false, Some(("", "invalid")), None, 0);
 }
 
 #[test]
@@ -699,44 +605,6 @@ fn cfg235_provider_readiness_is_unresolved_without_credential_lookup() {
                 }
             }
         }
-    }
-}
-
-#[test]
-fn cfg235_python_local_contract_reuses_name_file_and_symlink_validation() {
-    for case in ["missing_requirements", "invalid-name", "symlink"] {
-        let f = Fixture::new();
-        let name = if case == "invalid-name" {
-            "bad--name"
-        } else {
-            "foo"
-        };
-        let id = format!("python:{name}");
-        let package = f.host.launch_directory.join(".agents/tools").join(name);
-        std::fs::create_dir_all(&package).unwrap();
-        std::fs::write(package.join("server.py"), "# inert").unwrap();
-        if case != "missing_requirements" {
-            std::fs::write(package.join("requirements.txt"), "").unwrap();
-        }
-        if case == "symlink" {
-            std::os::unix::fs::symlink("server.py", package.join("linked.py")).unwrap();
-        }
-        f.project(json!({"python_sources":{id.clone():"enabled"}}));
-        let ((report, launch), effects) = super::static_effects::measure(|| {
-            super::diagnostics::inspect("config_check", &f.request, &f.host)
-        });
-        assert_eq!(effects, [0; 13]);
-        assert_eq!(report.exit_code(), 2, "{case}");
-        assert_eq!(
-            report
-                .launch
-                .as_ref()
-                .unwrap_or_else(|| panic!("{case}: {}", report.render(true)))
-                .sources[&id]
-                .local_status,
-            Some(PythonLocalStatus::Invalid)
-        );
-        assert!(!launch.unwrap().environment_store_root().exists());
     }
 }
 
@@ -829,12 +697,24 @@ fn cfg235_oversized_invalid_projection_preserves_authoritative_diagnostics() {
     )
     .unwrap();
     f.project(json!({
-        "python_sources":{"python:foo":"enabled"},
+        "mcp_servers":{"broken":{"enabled":true,"command":"fixture"}},
         "environment": (0..4096).map(|index| (format!("FIELD_{index}"), "RUSTX_SECRET_SENTINEL_DO_NOT_LEAK")).collect::<std::collections::BTreeMap<_,_>>()
     }));
-    let (report, _) = super::diagnostics::inspect("config_show", &f.request, &f.host);
-    assert_eq!(report.exit_code(), 2);
-    assert_bounded_cause(&report, "python_sources.python:foo", "invalid");
+    let (mut report, _) = super::diagnostics::inspect("config_show", &f.request, &f.host);
+    report.validity = super::diagnostics::Validity::Invalid;
+    report.diagnostics.insert(
+        0,
+        super::diagnostics::Report::failure(
+            "config_show",
+            Some(f.host.launch_directory.join(".agents/agents/bad.toml")),
+            "agents.bad",
+            "invalid canonical Agent",
+            "repair Agent TOML",
+        )
+        .diagnostics
+        .remove(0),
+    );
+    assert_bounded_cause(&report, "agents.bad", "invalid");
 }
 
 #[test]
@@ -1034,9 +914,10 @@ async fn cfg235_probe_verifies_mcp_without_business_calls_and_respects_inert_sou
         "enabled":{"enabled":true,"url":fixture.endpoint},
         "disabled":{"enabled":false,"command":"must-never-execute"},
         "unconfigured":{"command":"must-never-execute"}
-    },"python_sources":{"python:optional":"enabled"}}));
+    }}));
+    std::fs::create_dir_all(f.host.launch_directory.join(".agents/tools/optional")).unwrap();
     let (report, launch) = super::diagnostics::inspect("doctor", &f.request, &f.host);
-    assert_eq!(report.validity, super::diagnostics::Validity::Invalid);
+    assert_eq!(report.validity, super::diagnostics::Validity::Valid);
     let launch = launch.unwrap();
     let probe_plan = plan(&launch, true);
     let results = execute(
@@ -1055,7 +936,7 @@ async fn cfg235_probe_verifies_mcp_without_business_calls_and_respects_inert_sou
     assert_eq!(state("enabled"), ProbeState::Verified);
     assert_eq!(state("disabled"), ProbeState::Skipped);
     assert_eq!(state("unconfigured"), ProbeState::Skipped);
-    assert_eq!(state("python:optional"), ProbeState::Unavailable);
+    assert_eq!(state("python:optional"), ProbeState::Skipped);
     assert_eq!(fixture.control.accepted_calls(), 0);
     assert!(!launch.environment_store_root().exists());
     f.trust(TrustAction::Revoke);
@@ -1083,10 +964,7 @@ fn cfg235_diagnostics_keep_source_field_classification_and_correction() {
     for (configuration, field) in [
         (json!({"unknown_field":true}), "$"),
         (json!({"approval_mode":"full_access"}), "approval_mode"),
-        (
-            json!({"subagents":{"definitions":["missing"]}}),
-            "subagents.definitions.missing",
-        ),
+        (json!({"subagents":{"main":["missing"]}}), "subagents.main"),
     ] {
         f.project(configuration);
         let (report, _) = super::diagnostics::inspect("config_check", &f.request, &f.host);
@@ -1095,14 +973,7 @@ fn cfg235_diagnostics_keep_source_field_classification_and_correction() {
         assert_eq!(diagnostic.path, field);
         assert!(diagnostic.file.is_some());
         assert_eq!(diagnostic.classification, "error");
-        assert_eq!(
-            diagnostic.category,
-            if field == "subagents.definitions.missing" {
-                "resource_missing"
-            } else {
-                "invalid"
-            }
-        );
+        assert_eq!(diagnostic.category, "invalid");
         assert!(!diagnostic.reason.is_empty());
         assert!(!diagnostic.correction.is_empty());
     }
@@ -1253,7 +1124,7 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
         .join(".agents/workflows/broken.yaml");
     std::fs::create_dir_all(workflow.parent().unwrap()).unwrap();
     std::fs::write(&workflow, "RUSTX_SECRET_SENTINEL_DO_NOT_LEAK: [").unwrap();
-    f.project(json!({"workflows":{"definitions":["broken"],"main":["broken"]}}));
+    f.project(json!({"workflows":{"main":["broken"]}}));
     let ((report, _), counts) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_check", &f.request, &f.host)
     });
@@ -1278,7 +1149,7 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
         valid.replace("entry: read", "entry: missing_node"),
     )
     .unwrap();
-    f.project(json!({"workflows":{"definitions":["broken"],"main":["broken"]}}));
+    f.project(json!({"workflows":{"main":["broken"]}}));
     let ((report, _), counts) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_check", &f.request, &f.host)
     });
@@ -1302,7 +1173,7 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
 }
 
 #[tokio::test]
-async fn cfg235_preparation_requires_authorization_and_uses_existing_python_owner() {
+async fn cfg271_probe_cannot_turn_discovery_into_python_preparation() {
     use crate::runtime::process_runner::{
         CapturedProcessResult, RunnerTestControl, SupervisedCommandSpec, SupervisedProcessRunner,
     };
@@ -1327,7 +1198,7 @@ async fn cfg235_preparation_requires_authorization_and_uses_existing_python_owne
     std::fs::create_dir_all(&package).unwrap();
     std::fs::write(package.join("server.py"), "# never executed by this test\n").unwrap();
     std::fs::write(package.join("requirements.txt"), "").unwrap();
-    f.project(json!({"python_sources":{"python:optional":"enabled"}}));
+    f.project(json!({}));
     let launch = analyze(&f.request, &f.host).unwrap();
     let runner = Arc::new(FailingRunner::default());
     let store = crate::tools::python::PythonToolStore::with_binaries_and_runner(
@@ -1347,16 +1218,8 @@ async fn cfg235_preparation_requires_authorization_and_uses_existing_python_owne
             .iter()
             .find(|result| result.target == "python:optional")
             .unwrap();
-        if authorized {
-            assert!(
-                runner.0.load(Ordering::SeqCst) > before,
-                "existing Python owner attempted preparation; failed build was fully retired"
-            );
-            assert_eq!(result.state, super::probes::ProbeState::Failed);
-        } else {
-            assert_eq!(runner.0.load(Ordering::SeqCst), before);
-            assert_eq!(result.state, super::probes::ProbeState::Unavailable);
-        }
+        assert_eq!(runner.0.load(Ordering::SeqCst), before);
+        assert_eq!(result.state, super::probes::ProbeState::Skipped);
         assert!(
             !super::probes::render_results(&results, true)
                 .contains("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK")
@@ -1454,13 +1317,21 @@ impl Fixture {
         body: &str,
     ) -> std::path::PathBuf {
         let root = if user {
-            self.host.config_directory.join("subagents")
+            self.host.config_directory.join("agents")
         } else {
-            self.host.launch_directory.join(".agents/subagents")
+            self.host.launch_directory.join(".agents/agents")
         };
         std::fs::create_dir_all(&root).unwrap();
-        let path = root.join(format!("{name}.md"));
-        std::fs::write(&path, format!("---\n{metadata}\n---\n{body}")).unwrap();
+        let path = root.join(format!("{name}.toml"));
+        let mut metadata = metadata;
+        metadata["instructions"] = body.into();
+        if let Some(value) = metadata.as_object_mut().unwrap().remove("timeoutMs") {
+            metadata["timeout_ms"] = value;
+        }
+        if let Some(value) = metadata.as_object_mut().unwrap().remove("agentsMd") {
+            metadata["agents_md"] = value;
+        }
+        std::fs::write(&path, toml::to_string_pretty(&metadata).unwrap()).unwrap();
         path
     }
     fn project(&self, value: serde_json::Value) {
@@ -1530,7 +1401,7 @@ fn exact_selection_validates_non_cli_launch_requests_before_resolution() {
 }
 
 #[test]
-fn cfg233_configuration_accepts_only_declarative_python_enablement() {
+fn cfg271_python_enablement_settings_are_rejected() {
     for project_layer in [false, true] {
         for value in ["enabled", "disabled", "untrusted", "unconfigured"] {
             let f = Fixture::new();
@@ -1542,22 +1413,12 @@ fn cfg233_configuration_accepts_only_declarative_python_enablement() {
                 f.user(document);
             }
             let result = resolve(&f.request, &f.host);
-            assert_eq!(
-                result.is_ok(),
-                matches!(value, "enabled" | "disabled"),
+            assert!(
+                result.is_err(),
                 "{value}, project={project_layer}: {result:?}"
             );
         }
     }
-    let f = Fixture::new();
-    f.project(json!({"python_sources":{"python:x":"enabled"}}));
-    f.trust(TrustAction::Revoke);
-    assert!(
-        resolve(&f.request, &f.host)
-            .unwrap_err()
-            .contains("not trusted"),
-        "CFG-01 rejects before a running coordinator could project Untrusted"
-    );
 }
 
 #[test]
@@ -1664,45 +1525,34 @@ async fn cfg233_enabled_missing_credentials_and_connection_failures_are_source_l
 }
 
 #[tokio::test]
-async fn cfg233_missing_declared_python_is_visible_in_composed_source_status() {
-    let f = Fixture::new();
-    f.project(json!({"python_sources":{"python:missing":"enabled", "python:optional":"disabled"}}));
-    let launch = f.resolve();
-    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
-        .await
-        .unwrap();
-    let sources = product.runtime().capability().availability();
-    assert!(matches!(
-        sources[&CapabilitySourceId::Mcp(crate::runtime::identity::McpServerId::new(
-            "python:missing"
-        ))],
-        CapabilitySourceState::Unavailable { .. }
-    ));
-    assert_eq!(
-        sources[&CapabilitySourceId::Mcp(crate::runtime::identity::McpServerId::new(
-            "python:optional"
-        ))],
-        CapabilitySourceState::Inactive {
-            activation: crate::capabilities::activation::SourceActivation::Disabled
+async fn cfg271_missing_empty_and_unprepared_python_allow_native_startup() {
+    for populated in [None, Some(false), Some(true)] {
+        let f = Fixture::new();
+        let root = f.host.launch_directory.join(".agents/tools");
+        if let Some(populated) = populated {
+            std::fs::create_dir_all(&root).unwrap();
+            if populated {
+                std::fs::create_dir(root.join("unprepared")).unwrap();
+            }
         }
-    );
-    let response = product.endpoint().handle_request(
-        crate::runtime_client::RuntimeClientRequest::Initialize {
-            id: crate::runtime_client::RequestId::new(1),
-            protocol_version: crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
-        },
-    );
-    let payload = serde_json::to_string(&response).unwrap();
-    assert!(payload.contains("python:missing") && payload.contains("not discovered"));
-    assert!(!f.host.launch_directory.join(".agents/tools").exists());
-    assert!(
-        !launch
-            .environment_store_root()
-            .read_dir()
-            .unwrap()
-            .any(|entry| entry.unwrap().path().join("python-tools").exists())
-    );
-    product.runtime().shutdown().await.unwrap();
+        let product =
+            LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+                .await
+                .unwrap();
+        assert_eq!(
+            product
+                .runtime()
+                .runtime_resources()
+                .managed_python_catalog()
+                .packages()
+                .len(),
+            usize::from(populated == Some(true))
+        );
+        assert!(!product.runtime().capability().availability().keys().any(
+            |id| matches!(id, CapabilitySourceId::Mcp(id) if id.as_str().starts_with("python:"))
+        ));
+        product.runtime().shutdown().await.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -1859,12 +1709,12 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
     f.user(json!({"model":{"model":"host/one", "reasoning_profile":{"mode":"catalog_default"}}, "agent_id":"user", "context":{"reserve_tokens":2000,"keep_recent_tokens":6000},
         "default_tools":["read","bash"],"environment":{"USER_ENTRY":"one","REPLACED":"old"},
         "mcp_servers":{"service":{"command":"old-command","args":["old"]},"retained":{"command":"retained"}},
-        "subagents":{"definitions":["role"]}
+        "subagents":{}
     }));
     f.project(
         json!({"model":{"model":"host/two"},"context":{"reserve_tokens":3000},"default_tools":[],
             "environment":{"REPLACED":"new"}, "mcp_servers":{"service":{"command":"new-command"}},
-            "subagents":{"definitions":["role"]}
+            "subagents":{}
         }),
     );
     let resolved = f.resolve();
@@ -1896,7 +1746,7 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
     assert_eq!(source.layer, "project");
     assert_eq!(
         source.overridden.as_ref().unwrap(),
-        &f.host.config_directory.join("subagents/role.md")
+        &f.host.config_directory.join("agents/role.toml")
     );
     assert!(matches!(
         resolved.provenance["context.keep_recent_tokens"],
@@ -1917,11 +1767,11 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
         Origin::Cli { .. }
     ));
     assert_eq!(cli.tools, Some(vec!["read".into(), "bash".into()]));
-    f.project(json!({"environment":{},"mcp_servers":{},"subagents":{"definitions":[]}}));
+    f.project(json!({"environment":{},"mcp_servers":{},"subagents":{}}));
     let empty = f.resolve();
     assert!(empty.config.environment.is_empty());
     assert!(empty.config.mcp_servers.is_empty());
-    assert!(empty.config.subagents.definitions.is_empty());
+    assert!(empty.config.subagents.main.is_empty());
     assert_eq!(empty.config.default_tools, ["read", "bash"]);
 }
 
@@ -2020,8 +1870,8 @@ fn relative_paths_keep_their_document_and_cli_bases() {
         json!({"description":"project","agentsMd":{"files":["instructions.md"]}}),
         "Project role",
     );
-    f.user(json!({"model":{"model":"host/one"}, "skills":["user-skills"], "subagents":{"definitions":["user"]}}));
-    f.project(json!({"subagents":{"definitions":["user","project"]}}));
+    f.user(json!({"model":{"model":"host/one"}, "skills":["user-skills"], "subagents":{}}));
+    f.project(json!({"subagents":{}}));
     let resolved = f.resolve();
     assert_eq!(
         resolved.config.skills,
@@ -2034,18 +1884,18 @@ fn relative_paths_keep_their_document_and_cli_bases() {
     );
     for (name, source) in &resolved.role_sources {
         let base = if name.as_str() == "user" {
-            f.host.config_directory.join("subagents")
+            f.host.config_directory.join("agents")
         } else {
-            f.host.launch_directory.join(".agents/subagents")
+            f.host.launch_directory.join(".agents/agents")
         };
-        assert_eq!(source.selected, base.join(format!("{name}.md")));
+        assert_eq!(source.selected, base.join(format!("{name}.toml")));
     }
     f.request.config = Some("replacement.toml".into());
     std::fs::write(f.host.launch_directory.join("replacement.toml"), "").unwrap();
     assert_eq!(
-        f.resolve().config.subagents.definitions.len(),
-        1,
-        "--config replaces the project slot"
+        f.resolve().subagents.definitions().count(),
+        2,
+        "--config selects settings; canonical resources remain discovered"
     );
 }
 
@@ -2152,7 +2002,7 @@ fn canonical_symlink_and_real_git_worktree_identities_are_stable_and_separate() 
         json!({"description":"other","agentsMd":{"files":[outside]}}),
         "role",
     );
-    f.project(json!({"subagents":{"definitions":["other"]}}));
+    f.project(json!({"subagents":{}}));
     assert!(
         resolve(&f.request, &f.host)
             .unwrap_err()
@@ -2400,7 +2250,7 @@ fn duplicate_role_definitions_and_invalid_lower_layer_cannot_be_hidden() {
     std::fs::write(
         f.host.launch_directory.join("rustx.toml"),
         r#"[subagents]
-definitions = ["role", "role"]"#,
+main = ["role", "role"]"#,
     )
     .unwrap();
     assert!(
@@ -2415,8 +2265,8 @@ definitions = ["role", "role"]"#,
             .unwrap_err()
             .contains("unknown field")
     );
-    f.user(json!({"model":{"model":"host/one"},"subagents":{"definitions":["role","role"]}}));
-    f.project(json!({"subagents":{"definitions":[]}}));
+    f.user(json!({"model":{"model":"host/one"},"subagents":{"main":["role","role"]}}));
+    f.project(json!({"subagents":{}}));
     assert!(
         resolve(&f.request, &f.host)
             .unwrap_err()
@@ -2490,7 +2340,7 @@ async fn project_resource_authority_rejects_every_declared_escape_but_preserves_
             json!({"description":"x","agentsMd":{"files":[path]}}),
             "role",
         );
-        json!({"subagents":{"definitions":["x"]}})
+        json!({"subagents":{}})
     };
     for document in [
         role(json!(&resource)),
@@ -2517,9 +2367,9 @@ async fn project_resource_authority_rejects_every_declared_escape_but_preserves_
     );
     f.request.config = None;
     f.project(json!({}));
-    std::fs::remove_file(f.host.launch_directory.join(".agents/subagents/x.md")).unwrap();
+    std::fs::remove_file(f.host.launch_directory.join(".agents/agents/x.toml")).unwrap();
     f.role(true, "x", json!({"description":"host"}), "user-owned bytes");
-    f.user(json!({"model":{"model":"host/one"},"subagents":{"definitions":["x"]}}));
+    f.user(json!({"model":{"model":"host/one"},"subagents":{}}));
     let host = f.resolve();
     assert_eq!(host.role_sources.values().next().unwrap().layer, "user");
     let skill = other.join("outside");
@@ -2558,7 +2408,7 @@ async fn project_symlink_escape_is_rechecked_before_composition_and_reload() {
     std::fs::create_dir(&other).unwrap();
     std::fs::write(other.join("instructions.md"), "B MUST NEVER BE ADMITTED").unwrap();
     let source = f.role(false, "x", json!({"description":"x"}), "trusted A");
-    f.project(json!({"subagents":{"definitions":["x"]}}));
+    f.project(json!({"subagents":{}}));
     let launch = f.resolve();
     std::fs::remove_file(&source).unwrap();
     std::os::unix::fs::symlink(other.join("instructions.md"), &source).unwrap();
@@ -2603,7 +2453,7 @@ async fn project_symlink_escape_is_rechecked_before_composition_and_reload() {
             .instructions(),
         "trusted A"
     );
-    f.project(json!({"subagents":{"definitions":["x"]}}));
+    f.project(json!({"subagents":{}}));
     assert!(
         product
             .runtime()
@@ -2617,9 +2467,9 @@ async fn project_symlink_escape_is_rechecked_before_composition_and_reload() {
         product.runtime().runtime_resources().revision(),
         before.revision()
     );
-    // Removing the offending declaration permits a new candidate: stale launch
-    // paths must not become a second resource-generation authority.
-    f.project(json!({"subagents":{"definitions":[]}}));
+    // Removing the canonical resource permits a complete new candidate.
+    std::fs::remove_file(&source).unwrap();
+    f.project(json!({"subagents":{}}));
     product.runtime().reload_resources().await.unwrap();
     product.runtime().shutdown().await.unwrap();
 }
@@ -2694,7 +2544,7 @@ async fn workspace_workflow_symlink_rejects_reload_without_reading_external_yaml
     let directory = f.host.launch_directory.join(".agents/workflows");
     std::fs::create_dir_all(&directory).unwrap();
     std::os::unix::fs::symlink(&other, directory.join("escape.yaml")).unwrap();
-    f.project(json!({"workflows":{"definitions":["escape"]}}));
+    f.project(json!({"workflows":{}}));
     let error = product
         .runtime()
         .reload_resources()
@@ -2844,10 +2694,125 @@ fn cfg270_every_checked_in_toml_example_uses_its_production_authoring_owner() {
                         )
                         .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
                     }
+                    _ if path.parent().unwrap().file_name().unwrap() == "agents" => {
+                        crate::local_runtime::agent_resources::parse(
+                            std::str::from_utf8(&bytes).unwrap(),
+                        )
+                        .unwrap();
+                    }
                     other => panic!("unowned TOML example {other}"),
                 }
             }
         }
     }
     visit(&Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/local-runtime"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cfg271_all_catalogs_publish_together_and_failed_candidates_publish_nothing() {
+    let f = Fixture::new();
+    let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+        .await
+        .unwrap();
+    let before = product.runtime().runtime_resources();
+    let workspace = &f.host.launch_directory;
+    let agent = f.role(
+        false,
+        "added",
+        json!({"description":"Added Agent"}),
+        "Frozen instructions",
+    );
+    let skills = workspace.join(".agents/skills/added");
+    std::fs::create_dir_all(&skills).unwrap();
+    std::fs::write(
+        skills.join("SKILL.md"),
+        "---\nname: added\ndescription: Added Skill\n---\nFrozen Skill\n",
+    )
+    .unwrap();
+    let package = workspace.join(".agents/tools/added");
+    std::fs::create_dir_all(&package).unwrap();
+    let workflow = install_workflow(&f, "invalid: [");
+    assert!(product.runtime().reload_resources().await.is_err());
+    assert!(std::sync::Arc::ptr_eq(
+        &before,
+        &product.runtime().runtime_resources()
+    ));
+    // Use a shipped native-only program; no Agent/source materialization demand.
+    std::fs::write(&workflow, "description: Return a literal\nblock:\n  input: {type: object, properties: {}, additionalProperties: false}\n  output: {type: object, properties: {}, additionalProperties: false}\n  entry: done\n  nodes:\n    done:\n      type: return\n      output: {type: literal, value: {}}\n").unwrap();
+    let gate = super::agent_resources::test_support::arm(workspace);
+    let runtime = product.runtime().clone();
+    let mut reload = tokio::spawn(async move { runtime.reload_resources().await });
+    tokio::select! { () = gate.entered() => {}, result = &mut reload => panic!("candidate failed before publication gate: {result:?}") }
+    assert!(std::sync::Arc::ptr_eq(
+        &before,
+        &product.runtime().runtime_resources()
+    ));
+    gate.release();
+    reload.await.unwrap().unwrap();
+    drop(gate);
+    let added = product.runtime().runtime_resources();
+    assert_eq!(before.subagents().len(), 0);
+    assert!(before.managed_python_catalog().packages().is_empty());
+    assert_eq!(added.subagents().len(), 1);
+    assert_eq!(added.managed_python_catalog().packages().len(), 1);
+    assert_eq!(added.capability().skills().packages().len(), 1);
+    assert_eq!(added.workflows().definitions().len(), 1);
+    for path in [&agent, &skills.join("SKILL.md"), &workflow] {
+        let bytes = std::fs::read(path).unwrap();
+        std::fs::write(path, "malformed: [").unwrap();
+        assert!(product.runtime().reload_resources().await.is_err());
+        assert!(std::sync::Arc::ptr_eq(
+            &added,
+            &product.runtime().runtime_resources()
+        ));
+        std::fs::write(path, bytes).unwrap();
+    }
+    std::fs::remove_file(agent).unwrap();
+    std::fs::remove_file(workflow).unwrap();
+    std::fs::remove_dir_all(skills).unwrap();
+    std::fs::remove_dir(package).unwrap();
+    assert!(std::sync::Arc::ptr_eq(
+        &added,
+        &product.runtime().runtime_resources()
+    ));
+    product.runtime().reload_resources().await.unwrap();
+    let removed = product.runtime().runtime_resources();
+    assert!(removed.subagents().is_empty());
+    assert!(removed.workflows().definitions().is_empty());
+    assert!(removed.capability().skills().packages().is_empty());
+    assert!(removed.managed_python_catalog().packages().is_empty());
+    assert_eq!(added.subagents().len(), 1);
+    assert_eq!(added.workflows().definitions().len(), 1);
+    assert_eq!(added.capability().skills().packages().len(), 1);
+    assert_eq!(added.managed_python_catalog().packages().len(), 1);
+    product.runtime().shutdown().await.unwrap();
+}
+
+#[test]
+fn cfg271_removed_existence_registries_are_unknown_fields_in_each_layer() {
+    let f = Fixture::new();
+    for field in [
+        json!({"python_sources":{}}),
+        json!({"subagents":{"definitions":[]}}),
+        json!({"workflows":{"definitions":[]}}),
+    ] {
+        f.project(field.clone());
+        assert!(
+            analyze(&f.request, &f.host)
+                .unwrap_err()
+                .to_string()
+                .contains("unknown field")
+        );
+        f.project(json!({}));
+        let mut user = field;
+        user["model"] = json!({"model":"host/one"});
+        f.user(user);
+        assert!(
+            analyze(&f.request, &f.host)
+                .unwrap_err()
+                .to_string()
+                .contains("unknown field")
+        );
+        f.user(json!({"model":{"model":"host/one"}}));
+    }
 }

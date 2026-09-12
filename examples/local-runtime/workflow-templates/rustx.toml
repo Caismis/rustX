@@ -1,11 +1,9 @@
 # Project runtime configuration. Paths remain subject to project trust and containment.
 # TOML configuration; fixed Workflows use YAML and model-facing resources use Markdown.
 [subagents]
-definitions = ["reviewer"]
 main = []
 workflow = ["reviewer"]
 max_concurrent = 2
 
 [workflows]
-definitions = ["typed_agent", "parallel_checks", "human_plan", "specialized_agent"]
 main = ["typed_agent", "parallel_checks", "human_plan", "specialized_agent"]

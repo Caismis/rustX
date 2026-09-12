@@ -172,10 +172,10 @@ impl Lab {
         let lab = Self { dir };
         std::fs::create_dir_all(lab.workspace().join(".agents/skills/alpha"))
             .expect("skill directory");
-        std::fs::create_dir_all(lab.workspace().join(".agents/subagents/explore"))
+        std::fs::create_dir_all(lab.workspace().join(".agents/agents/explore"))
             .expect("subagent resources");
         std::fs::write(
-            lab.workspace().join(".agents/subagents/explore.md"),
+            lab.workspace().join(".agents/agents/explore.toml"),
             "You are a read-only exploration subagent. Answer the delegated task with the \
              capabilities your definition authorized.\n",
         )

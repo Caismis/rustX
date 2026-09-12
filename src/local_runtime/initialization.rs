@@ -413,7 +413,7 @@ mod tests {
                 .unwrap();
         assert!(!launch.trusted);
         assert!(launch.config.mcp_servers.is_empty());
-        assert!(launch.config.python_sources.is_empty());
+        assert!(launch.managed_python.packages().is_empty());
         assert_eq!(launch.config.model.model.to_string(), "local/declared");
         assert!(!workspace.join("rustx.toml").exists());
         assert!(!host.state_directory.exists());

@@ -272,12 +272,13 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                 .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
             let workspace = capability.current_snapshot().workspace_root().to_path_buf();
             let project_context_files = load_project_context_files(&workspace)?;
+            let managed_python = super::managed_python_resources::discover(&workspace)?;
             // The catalog is built before the base registry, because the
             // `subagent` intrinsic's model-facing description is generated
             // from exactly the catalog this candidate generation admits.
-            let subagents = super::subagent_resources::load(
+            let subagents = super::agent_resources::load(
                 &workspace,
-                &self.paths.role_root,
+                &self.paths.agent_root,
                 &config.subagents,
             )?
             .0;
@@ -296,8 +297,12 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
             let main_catalog = subagents
                 .admitted(&main_admission)
                 .map_err(|error| RuntimeResourceLoadError::new(format!("{error}")))?;
-            let workflows =
-                super::workflow_resources::load(&workspace, &config.workflows, &config.subagents)?;
+            let workflows = super::workflow_resources::load(
+                &workspace,
+                &config.workflows,
+                &config.subagents,
+                &subagents,
+            )?;
             let default_tools = default_tools_with_workflows(&config.default_tools, &workflows);
             let mut registry = ToolRegistry::new();
             register_native_tools(
@@ -345,7 +350,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
             .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
             let candidate = capability
                 .prepare_candidate_with_inputs(CapabilityResourceInputs {
-                    python_sources: config.python_activations(),
+                    python_sources: std::collections::BTreeMap::new(),
                     base_tool_registry: Arc::new(registry),
                     tool_activation: ToolActivationPolicy {
                         default_tools: Some(default_tools),
@@ -374,7 +379,8 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
             .with_subagent_catalog(subagents);
             let prepared = prepared
                 .with_subagent_admissions(main_admission, workflow_admission)
-                .with_workflow_catalog(workflows);
+                .with_workflow_catalog(workflows)
+                .with_managed_python_catalog(managed_python);
             // The catalog is admitted against the very candidate that is
             // about to be published, and rejection happens entirely
             // off-side: nothing of this candidate generation — catalog,
@@ -384,7 +390,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
             validate_subagent_catalog(&prepared, &self.models)?;
             validate_workflow_agent_overrides(&prepared)?;
             #[cfg(test)]
-            super::subagent_resources::test_support::before_publication(&workspace).await;
+            super::agent_resources::test_support::before_publication(&workspace).await;
             Ok(prepared)
         })
     }
@@ -845,7 +851,7 @@ impl RuntimeResourceLoader for FrozenSubagentResourceLoader {
 
 /// Workflow `main` admission is model-facing capability admission. Include
 /// those concrete Tool names in the normal optional built-in default set so
-/// a registered Workflow is available without duplicating its id in the
+/// a discovered Workflow is available without duplicating its id in the
 /// unrelated `defaultTools` selector. Explicit `--no-tools`,
 /// `--no-builtin-tools`, or a strict `--tools` allowlist still has the
 /// existing higher-priority meaning.
@@ -896,9 +902,7 @@ fn validate_subagent_catalog(
         &skills,
         models,
     )
-    .map_err(|(agent, error)| {
-        RuntimeResourceLoadError::new(format!("subagents.definitions.{agent}: {error}"))
-    })
+    .map_err(|(agent, error)| RuntimeResourceLoadError::new(format!("agents.{agent}: {error}")))
 }
 
 /// Admits every Workflow Agent node's trusted static invocation override
@@ -1231,7 +1235,7 @@ impl LocalConversationCore {
         // coordinator receives the activation policy
         // and applies it to the available capability registrations.
         let capability = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
-            python_sources: runtime_config.python_activations(),
+            python_sources: std::collections::BTreeMap::new(),
             conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: Arc::new(base_registry),
@@ -1265,7 +1269,7 @@ impl LocalConversationCore {
 
         // 10-11. Build one complete candidate off-side before publishing any
         // capability or resource state. The named-subagent catalog, its two
-        // admission domains, the registered Workflow programs, project
+        // admission domains, the discovered Workflow programs, project
         // instructions, and the capability candidate are validated as one
         // coherent generation. Optional-source failures (individual MCP
         // servers, including managed Python packages) remain typed
@@ -1289,7 +1293,8 @@ impl LocalConversationCore {
         )
         .with_subagent_catalog(subagent_catalog)
         .with_subagent_admissions(main_admission, workflow_admission)
-        .with_workflow_catalog(workflows);
+        .with_workflow_catalog(workflows)
+        .with_managed_python_catalog(paths.managed_python.clone());
         validate_subagent_catalog(&prepared, &registry).map_err(|error| {
             LocalRuntimeError::Capability {
                 detail: error.to_string(),
@@ -4365,9 +4370,9 @@ mod composition_tests {
     async fn compose_fixture(test_name: &str, arguments: serde_json::Value) -> ComposedFixture {
         let root = tempfile::tempdir().expect("fixture root");
         let workspace = root.path().join("workspace");
-        std::fs::create_dir_all(workspace.join(".agents/subagents/explore")).expect("workspace");
+        std::fs::create_dir_all(workspace.join(".agents/agents/explore")).expect("workspace");
         std::fs::write(
-            workspace.join(".agents/subagents/explore.md"),
+            workspace.join(".agents/agents/explore.toml"),
             "Read-only fixture subagent instructions.\n",
         )
         .expect("subagent instructions");

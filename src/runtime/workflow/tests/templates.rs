@@ -4,11 +4,9 @@ use super::*;
 pub(super) fn template(id: &str) -> Arc<WorkflowProgram> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples/local-runtime/workflow-templates");
-    let profiles =
-        serde_json::from_value(json!({"definitions":["reviewer"], "workflow":["reviewer"]}))
-            .unwrap();
+    let profiles = serde_json::from_value(json!({ "workflow":["reviewer"]})).unwrap();
     // Canonical role parsing is part of this fixture, not a replacement inline role format.
-    let (roles, sources) = crate::local_runtime::subagent_resources::load(
+    let (roles, sources) = crate::local_runtime::agent_resources::load(
         &root,
         &root.join("absent-user-roles"),
         &profiles,
@@ -16,9 +14,16 @@ pub(super) fn template(id: &str) -> Arc<WorkflowProgram> {
     .unwrap();
     assert_eq!(roles.len(), 1);
     assert_eq!(sources[&profile("reviewer")].layer, "project");
-    let document = serde_json::from_value(json!({"definitions":[id], "main":[id]})).unwrap();
-    let catalog =
-        crate::local_runtime::workflow_resources::load(&root, &document, &profiles).unwrap();
+    let document = serde_json::from_value(json!({ "main":[id]})).unwrap();
+    let catalog = crate::local_runtime::workflow_resources::load(
+        &root,
+        &document,
+        &profiles,
+        &crate::local_runtime::agent_resources::load(&root, &root.join("user-agents"), &profiles)
+            .unwrap()
+            .0,
+    )
+    .unwrap();
     catalog
         .get(&WorkflowId::parse(id).unwrap())
         .unwrap()
