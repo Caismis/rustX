@@ -56,6 +56,11 @@ function fakeSession(
     },
   },
 ): RuntimeClientAttachment {
+  // Even lifecycle-focused tests expose a complete native presentation snapshot:
+  // the footer now reads it at render time, including terminal-only resizes.
+  if (state && typeof state === "object" && !("sessionModel" in state)) {
+    state = { ...emptyPresentationState(sessionModel("alpha/model-a")), ...state };
+  }
   const stateListeners = new Set<(nextState: unknown) => void>();
   const snapshotListeners = new Set<() => void>();
   const session = {
@@ -2048,3 +2053,62 @@ for (const replacement of ["HITL", "snapshot"] as const) {
     } finally { await h.finish(); }
   });
 }
+
+it("approval overlay routes one typed request, consumes Esc, and discards stale snapshot surfaces", async () => {
+  const state = emptyPresentationState(sessionModel("alpha/model-a"));
+  const session = fakeSession(async () => {}, state) as RuntimeClientAttachment & {
+    publishState(next: typeof state): void; publishSnapshot(): void;
+  };
+  const response = deferred<Awaited<ReturnType<RuntimeClientAttachment["approvalModeSet"]>>>();
+  const requests: string[] = [];
+  let cancellations = 0;
+  session.approvalModeSet = (mode) => { requests.push(mode); return response.promise; };
+  session.cancelCurrentAttempt = async () => { cancellations++; return "a1"; };
+  const surfaces: Array<{ content: Parameters<TUI["showOverlay"]>[0]; visible: boolean }> = [];
+  const original = TUI.prototype.showOverlay;
+  TUI.prototype.showOverlay = function(content, options) {
+    const surface = { content, visible: true }; surfaces.push(surface);
+    const handle = original.call(this, content, options);
+    const hide = handle.hide;
+    handle.hide = () => { surface.visible = false; hide(); };
+    return handle;
+  };
+  const app = new RustxTuiApp({ session, connection: fakeConnection(), child: fakeChild([]) });
+  const running = app.run();
+  const input = async (data: string) => { process.stdin.emit("data", data); await waitForApplicationContinuation(); };
+  const active = () => surfaces.findLast((surface) => surface.visible);
+  const text = () => active()?.content.render(100).map(plainText).join("\n") ?? "";
+  try {
+    await input("/approval\r");
+    assert.match(text(), /✓ Policy/);
+    await input("\x1b[B"); await input("\x1b[27u");
+    assert.equal(active(), undefined); assert.equal(cancellations, 0); assert.deepEqual(requests, []);
+    await input("/approval\r"); await input("\x1b[B"); await input("\r");
+    assert.match(text(), /Enable full access/); assert.match(text(), /❯ Cancel/);
+    await input("\r"); assert.deepEqual(requests, []);
+    await input("/approval\r"); await input("\x1b[B"); await input("\r");
+    await input("\t"); await input("\r"); await input("\r");
+    assert.deepEqual(requests, ["full_access"]);
+    assert.match(text(), /Current attempt: Policy/);
+    await input("\x1b[27u"); await input("/approval\r");
+    assert.equal(active(), undefined); assert.deepEqual(requests, ["full_access"]);
+    response.resolve({ effectiveApprovalMode: "policy", pendingApprovalMode: "full_access", revision: 1 });
+    await waitForApplicationContinuation();
+    session.publishState({ ...state, pendingApprovalMode: "full_access", approvalModeRevision: 1 });
+    await input("/approval\r");
+    assert.match(text(), /Current attempt: Policy/); assert.match(text(), /Next attempt: Full access/);
+    const stale = active()!;
+    session.publishSnapshot();
+    session.publishState({ ...state, effectiveApprovalMode: "full_access", approvalModeRevision: 2 });
+    stale.content.handleInput?.("\r");
+    assert.deepEqual(requests, ["full_access"]);
+    await input("/approval\r");
+    assert.match(text(), /✓ Full access/); assert.doesNotMatch(text(), /Next attempt/);
+    assert.equal(cancellations, 0);
+    await input("\r");
+    assert.deepEqual(requests, ["full_access", "policy"]);
+    assert.equal(session.state?.effectiveApprovalMode, "full_access", "the response never mutates local effective state");
+  } finally {
+    await app.quit(); await running; TUI.prototype.showOverlay = original;
+  }
+});

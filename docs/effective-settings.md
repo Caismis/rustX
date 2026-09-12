@@ -43,7 +43,9 @@ persisted Session-local model selection.
   `clear` removes the explicit selection and uses the catalog default profile.
   Profile IDs are opaque: `set default` and `set clear` select those literal IDs.
   The old `/model profile <id>` syntax is rejected; there is no sentinel or alias.
-- `/approval policy|full_access` requests the native safe-boundary transition.
+- `/approval` opens an interactive picker. Policy selection requests the native
+  safe-boundary transition; Full access first requires explicit confirmation
+  with Cancel focused. Opening, highlighting and cancelling send no mutations.
 - `/show-reasoning on|off` changes rendering only: no provider parameters, model
   selection, tool invocation or canonical history changes. `/reasoning` is unknown;
   there is no compatibility alias.

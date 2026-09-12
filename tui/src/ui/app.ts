@@ -99,11 +99,13 @@ import { ModelSelector } from "./components/model-selector.ts";
 import { InspectionView } from "./components/inspection-view.ts";
 import { SessionDeletionWorkflow } from "./session-deletion-workflow.ts";
 import { ResumeSelector } from "./components/resume-selector.ts";
+import { ApprovalSelector } from "./components/approval-selector.ts";
+import { approvalLabel } from "../presentation/selectors.ts";
 import { ConfirmationView } from "./components/confirmation.ts";
 import { PopupFrame, type PopupContent } from "./components/popup-frame.ts";
 import { TransientFeedbackSurface } from "./components/transient-feedback.ts";
 import {
-  renderFooter,
+  FooterView,
   renderStartup,
   startupVisible,
   workingStatus,
@@ -216,12 +218,18 @@ export class RustxTuiApp {
    */
   readonly #todos = new Container();
   readonly #transient = new TransientFeedbackSurface();
-  readonly #footer = new Text("", 1, 0);
+  readonly #footer = new FooterView(() => ({
+    state: this.#session.state,
+    connection: this.#connectionLabel(),
+    session: this.#session.sessionInfo,
+    conversation: this.#conversationContext(),
+  }));
   readonly #editor: Editor;
   readonly #loader: Loader;
 
   #preferences: PresentationPreferences = defaultPreferences();
   #overlay: OverlayHandle | undefined;
+  #approvalRequestPending = false;
   #hitlOverlay: HumanInteractionOverlay | undefined;
   /**
    * Presentation-only focus over `pendingInteractions`, reconciled against
@@ -799,6 +807,9 @@ export class RustxTuiApp {
       case "transient":
         this.#showTransient(outcome.level, outcome.text);
         break;
+      case "choose_approval":
+        this.#showApprovalSelector(lease);
+        break;
       case "choose_model":
         this.#showModelSelector(outcome.models, lease);
         break;
@@ -1034,11 +1045,43 @@ export class RustxTuiApp {
   }
 
   /**
-   * Opens the model selector over the editor.
+   * Opens approval selection over the editor without changing runtime policy.
    *
    * The overlay owns focus while it is up and hands it straight back to the
    * editor on select or cancel, so the editor is never left unfocused.
    */
+  #showApprovalSelector(lease: PresentationLease): void {
+    if (!this.#isCurrentPresentationLease(lease)) return;
+    if (this.#approvalRequestPending) {
+      this.#showTransient("info", "Approval change is still pending.");
+      return;
+    }
+    let handle: OverlayHandle;
+    const alive = () => this.#isCurrentPresentationLease(lease) && this.#overlay === handle;
+    const selector = new ApprovalSelector({
+      state: () => lease.session.state,
+      change: () => { if (alive()) this.#tui.requestRender(); },
+      close: () => { if (alive()) this.#closeOverlay(); },
+      submit: async (mode) => {
+        if (!alive() || this.#approvalRequestPending) return;
+        this.#approvalRequestPending = true;
+        try {
+          const result = await lease.session.approvalModeSet(mode);
+          if (!alive()) return;
+          // A later authoritative projection supersedes an older control result.
+          const latest = lease.session.state;
+          const fact = latest && latest.approvalModeRevision > result.revision ? latest : result;
+          this.#showTransient("info", `Approval request accepted: effective ${approvalLabel(fact.effectiveApprovalMode)}${fact.pendingApprovalMode == null ? "" : ` · next attempt ${approvalLabel(fact.pendingApprovalMode)}`}`);
+        } catch (error) {
+          if (alive()) this.#showTransient("error", `Approval change failed: ${compactDiagnostic(error)}`);
+        } finally {
+          this.#approvalRequestPending = false;
+        }
+      },
+    });
+    handle = this.#showPopup(selector, { width: "85%", heightPercent: 85 });
+  }
+
   #showModelSelector(models: CatalogModelView[], lease: PresentationLease): void {
     if (!this.#isCurrentPresentationLease(lease)) return;
     const state = lease.session.state;
@@ -1696,15 +1739,6 @@ export class RustxTuiApp {
       this.#activity.addChild(this.#loader);
     }
 
-    this.#footer.setText(
-      renderFooter(
-        state,
-        this.#connectionLabel(),
-        this.#tui.terminal.columns,
-        this.#session.sessionInfo,
-        this.#conversationContext(),
-      ),
-    );
     this.#syncHitlOverlay(state);
     this.#syncDeletionPresentation();
     this.#tui.requestRender();

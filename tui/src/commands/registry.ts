@@ -113,8 +113,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   },
   {
     name: "/approval",
-    description: "Request the runtime ApprovalMode.",
-    argumentHint: "<policy|full_access>",
+    description: "Choose approval mode; Full access requires explicit confirmation.",
   },
   { name: "/quit", description: "Shut down the runtime and exit cleanly." },
 ];

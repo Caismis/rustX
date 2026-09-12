@@ -270,7 +270,8 @@ The command-to-surface classification is:
 | `/new`, `/clone` | control with transient/replacement feedback |
 | `/name` | inspection of the active Session's name, as transient feedback |
 | `/name <text>`, `/model <provider/model>` | control with transient result |
-| `/cancel`, `/compact`, `/approval` | control with transient acceptance/validation result |
+| `/cancel`, `/compact` | control with transient acceptance/validation result |
+| `/approval` | focused approval picker; Full access requires confirmation |
 | `/show-reasoning`, `/expand` | preference |
 | `/quit` | quit |
 | invalid, unknown, or empty-result command feedback | transient |
@@ -361,7 +362,8 @@ does not implement a parallel Session system.
   a background execution by id.
 - `/compact` — ask the runtime to compact the canonical context while idle;
   progress and completion remain authoritative Runtime Client facts.
-- `/approval <policy|full_access>` — request the runtime ApprovalMode.
+- `/approval` — open the focused approval picker. Policy respects per-tool
+  approval policy. Full access requires a second, safe-default confirmation.
 - `/debug` — show bounded presentation and protocol diagnostics.
 - `/show-reasoning [on|off]` — change the display preference for model reasoning;
   it does not change runtime model configuration.
@@ -529,18 +531,43 @@ invent a reasoning scale. Selecting a row calls the canonical dispatcher
 `model_set` path; a `replacement_required` result is interpreted by the same
 `#handleOutcome` flow as `/model` and Session commands.
 
-The footer is intentionally compact: it keeps the effective/configured/
-attempt-frozen model distinction, `session <name> · node <node>`, work state,
-latest published token usage, queued/background/approval counts, optional
-capability availability, connection state, and a short command hint as space
-allows. The context indicator is specifically the latest runtime/provider-
-published `input_tokens` divided by the published context window for that
-attempt's model. It is not a client tokenization of transcript history and is
-not a canonical compaction or occupancy calculation. Plumbing such as
-attachment ids, cursors, and capability revisions remains in `/debug`.
-During automatic or manual compaction, the footer displays the runtime-published
-`Compacting context…` lifecycle state; it never infers that state from token
-occupancy.
+The footer shows stable operating context, in retention order: current/frozen
+model, effective approval and any next-attempt transition, exceptional transport/
+draining/read-only state, published context usage/window, optional human Session
+name, then token usage. Healthy `online`, settled `ready`, transient work, raw
+Conversation/SessionNode IDs, redundant provider names and permanent help hints
+are absent. Missing optional values are omitted. `/session`, `/settings` and
+`/debug` retain focused identity and settings diagnostics. Child views show
+`read-only · Esc parent`; direct inspection shows `read-only inspection`.
+
+The footer prefers one line, dropping whole optional segments before using a
+second line for essential facts. Compact labels preserve full identities; if an
+identity cannot physically fit, `model: /settings` explicitly defers its detail
+instead of printing a misleading prefix. At extreme widths only whole segments
+that fit are shown. No TypeScript cwd/filesystem/Git probe supplies footer facts.
+Context is the runtime/provider-published input usage divided by the published
+window of that attempt's model, never a retokenization of transcript history.
+The working surface alone reports compaction, thinking, Tool execution and HITL.
+
+Tool cards share one neutral Tool surface across every lifecycle. Native glyphs
+and explicit status text use local foreground accents. Output, arguments and
+truncation hints do not inherit success/error backgrounds. Specialized adapters
+receive result content only; the common card owns native lifecycle metadata.
+
+`/approval` opens without a mutation. Highlighting and Esc also send nothing.
+Policy selection sends one typed native request. Full access selection opens a
+confirmation with Cancel focused; only explicitly enabling sends one request.
+Repeated keys and reopening during a pending request cannot duplicate it.
+Full access lets already-admitted Tools skip ordinary approval prompts, including
+command execution or file-changing operations when those Tools are available.
+It does not grant unavailable Tools/capabilities, answer Questionnaire or Workflow
+Review, or define a filesystem/network sandbox profile.
+
+The picker, confirmation and footer read native effective/pending facts. During a
+frozen Policy attempt, requesting Full access shows `Current attempt: Policy` and
+`Next attempt: Full access`; it does not change the admitted attempt. No optimistic
+mode is stored. Snapshot replacement closes stale overlays and reconstructs
+semantic display; it never replays a control request.
 
 ## The model invariant
 
@@ -784,13 +811,11 @@ effective    what the runtime would actually use  SessionModelView.effective
 attempt      what the running attempt froze       AttemptModelView.primary
 ```
 
-All three can differ at once and the UI never loses one. When they coincide the
-footer shows one bare model name; the moment any two differ every one of them
-is labelled — `cfg A · eff B · attempt C` — and all three are undroppable, so a
-narrow terminal wraps rather than omitting or truncating a model identity into
-a different, shorter, wrong one. The selector labels rows `configured`,
-`effective`, and `attempt` for the same reason, and uses the word `current`
-only when there is exactly one thing it can mean.
+All three can differ at once. `/settings` retains all labelled facts. The footer
+shows the actual current/frozen model first and `next` only when the next effective
+model differs. A distinct configured value is lower-priority diagnostic context.
+A settled attempt's historical model is not presented as the next attempt's model.
+Whole optional segments drop before essential facts use the second row.
 
 Catalog metadata and live configuration are likewise never merged. A catalog
 row states what a model *offers*, including the profile the catalog would fall

@@ -14,17 +14,9 @@
  * own colour language. There is no per-tool palette: a tool may choose a
  * *renderer*, it may not choose a colour system.
  *
- * The colour values are Pi's `dark` theme, so a reader moving between Pi and
- * rustX reads the same visual grammar: the same message background, the same
- * three tool-state backgrounds, the same Markdown accents. This is still not
- * a theme system — Issue #39 lists configurable theming as a non-goal, and
- * nothing here has a configuration surface.
- *
- * Backgrounds are a *band* language, not a text-decoration one. A background
- * role names the whole visual block it fills — a user turn, a tool card in
- * one of its three runtime states — and is applied by the shell that lays the
- * block out, which is the only layer that knows the terminal width. Nothing
- * below composes a background into a string.
+ * Tool lifecycle uses bounded foreground accents. Tool content has one neutral
+ * surface, independent of settlement. The shell fills surfaces; specialized
+ * renderers only format content and cannot select lifecycle palettes.
  */
 
 // The width measure the band filler pads by must be the terminal's own cell
@@ -39,14 +31,14 @@ const wrap = (open: string) => (text: string) => `[${open}m${text}[0m`;
 // ---------------------------------------------------------------------------
 
 /**
- * The raw palette. Pi's `dark` theme values, kept as one table so a colour
- * appears exactly once and every role below is a reference to it.
+ * The raw palette, derived from Pi's dark theme with a neutral Tool surface
+ * and readable supporting text. Every role below references this one table.
  */
 export const palette = {
   cyan: "#00d7ff",
   blue: "#5f87ff",
   green: "#b5bd68",
-  red: "#cc6666",
+  red: "#d78787",
   yellow: "#ffff00",
   text: "#d4d4d4",
   gray: "#808080",
@@ -57,12 +49,9 @@ export const palette = {
   link: "#81a2be",
   /** The background of a human turn. */
   userMessageBg: "#343541",
-  /** A tool call that has not settled. */
-  toolPendingBg: "#282832",
-  /** A tool call the runtime settled as a success. */
-  toolSuccessBg: "#283228",
-  /** A tool call the runtime settled as anything but a success. */
-  toolErrorBg: "#3c2828",
+  /** Neutral content surface for every Tool lifecycle. */
+  toolBg: "#282828",
+  secondaryText: "#a0a0a0",
   /** The raised surface of a modal/popup overlay above the transcript. */
   popupBg: "#2a2a3a",
 } as const;
@@ -235,10 +224,14 @@ export const role = {
   error: style.red,
   /** A tool card's title. */
   toolTitle: style.text,
+  /** Content structure, independent of Tool settlement. */
+  toolSubject: style.yellow,
+  diffAdded: style.green,
+  diffRemoved: style.red,
   /** Verbatim tool output. */
-  toolOutput: style.grey,
+  toolOutput: style.text,
   /** Identities, counts, durations, hints — anything supporting. */
-  meta: style.dim,
+  meta: fg(palette.secondaryText),
   /** Structural punctuation and separators. */
   chrome: style.grey,
   /** Emphasis inside an otherwise unstyled line. */
@@ -255,9 +248,7 @@ export const role = {
  */
 export const background = {
   user: bg(palette.userMessageBg),
-  toolPending: bg(palette.toolPendingBg),
-  toolSuccess: bg(palette.toolSuccessBg),
-  toolError: bg(palette.toolErrorBg),
+  tool: bg(palette.toolBg),
   popup: bg(palette.popupBg),
 };
 
@@ -320,5 +311,5 @@ export function plainText(text: string): string {
 
 /** The visible column count of a styled string, ignoring SGR sequences. */
 export function plainWidth(text: string): number {
-  return [...plainText(text)].length;
+  return visibleWidth(text);
 }

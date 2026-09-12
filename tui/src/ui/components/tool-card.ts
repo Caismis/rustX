@@ -11,13 +11,9 @@
  *                      … 17 more lines · ctrl+o to expand
  * ```
  *
- * The whole card is drawn on one background band — pending, settled-well, or
- * settled-badly — which is Pi's visual grammar for a tool call. The band is
- * chosen by {@link cardBackground} and filled by the app shell, the one layer
- * that knows the terminal width. It restates the lifecycle rather than
- * carrying it: three bands cannot express six settlements, so the status
- * words below are what actually say `denied`, `timed out`, or `outcome
- * unknown`.
+ * The content surface is neutral for every lifecycle. Native glyphs and status
+ * words carry settlement, reinforced only by bounded foreground accents.
+ * Arguments, output and truncation metadata never inherit a state background.
  *
  * The same `ToolCallId` produces the same card through all three states; the
  * card is not three records that happen to be adjacent.
@@ -91,7 +87,7 @@ import {
   SUMMARY_BUDGET,
 } from "../preferences.ts";
 import { sanitizeData, sanitizeField, sanitizeLine } from "../../sanitize.ts";
-import { type BackgroundRole, role, style } from "../theme.ts";
+import { role, style } from "../theme.ts";
 import {
   type ToolCallPresentation,
   type ToolPresentationRenderer,
@@ -115,27 +111,6 @@ import {
  * here: this module renders what it is told to render.
  */
 export type ToolCardPart = "full" | "call" | "continuation";
-
-/**
- * The background band one card is drawn on.
- *
- * Three bands for six settlements, so the band is never the only statement
- * of what happened: it separates "still working" from "settled well" from
- * "settled badly", and the card's own status words carry which of the four
- * bad settlements it was. A card with no lifecycle yet — a `call` part whose
- * result renders further down — is still in flight and gets the pending
- * band.
- */
-export function cardBackground(
-  lifecycle: ToolLifecycle | undefined,
-): BackgroundRole {
-  if (lifecycle === undefined || lifecycle.type !== "settled") {
-    return "toolPending";
-  }
-  return lifecycle.result.status.type === "success"
-    ? "toolSuccess"
-    : "toolError";
-}
 
 /** Renders one correlated tool call as one card, or as one part of one. */
 export function renderToolCard(
@@ -376,7 +351,7 @@ function resultBody(
   context: ToolRenderContext,
 ): string[] {
   const specialized: ToolResultPresentation | undefined =
-    renderer.renderResult?.(result, args);
+    renderer.renderResult?.({ content: result.content }, args);
   const body = specialized ?? genericResultLines(result);
 
   // A failure or denial reason, or an outcome-unknown detail, is

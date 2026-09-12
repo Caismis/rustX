@@ -681,3 +681,38 @@ describe("lifecycle progression", () => {
     );
   });
 });
+
+it("every native lifecycle uses the same neutral transcript surface, including split continuation", () => {
+  const statuses = [
+    { type: "success" }, { type: "failed", error: "failure" }, { type: "denied", reason: "denial" },
+    { type: "cancelled", reason: "user_requested", phase: "during_execution" }, { type: "timed_out" },
+    { type: "outcome_unknown", detail: "uncertain" },
+  ] as const;
+  for (const toolId of ["tool-bash", "tool-read"]) {
+    for (const split of [false, true]) {
+      for (const status of statuses) {
+        const result = toolResult({ status, content: [{ type: "text", text: "ok" }] });
+        const state = stateOf({ messages: [
+          assistantBlocks("m1", [toolCallBlock("call-1", toolId, toolId, { command: "echo ok", path: "a.txt" })]),
+          ...(split ? [userMessage("between", "canonical separator")] : []),
+          toolMessage("m2", "call-1", toolId, result),
+        ], attempt: attemptView({ foreground: [foreground("call-1", toolId, toolId, {
+          type: "settled", arguments: "{}", result,
+        })] }) });
+        const blocks = renderTranscript(state, prefs()).filter((block) => block.background === "tool");
+        assert.equal(blocks.length, split ? 2 : 1);
+        assert.ok(blocks.every((block) => block.background === "tool"));
+        const text = blocks.map(blockText).join("\n");
+        assert.match(text, status.type === "success" ? /· ok/ : new RegExp(status.type.replaceAll("_", " ")));
+      }
+    }
+    for (const type of ["assembled", "running"] as const) {
+      const state = stateOf({ messages: [assistantBlocks("m1", [toolCallBlock("call-1", toolId, toolId, {})])],
+        attempt: attemptView({ foreground: [foreground("call-1", toolId, toolId, { type, arguments: "{}" })] }),
+      });
+      const block = renderTranscript(state, prefs()).find((block) => block.background === "tool")!;
+      assert.ok(block);
+      assert.match(blockText(block), type === "running" ? /running/ : /◇/);
+    }
+  }
+});

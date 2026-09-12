@@ -914,3 +914,53 @@ describe("duration formatting", () => {
     assert.match(card({ lifecycle: settled({ duration_ms: 12 }) }), /12ms/);
   });
 });
+
+describe("neutral Tool content and bounded lifecycle accents", () => {
+  it("keeps Bash and Read result bodies identical across every native settlement", () => {
+    const statuses: ToolExecutionResult["status"][] = [
+      { type: "success" }, { type: "failed", error: "failure" },
+      { type: "denied", reason: "denial" }, { type: "timed_out" },
+      { type: "cancelled", reason: "user_requested", phase: "during_execution" },
+      { type: "outcome_unknown", detail: "not proven" },
+    ];
+    for (const toolId of ["tool-bash", "tool-read"]) {
+      const bodies = statuses.map((status) => renderToolCard(tool({ toolId,
+        argumentsText: '{"command":"echo ok","path":"a.txt"}',
+        lifecycle: settled({ status, content: [{ type: "text", text: "ok OUTPUT_SENTINEL" }] }),
+      }), context).split("\n").find((line) => line.includes("OUTPUT_SENTINEL")));
+      assert.ok(bodies[0]);
+      assert.equal(new Set(bodies).size, 1, "output never inherits outcome-dependent styling");
+      for (const body of bodies) assert.doesNotMatch(body!, /\x1b\[48;/);
+    }
+  });
+});
+
+it("audits title, output and metadata contrast on the neutral surface in truecolor and 256-color", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const themeUrl = new URL("../src/ui/theme.ts", import.meta.url).href;
+  function rgb(text: string): number[] {
+    const match = text.match(/\x1b\[(?:38|48);(2|5);([\d;]+)m/)!;
+    assert.ok(match, "the actual rendered SGR supplies color evidence");
+    const values = match[2]!.split(";").map(Number);
+    if (match[1] === "2") return values;
+    const index = values[0]!;
+    if (index >= 232) return Array(3).fill(8 + (index - 232) * 10);
+    const n = index - 16;
+    const cube = [0, 95, 135, 175, 215, 255];
+    return [cube[Math.floor(n / 36)]!, cube[Math.floor(n / 6) % 6]!, cube[n % 6]!];
+  }
+  function luminance(color: number[]): number {
+    const linear = color.map((c) => c / 255).map((c) => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+    return linear[0]! * 0.2126 + linear[1]! * 0.7152 + linear[2]! * 0.0722;
+  }
+  for (const colorMode of ["truecolor", ""]) {
+    const sample = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e",
+      `import {role,background} from ${JSON.stringify(themeUrl)}; console.log(JSON.stringify({surface:background.tool.open, roles:Object.fromEntries(['toolTitle','toolOutput','meta','success','error','warning','pending'].map(key=>[key,role[key]('sample')]))}));`,
+    ], { env: { ...process.env, COLORTERM: colorMode }, encoding: "utf8" })) as { surface: string; roles: Record<string, string> };
+    const surface = luminance(rgb(sample.surface));
+    for (const [name, value] of Object.entries(sample.roles)) {
+      const contrast = (luminance(rgb(value)) + 0.05) / (surface + 0.05);
+      assert.ok(contrast >= 4.5, `${colorMode || "256-color"} ${name}: ${contrast.toFixed(2)}`);
+    }
+  }
+});
