@@ -13,7 +13,7 @@ remain native execution and settlement conformance evidence.
 The fixed Workflow architecture (#216–#223) extends the native Workflow foundation (#83). A selected
 Workflow remains one foreground Tool. Canonical discovery reads
 `.agents/workflows/<id>.yaml`; settings expose it through
-`workflows.main`. Profiles must belong to `subagents.workflow`. Files do not
+`agent.workflows`. Profiles must belong to `subagents.workflow`. Files do not
 grant admission, and a block never rediscovers capabilities or resources.
 
 ## Authoring and lexical scope

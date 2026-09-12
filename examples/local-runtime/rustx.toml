@@ -1,37 +1,5 @@
-# Project runtime configuration. Paths remain subject to project trust and containment.
-# TOML configuration; fixed Workflows use YAML and model-facing resources use Markdown.
 schema_version = 8
 agent_id = "default-agent"
-default_tools = ["execution", "ask_user", "read", "write", "edit", "glob", "grep", "bash", "subagent"]
-skills = []
-
-[model]
-model = "example/demo-model"
-request_params_json = "{\"temperature\": 0.1}"
-
-[model.reasoning_profile]
-mode = "profile"
-name = "off"
-
-[model.max_output_tokens]
-mode = "limit"
-tokens = 2048
-
-[model.summary_model]
-mode = "session"
-
-[extensions.agent_status]
-enabled = true
-
-[extensions.agent_status.time]
-enabled = true
-timezone = "Asia/Tokyo"
-
-[extensions.agent_status.background]
-enabled = true
-
-[extensions.todo]
-enabled = true
 
 [context]
 reserve_tokens = 4096
@@ -47,14 +15,50 @@ stream_idle_timeout_ms = 15000
 
 [mcp_servers]
 
-
+# Runtime child capacity; Workflow static admission remains separate.
 [subagents]
 max_concurrent = 4
-main = ["navigator"]
 workflow = ["reviewer", "planner", "implementer"]
-
-[workflows]
-main = ["parallel_review", "implement_and_review"]
 
 [environment]
 RUSTX_EXAMPLE_MODE = "local-runtime"
+
+# One Agent Profile selects from admitted resources. It does not create them.
+[agent]
+skills = ["review-guidance"]
+agents = ["navigator"]
+workflows = ["parallel_review", "implement_and_review"]
+
+[agent.model]
+model = "example/demo-model"
+request_params_json = "{\"temperature\": 0.1}"
+
+[agent.model.reasoning_profile]
+mode = "profile"
+name = "off"
+
+[agent.model.max_output_tokens]
+mode = "limit"
+tokens = 2048
+
+[agent.model.summary_model]
+mode = "session"
+
+# This table replaces the complete extension composition. Empty means none.
+[agent.extensions]
+[agent.extensions.agent_status]
+enabled = true
+
+[agent.extensions.agent_status.time]
+enabled = true
+timezone = "Asia/Tokyo"
+
+[agent.extensions.agent_status.background]
+enabled = true
+
+[agent.extensions.todo]
+enabled = true
+
+# Ordinary Tool exposure does not change execution or approval policy.
+[agent.tools]
+builtin = ["execution", "ask_user", "read", "write", "edit", "glob", "grep", "bash"]

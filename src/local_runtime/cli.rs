@@ -369,7 +369,7 @@ pub fn parse_arguments(
         }
     }
 
-    let selection = crate::capabilities::ToolActivationPolicy {
+    let selection = crate::capabilities::AgentActivation {
         no_tools,
         no_builtin_tools,
         tools: tools.clone(),

@@ -1,4 +1,9 @@
 description = "Produce a typed text assessment from explicit inputs."
-tools = {"builtin" = []}
-worktree = {"enabled" = false}
 instructions = "Use only the supplied inputs and fixed task. Return the declared structured result through workflow_output.\n"
+
+[tools]
+builtin = []
+
+
+[worktree]
+enabled = false

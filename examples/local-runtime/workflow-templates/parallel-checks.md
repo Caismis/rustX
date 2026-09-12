@@ -11,8 +11,8 @@ Minimum project configuration:
 workflow = ["reviewer"]
 max_concurrent = 2
 
-[workflows]
-main = ["parallel_checks"]
+[agent]
+workflows = ["parallel_checks"]
 ```
 
 `rustx workflow explain parallel_checks` shows the fixed `brevity` and `clarity`

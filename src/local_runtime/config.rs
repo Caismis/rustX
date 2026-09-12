@@ -130,17 +130,15 @@ pub const DEFAULT_MAX_CONCURRENT_SUBAGENTS: usize = 4;
 /// The hard upper bound of the launch-scoped subagent capacity.
 pub const MAX_MAX_CONCURRENT_SUBAGENTS: usize = 64;
 
-/// Strict canonical Agent TOML document with explicit primary instructions.
+/// Strict Agent Profile authoring shared by root and named Agents.
 ///
-/// Everything here is *definition* state, and the definition is the child's
-/// canonical **default** execution profile. One invocation may replace
-/// `tools`, `skills`, and `extensions` for exactly that child through the
-/// shared `SubagentInvocationOverride` (Issue #258), within an explicit
-/// delegation ceiling. Every other field here — model, instructions,
-/// `timeout_ms`, `agents_md`, `worktree` — has no per-call form at all.
+/// Complete selected intent resolves against admitted resources. Execution
+/// scope controls child lifecycle/worktree applicability. Dynamic child
+/// invocations may replace only Tools, Skills and Extensions within their
+/// frozen delegation ceiling; the other dimensions remain authored defaults.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
+#[derive(schemars::JsonSchema, Default)]
 pub struct AgentProfileDocument {
     #[serde(default)]
     pub agents: Vec<SubagentName>,
@@ -173,36 +171,15 @@ pub struct AgentProfileDocument {
     pub skills: Vec<String>,
     /// The project-instruction policy of this agent.
     #[serde(default)]
-    pub agents_md: SubagentAgentsMdDocument,
+    pub agents_md: AgentProjectInstructionsDocument,
     /// The bounded project-workspace policy of this agent.
     #[serde(default)]
-    pub worktree: SubagentWorktreeDocument,
-    /// The closed **Native Agent Extension** composition of this named role
-    /// (Issue #256).
-    ///
-    /// Independently authored: a role never inherits the root Agent's
-    /// extension set, and an omitted value means this role's own built-in
-    /// defaults, never the invoking runtime's configuration.
+    pub worktree: AgentWorktreeDocument,
+    /// Closed native Extension composition. Omission selects none. Root
+    /// product defaults are an explicit lower-priority authoring layer,
+    /// independent of this complete document's semantics.
     #[serde(default)]
     pub extensions: NativeAgentExtensionsDocument,
-}
-
-impl Default for AgentProfileDocument {
-    fn default() -> Self {
-        Self {
-            description: String::new(),
-            instructions: String::new(),
-            model: None,
-            timeout_ms: None,
-            tools: ToolSelectionDocument::default(),
-            skills: Vec::new(),
-            agents: Vec::new(),
-            workflows: Vec::new(),
-            agents_md: SubagentAgentsMdDocument::default(),
-            worktree: SubagentWorktreeDocument::default(),
-            extensions: NativeAgentExtensionsDocument::default(),
-        }
-    }
 }
 
 impl AgentProfileDocument {
@@ -220,19 +197,11 @@ impl AgentProfileDocument {
     }
 }
 
-/// The source-qualified capability selection of one named definition.
-///
-/// Agent TOML, a Workflow Agent node's invocation override, and the
-/// model-facing `subagent` Tool's `override` all express a capability
-/// selection with exactly this vocabulary, so the type is the shared
-/// [`ToolSelectionDocument`] rather than a second structurally identical
-/// authoring shape.
-
-/// The project-instruction policy of one named definition.
+/// Project-instruction selection from admitted workspace resources.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 #[derive(schemars::JsonSchema)]
-pub struct SubagentAgentsMdDocument {
+pub struct AgentProjectInstructionsDocument {
     /// Whether the invoking generation's normal project instruction chain is
     /// prepended to the explicit files.
     pub inherit: bool,
@@ -242,7 +211,7 @@ pub struct SubagentAgentsMdDocument {
     pub files: Vec<PathBuf>,
 }
 
-impl Default for SubagentAgentsMdDocument {
+impl Default for AgentProjectInstructionsDocument {
     fn default() -> Self {
         Self {
             inherit: true,
@@ -259,12 +228,12 @@ impl Default for SubagentAgentsMdDocument {
 /// parent `HEAD` snapshot. `require_clean_parent` defaults to `true`
 /// (strict): the parent source workspace must be clean, otherwise the child
 /// is rejected rather than silently dropping parent-local changes. Only an
-/// explicit `"requireCleanParent": false` permits a dirty parent while the
+/// explicit `"require_clean_parent": false` permits a dirty parent while the
 /// child still receives exactly the committed snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[serde(rename_all = "snake_case", deny_unknown_fields, default)]
 #[derive(schemars::JsonSchema)]
-pub struct SubagentWorktreeDocument {
+pub struct AgentWorktreeDocument {
     /// Whether this named definition uses an isolated Git worktree.
     pub enabled: bool,
     /// Whether acquisition rejects a dirty parent workspace/index.
@@ -276,9 +245,9 @@ pub struct SubagentWorktreeDocument {
     pub require_clean_parent: bool,
 }
 
-impl Default for SubagentWorktreeDocument {
+impl Default for AgentWorktreeDocument {
     /// The derived default kept both booleans `false`, which made an omitted
-    /// `"requireCleanParent"` silently mean “allow a dirty parent”. The two
+    /// `"require_clean_parent"` silently mean “allow a dirty parent”. The two
     /// booleans now have independent defaults (Issue #188): isolation stays
     /// disabled, while the clean-parent requirement is strict whenever
     /// isolation is enabled.
@@ -290,7 +259,7 @@ impl Default for SubagentWorktreeDocument {
     }
 }
 
-impl SubagentWorktreeDocument {
+impl AgentWorktreeDocument {
     /// Resolves the configuration document into the bounded runtime policy.
     ///
     /// The resolved policy is the single normalized value the runtime
@@ -459,6 +428,8 @@ pub(crate) fn builtin_root_profile() -> AgentProfileDocument {
 impl CurrentRuntimeConfig {
     /// Launch default used only when creating a new durable Session.
     #[must_use]
+    /// # Panics
+    /// Panics if called before root model validation.
     pub fn initial_model(&self) -> &SessionModelConfig {
         self.agent
             .model
@@ -1287,12 +1258,14 @@ mod tests {
 
     const MINIMAL: &str = r#"agent_id = "agent-a"
 
-[model]
-model = "p/m"
-
 [context]
 reserve_tokens = 1024
 keep_recent_tokens = 4096
+
+
+[agent]
+[agent.model]
+model = "p/m"
 "#;
 
     /// The minimal configuration parses and derives its policy pieces.
@@ -1328,7 +1301,7 @@ keep_recent_tokens = 4096
     }
 
     /// Issue #188: an enabled isolated worktree is strict by default. An
-    /// omitted `"requireCleanParent"` resolves to `true`, exactly like an
+    /// omitted `"require_clean_parent"` resolves to `true`, exactly like an
     /// explicit `true`; only an explicit `false` retains the committed-
     /// snapshot permissive path, and disabled/omitted isolation keeps the
     /// shared-workspace policy unchanged. The normalization lives at this
@@ -1350,7 +1323,7 @@ keep_recent_tokens = 4096
                 .to_policy()
         }
 
-        // `enabled: true` with an omitted `requireCleanParent` resolves to
+        // `enabled: true` with an omitted `require_clean_parent` resolves to
         // the strict clean-parent policy.
         assert_eq!(
             policy(r#"{"enabled": true}"#),
@@ -1358,17 +1331,17 @@ keep_recent_tokens = 4096
                 require_clean_parent: true,
             }
         );
-        // An explicit `requireCleanParent: true` is the same strict policy.
+        // An explicit `require_clean_parent: true` is the same strict policy.
         assert_eq!(
-            policy(r#"{"enabled": true, "requireCleanParent": true}"#),
+            policy(r#"{"enabled": true, "require_clean_parent": true}"#),
             Policy::GitWorktree {
                 require_clean_parent: true,
             }
         );
-        // An explicit `requireCleanParent: false` is the committed-snapshot
+        // An explicit `require_clean_parent: false` is the committed-snapshot
         // opt-out.
         assert_eq!(
-            policy(r#"{"enabled": true, "requireCleanParent": false}"#),
+            policy(r#"{"enabled": true, "require_clean_parent": false}"#),
             Policy::GitWorktree {
                 require_clean_parent: false,
             }
@@ -1379,7 +1352,7 @@ keep_recent_tokens = 4096
         assert_eq!(policy(r#"{"enabled": false}"#), Policy::SharedWorkspace);
         // The two document booleans default independently: `enabled` stays
         // false while `require_clean_parent` is true.
-        let default_document = super::SubagentWorktreeDocument::default();
+        let default_document = super::AgentWorktreeDocument::default();
         assert!(!default_document.enabled);
         assert!(default_document.require_clean_parent);
         assert_eq!(default_document.to_policy(), Policy::SharedWorkspace);
@@ -1626,12 +1599,14 @@ approval_mode = "full_access""#,
         let json = r#"agent_id = "a"
 future_knob = true
 
-[model]
-model = "p/m"
-
 [context]
 reserve_tokens = 0
 keep_recent_tokens = 0
+
+
+[agent]
+[agent.model]
+model = "p/m"
 "#;
         json.parse::<toml_edit::DocumentMut>().expect("valid TOML");
         let error = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect_err("must fail");
@@ -1689,24 +1664,27 @@ timezone = "UTC""#,
         for (fragment, expected) in [
             ("future = true", "unknown field `future`"),
             (
-                "[extensions.future_goal]\nenabled = true",
+                "[agent.extensions]\n[agent.extensions.future_goal]\nenabled = true\n",
                 "unknown field `future_goal`",
             ),
             (
-                "[extensions.todo]\nenabled = true\nfuture = true",
-                "unknown field `future`",
-            ),
-            ("[extensions.todo]\nenabled = 'true'", "expected a boolean"),
-            (
-                "[extensions.agent_status]\nfuture = true",
+                "[agent.extensions]\n[agent.extensions.todo]\nenabled = true\nfuture = true\n",
                 "unknown field `future`",
             ),
             (
-                "[extensions.agent_status.time]\nenabled = true\nfuture = true",
+                "[agent.extensions]\n[agent.extensions.todo]\nenabled = \"true\"\n",
+                "expected a boolean",
+            ),
+            (
+                "[agent.extensions]\n[agent.extensions.agent_status]\nfuture = true\n",
                 "unknown field `future`",
             ),
             (
-                "[extensions.agent_status.background]\nfuture = true",
+                "[agent.extensions]\n[agent.extensions.agent_status]\n[agent.extensions.agent_status.time]\nenabled = true\nfuture = true\n",
+                "unknown field `future`",
+            ),
+            (
+                "[agent.extensions]\n[agent.extensions.agent_status]\n[agent.extensions.agent_status.background]\nfuture = true\n",
                 "unknown field `future`",
             ),
         ] {
@@ -1730,8 +1708,8 @@ timezone = "UTC""#,
     #[test]
     fn ext256_the_extension_surface_freezes_the_declared_composition() {
         let enabled = MINIMAL.replace(
-            r#"agent_id = "agent-a""#,
-            r#"agent_id = "agent-a"
+            r"[agent]",
+            r#"[agent]
 extensions = { "agent_status" = { "time" = { "timezone" = "Asia/Shanghai" }, "background" = { "enabled" = false } } }"#,
         );
         let config = CurrentRuntimeConfig::from_toml_slice(enabled.as_bytes()).expect("valid");
@@ -1743,8 +1721,8 @@ extensions = { "agent_status" = { "time" = { "timezone" = "Asia/Shanghai" }, "ba
         assert!(!agent_status.background.enabled);
 
         let disabled = MINIMAL.replace(
-            r#"agent_id = "agent-a""#,
-            r#"agent_id = "agent-a"
+            r"[agent]",
+            r#"[agent]
 extensions = { "agent_status" = { "enabled" = false } }"#,
         );
         let config = CurrentRuntimeConfig::from_toml_slice(disabled.as_bytes()).expect("valid");
@@ -1756,8 +1734,8 @@ extensions = { "agent_status" = { "enabled" = false } }"#,
         // Issue #259: the members are independent, and switching both off is
         // what empties the composition.
         let neither = MINIMAL.replace(
-            r#"agent_id = "agent-a""#,
-            r#"agent_id = "agent-a"
+            r"[agent]",
+            r#"[agent]
 extensions = { "agent_status" = { "enabled" = false }, "todo" = { "enabled" = false } }"#,
         );
         assert!(
@@ -1774,12 +1752,14 @@ extensions = { "agent_status" = { "enabled" = false }, "todo" = { "enabled" = fa
         let json = r#"schema_version = 99
 agent_id = "a"
 
-[model]
-model = "p/m"
-
 [context]
 reserve_tokens = 0
 keep_recent_tokens = 0
+
+
+[agent]
+[agent.model]
+model = "p/m"
 "#;
         assert!(matches!(
             CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect_err("must fail"),
@@ -1791,20 +1771,16 @@ keep_recent_tokens = 0
     #[test]
     fn array_based_mcp_servers_are_rejected() {
         let json = r#"agent_id = "a"
-
-[model]
-model = "p/m"
+mcp_servers = [{ server_id = "s", transport = { type = "streamable_http", endpoint = "https://x" } }]
 
 [context]
 reserve_tokens = 0
 keep_recent_tokens = 0
 
-[[mcp_servers]]
-server_id = "s"
 
-[mcp_servers.transport]
-type = "streamable_http"
-endpoint = "https://x"
+[agent]
+[agent.model]
+model = "p/m"
 "#;
         assert!(matches!(
             CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect_err("must fail"),
@@ -1816,7 +1792,10 @@ endpoint = "https://x"
     /// context would otherwise never need compaction.
     #[test]
     fn zero_summary_output_cap_is_rejected() {
-        let json = format!("{MINIMAL}\nsummary_output_cap = {{ mode = \"limit\", tokens = 0 }}\n");
+        let json = MINIMAL.replace(
+            "[context]",
+            "[context]\nsummary_output_cap = { mode = 'limit', tokens = 0 }",
+        );
         let error = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect_err("must fail");
         assert!(matches!(error, CurrentRuntimeConfigError::Invalid { .. }));
         assert!(
@@ -1831,7 +1810,7 @@ endpoint = "https://x"
         let json = MINIMAL.replace(
             r#"agent_id = "agent-a""#,
             r#"agent_id = "agent-a"
-subagents = {  "main" = [], "workflow" = ["worker"] }"#,
+subagents = {  "workflow" = ["worker"] }"#,
         );
         let config = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect("valid");
         assert!(config.agent.agents.is_empty());
@@ -1841,7 +1820,7 @@ subagents = {  "main" = [], "workflow" = ["worker"] }"#,
         let defined_but_unadmitted = MINIMAL.replace(
             r#"agent_id = "agent-a""#,
             r#"agent_id = "agent-a"
-subagents = {  "main" = [], "workflow" = [] }"#,
+subagents = {  "workflow" = [] }"#,
         );
         assert!(CurrentRuntimeConfig::from_toml_slice(defined_but_unadmitted.as_bytes()).is_ok());
     }
@@ -1849,16 +1828,16 @@ subagents = {  "main" = [], "workflow" = [] }"#,
     #[test]
     fn selection_identity_resolution_is_deferred_but_duplicates_are_rejected() {
         let unknown = MINIMAL.replace(
-            r#"agent_id = "agent-a""#,
-            r#"agent_id = "agent-a"
-subagents = {  "main" = ["missing"], "workflow" = [] }"#,
+            r"[agent]",
+            r#"[agent]
+agents = ["missing"]"#,
         );
         assert!(CurrentRuntimeConfig::from_toml_slice(unknown.as_bytes()).is_ok());
 
         let duplicate = MINIMAL.replace(
-            r#"agent_id = "agent-a""#,
-            r#"agent_id = "agent-a"
-subagents = {  "main" = ["worker", "worker"], "workflow" = [] }"#,
+            r"[agent]",
+            r#"[agent]
+agents = ["worker", "worker"]"#,
         );
         let error =
             CurrentRuntimeConfig::from_toml_slice(duplicate.as_bytes()).expect_err("duplicate");
@@ -1868,18 +1847,18 @@ subagents = {  "main" = ["worker", "worker"], "workflow" = [] }"#,
     #[test]
     fn workflow_selection_resolves_after_discovery() {
         let valid = MINIMAL.replace(
-            r#"agent_id = "agent-a""#,
-            r#"agent_id = "agent-a"
-workflows = {  "main" = [] }"#,
+            r"[agent]",
+            r"[agent]
+workflows = []",
         );
         let config = CurrentRuntimeConfig::from_toml_slice(valid.as_bytes()).expect("valid");
         assert!(config.agent.workflows.is_empty());
         assert!(config.agent.workflows.is_empty());
 
         let unknown = MINIMAL.replace(
-            r#"agent_id = "agent-a""#,
-            r#"agent_id = "agent-a"
-workflows = {  "main" = ["investigate"] }"#,
+            r"[agent]",
+            r#"[agent]
+workflows = ["investigate"]"#,
         );
         assert!(CurrentRuntimeConfig::from_toml_slice(unknown.as_bytes()).is_ok());
     }
@@ -1890,7 +1869,7 @@ mod profile_authoring_tests {
     use super::*;
     #[test]
     fn cfg273_root_and_named_share_the_complete_profile_document() {
-        let named = r#"description = 'review'
+        let named = r"description = 'review'
 instructions = 'Review carefully'
 skills = ['review']
 agents = ['helper']
@@ -1900,7 +1879,7 @@ builtin = ['read']
 [extensions]
 [model]
 model = 'provider/model'
-"#;
+";
         let root = format!(
             "[agent]\n{}",
             named

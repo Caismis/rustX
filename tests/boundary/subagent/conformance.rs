@@ -209,10 +209,12 @@ async fn child_fixture_at(
 ) -> ChildFixture {
     let workspace = dir.path().join("child-workspace");
     std::fs::create_dir_all(&workspace).expect("child workspace");
-    let tool_runtime = rustx::tools::runtime::ConversationToolRuntime::new(
+    let tool_runtime = rustx::tools::runtime::ConversationToolRuntime::from_config(
         conversation_id.clone(),
-        &workspace,
-        artifacts_dir,
+        rustx::tools::runtime::ConversationRuntimeConfig::new(&workspace, artifacts_dir)
+            .with_extensions(rustx::extensions::NativeAgentExtensions::with_agent_status(
+                rustx::context::AgentStatusConfig::default(),
+            )),
     )
     .expect("child tool runtime");
     let capability = rustx::capabilities::CapabilityCoordinator::new(
@@ -220,9 +222,18 @@ async fn child_fixture_at(
             source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
             conversation_id: conversation_id.clone(),
             workspace: tool_runtime.workspace().clone(),
+            agent_activation: {
+                let mut activation = rustx::capabilities::AgentActivation::default();
+                activation.profile.tools.builtin = tools
+                    .definitions()
+                    .into_iter()
+                    .filter(|tool| tool.origin.source().is_none())
+                    .map(|tool| tool.name.clone())
+                    .collect();
+                activation
+            },
             base_tool_registry: Arc::new(tools),
             extension_tools: tool_runtime.extension_tool_plane(),
-            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
             skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: tool_runtime.environment().clone(),
@@ -479,10 +490,15 @@ async fn compose_parent_runtime_plane(
     std::fs::create_dir_all(&workspace).expect("parent workspace");
     let runtime_root = dir.path().join("parent-runtime");
     std::fs::create_dir_all(&runtime_root).expect("parent runtime root");
-    let tool_runtime = rustx::tools::runtime::ConversationToolRuntime::new(
+    let tool_runtime = rustx::tools::runtime::ConversationToolRuntime::from_config(
         conversation_id.clone(),
-        &workspace,
-        dir.path().join("parent-artifacts"),
+        rustx::tools::runtime::ConversationRuntimeConfig::new(
+            &workspace,
+            dir.path().join("parent-artifacts"),
+        )
+        .with_extensions(rustx::extensions::NativeAgentExtensions::with_agent_status(
+            rustx::context::AgentStatusConfig::default(),
+        )),
     )
     .expect("parent tool runtime");
     let capability = rustx::capabilities::CapabilityCoordinator::new(
@@ -492,7 +508,7 @@ async fn compose_parent_runtime_plane(
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: tool_runtime.extension_tool_plane(),
-            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            agent_activation: rustx::capabilities::AgentActivation::default(),
             skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: tool_runtime.environment().clone(),
@@ -582,7 +598,7 @@ async fn compose_parent_runtime_plane(
 /// semantics.
 struct WiredChild {
     accepted: SubagentAccepted,
-    serve: tokio::task::JoinHandle<Result<(), crate::local_runtime::subagent_child::ChildExit>>,
+    serve: tokio::task::JoinHandle<Result<(), rustx::local_runtime::subagent_child::ChildExit>>,
     stop_serve: tokio::sync::oneshot::Sender<()>,
     /// The scripted stand-in process identity (crash tests signal it).
     pid: u32,
@@ -625,7 +641,7 @@ async fn launch_wired_child_with_provider_gate(
     plane: &ParentPlane,
     child: &ChildFixture,
     task: &str,
-    provider_gate: crate::local_runtime::dispatcher::ProviderAvailabilityGate,
+    provider_gate: rustx::local_runtime::dispatcher::ProviderAvailabilityGate,
 ) -> WiredChild {
     launch_wired_child_full(
         plane,
@@ -644,7 +660,7 @@ async fn launch_wired_child_full(
     task: &str,
     shell: &str,
     observation_wiring: ObservationWiring,
-    provider_gate: Option<crate::local_runtime::dispatcher::ProviderAvailabilityGate>,
+    provider_gate: Option<rustx::local_runtime::dispatcher::ProviderAvailabilityGate>,
 ) -> WiredChild {
     let (driver_end, child_end) = tokio::net::UnixStream::pair().expect("control pair");
     // The disposable observation channel (Issue #178): a second socket pair
@@ -712,23 +728,23 @@ async fn launch_wired_child_full(
     let serve = tokio::spawn(async move {
         let mut dispatcher = match provider_gate {
             Some(provider_gate) => {
-                crate::local_runtime::dispatcher::ChildControlDispatcher::start_with_provider_gate(
+                rustx::local_runtime::dispatcher::ChildControlDispatcher::start_with_provider_gate(
                     child_end,
                     observation_child_end,
                     provider_gate,
                 )
             }
-            None => crate::local_runtime::dispatcher::ChildControlDispatcher::start(
+            None => rustx::local_runtime::dispatcher::ChildControlDispatcher::start(
                 child_end,
                 observation_child_end,
             ),
         };
         let handle = dispatcher.handle();
         child_runtime.install_interaction_route(Arc::new(
-            crate::local_runtime::subagent_child::ChildInteractionRoute::new(handle.clone()),
+            rustx::local_runtime::subagent_child::ChildInteractionRoute::new(handle.clone()),
         ));
         let result = tokio::select! {
-            result = crate::local_runtime::subagent_child::serve_child_delegation(
+            result = rustx::local_runtime::subagent_child::serve_child_delegation(
                 &mut dispatcher,
                 &handle,
                 parent_agent_id,
@@ -1011,7 +1027,7 @@ fn child_canonical_messages(child: &ChildFixture) -> Vec<MessageBlock> {
 
 /// Awaits the wired child's serve task and asserts a clean exit.
 async fn await_serve(
-    serve: tokio::task::JoinHandle<Result<(), crate::local_runtime::subagent_child::ChildExit>>,
+    serve: tokio::task::JoinHandle<Result<(), rustx::local_runtime::subagent_child::ChildExit>>,
 ) {
     tokio::time::timeout(LIVENESS, serve)
         .await
@@ -3323,7 +3339,7 @@ async fn root_detach_rejects_publication_with_stale_child_provider_state() {
     )
     .await;
 
-    let provider_gate = crate::local_runtime::dispatcher::ProviderAvailabilityGate::default();
+    let provider_gate = rustx::local_runtime::dispatcher::ProviderAvailabilityGate::default();
     provider_gate.arm();
     let wired = launch_wired_child_with_provider_gate(
         &parent.plane,
@@ -4749,7 +4765,7 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
     // The resolver must attach to the child-owned Runtime Client projection,
     // because the durable store intentionally has no progress fact yet.
     let live_server =
-        crate::local_runtime::live_inspection::LiveConversationInspectionServer::bind(
+        rustx::local_runtime::live_inspection::LiveConversationInspectionServer::bind(
             crate::runtime::subagent::child_conversation_inspection_socket_path(
                 &plane.runtime_root,
                 &child_conversation_id,

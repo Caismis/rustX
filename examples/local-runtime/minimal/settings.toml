@@ -1,4 +1,4 @@
-# Host-owned defaults and policies. Relative paths start at this document.
-# TOML configuration; fixed Workflows use YAML and model-facing resources use Markdown.
-[model]
+# One Agent Profile selects from admitted resources. It does not create them.
+[agent]
+[agent.model]
 model = "example/demo-model"

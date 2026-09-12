@@ -1262,7 +1262,7 @@ An extension may contribute a model-facing Tool, and that contribution is a
 second, independent plane:
 
 ```text
-  ordinary selected Tool capabilities        defaultTools / --tools /
+  ordinary selected Tool capabilities        agent.tools.builtin / --tools /
                                              --exclude-tools / tools.builtin
 + enabled extension-provided Tool surfaces   ExtensionToolPlane
 + already-admitted domain protocols          Workflow output, ...
@@ -1374,7 +1374,7 @@ launch or role gets" is a decision of `resolve()`, and "no extension at all" is
 the explicit `NativeAgentExtensions::none()`.
 
 `extensions` is not an alias for tool selection. Ordinary execution
-capabilities remain `defaultTools`/`--tools` and the capability plane; an
+capabilities remain `agent.tools.builtin`/`--tools` and the capability plane; an
 extension never adds a Tool to the model-facing registry by itself.
 
 ### Launch-scoped lifetime and the two freeze points
@@ -1402,7 +1402,7 @@ extension never adds a Tool to the model-facing registry by itself.
   ceiling is a union taken per behavior-affecting contributor, and timezone
   authority is decided on the zone that will actually render (absent means
   UTC), never on whether `time.timezone` was written. Role extension settings
-  participate in `SubagentDefinitionDigest` as authored; the effective
+  participate in `NamedAgentDefinitionDigest` as authored; the effective
   composition participates in `ResolvedSubagentSpec::profile_digest()` by its
   effective semantics.
   `LocalConversationCore::compose_subagent_child` materializes
@@ -1428,7 +1428,7 @@ not about a document:
 
 ```text
 root Agent                              named Subagent
-  CurrentRuntimeConfig                    SubagentDefinition
+  CurrentRuntimeConfig                    NamedAgentDefinition
         |                                       |
         v                                 SubagentResolver
   NativeAgentExtensionsDocument                 |
@@ -6439,7 +6439,7 @@ applies startup activation. The selection order is:
 ```text
 available definitions
   -> eligible definitions
-  -> native defaultTools (unless a strict --tools allowlist is supplied)
+  -> native agent.tools.builtin (unless a strict --tools allowlist is supplied)
   -> strict --tools allowlist, if supplied
   -> final --exclude-tools
   -> immutable active ToolRegistry
@@ -7975,34 +7975,37 @@ Representative current runtime/project configuration:
 ```toml
 schema_version = 8
 agent_id = "agent-default"
-default_tools = ["read", "write", "edit", "glob", "grep", "bash"]
-skills = [".agents/skills"]
+[agent]
+skills = ["repository-guide"]
 
-[model]
+[agent.tools]
+builtin = ["read", "write", "edit", "glob", "grep", "bash"]
+
+[agent.model]
 model = "gateway/reasoner"
 request_params_json = "{\"top_p\": 0.95}"
 
-[model.reasoning_profile]
+[agent.model.reasoning_profile]
 mode = "profile"
 name = "on"
 
-[model.max_output_tokens]
+[agent.model.max_output_tokens]
 mode = "limit"
 tokens = 8000
 
-[model.summary_model]
+[agent.model.summary_model]
 mode = "explicit"
 model = "compat-service/small"
 request_params_json = "{\"temperature\": 0.1}"
 
-[extensions.agent_status]
+[agent.extensions.agent_status]
 enabled = true
 
-[extensions.agent_status.time]
+[agent.extensions.agent_status.time]
 enabled = true
 timezone = "Europe/Paris"
 
-[extensions.agent_status.background]
+[agent.extensions.agent_status.background]
 enabled = true
 
 [context]
@@ -8404,10 +8407,10 @@ Tool Plane, Subagent runtime, Workflow scheduler, or approval authority.
 
 Canonical `.agents/agents/<name>.toml` resources establish named Agent identities;
 see [canonical Agent resources](subagent-resources.md). Project Agent overrides
-user Agent as a whole resource, with no field-level merge. `subagents.main` and
+user Agent as a whole resource, with no field-level merge. `agent.agents` and
 `subagents.workflow` retain independent admission domains resolved against discovery.
 Canonical `.agents/workflows/<id>.yaml` resources establish Workflow identities;
-`workflows.main` selects the model-facing subset. Unknown selected identities fail
+`agent.workflows` selects the model-facing subset. Unknown selected identities fail
 candidate validation. All discovery is bounded, deterministic and off-side, and
 only one complete resource-generation publication changes future admission.
 
@@ -9502,11 +9505,9 @@ github = "all"
 "python:data-analysis" = ["run_python", "inspect_dataframe"]
 ```
 
-The main runtime configuration accepts the same `[tools]` document. When it is
-absent, existing native defaults apply, with no external source exposure. An
-explicit document replaces that main selection. Named Agent discovery does not
-select every discovered Agent; existing main/Workflow Agent admission lists
-remain responsible for which profiles create demand in this issue.
+Root uses `[agent.tools]`; named files place the same Agent Profile directly
+at the document root. `agent.agents` selects delegation and `agent.workflows`
+selects Workflow invocation. Discovery alone never grants caller exposure.
 
 `All` is coarse source trust: every eligible ordinary Tool published by that
 exact source in the admitted resource generation. `Exact` is fine-grained Tool
@@ -9584,3 +9585,25 @@ with a bounded reason; or a ready source with selected definitions and missing
 Exact names. Offline checks retain unprepared facts and never invent online Tool
 metadata. Agent warning/suppression policy and atomic Workflow disable policy
 remain owned by CFG2-04 and CFG2-05 respectively.
+
+
+## CFG2-04: One Agent Profile resolution boundary
+
+Root `[agent]` and canonical named Agent TOML share `AgentProfileDocument` and
+native `AgentProfile`. `resolve_agent_profile` consumes immutable admitted
+Tool/source, Skill, Agent and Workflow authority plus an execution scope. Its
+owned `ResolvedAgentProfile` records finite selected capabilities and canonically
+ordered typed diagnostics. See [Agent Profiles](agent-profiles.md) for the complete
+authoring, omission, scope, override and freeze contract.
+
+Named defaults resolve against generation authority, independently of root's
+visible registry. Dynamic overrides remain bounded by named defaults and the
+invoking Agent's frozen delegation authority; unauthorized additions are refused.
+Valid unavailable profile selections warn and suppress. Malformed authoring
+fails. Neither boundary activates sources or changes host invocation policy.
+
+The existing resource generation owns root and named profile decisions. Attempt
+leases pin root capabilities; `ResolvedSubagentSpec` freezes the shared decision
+with child model/source/Skill bindings and workspace materialization policy.
+There is no second mutable profile registry or alternate child capability
+interpreter. Workflow static admission remains with its existing owner.

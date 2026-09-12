@@ -59,7 +59,7 @@ never automatically retried against a newer revision.
 The stable model Tool definitions are `get_goal`, `create_goal`, `update_goal`.
 ExtensionToolPlane is derived from materialized owners, and ConversationRuntime
 checks both configured and published Tool shapes against the frozen composition.
-Phase changes publish no capability generation. Ordinary `--tools`/`defaultTools`
+Phase changes publish no capability generation. Ordinary `--tools`/`agent.tools.builtin`
 selection neither grants nor strips Goal Tools.
 
 `create_goal` is permitted only when the Human clearly authorizes persistent

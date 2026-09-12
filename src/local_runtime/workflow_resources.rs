@@ -205,7 +205,7 @@ mod tests {
                     .collect::<Vec<_>>(),
                 ["alpha", "zeta"]
             );
-            assert!(catalog.main().is_empty());
+            assert_eq!(catalog.admitted().len(), catalog.definitions().len());
             for name in names {
                 std::fs::write(root.join(format!("{name}.yaml")), "invalid: [").unwrap();
             }

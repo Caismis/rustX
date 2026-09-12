@@ -5526,7 +5526,7 @@ mod tests {
             materialization:
                 crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
             extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
-                Default::default(),
+                crate::context::AgentStatusConfig::default(),
             )
             .and_todo(),
         }

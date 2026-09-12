@@ -76,8 +76,8 @@ partial!(AgentProfileLayer {
     skills: Vec<String>, extensions: crate::extensions::NativeAgentExtensionsDocument,
     agents: Vec<crate::runtime::subagent::SubagentName>,
     workflows: Vec<crate::runtime::workflow::WorkflowId>,
-    agents_md: super::config::SubagentAgentsMdDocument,
-    worktree: super::config::SubagentWorktreeDocument
+    agents_md: super::config::AgentProjectInstructionsDocument,
+    worktree: super::config::AgentWorktreeDocument
 });
 partial!(ModelLayer {
     model: ModelRef,
@@ -342,6 +342,10 @@ impl NativeToolsLayer {
 macro_rules! apply {
     ($layer:ident, $target:ident, $($field:ident),* $(,)?) => { $(if let Some(value) = $layer.$field { $target.$field = value; })* }
 }
+#[allow(
+    clippy::ref_option,
+    reason = "serde serialize_with requires a reference to the field type"
+)]
 pub(super) fn serialize_profile_model<S: serde::Serializer>(
     model: &Option<SessionModelConfig>,
     serializer: S,
@@ -609,16 +613,35 @@ mod tests {
         );
         (merged.resolve().unwrap(), origins)
     }
-    const LOWER: &str = r#"
-[model]
-model = "p/m"
-reasoning_profile = { mode = "profile", name = "custom" }
-max_output_tokens = { mode = "limit", tokens = 512 }
-[context]
-summary_output_cap = { mode = "limit", tokens = 256 }
+    const LOWER: &str = r#"[context]
+[context.summary_output_cap]
+mode = "limit"
+tokens = 256
+
+
 [tool_deadline_policy]
-idle_liveness_ms = { mode = "window", milliseconds = 100 }
-[extensions.agent_status.time]
+[tool_deadline_policy.idle_liveness_ms]
+mode = "window"
+milliseconds = 100
+
+
+[agent]
+[agent.model]
+model = "p/m"
+
+[agent.model.reasoning_profile]
+mode = "profile"
+name = "custom"
+
+
+[agent.model.max_output_tokens]
+mode = "limit"
+tokens = 512
+
+
+[agent.extensions]
+[agent.extensions.agent_status]
+[agent.extensions.agent_status.time]
 timezone = "Asia/Shanghai"
 "#;
     #[test]
@@ -641,15 +664,29 @@ timezone = "Asia/Shanghai"
         assert_eq!(inherited.tool_deadline_policy.idle_liveness_ms, Some(100));
         let (reset, origins) = resolve(
             LOWER,
-            r#"
-[model]
-reasoning_profile = { mode = "catalog_default" }
-max_output_tokens = { mode = "catalog_default" }
-[context]
-summary_output_cap = { mode = "model_limit" }
+            r#"[context]
+[context.summary_output_cap]
+mode = "model_limit"
+
+
 [tool_deadline_policy]
-idle_liveness_ms = { mode = "disabled" }
-[extensions.agent_status.time]
+[tool_deadline_policy.idle_liveness_ms]
+mode = "disabled"
+
+
+[agent]
+[agent.model]
+[agent.model.reasoning_profile]
+mode = "catalog_default"
+
+
+[agent.model.max_output_tokens]
+mode = "catalog_default"
+
+
+[agent.extensions]
+[agent.extensions.agent_status]
+[agent.extensions.agent_status.time]
 timezone = "UTC"
 "#,
         );
@@ -671,7 +708,7 @@ timezone = "UTC"
             "agent.model.max_output_tokens",
             "context.summary_output_cap",
             "tool_deadline_policy.idle_liveness_ms",
-            "agent.extensions.agent_status.time.timezone",
+            "agent.extensions",
         ] {
             assert!(matches!(origins[field], Origin::Project { .. }));
         }
@@ -680,14 +717,28 @@ timezone = "UTC"
     fn concrete_replacements_and_profile_names_do_not_collide_with_reset_modes() {
         let (config, _) = resolve(
             LOWER,
-            r#"
-[model]
-reasoning_profile = { mode = "profile", name = "catalog_default" }
-max_output_tokens = { mode = "limit", tokens = 1024 }
-[context]
-summary_output_cap = { mode = "limit", tokens = 512 }
+            r#"[context]
+[context.summary_output_cap]
+mode = "limit"
+tokens = 512
+
+
 [tool_deadline_policy]
-idle_liveness_ms = { mode = "window", milliseconds = 200 }
+[tool_deadline_policy.idle_liveness_ms]
+mode = "window"
+milliseconds = 200
+
+
+[agent]
+[agent.model]
+[agent.model.reasoning_profile]
+mode = "profile"
+name = "catalog_default"
+
+
+[agent.model.max_output_tokens]
+mode = "limit"
+tokens = 1024
 "#,
         );
         assert_eq!(
@@ -708,10 +759,10 @@ idle_liveness_ms = { mode = "window", milliseconds = 200 }
         for text in [
             "typo = true",
             "approvalMode = 'policy'",
-            "[model]\nmodel = 'p/m'\nrequest_params = {}",
-            "[model]\nmodel = 'p/m'\nreasoning_profile = { mode = 'catalog_default', name = 'hidden' }",
-            "[model]\nmodel = 'p/m'\n[unterminated",
-            "[model]\nmodel = 'p/m'\nmodel = 'p/other'",
+            "[agent]\n[agent.model]\nmodel = \"p/m\"\n\n[agent.model.request_params]\n",
+            "[agent]\n[agent.model]\nmodel = \"p/m\"\n\n[agent.model.reasoning_profile]\nmode = \"catalog_default\"\nname = \"hidden\"\n",
+            "[agent.model]\nmodel = 'p/m'\n[unterminated",
+            "[agent.model]\nmodel = 'p/m'\nmodel = 'p/other'",
         ] {
             assert!(
                 crate::toml_authoring::parse::<RuntimeLayer>(text.as_bytes()).is_err(),
@@ -752,14 +803,15 @@ idle_liveness_ms = { mode = "window", milliseconds = 200 }
     }
     #[test]
     fn opaque_json_string_is_the_only_overlay_form_including_explicit_summary() {
-        let config = layer(r#"
-[model]
+        let config = layer(r#"[agent]
+[agent.model]
 model = "p/m"
-request_params_json = '''{"future":{"nested":[1,null,{"new":true}]},"text":"x","flag":false,"temperature":0.7}'''
-[model.summary_model]
+request_params_json = "{\"future\":{\"nested\":[1,null,{\"new\":true}]},\"text\":\"x\",\"flag\":false,\"temperature\":0.7}"
+
+[agent.model.summary_model]
 mode = "explicit"
 model = "p/s"
-request_params_json = '''{"vendor":[null,[1,2],{"arbitrary":"yes"}]}'''
+request_params_json = "{\"vendor\":[null,[1,2],{\"arbitrary\":\"yes\"}]}"
 "#).resolve().unwrap();
         assert_eq!(
             config.initial_model().clone().request_params["future"]["nested"][1],
@@ -779,7 +831,9 @@ request_params_json = '''{"vendor":[null,[1,2],{"arbitrary":"yes"}]}'''
             serde_json::Value::Null
         );
         for json in ["null", "[]", "[1]", "42", "true", "\"string\"", "{broken"] {
-            let text = format!("[model]\nmodel = 'p/m'\nrequest_params_json = '{json}'");
+            let text = format!(
+                "[agent]\n[agent.model]\nmodel = \"p/m\"\nrequest_params_json = '{json}'\n"
+            );
             let error = crate::toml_authoring::parse::<RuntimeLayer>(text.as_bytes()).unwrap_err();
             assert!(error.contains("request_params_json must contain a valid JSON object"));
         }

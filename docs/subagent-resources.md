@@ -1,11 +1,9 @@
 # Canonical named Agent resources
 
-Goal belongs only to the root conversation in v1. The shared closed extension
-syntax accepts Goal in role definitions and invocation selections, but the
-effective composition is rejected by `unsupported_child_scope` during resolution,
-before staging/spawn/ownership commit. It is never silently dropped or inherited.
-Workflow overrides use the same scope check. [Goal extension](goal-extension.md)
-does not change one-shot Subagent terminal semantics.
+Root and named resources use the same [Agent Profile](agent-profiles.md).
+A complete child profile selecting root-only Goal receives a scope diagnostic
+and has Goal suppressed. An unsupported dynamic Extension override is refused
+before child staging. This preserves the one-shot child lifecycle.
 
 ## Session ownership and local lifecycle exclusion (Issue #254)
 
@@ -38,8 +36,10 @@ Profiles express selection, not existence.
 # rustx.toml: selection only
 [subagents]
 max_concurrent = 4
-main = []
 workflow = ["reviewer"]
+
+[agent]
+agents = ["reviewer"]
 ```
 
 The identity `reviewer` comes from `.agents/agents/reviewer.toml` in the trusted
@@ -64,14 +64,13 @@ files = [".agents/agents/reviewer/AGENTS.md"]
 Files are limited to 1 MiB and strict typed TOML; unknown fields, duplicate keys,
 invalid types and invalid native bounds reject the complete candidate. Primary
 instructions are explicit TOML data, subject to the native 64 KiB bound. The
-canonical type is `AgentDocument`, with [agent.schema.json](../schemas/agent.schema.json).
-The temporary document preserves named-Agent execution semantics; unified main
-and child Agent profiles are a subsequent architecture step.
+canonical type is `AgentProfileDocument`, with [agent.schema.json](../schemas/agent.schema.json).
+Both root and named authoring use this type and the same semantic resolver.
 
 | Field | Type and meaning |
 | --- | --- |
 | `description` | Required nonempty string, at most 512 bytes; routing text only. |
-| `model` | Optional `provider/model` reference. Omission inherits the invoking attempt's frozen effective model, including reasoning and request contracts. Explicit references use the native model catalog. |
+| `model` | Optional model table with `model = "provider/model"`. Omission inherits the invoking attempt's frozen effective model, including reasoning and request contracts. Explicit references use the native model catalog. |
 | `timeout_ms` | Optional integer, 1–86,400,000; the whole-child lifecycle deadline. |
 | `tools.builtin` | Exact array of **ordinary** native Tool names; default empty. A Tool provided by an Agent Extension (`todo`) is rejected here by name: compose it under `extensions` instead. |
 | `tools.sources` | Map of typed source identities to `"all"` or exact Tool-name arrays; default empty. MCP and `python:<package>` use this same selection vocabulary. |
@@ -79,14 +78,14 @@ and child Agent profiles are a subsequent architecture step.
 | `agents_md.inherit` | Boolean, default true; include the parent's frozen project guidance. |
 | `agents_md.files` | Ordered supplemental guidance paths; default empty, at most eight. They are distinct project instructions, never the primary role body. |
 | `worktree.enabled` | Boolean, default false. |
-| `worktree.requireCleanParent` | Boolean, default true; applies when Git isolation is enabled. |
-| `extensions.agentStatus` | This role's own closed [Native Agent Extension](launch-configuration.md#native-agent-extensions) composition: `enabled` (default true), `time.enabled`/`time.timezone`, `background.enabled`. Omission means this role's built-in defaults, never the invoking root Agent's configuration. |
-| `extensions.todo` | `enabled` (default true). Composes the child conversation's own task list, its model-facing `todo` Tool, and its bounded status presentation — or none of them. |
+| `worktree.require_clean_parent` | Boolean, default true; applies when Git isolation is enabled. |
+| `extensions.agent_status` | This role's own closed [Native Agent Extension](launch-configuration.md#native-agent-extensions) composition: `enabled`, `time.enabled`/`time.timezone`, `background.enabled`. Omission selects no Agent Status extension. |
+| `extensions.todo` | `enabled` (omitted extension is absent). Composes the child conversation's own task list, its model-facing `todo` Tool, and its bounded status presentation — or none of them. |
 
 Role extension composition is **independently authored**: root Agent extensions
 and named-Subagent extensions are separate compositions, and a child never
-implicitly inherits the root's set. A role that omits `extensions` composes the
-built-in defaults, not whatever the invoking runtime happens to run with.
+implicitly inherits the root's set. A profile that omits `extensions` composes none. Root product defaults are an
+explicit lower-priority profile layer.
 
 ```toml
 description = "Implement a bounded change."
@@ -162,12 +161,9 @@ additive or subtractive mode, no `addTools`/`removeTools`, no wildcard, and no
 recursive merge; a present `tools` or `extensions` object is never merged with
 the role's corresponding object.
 
-`"extensions": {}` deserves its own line because the *authoring* document
-defaults differ deliberately. A role that omits `extensions` composes the
-built-in defaults, which include Agent Status. An override that writes
-`"extensions": {}` composes **nothing**: presence, not emptiness, is what
-selects an extension in an override, so every closed extension member is
-explicitly named or absent. Absent means "not composed", never "use a default".
+`"extensions": {}` replaces the entire named composition with none. An absent
+override dimension retains the named default. Complete root and named profile
+documents share the same omission contract: no selected extensions.
 
 An explicit `null` is not an accepted spelling for any dimension, or for
 `override` itself. Unknown fields, non-goal dimensions, and unknown extension
@@ -289,7 +285,7 @@ resource, with no field-level merging. Each directory scan has a 1024-entry
 bound and the resulting catalog obeys the native Agent count bound. Incidental
 non-TOML files do not define Agents; malformed canonical TOML rejects the candidate.
 
-`subagents.main` and `subagents.workflow` remain independent selection lists.
+`agent.agents` and `subagents.workflow` remain independent selection lists.
 They resolve against the discovered catalog. Neither selection bypasses source
 authority, capability validation or invocation approval.
 
@@ -316,9 +312,9 @@ guidance is explicit and ordered after inherited guidance.
 ## Checking, reload, and child ownership
 
 `rustx config check` uses the same role loader as runtime preparation. It checks
-file bounds, trust, TOML, discovery/admission references, statically
-known model, Skill and Tool/source contracts, and every statically knowable
-reference in a Workflow Agent node's invocation override. It performs no model, Tool, Python,
+file bounds, trust, strict TOML and native model contracts. Unavailable profile
+capabilities produce typed warnings and suppression during generation resolution.
+Workflow static admission retains its separate contract. It performs no model, Tool, Python,
 MCP, package-preparation or network work, creates no Session/runtime state, and
 writes no trust. Unknown online Tool identities remain deferred to their source
 owner rather than being invented by static analysis.
@@ -384,7 +380,7 @@ The two digests are **separate identities** and neither is derived from the
 other:
 
 ```text
-SubagentDefinitionDigest              identity of the SOURCE named definition
+NamedAgentDefinitionDigest              identity of the SOURCE named definition
                                       (its routing description, its DEFAULT
                                       tool/Skill/extension selections, its
                                       authored spellings)
@@ -394,7 +390,7 @@ ResolvedSubagentSpec::profile_digest  identity of the FINAL FROZEN effective
                                       replacement
 ```
 
-`SubagentDefinitionDigest` continues to identify the source definition, and no
+`NamedAgentDefinitionDigest` continues to identify the source definition, and no
 longer uniquely identifies one child once overrides exist. The profile digest
 obeys one rule:
 

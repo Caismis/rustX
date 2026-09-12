@@ -1,5 +1,5 @@
-//! The one resolution boundary between a named definition and the runtime
-//! generation that admits it (Issue #144).
+//! Child authorization and freeze boundary consuming the shared Agent Profile
+//! resolved in the admitted resource generation.
 //!
 //! ```text
 //! NamedAgentDefinition
@@ -74,29 +74,14 @@
 //! trusted Workflow program carries its own typed authority and is bounded by
 //! the generation catalog instead; see [`SubagentOverrideAuthority`].
 //!
-//! # Optionality
+//! # Complete profiles and dynamic replacements
 //!
-//! Optionality belongs to *source availability*, never to a selection. Once
-//! a definition explicitly selects a capability, that capability is required
-//! for that invocation: an unavailable source makes the invocation fail
-//! before ownership commit, and an unknown selection whose source authority
-//! *is* present is a static configuration error that rejects
-//! resource-generation preparation.
-//!
-//! The two callers of the per-selector core are therefore asymmetric, and
-//! the asymmetry is the whole point:
-//!
-//! ```text
-//! resolve_tools                   (invocation)  fail fast on the first
-//!                                               unsatisfiable selector
-//! validate_selectors_for_admission (admission)  inspect EVERY selector;
-//!                                               tolerate an unavailable
-//!                                               source only for that one
-//! ```
-//!
-//! Admission may not stop at an unavailable source: an offline MCP server
-//! listed before a misspelled selector would otherwise let a statically
-//! invalid definition into a published generation.
+//! Complete named defaults consume the generation's shared resolved Agent
+//! Profile. Valid but unavailable selections have already been diagnosed and
+//! suppressed. Dynamic replacements are different: every requested capability
+//! must pass the typed invocation authorization boundary before the common
+//! profile resolver decides composition. An unauthorized override is refused,
+//! never silently suppressed into a different request.
 //!
 //! # The parent decides; the child materializes
 //!
@@ -957,6 +942,12 @@ impl SubagentResolver {
     /// # Errors
     ///
     /// Returns the first typed [`SubagentResolutionError`].
+    /// # Panics
+    /// Panics if an internally constructed generation violates catalog/profile coherence.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one child authorization and freeze boundary"
+    )]
     pub fn resolve(
         request: &SubagentResolution<'_>,
     ) -> Result<ResolvedSubagentSpec, SubagentResolutionError> {
@@ -1029,12 +1020,7 @@ impl SubagentResolver {
                     availability: resources.capability_availability(),
                     skills: capability.skills(),
                     agents: &catalog.names().into_iter().cloned().collect(),
-                    workflows: &resources
-                        .workflows()
-                        .definitions()
-                        .keys()
-                        .cloned()
-                        .collect(),
+                    workflows: resources.workflows().admitted(),
                     scope: AgentScope::OneShotChild,
                 },
             )
@@ -1994,9 +1980,7 @@ mod tests {
         AvailableToolCatalog, CapabilityAvailability, CapabilitySourceState, ToolSourceId,
     };
     use crate::runtime::identity::{McpServerId, ToolId};
-    use crate::runtime::subagent::catalog::{
-        AgentCatalog, NamedAgentDefinition, SubagentName, SubagentProjectInstructionPolicy,
-    };
+    use crate::runtime::subagent::catalog::{AgentCatalog, NamedAgentDefinition, SubagentName};
     use crate::runtime::workspace::WorkspacePolicy;
     use crate::tools::types::{
         ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin,
@@ -2142,19 +2126,20 @@ mod tests {
                 instructions: "instructions".to_owned(),
                 model: None,
                 execution_deadline: None,
-                tools: tools,
+                tools,
                 skills: Vec::new(),
-                project_instructions: SubagentProjectInstructionPolicy {
-                    inherit: true,
-                    files: Vec::new(),
-                },
+                project_instructions:
+                    crate::runtime::agent_profile::AgentProjectInstructionPolicy {
+                        inherit: true,
+                        files: Vec::new(),
+                    },
                 workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
-                    Default::default(),
+                    crate::context::AgentStatusConfig::default(),
                 )
                 .and_todo(),
-                agents: Default::default(),
-                workflows: Default::default(),
+                agents: std::collections::BTreeSet::default(),
+                workflows: std::collections::BTreeSet::default(),
             },
             std::path::PathBuf::from("/w/explore.md"),
         )
@@ -2431,16 +2416,17 @@ mod tests {
                 instructions: "instructions".to_owned(),
                 model: None,
                 execution_deadline: None,
-                tools: tools,
+                tools,
                 skills: Vec::new(),
-                project_instructions: SubagentProjectInstructionPolicy {
-                    inherit: true,
-                    files: Vec::new(),
-                },
+                project_instructions:
+                    crate::runtime::agent_profile::AgentProjectInstructionPolicy {
+                        inherit: true,
+                        files: Vec::new(),
+                    },
                 workspace_policy: WorkspacePolicy::SharedWorkspace,
-                extensions: extensions,
-                agents: Default::default(),
-                workflows: Default::default(),
+                extensions,
+                agents: std::collections::BTreeSet::default(),
+                workflows: std::collections::BTreeSet::default(),
             },
             std::path::PathBuf::from("/w/reviewer.md"),
         )
@@ -2627,8 +2613,10 @@ mod tests {
             vec![AgentToolSelection::Builtin {
                 name: "read".to_owned(),
             }],
-            crate::extensions::NativeAgentExtensions::with_agent_status(Default::default())
-                .and_todo(),
+            crate::extensions::NativeAgentExtensions::with_agent_status(
+                crate::context::AgentStatusConfig::default(),
+            )
+            .and_todo(),
         );
         // A caller that holds nothing at all: the role's own defaults must
         // still resolve, because they are the role's authority by
@@ -2917,8 +2905,10 @@ mod tests {
     fn sub258_every_supported_extension_is_child_scope_supported() {
         for composition in [
             crate::extensions::NativeAgentExtensions::none(),
-            crate::extensions::NativeAgentExtensions::with_agent_status(Default::default())
-                .and_todo(),
+            crate::extensions::NativeAgentExtensions::with_agent_status(
+                crate::context::AgentStatusConfig::default(),
+            )
+            .and_todo(),
             crate::extensions::NativeAgentExtensions::with_agent_status(
                 crate::context::AgentStatusConfig {
                     time: crate::context::TimeStatusConfig {
@@ -2948,17 +2938,18 @@ mod tests {
                     execution_deadline: None,
                     tools: Vec::new(),
                     skills: Vec::new(),
-                    project_instructions: SubagentProjectInstructionPolicy {
-                        inherit: true,
-                        files: Vec::new(),
-                    },
+                    project_instructions:
+                        crate::runtime::agent_profile::AgentProjectInstructionPolicy {
+                            inherit: true,
+                            files: Vec::new(),
+                        },
                     workspace_policy: WorkspacePolicy::SharedWorkspace,
                     extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
-                        Default::default(),
+                        crate::context::AgentStatusConfig::default(),
                     )
                     .and_todo(),
-                    agents: Default::default(),
-                    workflows: Default::default(),
+                    agents: std::collections::BTreeSet::default(),
+                    workflows: std::collections::BTreeSet::default(),
                 },
                 std::path::PathBuf::from("/w/research.md"),
             )
@@ -2972,17 +2963,18 @@ mod tests {
                     execution_deadline: None,
                     tools: Vec::new(),
                     skills: Vec::new(),
-                    project_instructions: SubagentProjectInstructionPolicy {
-                        inherit: true,
-                        files: Vec::new(),
-                    },
+                    project_instructions:
+                        crate::runtime::agent_profile::AgentProjectInstructionPolicy {
+                            inherit: true,
+                            files: Vec::new(),
+                        },
                     workspace_policy: WorkspacePolicy::SharedWorkspace,
                     extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
-                        Default::default(),
+                        crate::context::AgentStatusConfig::default(),
                     )
                     .and_todo(),
-                    agents: Default::default(),
-                    workflows: Default::default(),
+                    agents: std::collections::BTreeSet::default(),
+                    workflows: std::collections::BTreeSet::default(),
                 },
                 std::path::PathBuf::from("/w/explore.md"),
             )
@@ -2999,18 +2991,6 @@ mod tests {
         );
     }
 
-    /// Admission and invocation are asymmetric on purpose, and the
-    /// asymmetry must not degrade into "stop at the first unavailable
-    /// source".
-    ///
-    /// The definition below lists an offline MCP selector first in canonical
-    /// order followed by a statically invalid one against a *ready* source.
-    /// A validator that treated the unavailable source as sufficient would
-    /// never reach the invalid selector and would admit the definition.
-
-    /// A definition whose *only* unsatisfiable selector is an unavailable
-    /// optional source stays admissible: the runtime is healthy and only an
-    /// invocation of that agent fails.
     // ---------------------------------------------------------------
     // Issue #258: the effective execution-profile digest.
     //
@@ -3088,10 +3068,10 @@ mod tests {
             // an override would have replaced away.
             "An entirely different routing description.".to_owned(), instructions: "instructions".to_owned(), model: None, execution_deadline: None, tools: vec![AgentToolSelection::Builtin {
                 name: "read".to_owned(),
-            }], skills: vec!["some-skill".to_owned()], project_instructions: SubagentProjectInstructionPolicy {
+            }], skills: vec!["some-skill".to_owned()], project_instructions: crate::runtime::agent_profile::AgentProjectInstructionPolicy {
                 inherit: true,
                 files: Vec::new(),
-            }, workspace_policy: WorkspacePolicy::SharedWorkspace, extensions: crate::extensions::NativeAgentExtensions::with_agent_status(Default::default()).and_todo(), agents: Default::default(), workflows: Default::default() }, std::path::PathBuf::from("/w/reviewer.md"))
+            }, workspace_policy: WorkspacePolicy::SharedWorkspace, extensions: crate::extensions::NativeAgentExtensions::with_agent_status(crate::context::AgentStatusConfig::default()).and_todo(), agents: std::collections::BTreeSet::default(), workflows: std::collections::BTreeSet::default() }, std::path::PathBuf::from("/w/reviewer.md"))
         .expect("definition");
 
         let mut relabelled = spec.clone();
@@ -3163,9 +3143,10 @@ mod tests {
         variants.push(reguided);
 
         let mut composed = base.clone();
-        composed.extensions =
-            crate::extensions::NativeAgentExtensions::with_agent_status(Default::default())
-                .and_todo();
+        composed.extensions = crate::extensions::NativeAgentExtensions::with_agent_status(
+            crate::context::AgentStatusConfig::default(),
+        )
+        .and_todo();
         variants.push(composed);
 
         assert_distinct(&variants, "every behavior-affecting frozen field");

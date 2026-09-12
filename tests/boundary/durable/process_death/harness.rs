@@ -34,13 +34,13 @@ use crate::durable::{
     ConversationStore, SqliteConversationStore, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT, TranscriptEntry,
 };
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
-use crate::local_runtime::session::{SessionCatalog, SessionId, SessionNode};
 use crate::message::types::MessageBlock;
 use crate::model::RequestSnapshot;
 use crate::runtime::identity::ConversationId;
 use crate::runtime::process_death::{CONTROL_ENV, GATE_ENV, GATE_NTH_ENV};
 use crate::runtime::recovery::{RecoveryReport, recover};
 use crate::runtime::types::RuntimeClock;
+use rustx::local_runtime::session::{SessionCatalog, SessionId, SessionNode};
 
 use super::{CHILD_TEST, ROOT_ENV, SCENARIO_ENV};
 
@@ -101,14 +101,14 @@ fn models_json() -> String {
 /// The runtime configuration a child composes from.
 fn runtime_json(read_approval: &str, include_todo: bool) -> String {
     // Issue #259: Todo is composed through the closed extension surface, not
-    // through `defaultTools` — which no longer accepts the name at all. The
+    // through `agent.tools.builtin` — which no longer accepts the name at all. The
     // bounded catalog the rest of FND-06 relies on is preserved by composing
     // no Todo extension unless a case asks for one.
-    let default_tools = vec!["read", "bash", "execution", "subagent"];
+    let builtin_tools = vec!["read", "bash", "execution"];
     toml::to_string_pretty(&serde_json::json!({
         "schema_version": 8,
         "agent_id": "agent-fnd06",
-        "model": {"model": MODEL},
+        "agent": {"model": {"model": MODEL}, "tools": {"builtin": builtin_tools}, "extensions": {"agent_status": {"enabled": true}, "todo": {"enabled": include_todo}}, "agents": ["explore"], "skills": ["alpha", "beta"]},
         "approval_mode": "policy",
         "context": {"reserve_tokens": 0, "keep_recent_tokens": 0},
         "native_tools": {
@@ -116,8 +116,6 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
             // Process-death tests own execution gates, not approval interaction.
             "bash": {"execution": "model_selectable", "approval": "never"}
         },
-        "default_tools": default_tools,
-        "extensions": {"todo": {"enabled": include_todo}},
         // One named subagent definition (Issue #144). The instruction
         // document is a workspace resource the parent generation freezes;
         // the child never reads this configuration.
@@ -130,7 +128,6 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
                     "tools": {"builtin": ["read"]}
                 }
             },
-            "main": ["explore"],
             "workflow": []
         }
     }))
@@ -151,7 +148,7 @@ pub(crate) fn write_runtime_config_with_todo(root: &Path) {
 pub(crate) fn write_runtime_config_with_goal(root: &Path) {
     let mut document: serde_json::Value =
         rustx::toml_authoring::parse(runtime_json("never", false).as_bytes()).unwrap();
-    document["extensions"]["goal"] = serde_json::json!({"enabled": true});
+    document["agent"]["extensions"]["goal"] = serde_json::json!({"enabled": true});
     crate::launch_fixture::write_documents(
         &root.join("rustx.toml"),
         &toml::to_string_pretty(&document).unwrap(),

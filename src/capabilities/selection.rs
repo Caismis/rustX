@@ -679,6 +679,7 @@ mod tests {
         }
         let valid = r#"[tools]
 builtin = ["read", "grep"]
+
 [tools.sources]
 github = "all"
 "python:data-analysis" = ["run_python", "inspect_dataframe"]
@@ -714,8 +715,10 @@ github = "all"
     #[test]
     fn root_and_named_agent_documents_keep_source_all() {
         let selection = "[tools.sources]\ngithub = 'all'\n";
-        let root: crate::local_runtime::config::CurrentRuntimeConfig =
-            toml::from_str(&format!("[model]\nmodel = 'local/test'\n{selection}")).unwrap();
+        let root: crate::local_runtime::config::CurrentRuntimeConfig = toml::from_str(
+            "[agent.model]\nmodel = 'local/test'\n[agent.tools.sources]\ngithub = 'all'\n",
+        )
+        .unwrap();
         let named: crate::local_runtime::config::AgentProfileDocument = toml::from_str(&format!(
             "description = 'Review'\ninstructions = 'Review code'\n{selection}"
         ))
@@ -858,7 +861,7 @@ github = "all"
             .into();
             let registration =
                 ToolRegistration::plain(source_definition(&source, "todo"), Arc::new(Unused));
-            let policy = super::super::ToolActivationPolicy {
+            let policy = super::super::AgentActivation {
                 profile: crate::local_runtime::config::AgentProfileDocument {
                     tools: crate::capabilities::selection::ToolSelectionDocument {
                         builtin: crate::local_runtime::config::builtin_root_profile()

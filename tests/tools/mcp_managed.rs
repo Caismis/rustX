@@ -658,10 +658,11 @@ async fn a_server_failing_at_startup_is_isolated_and_diagnosed() {
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            tool_activation: rustx::capabilities::ToolActivationPolicy {
-                profile: crate::local_runtime::config::AgentProfileDocument {
-                    tools: crate::capabilities::selection::ToolSelectionDocument {
-                        builtin: crate::local_runtime::config::builtin_root_profile()
+            agent_activation: rustx::capabilities::AgentActivation {
+                profile: rustx::local_runtime::config::AgentProfileDocument {
+                    tools: rustx::capabilities::selection::ToolSelectionDocument {
+                        builtin: rustx::capabilities::AgentActivation::default()
+                            .profile
                             .tools
                             .builtin,
                         sources: ["crasher", "exportless"]
@@ -675,7 +676,7 @@ async fn a_server_failing_at_startup_is_isolated_and_diagnosed() {
                             })
                             .into(),
                     },
-                    ..crate::local_runtime::config::builtin_root_profile()
+                    ..rustx::capabilities::AgentActivation::default().profile
                 },
                 ..Default::default()
             },
@@ -825,10 +826,11 @@ def add(a: int, b: int) -> str:
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            tool_activation: rustx::capabilities::ToolActivationPolicy {
-                profile: crate::local_runtime::config::AgentProfileDocument {
-                    tools: crate::capabilities::selection::ToolSelectionDocument {
-                        builtin: crate::local_runtime::config::builtin_root_profile()
+            agent_activation: rustx::capabilities::AgentActivation {
+                profile: rustx::local_runtime::config::AgentProfileDocument {
+                    tools: rustx::capabilities::selection::ToolSelectionDocument {
+                        builtin: rustx::capabilities::AgentActivation::default()
+                            .profile
                             .tools
                             .builtin,
                         sources: ["calc"]
@@ -842,7 +844,7 @@ def add(a: int, b: int) -> str:
                             })
                             .into(),
                     },
-                    ..crate::local_runtime::config::builtin_root_profile()
+                    ..rustx::capabilities::AgentActivation::default().profile
                 },
                 ..Default::default()
             },
@@ -1155,10 +1157,11 @@ def ping() -> str:
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(base_tool_registry),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            tool_activation: rustx::capabilities::ToolActivationPolicy {
-                profile: crate::local_runtime::config::AgentProfileDocument {
-                    tools: crate::capabilities::selection::ToolSelectionDocument {
-                        builtin: crate::local_runtime::config::builtin_root_profile()
+            agent_activation: rustx::capabilities::AgentActivation {
+                profile: rustx::local_runtime::config::AgentProfileDocument {
+                    tools: rustx::capabilities::selection::ToolSelectionDocument {
+                        builtin: rustx::capabilities::AgentActivation::default()
+                            .profile
                             .tools
                             .builtin,
                         sources: ["healthy", "conflicting"]
@@ -1172,7 +1175,7 @@ def ping() -> str:
                             })
                             .into(),
                     },
-                    ..crate::local_runtime::config::builtin_root_profile()
+                    ..rustx::capabilities::AgentActivation::default().profile
                 },
                 ..Default::default()
             },

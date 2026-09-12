@@ -375,7 +375,7 @@ pub fn resolve_locations(
     if let Some(names) = &request.exclude_tools {
         crate::capabilities::validate_tool_names(names, "exclusion")?;
     }
-    crate::capabilities::ToolActivationPolicy {
+    crate::capabilities::AgentActivation {
         no_tools: request.no_tools,
         no_builtin_tools: request.no_builtin_tools,
         tools: request.tools.clone(),
@@ -676,7 +676,7 @@ pub fn analyze(
         .map_err(|e| e.clone())?;
     config.tool_environment().map_err(|e| e.to_string())?;
     let (primary, summary) =
-        crate::model::session::analyze_session_model_config(&models, &config.initial_model())
+        crate::model::session::analyze_session_model_config(&models, config.initial_model())
             .map_err(|e| e.to_string())?;
     let summary = summary.as_ref().unwrap_or(&primary);
     config
@@ -855,7 +855,7 @@ pub fn analyze(
         .collect();
     definitions.extend(
         workflows
-            .main()
+            .admitted()
             .iter()
             .filter_map(|id| workflows.get(id))
             .map(|program| crate::tools::native::workflow_definition(program)),
@@ -941,10 +941,10 @@ pub fn analyze(
         .mcp_servers
         .values()
         .any(|source| source.enabled == Some(true));
-    let policy = crate::capabilities::ToolActivationPolicy {
+    let policy = crate::capabilities::AgentActivation {
         profile: config.agent.clone(),
         admitted_agents: subagents.names().into_iter().cloned().collect(),
-        admitted_workflows: workflows.definitions().keys().cloned().collect(),
+        admitted_workflows: workflows.admitted().clone(),
         project_files: super::agent_resources::load_profile_files(&config.agent.agents_md.files)
             .map_err(LaunchFailure::resource)?,
         no_tools: locations.no_tools,

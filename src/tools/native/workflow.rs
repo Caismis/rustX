@@ -23,7 +23,7 @@ pub(super) fn registrations(
     catalog: &WorkflowCatalog,
 ) -> Vec<NativeToolRegistration> {
     catalog
-        .main()
+        .admitted()
         .iter()
         .map(|id| {
             let program = catalog

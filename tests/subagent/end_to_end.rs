@@ -59,48 +59,62 @@ chat_reasoning_replay = "omit"
 
 const SESSION_TOML: &str = r#"agent_id = "agent-parent"
 
-[model]
-model = "fixture/subagent-model"
-
 [context]
 reserve_tokens = 1024
 keep_recent_tokens = 8192
 
+
 [subagents]
 max_concurrent = 4
-main = ["explore"]
 workflow = []
 
+[subagents.roles]
 [subagents.roles.explore]
 description = "Read-only repository exploration."
 
 [subagents.roles.explore.tools]
 builtin = ["read", "glob", "grep"]
+
+
+[agent]
+agents = ["explore"]
+
+[agent.model]
+model = "fixture/subagent-model"
 "#;
 
 const ISOLATED_SUBDIRECTORY_SESSION_TOML: &str = r#"agent_id = "agent-parent"
-default_tools = ["read", "subagent"]
-
-[model]
-model = "fixture/subagent-model"
 
 [context]
 reserve_tokens = 1024
 keep_recent_tokens = 8192
 
+
 [subagents]
 max_concurrent = 4
-main = ["explore"]
 workflow = []
 
+[subagents.roles]
 [subagents.roles.explore]
 description = "Read the preserved logical project scope."
 
 [subagents.roles.explore.tools]
 builtin = ["read"]
 
+
 [subagents.roles.explore.worktree]
 enabled = true
+
+
+[agent]
+agents = ["explore"]
+
+[agent.model]
+model = "fixture/subagent-model"
+
+
+[agent.tools]
+builtin = ["read"]
 "#;
 
 /// The `explore` agent's instruction document, written into the workspace so

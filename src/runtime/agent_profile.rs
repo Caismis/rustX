@@ -7,13 +7,26 @@ use crate::capabilities::{AvailableToolCatalog, CapabilityAvailability};
 use crate::extensions::NativeAgentExtensions;
 use crate::model::session::SessionModelConfig;
 use crate::runtime::resources::ProjectContextFile;
-use crate::runtime::subagent::{
-    SubagentExecutionDeadline, SubagentName, SubagentProjectInstructionPolicy,
-};
+use crate::runtime::subagent::{SubagentExecutionDeadline, SubagentName};
 use crate::runtime::workflow::WorkflowId;
 use crate::runtime::workspace::WorkspacePolicy;
 use crate::skills::SkillSnapshot;
 use crate::tools::types::{ToolDefinition, ToolOrigin};
+
+/// The project-instruction policy of one Agent Profile.
+///
+/// Resource composition owns discovery; this policy decides only
+/// how the generation's already-discovered chain composes with the
+/// profile's own explicit files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentProjectInstructionPolicy {
+    /// Whether the invoking generation's normal project instruction chain is
+    /// prepended to the explicit files.
+    pub inherit: bool,
+    /// The explicit profile-owned project instruction resources, already
+    /// loaded by resource composition, in configured order.
+    pub files: Vec<ProjectContextFile>,
+}
 
 /// Complete typed selected intent, independent of root versus named ownership.
 #[derive(Debug, Clone, PartialEq)]
@@ -27,11 +40,14 @@ pub struct AgentProfile {
     pub extensions: NativeAgentExtensions,
     pub agents: BTreeSet<SubagentName>,
     pub workflows: BTreeSet<WorkflowId>,
-    pub project_instructions: SubagentProjectInstructionPolicy,
+    pub project_instructions: AgentProjectInstructionPolicy,
     pub workspace_policy: WorkspacePolicy,
 }
 impl AgentProfile {
     /// Lower strict authoring with project files already loaded by their trust owner.
+    ///
+    /// # Errors
+    /// Rejects malformed selections, invalid deadlines and native text bounds.
     pub fn from_document(
         document: &crate::local_runtime::config::AgentProfileDocument,
         files: Vec<ProjectContextFile>,
@@ -57,7 +73,7 @@ impl AgentProfile {
             extensions: document.extensions.resolve(),
             agents: document.agents.iter().cloned().collect(),
             workflows: document.workflows.iter().cloned().collect(),
-            project_instructions: SubagentProjectInstructionPolicy {
+            project_instructions: AgentProjectInstructionPolicy {
                 inherit: document.agents_md.inherit,
                 files,
             },
@@ -91,7 +107,26 @@ pub enum AgentProfileDiagnostic {
     SkillUnavailable { name: String },
     AgentUnavailable { name: SubagentName },
     WorkflowUnavailable { id: WorkflowId },
-    ScopeUnsupported { capability: String },
+    ScopeUnsupported { capability: ScopeCapability },
+}
+/// Closed scope-ineligible capability identities, requiring no string parsing.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", content = "identity", rename_all = "snake_case")]
+pub enum ScopeCapability {
+    Agent(SubagentName),
+    Workflow(WorkflowId),
+    Goal,
+    BuiltinTool(crate::runtime::identity::ToolId),
+}
+impl ScopeCapability {
+    fn key(&self) -> String {
+        match self {
+            Self::Agent(name) => format!("agent:{name}"),
+            Self::Workflow(id) => format!("workflow:{id}"),
+            Self::Goal => "extension:goal".into(),
+            Self::BuiltinTool(id) => format!("builtin:{id}"),
+        }
+    }
 }
 impl AgentProfileDiagnostic {
     fn key(&self) -> (u8, String) {
@@ -106,7 +141,7 @@ impl AgentProfileDiagnostic {
             Self::SkillUnavailable { name } => (3, name.clone()),
             Self::AgentUnavailable { name } => (4, name.to_string()),
             Self::WorkflowUnavailable { id } => (5, id.to_string()),
-            Self::ScopeUnsupported { capability } => (6, capability.clone()),
+            Self::ScopeUnsupported { capability } => (6, capability.key()),
         }
     }
 }
@@ -124,7 +159,7 @@ pub struct ResolvedAgentProfile {
     pub extensions: NativeAgentExtensions,
     pub agents: BTreeSet<SubagentName>,
     pub workflows: BTreeSet<WorkflowId>,
-    pub project_instructions: SubagentProjectInstructionPolicy,
+    pub project_instructions: AgentProjectInstructionPolicy,
     pub workspace_policy: WorkspacePolicy,
     pub diagnostics: Vec<AgentProfileDiagnostic>,
 }
@@ -184,7 +219,7 @@ pub fn resolve_agent_profile(
             diagnostics.push(AgentProfileDiagnostic::AgentUnavailable { name: name.clone() });
         } else if authority.scope == AgentScope::OneShotChild {
             diagnostics.push(AgentProfileDiagnostic::ScopeUnsupported {
-                capability: format!("agent:{name}"),
+                capability: ScopeCapability::Agent(name.clone()),
             });
         } else {
             agents.insert(name.clone());
@@ -196,7 +231,7 @@ pub fn resolve_agent_profile(
             diagnostics.push(AgentProfileDiagnostic::WorkflowUnavailable { id: id.clone() });
         } else if authority.scope == AgentScope::OneShotChild {
             diagnostics.push(AgentProfileDiagnostic::ScopeUnsupported {
-                capability: format!("workflow:{id}"),
+                capability: ScopeCapability::Workflow(id.clone()),
             });
         } else {
             workflows.insert(id.clone());
@@ -206,7 +241,7 @@ pub fn resolve_agent_profile(
     if authority.scope == AgentScope::OneShotChild {
         if crate::extensions::unsupported_child_scope(&extensions).is_some() {
             diagnostics.push(AgentProfileDiagnostic::ScopeUnsupported {
-                capability: "extension:goal".into(),
+                capability: ScopeCapability::Goal,
             });
             extensions = extensions.without_goal();
         }
@@ -217,7 +252,7 @@ pub fn resolve_agent_profile(
                     || tool.name == crate::tools::native::SUBAGENT_TOOL_NAME);
             if unsupported {
                 diagnostics.push(AgentProfileDiagnostic::ScopeUnsupported {
-                    capability: format!("builtin:{}", tool.name),
+                    capability: ScopeCapability::BuiltinTool(tool.id.clone()),
                 });
             }
             !unsupported
@@ -464,7 +499,7 @@ mod tests {
         assert_eq!(
             child.diagnostics,
             [AgentProfileDiagnostic::ScopeUnsupported {
-                capability: "extension:goal".into()
+                capability: ScopeCapability::Goal
             }]
         );
     }
@@ -529,7 +564,7 @@ mod composition_tests {
         .unwrap();
         let selected = crate::capabilities::select_definitions(
             &definitions.iter().collect::<Vec<_>>(),
-            &crate::capabilities::ToolActivationPolicy {
+            &crate::capabilities::AgentActivation {
                 profile: root,
                 admitted_agents: [reviewer].into(),
                 ..Default::default()
@@ -546,6 +581,25 @@ mod composition_tests {
         assert!(selected.iter().any(|tool| tool.name == "read"));
         assert!(!selected.iter().any(|tool| tool.name == "grep"));
         assert_eq!(selected.len(), 2);
+        let mut root_registry = crate::tools::executor::ToolRegistry::new();
+        crate::tools::native::register_subagent_child_tools(
+            &mut root_registry,
+            &selected
+                .iter()
+                .filter(|tool| tool.name == "read")
+                .map(|tool| (*tool).clone())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        assert!(matches!(
+            root_registry.preflight(&crate::tools::types::ToolCall {
+                id: crate::runtime::identity::ToolCallId::new("root-cannot-call-child-tool"),
+                tool_id: crate::runtime::identity::ToolId::new("tool-grep"),
+                name: "grep".into(),
+                arguments: serde_json::json!({"pattern": "review"}),
+            }),
+            Err(crate::tools::executor::ToolPreflightError::UnknownTool { .. })
+        ));
     }
     #[test]
     fn cfg273_admitted_skill_selection_is_identical_in_root_and_named_scope() {

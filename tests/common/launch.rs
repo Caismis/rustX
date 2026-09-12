@@ -36,12 +36,6 @@ pub fn write_roles(workspace: &Path, subagents: &mut serde_json::Value) {
             .unwrap_or(existing);
         let mut document = metadata.clone();
         document["instructions"] = body.into();
-        if let Some(value) = document.as_object_mut().unwrap().remove("timeoutMs") {
-            document["timeout_ms"] = value;
-        }
-        if let Some(value) = document.as_object_mut().unwrap().remove("agentsMd") {
-            document["agents_md"] = value;
-        }
         std::fs::write(path, toml::to_string_pretty(&document).unwrap()).unwrap();
     }
 }

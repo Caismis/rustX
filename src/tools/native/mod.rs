@@ -19,7 +19,7 @@
 //! deliberately absent from every composition below. It is contributed by the
 //! Todo Native Agent Extension
 //! ([`ExtensionToolPlane`](crate::extensions::ExtensionToolPlane)),
-//! which is why it cannot be named in `defaultTools`, `--tools`,
+//! which is why it cannot be named in `agent.tools.builtin`, `--tools`,
 //! `--exclude-tools`, a role's `tools.builtin`, or a Workflow capability
 //! selection — and why `--no-tools` does not remove it. Its module lives here
 //! because this is where native Tool implementations live; ownership of its

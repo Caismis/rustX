@@ -20,19 +20,17 @@ control and does not disable external preparation.
 
 ## Exact Tool authority and native defaults
 
-An ordinary main Agent sees and can invoke exactly its frozen selected registry.
-Revision zero has no executable Tool authority; a prepared candidate publishes
-the selection. Default selection includes available built-ins named by
-`default_tools` (Read is an ordinary member) and admitted main Workflow tools.
-External Tools require the main Agent's explicit `tools.sources` selection;
-materialization for another Agent never exposes them to main. `--no-builtin-tools` removes all built-ins from this
-default selection, including generated Subagent/Workflow tools.
-`--tools a,b` narrows selection to those applicable registered names; external
-identities must first be selected through `tools.sources`.
-`--exclude-tools a,b` subtracts last, without reinsertion. Exclusions resolve
-against applicable availability, so excluding an already unselected available
-identity is valid, while unknown/ineligible or ambiguous names fail.
-`--no-tools` selects zero ordinary tools, including generated dispatchers.
+Root and named Agents resolve one [Agent Profile](agent-profiles.md) against
+admitted resources. Each frozen registry exposes only that Agent's selection.
+Root selects `agent.tools`, `agent.skills`, `agent.extensions`, `agent.agents`
+and `agent.workflows`. Named defaults use their independently authored profile
+against generation authority, never the root registry as a ceiling.
+
+`--tools a,b` is an explicit host profile layer selecting admitted ordinary
+names. Unknown or ambiguous CLI names fail. `--no-builtin-tools` and `--no-tools`
+restrict model exposure; `--exclude-tools a,b` subtracts last. None activates a
+source or changes invocation policy. Profile capabilities unavailable in the
+current generation produce typed diagnostics and suppression.
 
 ### Ordinary selection is one of two planes
 
@@ -55,7 +53,7 @@ incidental to where the implementation lives.
 
 Symmetrically, no selector can switch an extension on. `todo` is provided by
 the Todo Agent Extension and is rejected — with a diagnostic naming the
-extension — in `defaultTools`, `--tools`, `--exclude-tools`, a named
+extension — in `agent.tools.builtin`, `--tools`, `--exclude-tools`, a named
 Subagent's `tools.builtin`, and a Workflow's admitted capability set. It is not
 an ordinary available capability at all, so it never appears in the available
 catalog those selectors resolve against. See
@@ -238,7 +236,7 @@ to publish, and only then does the candidate commit. A definition that names
 an unknown capability, model, or Skill therefore rejects the whole candidate,
 and the previous complete generation stays authoritative in every half.
 
-`AgentDocument.timeout_ms` is an optional, definition-level positive
+`AgentProfileDocument.timeout_ms` is an optional, definition-level positive
 millisecond value. Admission rejects zero, malformed values, and values above
 the rustX-owned 86,400,000 millisecond (24 hour) maximum; it never clamps an
 invalid value. The validated `SubagentExecutionDeadline` is part of the
@@ -324,7 +322,7 @@ nominal:
 
 ### What `definition_digest` is, and is not
 
-`SubagentDefinitionDigest` is the identity of the **named definition
+`NamedAgentDefinitionDigest` is the identity of the **named definition
 itself** — the normalized semantics configuration declares for that agent
 (name, description, instruction document, explicit model reference,
 whole-lifecycle execution deadline, selector set, Skill selector set,

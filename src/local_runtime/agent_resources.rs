@@ -139,7 +139,8 @@ pub(crate) fn load(
     }
     let catalog =
         AgentCatalog::new(definitions).map_err(|e| RuntimeResourceLoadError::new(e.to_string()))?;
-    for (field, admission) in [("subagents.workflow", &document.workflow)] {
+    {
+        let (field, admission) = ("subagents.workflow", &document.workflow);
         catalog
             .admitted(&admission.iter().cloned().collect())
             .map_err(|e| RuntimeResourceLoadError::new(e.to_string()).at(workspace, field))?;
@@ -262,7 +263,6 @@ mod tests {
         for text in [
             "---\ndescription: old\n---\nbody",
             "description = 'x'\ninstructions = 'x'\nname = 'other'",
-            "description = 'x'",
             "description = 'x'\ninstructions = 'x'\nunknown = true",
         ] {
             assert!(parse(text).is_err());

@@ -6159,6 +6159,20 @@ impl ConversationRuntime {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    fn fixture_activation() -> crate::capabilities::AgentActivation {
+        let mut activation = crate::capabilities::AgentActivation::default();
+        activation.profile.tools.builtin.push("reload_proof".into());
+        activation.profile.skills = [
+            "exact-fit-skill",
+            "pinned-skill",
+            "reload-proof",
+            "late-skill",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        activation
+    }
 
     /// A Builtin-only frozen named-agent specification for registry-level
     /// tests: resolution is the resolver's concern, so a registry test
@@ -6614,13 +6628,28 @@ mod tests {
         let conversation_id = ConversationId::new("conv-headless");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
             conversation_id.clone(),
-            &workspace,
-            dir.path().join("artifacts"),
+            crate::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace,
+                dir.path().join("artifacts"),
+            )
+            .with_extensions(crate::extensions::NativeAgentExtensions::with_agent_status(
+                crate::context::AgentStatusConfig::default(),
+            ))
+            .with_extensions(
+                crate::extensions::NativeAgentExtensions::with_todo()
+                    .and_agent_status(options.status_engine.config().clone()),
+            ),
         )
         .expect("tool runtime");
         let base_tool_registry = base_tool_registry.unwrap_or_default();
+        let selected_builtin = base_tool_registry
+            .definitions()
+            .into_iter()
+            .filter(|tool| tool.origin.source().is_none())
+            .map(|tool| tool.name.clone())
+            .collect();
         let source_selection: std::collections::BTreeMap<_, _> = base_tool_registry
             .definitions()
             .into_iter()
@@ -6653,15 +6682,13 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(base_tool_registry),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                tool_activation: crate::capabilities::ToolActivationPolicy {
+                agent_activation: crate::capabilities::AgentActivation {
                     profile: crate::local_runtime::config::AgentProfileDocument {
                         tools: crate::capabilities::selection::ToolSelectionDocument {
-                            builtin: crate::local_runtime::config::builtin_root_profile()
-                                .tools
-                                .builtin,
+                            builtin: selected_builtin,
                             sources: source_selection,
                         },
-                        ..crate::local_runtime::config::builtin_root_profile()
+                        ..fixture_activation().profile
                     },
                     ..Default::default()
                 },
@@ -6782,6 +6809,11 @@ mod tests {
                     &workspace,
                     dir.path().join("artifacts"),
                 )
+                .with_extensions(
+                    crate::extensions::NativeAgentExtensions::with_agent_status(
+                        crate::context::AgentStatusConfig::default(),
+                    ),
+                )
             },
         )
         .expect("tool runtime");
@@ -6792,7 +6824,7 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                agent_activation: fixture_activation(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
@@ -6839,6 +6871,10 @@ mod tests {
     /// Builds the same headless runtime fixture with a conversation-owned
     /// subagent registry, so the runtime-level durability sink is exercised
     /// instead of only the registry's isolated publication policy.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one complete deterministic fixture boundary"
+    )]
     async fn headless_runtime_over_store_with_subagents(
         dir: &tempfile::TempDir,
         conversation_id: &str,
@@ -6860,6 +6896,11 @@ mod tests {
                     &workspace,
                     dir.path().join("artifacts"),
                 )
+                .with_extensions(
+                    crate::extensions::NativeAgentExtensions::with_agent_status(
+                        crate::context::AgentStatusConfig::default(),
+                    ),
+                )
             },
         )
         .expect("tool runtime");
@@ -6870,7 +6911,7 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                agent_activation: fixture_activation(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
@@ -6977,6 +7018,11 @@ mod tests {
                     &workspace,
                     dir.path().join("artifacts"),
                 )
+                .with_extensions(
+                    crate::extensions::NativeAgentExtensions::with_agent_status(
+                        crate::context::AgentStatusConfig::default(),
+                    ),
+                )
             },
         )
         .expect("tool runtime");
@@ -6987,7 +7033,7 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                agent_activation: fixture_activation(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
@@ -8560,10 +8606,12 @@ mod tests {
         // First process: accept one inbound item durably, then die before
         // any adoption.
         {
-            let _tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+            let _tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
                 ConversationId::new("conv-headless"),
-                &workspace,
-                &artifacts,
+                crate::tools::runtime::ConversationRuntimeConfig::new(&workspace, &artifacts)
+                    .with_extensions(crate::extensions::NativeAgentExtensions::with_agent_status(
+                        crate::context::AgentStatusConfig::default(),
+                    )),
             )
             .expect("tool runtime");
             let store = crate::durable::SqliteConversationStore::open(
@@ -9087,7 +9135,7 @@ mod tests {
                 "tool_generation_b",
                 "Tool generation B",
             )),
-            tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+            agent_activation: fixture_activation(),
             skill_discovery: crate::skills::SkillDiscoveryConfig {
                 automatic_roots: Vec::new(),
                 explicit_paths: vec![skill],
@@ -9215,7 +9263,7 @@ mod tests {
         loader.set_capability_inputs(crate::capabilities::CapabilityResourceInputs {
             source_demand: crate::capabilities::source::ToolSourceDemand::default(),
             base_tool_registry: Arc::new(with_native_read(registry)),
-            tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+            agent_activation: fixture_activation(),
             skill_discovery: crate::skills::SkillDiscoveryConfig {
                 automatic_roots: Vec::new(),
                 explicit_paths: vec![skill.clone()],
@@ -9420,7 +9468,7 @@ mod tests {
                 crate::runtime::resources::ManagedPythonCatalog::default(),
             ),
             base_tool_registry: Arc::new(ToolRegistry::new()),
-            tool_activation: crate::capabilities::ToolActivationPolicy {
+            agent_activation: crate::capabilities::AgentActivation {
                 profile: crate::local_runtime::config::AgentProfileDocument {
                     tools: crate::capabilities::selection::ToolSelectionDocument {
                         builtin: crate::local_runtime::config::builtin_root_profile()
@@ -9432,7 +9480,7 @@ mod tests {
                         )]
                         .into(),
                     },
-                    ..crate::local_runtime::config::builtin_root_profile()
+                    ..fixture_activation().profile
                 },
                 ..Default::default()
             },
@@ -9808,7 +9856,7 @@ mod tests {
                 crate::runtime::resources::ManagedPythonCatalog::default(),
             ),
             base_tool_registry: Arc::new(ToolRegistry::new()),
-            tool_activation: crate::capabilities::ToolActivationPolicy {
+            agent_activation: crate::capabilities::AgentActivation {
                 profile: crate::local_runtime::config::AgentProfileDocument {
                     tools: crate::capabilities::selection::ToolSelectionDocument {
                         builtin: crate::local_runtime::config::builtin_root_profile()
@@ -9820,7 +9868,7 @@ mod tests {
                         )]
                         .into(),
                     },
-                    ..crate::local_runtime::config::builtin_root_profile()
+                    ..fixture_activation().profile
                 },
                 ..Default::default()
             },
@@ -9955,7 +10003,7 @@ mod tests {
                 crate::runtime::resources::ManagedPythonCatalog::default(),
             ),
             base_tool_registry: Arc::new(ToolRegistry::new()),
-            tool_activation: crate::capabilities::ToolActivationPolicy {
+            agent_activation: crate::capabilities::AgentActivation {
                 profile: crate::local_runtime::config::AgentProfileDocument {
                     tools: crate::capabilities::selection::ToolSelectionDocument {
                         builtin: crate::local_runtime::config::builtin_root_profile()
@@ -9967,7 +10015,7 @@ mod tests {
                         )]
                         .into(),
                     },
-                    ..crate::local_runtime::config::builtin_root_profile()
+                    ..fixture_activation().profile
                 },
                 ..Default::default()
             },
@@ -10098,7 +10146,7 @@ mod tests {
                 crate::runtime::resources::ManagedPythonCatalog::default(),
             ),
             base_tool_registry: Arc::new(ToolRegistry::new()),
-            tool_activation: crate::capabilities::ToolActivationPolicy {
+            agent_activation: crate::capabilities::AgentActivation {
                 profile: crate::local_runtime::config::AgentProfileDocument {
                     tools: crate::capabilities::selection::ToolSelectionDocument {
                         builtin: crate::local_runtime::config::builtin_root_profile()
@@ -10110,7 +10158,7 @@ mod tests {
                         )]
                         .into(),
                     },
-                    ..crate::local_runtime::config::builtin_root_profile()
+                    ..fixture_activation().profile
                 },
                 ..Default::default()
             },
@@ -10379,7 +10427,7 @@ mod tests {
                 crate::runtime::resources::ManagedPythonCatalog::default(),
             ),
             base_tool_registry: Arc::new(ToolRegistry::new()),
-            tool_activation: crate::capabilities::ToolActivationPolicy {
+            agent_activation: crate::capabilities::AgentActivation {
                 profile: crate::local_runtime::config::AgentProfileDocument {
                     tools: crate::capabilities::selection::ToolSelectionDocument {
                         builtin: crate::local_runtime::config::builtin_root_profile()
@@ -10391,7 +10439,7 @@ mod tests {
                         )]
                         .into(),
                     },
-                    ..crate::local_runtime::config::builtin_root_profile()
+                    ..fixture_activation().profile
                 },
                 ..Default::default()
             },
@@ -10829,19 +10877,33 @@ mod tests {
         let conversation_id = ConversationId::new("conv-a");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
             conversation_id.clone(),
-            &workspace,
-            dir.path().join("artifacts"),
+            crate::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace,
+                dir.path().join("artifacts"),
+            )
+            .with_extensions(
+                crate::extensions::NativeAgentExtensions::with_agent_status(
+                    crate::context::AgentStatusConfig::default(),
+                ),
+            ),
         )
         .expect("tool runtime");
         let other = ConversationId::new("conv-b");
         let other_workspace = dir.path().join("workspace-other");
         std::fs::create_dir_all(&other_workspace).expect("other workspace");
-        let other_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+        let other_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
             other.clone(),
-            &other_workspace,
-            dir.path().join("artifacts-other"),
+            crate::tools::runtime::ConversationRuntimeConfig::new(
+                &other_workspace,
+                dir.path().join("artifacts-other"),
+            )
+            .with_extensions(
+                crate::extensions::NativeAgentExtensions::with_agent_status(
+                    crate::context::AgentStatusConfig::default(),
+                ),
+            ),
         )
         .expect("other tool runtime");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
@@ -10851,7 +10913,7 @@ mod tests {
                 workspace: other_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
                 extension_tools: other_runtime.extension_tool_plane(),
-                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                agent_activation: fixture_activation(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: other_runtime.environment().clone(),
@@ -10920,6 +10982,9 @@ mod tests {
                 &workspace,
                 dir.path().join("artifacts"),
             )
+            .with_extensions(crate::extensions::NativeAgentExtensions::with_agent_status(
+                crate::context::AgentStatusConfig::default(),
+            ))
             .with_extensions(
                 crate::extensions::NativeAgentExtensions::with_agent_status(
                     crate::context::AgentStatusConfig::default(),
@@ -10934,7 +10999,7 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                agent_activation: fixture_activation(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
@@ -14697,10 +14762,17 @@ mod tests {
         let conversation_id = ConversationId::new("conv-204-frozen-policy");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
             conversation_id.clone(),
-            &workspace,
-            dir.path().join("artifacts"),
+            crate::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace,
+                dir.path().join("artifacts"),
+            )
+            .with_extensions(
+                crate::extensions::NativeAgentExtensions::with_agent_status(
+                    crate::context::AgentStatusConfig::default(),
+                ),
+            ),
         )
         .expect("tool runtime");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
@@ -14708,9 +14780,18 @@ mod tests {
                 source_demand: crate::capabilities::source::ToolSourceDemand::default(),
                 conversation_id,
                 workspace: tool_runtime.workspace().clone(),
+                agent_activation: {
+                    let mut activation = fixture_activation();
+                    activation.profile.tools.builtin = registry
+                        .definitions()
+                        .into_iter()
+                        .filter(|tool| tool.origin.source().is_none())
+                        .map(|tool| tool.name.clone())
+                        .collect();
+                    activation
+                },
                 base_tool_registry: Arc::new(registry),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
@@ -15491,10 +15572,17 @@ mod tests {
         let conversation_id = ConversationId::new("conv-204-guard-drain");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
             conversation_id.clone(),
-            &workspace,
-            dir.path().join("artifacts"),
+            crate::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace,
+                dir.path().join("artifacts"),
+            )
+            .with_extensions(
+                crate::extensions::NativeAgentExtensions::with_agent_status(
+                    crate::context::AgentStatusConfig::default(),
+                ),
+            ),
         )
         .expect("tool runtime");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
@@ -15502,9 +15590,18 @@ mod tests {
                 source_demand: crate::capabilities::source::ToolSourceDemand::default(),
                 conversation_id,
                 workspace: tool_runtime.workspace().clone(),
+                agent_activation: {
+                    let mut activation = fixture_activation();
+                    activation.profile.tools.builtin = registry
+                        .definitions()
+                        .into_iter()
+                        .filter(|tool| tool.origin.source().is_none())
+                        .map(|tool| tool.name.clone())
+                        .collect();
+                    activation
+                },
                 base_tool_registry: Arc::new(registry),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
@@ -17131,6 +17228,10 @@ mod tests {
     /// same untouched tool-runtime/capability bundle can immediately build a
     /// valid runtime afterwards.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one complete deterministic fixture boundary"
+    )]
     async fn invalid_model_timeout_policy_fails_before_runtime_ownership_transfer() {
         struct Fixture {
             tool_runtime: crate::tools::runtime::ConversationToolRuntime,
@@ -17177,10 +17278,17 @@ mod tests {
         let conversation_id = ConversationId::new("conv-timeout-construction");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
             conversation_id.clone(),
-            &workspace,
-            dir.path().join("artifacts"),
+            crate::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace,
+                dir.path().join("artifacts"),
+            )
+            .with_extensions(
+                crate::extensions::NativeAgentExtensions::with_agent_status(
+                    crate::context::AgentStatusConfig::default(),
+                ),
+            ),
         )
         .expect("tool runtime");
         let capability = crate::capabilities::CapabilityCoordinator::new(
@@ -17190,7 +17298,7 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(ToolRegistry::new()),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                agent_activation: fixture_activation(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
@@ -17241,6 +17349,10 @@ mod tests {
     /// every observation. The same untouched tool-runtime/capability bundle
     /// can immediately build a valid runtime afterwards.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one complete deterministic fixture boundary"
+    )]
     async fn invalid_tool_deadline_policy_fails_before_runtime_ownership_transfer() {
         struct Fixture {
             tool_runtime: crate::tools::runtime::ConversationToolRuntime,
@@ -17286,10 +17398,17 @@ mod tests {
         let conversation_id = ConversationId::new("conv-tool-deadline-construction");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
             conversation_id.clone(),
-            &workspace,
-            dir.path().join("artifacts"),
+            crate::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace,
+                dir.path().join("artifacts"),
+            )
+            .with_extensions(
+                crate::extensions::NativeAgentExtensions::with_agent_status(
+                    crate::context::AgentStatusConfig::default(),
+                ),
+            ),
         )
         .expect("tool runtime");
         let capability = crate::capabilities::CapabilityCoordinator::new(
@@ -17299,7 +17418,7 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(ToolRegistry::new()),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                agent_activation: fixture_activation(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
@@ -17370,10 +17489,12 @@ mod tests {
         std::fs::create_dir_all(&workspace).expect("workspace");
         let artifacts = dir.path().join("artifacts");
         std::fs::create_dir_all(&artifacts).expect("artifacts");
-        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
             conversation_id.clone(),
-            &workspace,
-            &artifacts,
+            crate::tools::runtime::ConversationRuntimeConfig::new(&workspace, &artifacts)
+                .with_extensions(crate::extensions::NativeAgentExtensions::with_agent_status(
+                    crate::context::AgentStatusConfig::default(),
+                )),
         )
         .expect("tool runtime");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
@@ -17383,7 +17504,7 @@ mod tests {
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                agent_activation: fixture_activation(),
                 skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),

@@ -257,8 +257,8 @@ The harmless `RUSTX_EXAMPLE_MODE` entry demonstrates the authorized runtime
 environment. Keep provider credentials in `models.toml`'s `api_key` reference,
 not in this table.
 
-`default_tools` selects ordinary built-ins; Read is default-enabled.
-`default_tools: []` selects no ordinary built-ins, while explicitly admitted
+`agent.tools.builtin` selects ordinary built-ins; Read is default-enabled.
+`agent.tools.builtin: []` selects no ordinary built-ins, while explicitly admitted
 main Workflows remain default-eligible. `--no-builtin-tools` removes all
 built-ins, including generated dispatchers, from default selection.
 `--tools a,b` is an exact allowlist; `--exclude-tools a,b` subtracts last.
@@ -268,7 +268,7 @@ flags; `--tools` also conflicts with `--no-builtin-tools`.
 
 Every control in this paragraph addresses the *ordinary* capability plane.
 A Tool contributed by a Native Agent Extension — `todo` — is composed under
-`extensions` and is unnameable here: listing it in `default_tools`, `--tools`
+`extensions` and is unnameable here: listing it in `agent.tools.builtin`, `--tools`
 or `--exclude-tools` is a validation error, and `--no-tools` does not remove
 it. A model request with no Tools at all therefore needs `--no-tools` *and*
 `"extensions": { "todo": { "enabled": false } }`.
@@ -310,7 +310,7 @@ workspace/.agents/workflows/parallel_review.yaml
 ```
 
 Workflow files define their own existence through canonical discovery.
-`workflows.main` selects the model-visible subset. Every selected id becomes a
+`agent.workflows` selects the model-visible subset. Every selected id becomes a
 concrete Tool named by that id. Malformed canonical YAML rejects the complete
 candidate even when the Workflow is not exposed to the main Agent.
 
@@ -334,7 +334,7 @@ terminal call. Invalid or mixed turns perform no ordinary side effect and
 receive bounded feedback so the child can continue. Workflow-local values and
 child transcripts do not enter the parent conversation history.
 
-Workflow subagent admission is independent from `subagents.main`: a profile
+Workflow subagent admission is independent from `agent.agents`: a profile
 must be listed in `subagents.workflow` to be usable by a Workflow Agent, and
 being main-visible does not grant Workflow admission. In this example
 `navigator` is main-admitted while `reviewer`, `planner` and `implementer` are Workflow-only. A reload

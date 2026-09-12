@@ -485,7 +485,11 @@ async fn agent_dirty_bytes_reach_exact_tool_context_after_child_settlement_with_
         .resolve_workflow(&profile("reviewer"), Some(&invocation))
         .unwrap();
     assert_eq!(default.definition_digest, frozen.definition_digest);
-    assert_ne!(default.profile_digest(), frozen.profile_digest());
+    assert_eq!(
+        default.profile_digest(),
+        frozen.profile_digest(),
+        "the named fixture already selects no extensions"
+    );
     let mut definition = candidate_definition(true);
     let WorkflowNodeDefinition::Agent {
         invocation_override,

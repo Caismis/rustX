@@ -41,19 +41,24 @@ chat_reasoning_replay = "omit"
 
 const RUNTIME_CONFIG_TOML: &str = r#"agent_id = "agent-composed"
 
-[model]
-model = "local/composed-model"
-
 [context]
 reserve_tokens = 1024
 keep_recent_tokens = 8192
 
+
+[native_tools]
 [native_tools.bash]
 execution = "model_selectable"
 concurrency = "sequential"
 
+
 [environment]
 RUSTX_FIXTURE = "1"
+
+
+[agent]
+[agent.model]
+model = "local/composed-model"
 "#;
 
 /// Writes the startup files into a temporary root and returns the explicit

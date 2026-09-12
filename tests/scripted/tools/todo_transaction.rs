@@ -611,6 +611,7 @@ async fn a_committed_list_survives_the_compaction_that_retires_its_result() {
     let reopened = rustx::tools::runtime::ConversationToolRuntime::from_config(
         fixture.runtime.conversation_id().clone(),
         rustx::tools::runtime::ConversationRuntimeConfig {
+            extensions: rustx::extensions::NativeAgentExtensions::with_todo(),
             durable_binding: Some(rustx::durable::ConversationStoreBinding::new(Arc::clone(
                 &fixture.store,
             )
@@ -705,6 +706,7 @@ async fn every_committed_list_survives_the_restart_that_reads_it_back() {
     let restarted = rustx::tools::runtime::ConversationToolRuntime::from_config(
         conversation_id,
         rustx::tools::runtime::ConversationRuntimeConfig {
+            extensions: rustx::extensions::NativeAgentExtensions::with_todo(),
             durable_binding: Some(rustx::durable::ConversationStoreBinding::new(store)),
             ..rustx::tools::runtime::ConversationRuntimeConfig::new(
                 &workspace,

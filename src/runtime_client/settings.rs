@@ -373,7 +373,7 @@ mod tests {
         // and the frozen composition is the only input it has.
         let frozen = serde_json::from_value::<crate::extensions::NativeAgentExtensionsDocument>(
             serde_json::json!({
-                "agentStatus": {
+                "agent_status": {
                     "enabled": true,
                     "time": {"enabled": true, "timezone": "Asia/Shanghai"},
                     "background": {"enabled": true}

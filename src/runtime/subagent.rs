@@ -174,7 +174,6 @@ pub use catalog::{
     MAX_SUBAGENT_EXECUTION_DEADLINE_MS, NamedAgentDefinition, NamedAgentDefinitionDigest,
     NamedAgentDefinitionError, SUBAGENT_DEFINITION_DIGEST_VERSION, SubagentAdmissionError,
     SubagentExecutionDeadline, SubagentExecutionDeadlineError, SubagentName, SubagentNameError,
-    SubagentProjectInstructionPolicy,
 };
 pub use invocation::{
     MAX_OVERRIDE_SKILLS, MAX_OVERRIDE_TOOLS, SubagentInvocationOverride, SubagentOverrideError,

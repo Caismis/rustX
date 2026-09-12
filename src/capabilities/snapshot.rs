@@ -113,6 +113,7 @@ impl CapabilitySnapshot {
         self.resolved_profile = profile;
         self
     }
+    #[must_use]
     pub fn resolved_profile(&self) -> Option<&crate::runtime::agent_profile::ResolvedAgentProfile> {
         self.resolved_profile.as_deref()
     }

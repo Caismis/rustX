@@ -1,9 +1,9 @@
-# Project runtime configuration. Paths remain subject to project trust and containment.
-# TOML configuration; fixed Workflows use YAML and model-facing resources use Markdown.
+# Runtime child capacity; Workflow static admission remains separate.
 [subagents]
-main = []
 workflow = ["reviewer"]
 max_concurrent = 2
 
-[workflows]
-main = ["typed_agent", "parallel_checks", "human_plan", "specialized_agent"]
+# One Agent Profile selects from admitted resources. It does not create them.
+[agent]
+agents = []
+workflows = ["typed_agent", "parallel_checks", "human_plan", "specialized_agent"]

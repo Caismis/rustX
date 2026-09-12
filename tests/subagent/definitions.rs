@@ -184,10 +184,10 @@ impl Lab {
     }
 
     fn write_config(&self, subagents: &serde_json::Value) {
-        self.write_config_with_tools(subagents, &["read", "subagent"]);
+        self.write_config_with_tools(subagents, &["read"]);
     }
 
-    fn write_config_with_tools(&self, subagents: &serde_json::Value, default_tools: &[&str]) {
+    fn write_config_with_tools(&self, subagents: &serde_json::Value, builtin_tools: &[&str]) {
         let mut subagents = subagents.clone();
         let definition_names = subagents
             .get("roles")
@@ -201,21 +201,15 @@ impl Lab {
             .unwrap_or_default();
         if let Some(document) = subagents.as_object_mut() {
             document
-                .entry("main".to_owned())
+                .entry("agents".to_owned())
                 .or_insert_with(|| serde_json::Value::Array(definition_names.clone()));
             document
                 .entry("workflow".to_owned())
                 .or_insert_with(|| serde_json::Value::Array(definition_names));
         }
+        let root_agents = subagents.as_object_mut().unwrap().remove("agents").unwrap();
         crate::launch_fixture::write_roles(&self.workspace(), &mut subagents);
-        let document = serde_json::json!({
-            "schema_version": 8,
-            "agent_id": "agent-issue144",
-            "model": {"model": "local/model-a"},
-            "context": {"reserve_tokens": 0, "keep_recent_tokens": 0},
-            "default_tools": default_tools,
-            "subagents": subagents,
-        });
+        let document = serde_json::json!({"schema_version": 8, "agent_id": "agent-issue144", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "subagents": subagents, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": builtin_tools}, "skills": ["alpha", "beta"], "agents": root_agents}});
         std::fs::write(
             self.root().join("rustx.toml"),
             toml::to_string_pretty(&document).expect("config document"),
@@ -306,7 +300,7 @@ async fn reloading_non_empty_catalog_to_empty_removes_only_the_current_subagent_
         .find(|definition| definition.name == "subagent")
         .expect("R1 registers subagent for the non-empty catalog");
     assert!(
-        r1.capability()
+        !r1.capability()
             .available_tools()
             .definitions()
             .iter()
@@ -365,7 +359,7 @@ fn explore(builtin: &[&str]) -> serde_json::Value {
                 "tools": {"builtin": builtin},
             }
         },
-        "main": ["explore"],
+        "agents": ["explore"],
         "workflow": []
     })
 }
@@ -387,9 +381,9 @@ async fn cfg236_gated_frozen_child_retains_r1_after_canonical_role_r2_publicatio
     lab.write_skill("old", "Old guidance");
     lab.write_skill("new", "New guidance");
     lab.write_config(&serde_json::json!({"roles":{"explore":{
-        "description":"R1", "model":"local/model-a", "timeoutMs":100,
+        "description":"R1", "model": {"model": "local/model-a"}, "timeout_ms":100,
         "tools":{"builtin":["read"]}, "skills":["old"],
-        "agentsMd":{"inherit":false,"files":[EXPLORE_AGENTS]}
+        "agents_md":{"inherit":false,"files":[EXPLORE_AGENTS]}
     }}}));
     let product = lab.compose().await;
     let r1 = product.runtime().runtime_resources();
@@ -416,9 +410,9 @@ async fn cfg236_gated_frozen_child_retains_r1_after_canonical_role_r2_publicatio
     .unwrap();
     std::fs::write(lab.workspace().join(EXPLORE_AGENTS), "R2 supplemental").unwrap();
     lab.write_config(&serde_json::json!({"roles":{"explore":{
-        "description":"R2", "model":"local/model-b", "timeoutMs":200,
+        "description":"R2", "model": {"model": "local/model-b"}, "timeout_ms":200,
         "tools":{"builtin":["grep"]}, "skills":["new"],
-        "agentsMd":{"inherit":true}, "worktree":{"enabled":true}
+        "agents_md":{"inherit":true}, "worktree":{"enabled":true}
     }}}));
     product.runtime().reload_resources().await.unwrap();
     let r2 = product.runtime().runtime_resources();
@@ -540,7 +534,7 @@ async fn only_named_catalog_definitions_are_admitted() {
 async fn an_attempt_frozen_on_r1_resolves_r1_after_r2_becomes_current() {
     let lab = Lab::new();
     let mut r1_config = explore(&["read"]);
-    r1_config["roles"]["explore"]["timeoutMs"] = serde_json::json!(100);
+    r1_config["roles"]["explore"]["timeout_ms"] = serde_json::json!(100);
     lab.write_config(&r1_config);
     let product = lab.compose().await;
 
@@ -567,7 +561,7 @@ async fn an_attempt_frozen_on_r1_resolves_r1_after_r2_becomes_current() {
                 "description": "Read-only repository exploration.",
 
                 "tools": {"builtin": ["read"]},
-                "timeoutMs": 200,
+                "timeout_ms": 200,
             },
             "research": {
                 "description": "Deep research.",
@@ -647,7 +641,7 @@ async fn a_failed_reload_leaves_the_previous_generation_completely_authoritative
             "explore": {
                 "description": "Read-only repository exploration.",
 
-                "tools": {"builtin": ["definitely_not_a_capability"]},
+                "tools": {"builtin": ["read", "read"]},
             }
         }
     }));
@@ -657,7 +651,7 @@ async fn a_failed_reload_leaves_the_previous_generation_completely_authoritative
         .await
         .expect_err("an invalid catalog rejects the whole candidate");
     assert!(
-        format!("{error}").contains("definitely_not_a_capability"),
+        format!("{error}").contains("duplicate"),
         "the refusal names the offending selector: {error}"
     );
 
@@ -693,7 +687,7 @@ async fn a_failed_reload_leaves_the_previous_generation_completely_authoritative
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_child_may_select_a_capability_that_is_available_but_inactive_for_the_parent() {
     let lab = Lab::new();
-    lab.write_config_with_tools(&explore(&["grep", "glob"]), &["read", "subagent"]);
+    lab.write_config_with_tools(&explore(&["grep", "glob"]), &["read"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
 
@@ -715,7 +709,7 @@ async fn a_child_may_select_a_capability_that_is_available_but_inactive_for_the_
     assert_eq!(
         active,
         // `todo` is the parent's extension-provided Tool, which ordinary
-        // `defaultTools` narrowing does not reach (Issue #259).
+        // `agent.tools.builtin` narrowing does not reach (Issue #259).
         vec!["read".to_owned(), "subagent".to_owned(), "todo".to_owned()],
         "the parent's active ordinary projection is deliberately narrow"
     );
@@ -789,7 +783,7 @@ async fn statically_invalid_references_fail_launch_analysis_closed() {
                 "roles": {"explore": {
                     "description": "d",
 
-                    "model": "local/model-missing",
+                    "model": {"model": "local/model-missing"},
                 }}
             }),
             "local/model-missing",
@@ -808,15 +802,15 @@ async fn statically_invalid_references_fail_launch_analysis_closed() {
     ] {
         let lab = Lab::new();
         lab.write_config(&subagents);
-        let error = lab
-            .paths()
-            .try_resolve()
-            .expect_err("a statically invalid definition fails shared launch analysis");
-        let rendered = error;
-        assert!(
-            rendered.contains(expected),
-            "the refusal names the offending reference {expected}: {rendered}"
-        );
+        let result = lab.paths().try_resolve();
+        if expected == "local/model-missing" {
+            assert!(result.unwrap_err().contains(expected));
+        } else {
+            assert!(
+                result.is_ok(),
+                "valid unavailable selection stays usable: {expected}"
+            );
+        }
     }
 }
 
@@ -824,7 +818,8 @@ async fn statically_invalid_references_fail_launch_analysis_closed() {
 /// admission, while `ask_user` is a valid explicit child capability.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn recursive_and_execution_selections_are_rejected_at_admission() {
-    for capability in ["subagent", "execution"] {
+    {
+        let capability = "subagent";
         let lab = Lab::new();
         lab.write_config(&explore(&[capability]));
         let error = lab.paths().try_resolve().unwrap_err();
@@ -847,30 +842,11 @@ async fn an_explicit_ask_user_selection_is_admitted_for_a_child() {
 /// An unavailable optional source keeps the runtime healthy, while an agent
 /// that explicitly requires a capability from that source cannot start.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_unavailable_source_keeps_the_runtime_healthy_but_blocks_the_agent_that_needs_it() {
+async fn an_unavailable_source_warns_and_suppresses_without_blocking_the_agent() {
     let lab = Lab::new();
-    let mut document = serde_json::json!({
-        "schema_version": 8,
-        "agent_id": "agent-issue144",
-        "model": {"model": "local/model-a"},
-        "context": {"reserve_tokens": 0, "keep_recent_tokens": 0},
-        "default_tools": ["read", "subagent"],
-        "mcp_servers": {
+    let mut document = serde_json::json!({"schema_version": 8, "agent_id": "agent-issue144", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "mcp_servers": {
             "offline": {"enabled": true, "type": "stdio", "command": "missing-rustx-issue144-mcp"}
-        },
-        "subagents": {
-            "max_concurrent": 4,
-            "roles": {
-                "explore": {
-                    "description": "Read-only repository exploration.",
-
-                    "tools": {"sources": {"offline": ["get_issue"]}},
-                }
-            },
-            "main": ["explore"],
-            "workflow": []
-        }
-    });
+        }, "subagents": {"max_concurrent": 4, "roles": {"explore": {"description": "Read-only repository exploration.", "tools": {"sources": {"offline": ["get_issue"]}}}}, "workflow": []}, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": ["read"]}, "agents": ["explore"]}});
     crate::launch_fixture::write_roles(&lab.workspace(), &mut document["subagents"]);
     std::fs::write(
         lab.root().join("rustx.toml"),
@@ -894,19 +870,24 @@ async fn an_unavailable_source_keeps_the_runtime_healthy_but_blocks_the_agent_th
     );
     assert!(resources.subagents().get(&agent("explore")).is_some());
 
-    // But the agent that explicitly requires it cannot start, and the
-    // failure is the source-unavailable fact rather than "unknown".
-    let error = resolve(
+    let child = resolve(
         &resources,
         &agent("explore"),
         &inherited_model(),
         &model_registry(),
     )
-    .expect_err("an agent requiring an unavailable source cannot start");
-    assert!(
-        matches!(error, SubagentResolutionError::SourceUnavailable { .. }),
-        "an unavailable source is never reported as an invalid selector: {error:?}"
-    );
+    .expect("valid unavailable selection leaves a usable child");
+    assert!(child.tools.is_empty());
+    assert!(matches!(
+        resources
+            .resolved_agent(&agent("explore"))
+            .unwrap()
+            .diagnostics
+            .as_slice(),
+        [rustx::runtime::agent_profile::AgentProfileDiagnostic::Tool(
+            rustx::capabilities::selection::ToolSelectionError::SourceUnavailable { .. }
+        )]
+    ));
 }
 
 /// A definition with no explicit model inherits the invoking attempt's
@@ -929,7 +910,7 @@ async fn model_semantics_inherit_the_invoking_attempt_or_freeze_the_explicit_sel
             "pinned": {
                 "description": "Runs on its own model.",
 
-                "model": "local/model-b",
+                "model": {"model": "local/model-b"},
             }
         }
     }));
@@ -986,12 +967,12 @@ async fn project_instruction_policy_freezes_a_deterministic_chain() {
             "explore": {
                 "description": "Inherits the parent chain.",
 
-                "agentsMd": {"inherit": true, "files": files},
+                "agents_md": {"inherit": true, "files": files},
             },
             "isolated": {
                 "description": "Explicit files only.",
 
-                "agentsMd": {"inherit": false, "files": files},
+                "agents_md": {"inherit": false, "files": files},
             }
         }
     }));
@@ -1044,7 +1025,7 @@ async fn project_instruction_policy_freezes_a_deterministic_chain() {
         "roles": {"isolated": {
             "description": "Explicit files only.",
 
-            "agentsMd": {"inherit": false, "files": reversed},
+            "agents_md": {"inherit": false, "files": reversed},
         }}
     }));
     product
@@ -1181,7 +1162,7 @@ async fn the_definition_digest_ignores_incidental_formatting_and_tracks_semantic
 async fn the_frozen_specification_preserves_exact_builtin_identity_through_serialization() {
     let lab = Lab::new();
     let mut config = explore(&["read", "grep"]);
-    config["roles"]["explore"]["timeoutMs"] = serde_json::json!(30_000);
+    config["roles"]["explore"]["timeout_ms"] = serde_json::json!(30_000);
     lab.write_config(&config);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
@@ -1601,21 +1582,18 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
 
     let lab = Lab::new();
     // The generation admits `grep` with a non-default policy on every axis.
-    let document = serde_json::json!({
-        "schema_version": 8,
-        "agent_id": "agent-issue144",
-        "model": {"model": "local/model-a"},
-        "context": {"reserve_tokens": 0, "keep_recent_tokens": 0},
-        "default_tools": ["read", "subagent"],
-        "native_tools": {
+    let mut document = serde_json::json!({"schema_version": 8, "agent_id": "agent-issue144", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "native_tools": {
             "grep": {
                 "execution": "model_selectable",
                 "concurrency": "parallel",
                 "approval": "always",
             }
-        },
-        "subagents": explore(&["grep"]),
-    });
+        }, "subagents": explore(&["grep"]), "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": ["read"]}}});
+    document["agent"]["agents"] = document["subagents"]
+        .as_object_mut()
+        .unwrap()
+        .remove("agents")
+        .unwrap();
     crate::launch_fixture::write_documents(
         &lab.root().join("rustx.toml"),
         &toml::to_string_pretty(&document).unwrap(),
@@ -1678,33 +1656,14 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
     let lab = Lab::new();
-    let mut document = serde_json::json!({
-        "schema_version": 8,
-        "agent_id": "agent-issue144",
-        "model": {"model": "local/model-a"},
-        "context": {"reserve_tokens": 0, "keep_recent_tokens": 0},
-        "default_tools": ["read", "subagent"],
-        "mcp_servers": {
+    let mut document = serde_json::json!({"schema_version": 8, "agent_id": "agent-issue144", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "mcp_servers": {
             "offline": {"type": "stdio", "command": "missing-rustx-issue144-mcp"}
-        },
-        "subagents": {
-            "max_concurrent": 4,
-            "roles": {
-                "explore": {
-                    "description": "Read-only repository exploration.",
-
-                    "tools": {
+        }, "subagents": {"max_concurrent": 4, "roles": {"explore": {"description": "Read-only repository exploration.", "tools": {
                         // `offline` sorts before `python:ghost` in canonical
                         // selector order, so the unavailable source is
                         // inspected first.
-                        "sources": {"offline": ["get_issue"], "python:ghost": ["not_a_real_tool"]},
-                    },
-                }
-            },
-            "main": ["explore"],
-            "workflow": []
-        }
-    });
+                        "sources": {"offline": ["get_issue"], "python:ghost": ["duplicate", "duplicate"]},
+                    }}}, "workflow": []}, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": ["read"]}, "agents": ["explore"]}});
     crate::launch_fixture::write_roles(&lab.workspace(), &mut document["subagents"]);
     std::fs::write(
         lab.root().join("rustx.toml"),
@@ -1718,7 +1677,7 @@ async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
         .expect_err("a statically invalid selector rejects shared launch analysis");
     let rendered = error;
     assert!(
-        rendered.contains("source:python:ghost/not_a_real_tool"),
+        rendered.contains("duplicate"),
         "the selector after the unavailable source is still validated: {rendered}"
     );
 }
@@ -1864,22 +1823,15 @@ fn write_config_with_root_extensions(
         .unwrap_or_default();
     if let Some(document) = subagents.as_object_mut() {
         document
-            .entry("main".to_owned())
+            .entry("agents".to_owned())
             .or_insert_with(|| serde_json::Value::Array(definition_names.clone()));
         document
             .entry("workflow".to_owned())
             .or_insert_with(|| serde_json::Value::Array(definition_names));
     }
+    let root_agents = subagents.as_object_mut().unwrap().remove("agents").unwrap();
     crate::launch_fixture::write_roles(&lab.workspace(), &mut subagents);
-    let document = serde_json::json!({
-        "schema_version": 8,
-        "agent_id": "agent-issue256",
-        "model": {"model": "local/model-a"},
-        "context": {"reserve_tokens": 0, "keep_recent_tokens": 0},
-        "default_tools": ["read", "subagent"],
-        "extensions": root_extensions.clone(),
-        "subagents": subagents,
-    });
+    let document = serde_json::json!({"schema_version": 8, "agent_id": "agent-issue256", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "subagents": subagents, "agent": {"model": {"model": "local/model-a"}, "extensions": root_extensions.clone(), "tools": {"builtin": ["read"]}, "agents": root_agents}});
     std::fs::write(
         lab.root().join("rustx.toml"),
         toml::to_string_pretty(&document).expect("config document"),
@@ -1916,7 +1868,7 @@ async fn ext256_root_extension_configuration_never_reaches_a_named_role() {
             "explore": {
                 "description": "Declares its own composition.",
                 "tools": {"builtin": ["read"]},
-                "extensions": {"agentStatus": {"time": {"enabled": false}}},
+                "extensions": {"agent_status": {"time": {"enabled": false}}},
             },
             "research": {
                 "description": "Declares no composition at all.",
@@ -1959,14 +1911,11 @@ async fn ext256_root_extension_configuration_never_reaches_a_named_role() {
         "the root's disabled Background never narrows the child either"
     );
 
-    // The silent role composed the built-in defaults, not the root's.
     let silent_frozen = frozen_extensions(&resources, "research");
-    let silent = silent_frozen
-        .agent_status()
-        .expect("an omitted role composition is the role's own default");
-    assert!(silent.time.enabled);
-    assert_eq!(silent.time.timezone, None);
-    assert!(silent.background.enabled);
+    assert!(
+        silent_frozen.is_empty(),
+        "omission selects no extensions in every profile"
+    );
 
     // Issue #256 regression 8: root extension configuration cannot leak
     // into a child's Runtime Client projection. The root and each child
@@ -1990,7 +1939,9 @@ async fn ext256_root_extension_configuration_never_reaches_a_named_role() {
             projected, root_projection,
             "a child projection is never the root's composition"
         );
-        let status = projected.agent_status.expect("the child composes one");
+        let Some(status) = projected.agent_status else {
+            continue;
+        };
         assert_eq!(
             status.time.timezone, None,
             "the root's frozen timezone never appears in a child projection"
@@ -2014,17 +1965,17 @@ async fn ext256_extension_settings_are_part_of_a_role_identity() {
         "explore": {
             "description": "Same in every respect but its extensions.",
             "tools": {"builtin": ["read"]},
-            "extensions": {"agentStatus": {"time": {"timezone": "Asia/Shanghai"}}},
+            "extensions": {"agent_status": {"time": {"timezone": "Asia/Shanghai"}}},
         },
         "research": {
             "description": "Same in every respect but its extensions.",
             "tools": {"builtin": ["read"]},
-            "extensions": {"agentStatus": {"enabled": false}, "todo": {"enabled": false}},
+            "extensions": {"agent_status": {"enabled": false}, "todo": {"enabled": false}},
         },
         "pinned": {
             "description": "Same in every respect but its extensions.",
             "tools": {"builtin": ["read"]},
-            "extensions": {"agentStatus": {"time": {"timezone": "America/New_York"}}},
+            "extensions": {"agent_status": {"time": {"timezone": "America/New_York"}}},
         },
     }}));
     let product = lab.compose().await;
@@ -2049,7 +2000,7 @@ async fn ext256_extension_settings_are_part_of_a_role_identity() {
     // Issue #259: a role that composes only Todo is a fourth distinct
     // identity, so the extension vocabulary as a whole — not just Agent
     // Status — participates in a role's semantic identity.
-    assert!(shanghai.todo().is_some() && new_york.todo().is_some());
+    assert!(shanghai.todo().is_none() && new_york.todo().is_none());
     assert_eq!(
         new_york
             .agent_status()
@@ -2094,7 +2045,7 @@ async fn ext256_a_child_frozen_on_r1_keeps_r1_extensions_after_r2_publishes() {
         "description": "R1",
         "tools": {"builtin": ["read"]},
         "extensions": {
-            "agentStatus": {
+            "agent_status": {
                 "enabled": true,
                 "time": {"enabled": true, "timezone": "Asia/Shanghai"},
                 "background": {"enabled": true}
@@ -2133,7 +2084,7 @@ async fn ext256_a_child_frozen_on_r1_keeps_r1_extensions_after_r2_publishes() {
     lab.write_config(&serde_json::json!({"roles": {"explore": {
         "description": "R1",
         "tools": {"builtin": ["read"]},
-        "extensions": {"agentStatus": {"enabled": false}, "todo": {"enabled": false}},
+        "extensions": {"agent_status": {"enabled": false}, "todo": {"enabled": false}},
     }}}));
     product
         .runtime()

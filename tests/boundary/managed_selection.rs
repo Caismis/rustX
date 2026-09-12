@@ -7,8 +7,8 @@ use std::sync::Arc;
 use super::{common, support};
 use rustx::agent::{AgentCancellation, AgentExecution, AgentExecutionRequest};
 use rustx::capabilities::{
-    CapabilityCoordinator, CapabilityCoordinatorConfig, CapabilityPreparationError,
-    CapabilityResourceInputs, CapabilitySourceState, ToolActivationPolicy, ToolSourceId,
+    AgentActivation, CapabilityCoordinator, CapabilityCoordinatorConfig,
+    CapabilityPreparationError, CapabilityResourceInputs, CapabilitySourceState, ToolSourceId,
 };
 use rustx::events::AttemptOutcome;
 use rustx::events::types::{AttemptFailure, RuntimeEvent};
@@ -23,23 +23,23 @@ use support::fake::{FakeStep, ScriptedCall, fake_model, tool_call_events};
 async fn fastmcp4_availability_selection_request_and_invocation_share_one_authority() {
     // CI's boundary jobs provide uv; absence must not make this acceptance green.
     for (mut selection, admitted) in [
-        (ToolActivationPolicy::default(), true),
+        (AgentActivation::default(), true),
         (
-            ToolActivationPolicy {
+            AgentActivation {
                 tools: Some(vec!["ping".into()]),
                 ..Default::default()
             },
             true,
         ),
         (
-            ToolActivationPolicy {
+            AgentActivation {
                 no_tools: true,
                 ..Default::default()
             },
             false,
         ),
         (
-            ToolActivationPolicy {
+            AgentActivation {
                 exclude_tools: vec!["ping".into()],
                 ..Default::default()
             },
@@ -71,7 +71,7 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
                 ["healthy", "conflicting"].map(|name| format!("python:{name}")),
             ),
             base_tool_registry: Arc::new(fixture.registry.clone()),
-            tool_activation: selection.clone(),
+            agent_activation: selection.clone(),
             skill_discovery: rustx::skills::SkillDiscoveryConfig {
                 automatic_roots: vec![],
                 explicit_paths: vec![],
@@ -86,7 +86,7 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
             source_demand: inputs.source_demand.clone(),
             base_tool_registry: inputs.base_tool_registry.clone(),
             extension_tools: fixture.runtime.extension_tool_plane(),
-            tool_activation: selection.clone(),
+            agent_activation: selection.clone(),
             skill_discovery: inputs.skill_discovery.clone(),
             mcp_servers: inputs.mcp_servers.clone(),
             base_environment: inputs.base_environment.clone(),
@@ -170,7 +170,7 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
                 summary_output_cap: None,
             },
             Arc::new(rustx::context::DefaultTokenEstimator),
-            Some(rustx::context::AgentStatusEngine::default()),
+            None,
             &model_snapshot,
             rustx::model::ModelTimeoutPolicy::default(),
             support::default_monotonic_clock(),
@@ -268,7 +268,7 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
         }
         // A failed source cannot fabricate an exact-selected identity or
         // publish a fallback over the last successfully admitted registry.
-        inputs.tool_activation = ToolActivationPolicy {
+        inputs.agent_activation = AgentActivation {
             tools: Some(vec!["failed_identity".into()]),
             ..Default::default()
         };

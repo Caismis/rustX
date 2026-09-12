@@ -11,7 +11,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use crate::capabilities::availability::{CapabilityAvailability, CapabilitySourceState};
 use crate::capabilities::error::{CapabilityCommitError, CapabilityPreparationError};
 use crate::capabilities::snapshot::CapabilitySnapshot;
-use crate::capabilities::tools::{AvailableToolCatalog, ToolActivationPolicy, select_tools};
+use crate::capabilities::tools::{AgentActivation, AvailableToolCatalog, select_tools};
 use crate::runtime::identity::{CapabilityRevision, ConversationId, McpServerId};
 use crate::runtime::process_runner::RunnerBackedProcessRunner;
 use crate::runtime::types::ConversationLifecycle;
@@ -65,7 +65,7 @@ pub struct CapabilityCoordinatorConfig {
     pub extension_tools: crate::extensions::ExtensionToolPlane,
     /// Current startup availability/activation policy. It is not durable
     /// Session state and is re-applied for every process composition.
-    pub tool_activation: ToolActivationPolicy,
+    pub agent_activation: AgentActivation,
     /// Current automatic and explicit Skill resource roots.
     pub skill_discovery: SkillDiscoveryConfig,
     /// The immutable configured MCP server set for this coordinator, keyed
@@ -314,7 +314,7 @@ pub struct CapabilityResourceInputs {
     /// Native/extension Tool registrations.
     pub base_tool_registry: Arc<ToolRegistry>,
     /// Effective Tool activation policy.
-    pub tool_activation: ToolActivationPolicy,
+    pub agent_activation: AgentActivation,
     /// Skill discovery roots and explicit sources.
     pub skill_discovery: SkillDiscoveryConfig,
     /// Configured MCP sources.
@@ -418,6 +418,7 @@ pub struct PreparedCapabilityCandidate {
 }
 
 impl PreparedCapabilityCandidate {
+    #[must_use]
     pub fn resolved_profile(&self) -> Option<&crate::runtime::agent_profile::ResolvedAgentProfile> {
         self.resolved_profile.as_deref()
     }
@@ -575,7 +576,7 @@ impl CapabilityCoordinator {
                     .map(|id| (id, CapabilitySourceState::Unprepared)),
             )
             .collect();
-        let tool_activation = config.tool_activation;
+        let agent_activation = config.agent_activation;
         let extension_tools = config.extension_tools;
         let skill_discovery = config.skill_discovery;
         // Only the Python store *location* is computed here; the store
@@ -612,7 +613,7 @@ impl CapabilityCoordinator {
                 resource_inputs: Mutex::new(CapabilityResourceInputs {
                     source_demand: config.source_demand,
                     base_tool_registry: config.base_tool_registry,
-                    tool_activation,
+                    agent_activation,
                     skill_discovery,
                     mcp_servers,
                     base_environment: config.base_environment.clone(),
@@ -1007,7 +1008,7 @@ impl CapabilityCoordinator {
         let (available_tools, candidate_registry, resolved_profile) = select_tools(
             &discovered_tools,
             self.inner.extension_tools.registrations(),
-            &inputs.tool_activation,
+            &inputs.agent_activation,
             &skills,
             &availability,
         )
@@ -1281,7 +1282,7 @@ impl CapabilityCoordinator {
         let (available_tools, candidate_registry, resolved_profile) = select_tools(
             &base_registrations,
             self.inner.extension_tools.registrations(),
-            &inputs.tool_activation,
+            &inputs.agent_activation,
             &SkillSnapshot::new(Vec::new()),
             &CapabilityAvailability::new(),
         )
@@ -2559,7 +2560,7 @@ body
             workspace: workspace.clone(),
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: crate::extensions::ExtensionToolPlane::none(),
-            tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+            agent_activation: crate::capabilities::AgentActivation::default(),
             // Keep this unit fixture independent of the developer's HOME:
             // the relocation proof owns both current roots explicitly.
             skill_discovery: crate::skills::SkillDiscoveryConfig {
@@ -2824,7 +2825,7 @@ body
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: crate::extensions::ExtensionToolPlane::none(),
-            tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+            agent_activation: crate::capabilities::AgentActivation::default(),
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
@@ -3069,7 +3070,7 @@ mod mcp_race_tests {
         );
         let mut inputs = coordinator.inner.resource_inputs.lock().unwrap().clone();
         inputs.source_demand.sources.clear();
-        inputs.tool_activation.profile.tools.sources.clear();
+        inputs.agent_activation.profile.tools.sources.clear();
         let candidate = coordinator
             .prepare_candidate_with_inputs(inputs.clone())
             .await
@@ -3089,7 +3090,7 @@ mod mcp_race_tests {
         );
         candidate.retire_uncommitted().await;
         inputs.source_demand.sources = [source.clone(), source.clone(), source.clone()].into();
-        inputs.tool_activation.profile.tools.sources.insert(
+        inputs.agent_activation.profile.tools.sources.insert(
             source.clone(),
             crate::capabilities::selection::SourceToolSelection::All,
         );
@@ -3245,7 +3246,7 @@ mod mcp_race_tests {
                 "capabilities::coordinator::mcp_race_tests::cfg233_exposure_and_domain_references_never_grant_source_activation",
             );
             let mut inputs = coordinator.inner.resource_inputs.lock().unwrap().clone();
-            inputs.tool_activation.no_tools = true;
+            inputs.agent_activation.no_tools = true;
             if !enabled {
                 inputs.mcp_servers.get_mut(&id).unwrap().activation =
                     crate::capabilities::activation::SourceActivation::Disabled;
@@ -3377,7 +3378,7 @@ mod mcp_race_tests {
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: crate::extensions::ExtensionToolPlane::none(),
-            tool_activation: crate::capabilities::ToolActivationPolicy {
+            agent_activation: crate::capabilities::AgentActivation {
                 profile: crate::local_runtime::config::AgentProfileDocument {
                     tools: crate::capabilities::selection::ToolSelectionDocument {
                         builtin: crate::local_runtime::config::builtin_root_profile()
@@ -3477,7 +3478,7 @@ mod mcp_race_tests {
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: crate::extensions::ExtensionToolPlane::none(),
-            tool_activation: crate::capabilities::ToolActivationPolicy {
+            agent_activation: crate::capabilities::AgentActivation {
                 profile: crate::local_runtime::config::AgentProfileDocument {
                     tools: crate::capabilities::selection::ToolSelectionDocument {
                         builtin: crate::local_runtime::config::builtin_root_profile()

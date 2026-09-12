@@ -355,9 +355,7 @@ impl ToolExecutor for SubagentExecutor {
 #[cfg(test)]
 mod tests {
     use super::{SUBAGENT_TOOL_NAME, SubagentExecutor, SubagentInput, ToolInvocation, definition};
-    use crate::runtime::subagent::catalog::{
-        AgentCatalog, NamedAgentDefinition, SubagentName, SubagentProjectInstructionPolicy,
-    };
+    use crate::runtime::subagent::catalog::{AgentCatalog, NamedAgentDefinition, SubagentName};
     use crate::runtime::workspace::WorkspacePolicy;
     use crate::tools::types::{ToolExecutionStatus, ToolResultContent};
 
@@ -372,15 +370,16 @@ mod tests {
                     execution_deadline: None,
                     tools: Vec::new(),
                     skills: Vec::new(),
-                    project_instructions: SubagentProjectInstructionPolicy {
-                        inherit: true,
-                        files: Vec::new(),
-                    },
+                    project_instructions:
+                        crate::runtime::agent_profile::AgentProjectInstructionPolicy {
+                            inherit: true,
+                            files: Vec::new(),
+                        },
                     workspace_policy: WorkspacePolicy::SharedWorkspace,
                     extensions: crate::extensions::NativeAgentExtensionsDocument::default()
                         .resolve(),
-                    agents: Default::default(),
-                    workflows: Default::default(),
+                    agents: std::collections::BTreeSet::default(),
+                    workflows: std::collections::BTreeSet::default(),
                 },
                 std::path::PathBuf::from("/w/research.md"),
             )
@@ -394,15 +393,16 @@ mod tests {
                     execution_deadline: None,
                     tools: Vec::new(),
                     skills: Vec::new(),
-                    project_instructions: SubagentProjectInstructionPolicy {
-                        inherit: true,
-                        files: Vec::new(),
-                    },
+                    project_instructions:
+                        crate::runtime::agent_profile::AgentProjectInstructionPolicy {
+                            inherit: true,
+                            files: Vec::new(),
+                        },
                     workspace_policy: WorkspacePolicy::SharedWorkspace,
                     extensions: crate::extensions::NativeAgentExtensionsDocument::default()
                         .resolve(),
-                    agents: Default::default(),
-                    workflows: Default::default(),
+                    agents: std::collections::BTreeSet::default(),
+                    workflows: std::collections::BTreeSet::default(),
                 },
                 std::path::PathBuf::from("/w/explore.md"),
             )
@@ -690,16 +690,17 @@ chat_reasoning_replay = "omit"
                 execution_deadline: None,
                 tools: Vec::new(),
                 skills: Vec::new(),
-                project_instructions: SubagentProjectInstructionPolicy {
-                    inherit: false,
-                    files: Vec::new(),
-                },
+                project_instructions:
+                    crate::runtime::agent_profile::AgentProjectInstructionPolicy {
+                        inherit: false,
+                        files: Vec::new(),
+                    },
                 workspace_policy: WorkspacePolicy::GitWorktree {
                     require_clean_parent: true,
                 },
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
-                agents: Default::default(),
-                workflows: Default::default(),
+                agents: std::collections::BTreeSet::default(),
+                workflows: std::collections::BTreeSet::default(),
             },
             workspace_root.join("isolated.md"),
         )
@@ -888,14 +889,15 @@ chat_reasoning_replay = "omit"
                     name: "read".to_owned(),
                 }],
                 skills: Vec::new(),
-                project_instructions: SubagentProjectInstructionPolicy {
-                    inherit: false,
-                    files: Vec::new(),
-                },
+                project_instructions:
+                    crate::runtime::agent_profile::AgentProjectInstructionPolicy {
+                        inherit: false,
+                        files: Vec::new(),
+                    },
                 workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions: crate::extensions::NativeAgentExtensions::none(),
-                agents: Default::default(),
-                workflows: Default::default(),
+                agents: std::collections::BTreeSet::default(),
+                workflows: std::collections::BTreeSet::default(),
             },
             workspace_root.join("reviewer.md"),
         )

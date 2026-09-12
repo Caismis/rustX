@@ -39,19 +39,19 @@ fn cfg237_check_explain_zero_effects_precise_errors_and_authority() {
         json!({"description":"Review","tools":{"builtin":[]},"worktree":{"enabled":false}}),
         "SECRET_ROLE_PROMPT",
     );
-    let config = json!({"subagents":{"workflow":["reviewer"]},"workflows":{"main":[]}});
+    let config = json!({"subagents": {"workflow": ["reviewer"]}, "agent": {"workflows": []}});
     let original = template_source("typed_agent");
     let scenarios = [
         (original.clone(), config.clone(), Validity::Valid, None),
         (
             original.clone(),
-            json!({"workflows":{}}),
+            json!({}),
             Validity::Invalid,
             Some("block.nodes.summarize.profile"),
         ),
         (
             original.clone(),
-            json!({"subagents":{},"workflows":{}}),
+            json!({"subagents": {}}),
             Validity::Invalid,
             Some("block.nodes.summarize.profile"),
         ),
@@ -137,7 +137,7 @@ fn cfg237_graph_paths_reach_diagnostics_with_zero_side_effects() {
         json!({"description":"Review","tools":{"builtin":[]}}),
         "Review.",
     );
-    f.project(json!({"subagents":{"workflow":["reviewer"]},"workflows":{}}));
+    f.project(json!({"subagents": {"workflow": ["reviewer"]}}));
     let original: serde_json::Value = serde_json::to_value(
         serde_yaml::from_str::<crate::runtime::workflow::WorkflowDefinition>(&template_source(
             "parallel_checks",
@@ -209,7 +209,9 @@ block:
 ";
     install_workflow(&f, text);
     for enabled in [true, false] {
-        f.project(json!({"mcp_servers":{"external":{"enabled":enabled,"command":"must-never-spawn"}},"workflows":{}}));
+        f.project(
+            json!({"mcp_servers": {"external":{"enabled":enabled,"command":"must-never-spawn"}}}),
+        );
         for explain in [false, true] {
             let (report, effects) = super::static_effects::measure(|| {
                 super::workflow_inspection::inspect(
@@ -253,7 +255,7 @@ fn cfg237_nested_paths_parser_locations_and_compiler_agreement() {
         json!({"description":"Review","tools":{"builtin":[]}}),
         "Review.",
     );
-    f.project(json!({"subagents":{"workflow":["reviewer"]},"workflows":{}}));
+    f.project(json!({"subagents": {"workflow": ["reviewer"]}}));
     let definition: crate::runtime::workflow::WorkflowDefinition =
         serde_yaml::from_str(&template_source("parallel_checks")).unwrap();
     let original = serde_json::to_value(definition).unwrap();
@@ -310,7 +312,7 @@ fn cfg237_nested_paths_parser_locations_and_compiler_agreement() {
 #[test]
 fn cfg237_workflow_projection_omission_preserves_validity_and_size_bound() {
     let f = Fixture::new();
-    f.project(json!({"workflows":{}}));
+    f.project(json!({}));
     install_workflow(&f, &template_source("human_plan"));
     let mut report = super::workflow_inspection::inspect(
         &crate::runtime::workflow::WorkflowId::parse("example").unwrap(),
@@ -355,7 +357,7 @@ fn cfg236_offline_role_provenance_rejections_and_trust_have_zero_effects() {
         json!({"description":"Project","tools":{"builtin":["read"]}}),
         "Project body",
     );
-    f.project(json!({"subagents":{"main":[],"workflow":["reviewer"]}}));
+    f.project(json!({"subagents": {"workflow": ["reviewer"]}, "agent": {"agents": []}}));
     for operation in ["config_check", "config_show"] {
         let ((report, launch), effects) = super::static_effects::measure(|| {
             super::diagnostics::inspect(operation, &f.request, &f.host)
@@ -464,7 +466,7 @@ async fn cfg236_gated_role_reload_cancels_or_publishes_one_complete_generation()
         json!({"description":"R1", "tools":{"builtin":["read"]}}),
         "R1 body",
     );
-    f.project(json!({"subagents":{"main":["role"],"workflow":[]}}));
+    f.project(json!({"subagents": {"workflow": []}, "agent": {"agents": ["role"]}}));
     let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
         .await
         .unwrap();
@@ -475,7 +477,7 @@ async fn cfg236_gated_role_reload_cancels_or_publishes_one_complete_generation()
         json!({"description":"R2", "tools":{"builtin":["grep"]}}),
         "R2 body",
     );
-    f.project(json!({"subagents":{"main":[],"workflow":["role"]}}));
+    f.project(json!({"subagents": {"workflow": ["role"]}, "agent": {"agents": []}}));
     let gate = super::agent_resources::test_support::arm(&f.host.launch_directory);
     let runtime = product.runtime().clone();
     let reload = tokio::spawn(async move { runtime.reload_resources().await });
@@ -721,7 +723,7 @@ fn cfg235_oversized_invalid_projection_preserves_authoritative_diagnostics() {
 fn cfg235_oversized_incomplete_projection_preserves_incomplete_diagnostic() {
     let f = Fixture::new();
     f.user(json!({}));
-    f.project(json!({"default_tools": (0..12000).map(|index| format!("unresolved_tool_identity_{index}")).collect::<Vec<_>>(), "environment":{"PRIVATE":"RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"}}));
+    f.project(json!({"environment": {"PRIVATE":"RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"}, "agent": {"tools": {"builtin": (0..12000).map(|index| format!("unresolved_tool_identity_{index}")).collect::<Vec<_>>()}}}));
     let (report, _) = super::diagnostics::inspect("config_show", &f.request, &f.host);
     assert_eq!(report.exit_code(), 3);
     assert!(report.partial.is_some());
@@ -964,7 +966,6 @@ fn cfg235_diagnostics_keep_source_field_classification_and_correction() {
     for (configuration, field) in [
         (json!({"unknown_field":true}), "$"),
         (json!({"approval_mode":"full_access"}), "approval_mode"),
-        (json!({"subagents":{"main":["missing"]}}), "subagents.main"),
     ] {
         f.project(configuration);
         let (report, _) = super::diagnostics::inspect("config_check", &f.request, &f.host);
@@ -1000,11 +1001,11 @@ async fn cfg235_probe_stdio_timeout_and_cancel_reap_owned_process() {
     }
     for timed_out in [false, true] {
         let f = Fixture::new();
-        f.user(json!({"model":{"model":"host/one"}, "mcp_servers":{"owned":{
+        f.user(json!({"mcp_servers": {"owned":{
             "enabled":true, "command":std::env::current_exe().unwrap(),
             "args":fixture_spawn_args("local_runtime::launch_tests::cfg235_probe_stdio_timeout_and_cancel_reap_owned_process"),
             "env":{FIXTURE_MODE_ENV:"1"}
-        }}}));
+        }}, "agent": {"model": {"model":"host/one"}}}));
         let launch = analyze(&f.request, &f.host).unwrap();
         let mut plan = plan(&launch, false);
         let pause = Arc::new(crate::tools::mcp::test_sync::ConnectOwnershipPause::default());
@@ -1124,7 +1125,7 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
         .join(".agents/workflows/broken.yaml");
     std::fs::create_dir_all(workflow.parent().unwrap()).unwrap();
     std::fs::write(&workflow, "RUSTX_SECRET_SENTINEL_DO_NOT_LEAK: [").unwrap();
-    f.project(json!({"workflows":{"main":["broken"]}}));
+    f.project(json!({"agent": {"workflows": ["broken"]}}));
     let ((report, _), counts) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_check", &f.request, &f.host)
     });
@@ -1149,7 +1150,7 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
         valid.replace("entry: read", "entry: missing_node"),
     )
     .unwrap();
-    f.project(json!({"workflows":{"main":["broken"]}}));
+    f.project(json!({"agent": {"workflows": ["broken"]}}));
     let ((report, _), counts) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_check", &f.request, &f.host)
     });
@@ -1234,7 +1235,7 @@ async fn cfg235_probe_credential_use_and_failures_never_leak_values() {
     use crate::tools::mcp::fixture::streamable_http::{HttpFixture, HttpFixtureControl};
     let fixture = HttpFixture::start(HttpFixtureControl::new()).await;
     let f = Fixture::new();
-    f.user(json!({"model":{"model":"host/one"},"mcp_servers":{"secret":{"enabled":true,"url":fixture.endpoint,"sensitive_headers":{"Authorization":"$CFG235_TOKEN"}}}}));
+    f.user(json!({"mcp_servers": {"secret":{"enabled":true,"url":fixture.endpoint,"sensitive_headers":{"Authorization":"$CFG235_TOKEN"}}}, "agent": {"model": {"model":"host/one"}}}));
     let launch = analyze(&f.request, &f.host).unwrap();
     for present in [false, true] {
         let mut plan = super::probes::plan(&launch, false);
@@ -1298,7 +1299,7 @@ impl Fixture {
             credentials: crate::credentials::CredentialSnapshot::default(),
             request: LaunchRequest::default(),
         };
-        fixture.user(json!({"model":{"model":"host/one"}}));
+        fixture.user(json!({"agent": {"model": {"model":"host/one"}}}));
         fixture.trust(TrustAction::Grant);
         fixture
     }
@@ -1325,12 +1326,6 @@ impl Fixture {
         let path = root.join(format!("{name}.toml"));
         let mut metadata = metadata;
         metadata["instructions"] = body.into();
-        if let Some(value) = metadata.as_object_mut().unwrap().remove("timeoutMs") {
-            metadata["timeout_ms"] = value;
-        }
-        if let Some(value) = metadata.as_object_mut().unwrap().remove("agentsMd") {
-            metadata["agents_md"] = value;
-        }
         std::fs::write(&path, toml::to_string_pretty(&metadata).unwrap()).unwrap();
         path
     }
@@ -1438,7 +1433,7 @@ fn cfg233_whole_source_replacement_never_rebinds_host_credentials() {
             json!({"enabled":true,"command":"project-server"}),
         ),
     ] {
-        f.user(json!({"model":{"model":"host/one"},"mcp_servers":{"service":host}}));
+        f.user(json!({"mcp_servers": {"service":host}, "agent": {"model": {"model":"host/one"}}}));
         f.project(json!({"mcp_servers":{"service":project}}));
         let launch = f.resolve();
         let bindings = super::composition::mcp_bindings_with_authority(
@@ -1498,11 +1493,11 @@ async fn cfg233_provider_binding_uses_launch_snapshot_and_ignores_unused_missing
 #[tokio::test]
 async fn cfg233_enabled_missing_credentials_and_connection_failures_are_source_local() {
     let f = Fixture::new();
-    f.user(json!({"tools":{"sources":{"credential":"all","connection":"all","disabled":"all"}},"model":{"model":"host/one"},"mcp_servers":{
+    f.user(json!({"mcp_servers": {
         "credential":{"enabled":true,"command":"/does/not/exist","sensitive_env":{"TOKEN":"$REQUIRED_KEY"}},
         "connection":{"enabled":true,"command":"/does/not/exist"},
         "disabled":{"enabled":false,"command":"/does/not/exist","sensitive_env":{"TOKEN":"$IGNORED_KEY"}}
-    }}));
+    }, "agent": {"model": {"model":"host/one"}, "tools": {"sources":{"credential":"all","connection":"all","disabled":"all"}}}}));
     let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
         .await
         .unwrap();
@@ -1573,10 +1568,10 @@ async fn cfg233_native_composition_keeps_disabled_and_discovered_resources_inert
     )
     .unwrap();
     // No requirements file: inert discovery cannot require package validity.
-    f.user(json!({"model":{"model":"host/one"},"mcp_servers":{
+    f.user(json!({"mcp_servers": {
         "missing":{"enabled":false,"command":"/nonexistent/cfg233","sensitive_env":{"TOKEN":"$UNSET"}},
         "offline":{"enabled":false,"url":"http://127.0.0.1:1/mcp","sensitive_headers":{"Authorization":"$UNSET"}}
-    }}));
+    }, "agent": {"model": {"model":"host/one"}}}));
     let launch = f.resolve();
     let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
         .await
@@ -1607,10 +1602,10 @@ async fn cfg233_shared_connect_gate_rejects_all_inert_states_without_spawn_or_ne
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let marker = f.root.path().join("spawn-marker");
-    f.user(json!({"model":{"model":"host/one"},"mcp_servers":{
+    f.user(json!({"mcp_servers": {
         "stdio":{"command":"/bin/sh","args":["-c",format!("touch {}", marker.display())],"sensitive_env":{"TOKEN":"$UNSET"}},
         "http":{"url":format!("http://{}/mcp", listener.local_addr().unwrap()),"sensitive_headers":{"Authorization":"$UNSET"}}
-    }}));
+    }, "agent": {"model": {"model":"host/one"}}}));
     let launch = f.resolve();
     let workspace = crate::tools::Workspace::new(&launch.workspace).unwrap();
     for decision in [
@@ -1665,7 +1660,7 @@ async fn cfg233_http_credential_failure_redacts_peer_echo_and_configuration() {
         let body = format!("credential rejected: {SENTINEL}");
         socket.write_all(format!("HTTP/1.1 401 Unauthorized\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
     });
-    f.user(json!({"tools":{"sources":{"authenticated":"all"}},"model":{"model":"host/one"},"mcp_servers":{"authenticated":{"enabled":true,"url":format!("http://{endpoint}/mcp"),"sensitive_headers":{"Authorization":"$AUTH"}}}}));
+    f.user(json!({"mcp_servers": {"authenticated":{"enabled":true,"url":format!("http://{endpoint}/mcp"),"sensitive_headers":{"Authorization":"$AUTH"}}}, "agent": {"model": {"model":"host/one"}, "tools": {"sources":{"authenticated":"all"}}}}));
     let launch = f.resolve();
     let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
         .await
@@ -1712,16 +1707,9 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
         crate::tools::NativeToolPolicies::default()
     );
     assert_eq!(builtin.provenance["agent_id"], Origin::Builtin);
-    f.user(json!({"model":{"model":"host/one", "reasoning_profile":{"mode":"catalog_default"}}, "agent_id":"user", "context":{"reserve_tokens":2000,"keep_recent_tokens":6000},
-        "default_tools":["read","bash"],"environment":{"USER_ENTRY":"one","REPLACED":"old"},
-        "mcp_servers":{"service":{"command":"old-command","args":["old"]},"retained":{"command":"retained"}},
-        "subagents":{}
-    }));
+    f.user(json!({"agent_id": "user", "context": {"reserve_tokens":2000,"keep_recent_tokens":6000}, "environment": {"USER_ENTRY":"one","REPLACED":"old"}, "mcp_servers": {"service":{"command":"old-command","args":["old"]},"retained":{"command":"retained"}}, "subagents": {}, "agent": {"model": {"model":"host/one", "reasoning_profile":{"mode":"catalog_default"}}, "tools": {"builtin": ["read","bash"]}}}));
     f.project(
-        json!({"model":{"model":"host/two"},"context":{"reserve_tokens":3000},"default_tools":[],
-            "environment":{"REPLACED":"new"}, "mcp_servers":{"service":{"command":"new-command"}},
-            "subagents":{}
-        }),
+        json!({"context": {"reserve_tokens":3000}, "environment": {"REPLACED":"new"}, "mcp_servers": {"service":{"command":"new-command"}}, "subagents": {}, "agent": {"model": {"model":"host/two"}, "tools": {"builtin": []}}}),
     );
     let resolved = f.resolve();
     assert_eq!(
@@ -1767,7 +1755,10 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
     f.request.exclude_tools = Some(vec!["read".into()]);
     let cli = f.resolve();
     assert_eq!(cli.config.initial_model().model.to_string(), "host/one");
-    assert!(matches!(cli.provenance["model.model"], Origin::Cli { .. }));
+    assert!(matches!(
+        cli.provenance["agent.model.model"],
+        Origin::Cli { .. }
+    ));
     assert!(matches!(
         cli.provenance["exclude_tools"],
         Origin::Cli { .. }
@@ -1825,8 +1816,11 @@ fn optional_explicit_malformed_and_typed_rejections_are_distinct() {
     for (text, expected) in [
         ("unknown = 1", "unknown field `unknown`"),
         ("[context]\ntypo = 1", "unknown field `typo`"),
-        ("default_tools = false", "expected a sequence"),
-        ("skills = 'null'", "expected a sequence"),
+        (
+            "[agent]\n[agent.tools]\nbuiltin = false\n",
+            "expected a sequence",
+        ),
+        ("[agent]\nskills = 'null'", "expected a sequence"),
     ] {
         text.parse::<toml_edit::DocumentMut>()
             .expect("syntactically valid TOML");
@@ -1834,7 +1828,9 @@ fn optional_explicit_malformed_and_typed_rejections_are_distinct() {
         let error = resolve(&f.request, &f.host).unwrap_err();
         assert!(error.contains(expected), "{text}: {error}");
     }
-    f.project(json!({"context":{"summary_output_cap":{"mode":"model_limit"}},"skills":[]}));
+    f.project(
+        json!({"context": {"summary_output_cap":{"mode":"model_limit"}}, "agent": {"skills": []}}),
+    );
     assert_eq!(f.resolve().config.context.summary_output_cap, None);
     std::fs::remove_file(f.host.config_directory.join("settings.toml")).unwrap();
     f.request.model = Some("host/one".into());
@@ -1873,16 +1869,13 @@ fn relative_paths_keep_their_document_and_cli_bases() {
     f.role(
         false,
         "project",
-        json!({"description":"project","agentsMd":{"files":["instructions.md"]}}),
+        json!({"description": "project", "agents_md": {"files":["instructions.md"]}}),
         "Project role",
     );
-    f.user(json!({"model":{"model":"host/one"}, "skills":["user-skills"], "subagents":{}}));
+    f.user(json!({"subagents": {}, "agent": {"model": {"model":"host/one"}, "skills": ["user-skills"]}}));
     f.project(json!({"subagents":{}}));
     let resolved = f.resolve();
-    assert_eq!(
-        resolved.skill_paths,
-        [f.host.config_directory.join("user-skills")]
-    );
+    assert_eq!(resolved.config.agent.skills, ["user-skills"]);
     f.request.skill_paths = vec!["cli-skill".into()];
     assert_eq!(
         f.resolve().skill_paths,
@@ -2005,7 +1998,7 @@ fn canonical_symlink_and_real_git_worktree_identities_are_stable_and_separate() 
     f.role(
         false,
         "other",
-        json!({"description":"other","agentsMd":{"files":[outside]}}),
+        json!({"description": "other", "agents_md": {"files":[outside]}}),
         "role",
     );
     f.project(json!({"subagents":{}}));
@@ -2020,8 +2013,8 @@ fn canonical_symlink_and_real_git_worktree_identities_are_stable_and_separate() 
 async fn minimal_native_composition_and_frozen_launch_ignore_later_config_edits() {
     let f = Fixture::new();
     let launch = f.resolve();
-    f.user(json!({"model":{"model":"host/two"},"agent_id":"edited"}));
-    f.project(json!({"model":{"model":"missing/model"}}));
+    f.user(json!({"agent_id": "edited", "agent": {"model": {"model":"host/two"}}}));
+    f.project(json!({"agent": {"model": {"model":"missing/model"}}}));
     let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
         .await
         .unwrap();
@@ -2066,10 +2059,10 @@ async fn resolution_and_composition_failures_preserve_published_session_selectio
     f.project(json!({"agent_id":""}));
     assert!(resolve(&f.request, &f.host).is_err());
     assert_eq!(before, std::fs::read(&catalog).unwrap());
-    f.project(json!({"skills":["missing-skill"]}));
+    f.project(json!({"agent": {"skills": ["missing-skill"]}}));
     assert!(
-        analyze(&f.request, &f.host).is_err(),
-        "static resource failures precede composition"
+        analyze(&f.request, &f.host).is_ok(),
+        "unavailable profile selections remain usable"
     );
     assert_eq!(before, std::fs::read(&catalog).unwrap());
 }
@@ -2083,12 +2076,12 @@ fn no_model_or_protocol_is_guessed_and_host_paths_are_validated() {
             .unwrap_err()
             .contains("unambiguous")
     );
-    f.user(json!({"model":{"model":"one"}}));
+    f.user(json!({"agent": {"model": {"model":"one"}}}));
     assert!(
         resolve(&f.request, &f.host).is_err(),
         "unqualified reference is ambiguous"
     );
-    f.user(json!({"model":{"model":"host/one"}}));
+    f.user(json!({"agent": {"model": {"model":"host/one"}}}));
     let model_path = f.host.config_directory.join("models.toml");
     let mut catalog: serde_json::Value =
         crate::toml_authoring::parse(&std::fs::read(&model_path).unwrap()).unwrap();
@@ -2116,7 +2109,7 @@ fn no_model_or_protocol_is_guessed_and_host_paths_are_validated() {
 #[test]
 fn host_state_and_catalog_overrides_keep_document_and_cli_origins() {
     let mut f = Fixture::new();
-    f.user(json!({"models":"models.toml","runtime_root":"private","model":{"model":"host/one"}}));
+    f.user(json!({"models": "models.toml", "runtime_root": "private", "agent": {"model": {"model":"host/one"}}}));
     let user = f.resolve();
     assert_eq!(user.runtime_root, f.host.config_directory.join("private"));
     assert_eq!(
@@ -2256,7 +2249,12 @@ fn duplicate_role_definitions_and_invalid_lower_layer_cannot_be_hidden() {
     std::fs::write(
         f.host.launch_directory.join("rustx.toml"),
         r#"[subagents]
-main = ["role", "role"]"#,
+
+
+
+[agent]
+agents = ["role", "role"]
+"#,
     )
     .unwrap();
     assert!(
@@ -2264,30 +2262,30 @@ main = ["role", "role"]"#,
             .unwrap_err()
             .contains("duplicate")
     );
-    f.user(json!({"model":{"model":"host/one"},"context":{"unknown":true}}));
+    f.user(json!({"context": {"unknown":true}, "agent": {"model": {"model":"host/one"}}}));
     f.project(json!({"context":{"reserve_tokens":7}}));
     assert!(
         resolve(&f.request, &f.host)
             .unwrap_err()
             .contains("unknown field")
     );
-    f.user(json!({"model":{"model":"host/one"},"subagents":{"main":["role","role"]}}));
+    f.user(json!({"subagents": {}, "agent": {"model": {"model":"host/one"}, "agents": ["role","role"]}}));
     f.project(json!({"subagents":{}}));
     assert!(
         resolve(&f.request, &f.host)
             .unwrap_err()
             .contains("duplicate")
     );
-    f.user(json!({"model":{"model":"host/one"},"schema_version":7}));
+    f.user(json!({"schema_version": 7, "agent": {"model": {"model":"host/one"}}}));
     f.project(json!({"schema_version":8}));
     assert!(
         resolve(&f.request, &f.host)
             .unwrap_err()
             .contains("schema_version 7")
     );
-    f.user(json!({"model":{"model":"host/one"}}));
+    f.user(json!({"agent": {"model": {"model":"host/one"}}}));
     f.project(
-        json!({"subagents":{"definitions":{"role":{"description":"obsolete inline payload"}}}}),
+        json!({"subagents": {"definitions": {"role":{"description":"obsolete inline payload"}}}}),
     );
     assert!(resolve(&f.request, &f.host).is_err());
 }
@@ -2295,10 +2293,7 @@ main = ["role", "role"]"#,
 #[test]
 fn project_trust_never_grants_tool_approval_authority() {
     let mut f = Fixture::new();
-    let user = json!({"model":{"model":"host/one"},"approval_mode":"full_access",
-        "native_tools":{"bash":{"approval":"always"}},
-        "mcp_servers":{"server":{"command":"fixture"}},
-        "mcp_tool_policies":{"server":{"approval":"always"}}});
+    let user = json!({"approval_mode": "full_access", "native_tools": {"bash":{"approval":"always"}}, "mcp_servers": {"server":{"command":"fixture"}}, "mcp_tool_policies": {"server":{"approval":"always"}}, "agent": {"model": {"model":"host/one"}}});
     f.user(user);
     let host = f.resolve();
     assert_eq!(
@@ -2343,14 +2338,14 @@ async fn project_resource_authority_rejects_every_declared_escape_but_preserves_
         f.role(
             false,
             "x",
-            json!({"description":"x","agentsMd":{"files":[path]}}),
+            json!({"description": "x", "agents_md": {"files":[path]}}),
             "role",
         );
         json!({"subagents":{}})
     };
     for document in [
         role(json!(&resource)),
-        json!({"skills":[&other]}),
+        json!({"agent": {"agents_md": {"files": [&resource]}}}),
         role(json!(&resource)),
         json!({"mcp_servers":{"x":{"command":&resource}}}),
         json!({"mcp_servers":{"x":{"command":"fixture","cwd":&other}}}),
@@ -2375,12 +2370,13 @@ async fn project_resource_authority_rejects_every_declared_escape_but_preserves_
     f.project(json!({}));
     std::fs::remove_file(f.host.launch_directory.join(".agents/agents/x.toml")).unwrap();
     f.role(true, "x", json!({"description":"host"}), "user-owned bytes");
-    f.user(json!({"model":{"model":"host/one"},"subagents":{}}));
+    f.user(json!({"subagents": {}, "agent": {"model": {"model":"host/one"}}}));
     let host = f.resolve();
     assert_eq!(host.role_sources.values().next().unwrap().layer, "user");
     let skill = other.join("outside");
     std::fs::create_dir(&skill).unwrap();
     f.request.skill_paths = vec![skill];
+    f.user(json!({"agent": {"model": {"model": "host/one"}, "skills": ["outside"]}}));
     std::fs::write(
         f.request.skill_paths[0].join("SKILL.md"),
         "---\nname: outside\ndescription: Host resource\n---\nHost instructions\n",
@@ -2489,7 +2485,7 @@ fn project_directory_symlinks_cannot_authorize_builtin_or_declared_resources() {
     std::fs::write(other.join("file"), "B").unwrap();
     std::os::unix::fs::symlink(&other, f.host.launch_directory.join("link")).unwrap();
     for document in [
-        json!({"skills":["link"]}),
+        json!({"agent": {"agents_md": {"files": ["link/file"]}}}),
         json!({"mcp_servers":{"x":{"command":"link/file"}}}),
         json!({"mcp_servers":{"x":{"command":"fixture","cwd":"link"}}}),
     ] {
@@ -2550,7 +2546,7 @@ async fn workspace_workflow_symlink_rejects_reload_without_reading_external_yaml
     let directory = f.host.launch_directory.join(".agents/workflows");
     std::fs::create_dir_all(&directory).unwrap();
     std::os::unix::fs::symlink(&other, directory.join("escape.yaml")).unwrap();
-    f.project(json!({"workflows":{}}));
+    f.project(json!({}));
     let error = product
         .runtime()
         .reload_resources()
@@ -2799,8 +2795,8 @@ fn cfg271_removed_existence_registries_are_unknown_fields_in_each_layer() {
     let f = Fixture::new();
     for field in [
         json!({"python_sources":{}}),
-        json!({"subagents":{"definitions":[]}}),
-        json!({"workflows":{"definitions":[]}}),
+        json!({"subagents": {"definitions": []}}),
+        json!({"workflows": {"definitions": []}}),
     ] {
         f.project(field.clone());
         assert!(
@@ -2819,6 +2815,6 @@ fn cfg271_removed_existence_registries_are_unknown_fields_in_each_layer() {
                 .to_string()
                 .contains("unknown field")
         );
-        f.user(json!({"model":{"model":"host/one"}}));
+        f.user(json!({"agent": {"model": {"model":"host/one"}}}));
     }
 }

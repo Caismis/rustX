@@ -1477,7 +1477,7 @@ RemoteTaskActive
 Todo is an optional **Native Agent Extension** (Issue #259), not an ordinary
 execution capability like Read or Bash. `extensions.todo.enabled` is its one
 switch, and it composes all four faces above or none of them. It is enabled by
-default; `defaultTools`, `--tools`, `--exclude-tools`, a role's
+default; `agent.tools.builtin`, `--tools`, `--exclude-tools`, a role's
 `tools.builtin`, and a Workflow's admitted capability set all reject the name
 `todo` outright, because they address the ordinary capability plane and Todo is
 not in it. `--no-tools` therefore leaves an enabled Todo's Tool in place: a
@@ -2658,7 +2658,7 @@ after ChildGuidanceOutcome::Accepted:
   different semantics under the same tool name. `subagent`, `ask_user`, and
   `execution` have no child-plane implementation at all.
 - **Committed child identity is `(agent, definition_digest)`.**
-  `SubagentDefinitionDigest` is SHA-256 over a rustX-owned versioned
+  `NamedAgentDefinitionDigest` is SHA-256 over a rustX-owned versioned
   canonical framing (`rustx-subagent-definition-v4`) of the normalized
   semantic definition — never raw TOML bytes — so comments, whitespace, key
   order, and selector listing order cannot change it while every semantic
@@ -3114,7 +3114,7 @@ after ChildGuidanceOutcome::Accepted:
 
 ### Effective execution-profile identity
 
-- **`SubagentDefinitionDigest` identifies the source definition;
+- **`NamedAgentDefinitionDigest` identifies the source definition;
   `ResolvedSubagentSpec::profile_digest()` identifies the effective child
   execution profile.** They are separate identities and neither is derived from
   the other. Materially different effective tools, Skills, or extensions change
@@ -3505,8 +3505,8 @@ the launch-boundary policy inheritance.
   produce deterministic generation-scoped catalogs. Settings never repeat their
   existence. Invalid canonical Agent, Skill or Workflow content rejects the candidate.
 - **Discovery and admission are independent.** Whole project Agents replace user
-  Agents without merging instructions or capabilities. `subagents.main`,
-  `subagents.workflow` and `workflows.main` select discovered identities. Discovery
+  Agents without merging instructions or capabilities. `agent.agents`,
+  `subagents.workflow` and `agent.workflows` select discovered identities. Discovery
   never prepares Python packages or grants execution or approval authority.
 - **One candidate publishes atomically.** Exact YAML loading, program
   compilation, profile admission, capability validation, and concrete
@@ -3560,7 +3560,7 @@ the launch-boundary policy inheritance.
   committed output. Workflow terminal settlement waits for all owned child
   work to reach native quiescence, and runtime drain proves zero owned active
   work.
-- **Tool exposure is per Workflow.** Every `workflows.main` id is one
+- **Tool exposure is per Workflow.** Every `agent.workflows` id is one
   independent concrete Tool named by the configured id, with its description
   and input schema. There is no generic dispatcher and no implicit exposure
   of discovered Workflows or Subagents. Parent canonical history receives one
@@ -3627,7 +3627,7 @@ the launch-boundary policy inheritance.
   composition into `ResolvedSubagentSpec::extensions` before process staging
   and durable ownership commit, and the root's document is not an input to
   resolution. Role extension settings participate in
-  `SubagentDefinitionDigest`. The child materializes that frozen decision and
+  `NamedAgentDefinitionDigest`. The child materializes that frozen decision and
   never rereads `rustx.toml`, host or project configuration, role files, or a
   later resource generation to reinterpret which extensions it owns.
 - **Runtime Client reports the extension composition owned by the attached
@@ -3697,7 +3697,7 @@ the launch-boundary policy inheritance.
   `ToolRegistry`. Inactive definitions remain available for truthful
   inspection but their schemas never enter provider requests.
 - **Startup Tool selection is deterministic.** The base selection applies
-  `defaultTools` to built-ins, `--no-builtin-tools` removes all built-ins,
+  `agent.tools.builtin` to built-ins, `--no-builtin-tools` removes all built-ins,
   `--no-tools` selects zero ordinary Tools, `--tools` selects exactly its
   names, and exclusions subtract last. Read has no activation exception.
   Empty, unknown/ineligible, ambiguous or duplicate explicit entries fail.
@@ -8366,3 +8366,22 @@ A source-owned `todo` remains selectable by its source under All or Exact;
 `builtin = ["todo"]` cannot select the Todo extension. A selected source Tool and
 an enabled extension with the same model-facing name fail at final ToolRegistry
 composition, without filtering, shadowing or renaming either registration.
+
+
+### Agent Profile authority (CFG2-04)
+
+- Root and named Agents share one strict authoring model and semantic resolver.
+- Resource existence, source activation, Agent exposure and invocation approval
+  are separate authority decisions. Profile selection changes only exposure.
+- Named defaults use admitted generation authority; root delegation never grants
+  root direct access to child-only capabilities.
+- Valid unavailable selections produce typed ordered diagnostics and suppression.
+  Malformed authoring and unauthorized dynamic overrides remain hard failures.
+- Tools, Skills and Extensions override by whole-dimension replacement. An
+  explicitly empty dimension is distinct from absence.
+- Omitted Extensions select none in a complete profile. Root product composition
+  is an explicit lower-priority profile layer.
+- Published resource generations own resolved profiles. Later publication cannot
+  mutate admitted attempt leases or frozen child execution specifications.
+
+See [Agent Profiles](agent-profiles.md) for the exact scope and ownership rules.

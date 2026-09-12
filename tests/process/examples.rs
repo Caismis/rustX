@@ -53,7 +53,7 @@ fn assert_example_resource_snapshot(resources: &RuntimeResourceSnapshot) {
     );
     assert_eq!(
         resources
-            .subagent_main_admission()
+            .delegatable_agents()
             .iter()
             .map(rustx::runtime::subagent::SubagentName::as_str)
             .collect::<Vec<_>>(),
@@ -133,8 +133,8 @@ async fn checked_in_local_runtime_example_composes_its_real_resources() {
             config: examples.join("rustx.toml"),
             // Keep this test independent of the developer's home directory
             // while exercising the actual checked-in project Skill root.
-            skill_paths: vec![workspace.join(".agents/skills")],
-            no_skills: true,
+            skill_paths: vec![],
+            no_skills: false,
             no_builtin_tools: false,
             no_tools: false,
             startup_session: StartupSession::Empty,

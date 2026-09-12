@@ -297,7 +297,7 @@ Issue #259 Todo-extension regressions:
 | Test | Boundary/evidence |
 | --- | --- |
 | `ext259_ordinary_tool_selection_neither_adds_nor_removes_the_extension_tool` | Every ordinary activation shape, including `--no-tools` and `--no-builtin-tools`, against both compositions; the extension Tool is present or absent purely by composition, and never appears in the ordinary available catalog |
-| `ext259_todo_is_rejected_on_every_ordinary_selection_surface` | Root `defaultTools`, the CLI activation policy's three lists, and the shared source-qualified selection vocabulary all refuse `todo` by name |
+| `ext259_todo_is_rejected_on_every_ordinary_selection_surface` | Root `agent.tools.builtin`, the CLI activation policy's three lists, and the shared source-qualified selection vocabulary all refuse `todo` by name |
 | `ext259_a_workflow_cannot_admit_an_extension_tool` | A Workflow naming `builtin:todo` fails at compile time with the extension named |
 | `ext259_todo_is_not_an_ordinary_child_capability` | A frozen Builtin selection naming `todo` fails child materialization closed; the extension plane is the only seam that registers it |
 | `ext259_the_todo_tool_schema_is_stable_across_list_mutations` | Create/complete/clear through the real batch authority leave the Tool definition and the capability revision unchanged |

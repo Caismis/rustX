@@ -140,7 +140,7 @@ impl RuntimeResourceSnapshot {
                 availability: &self.capability_availability,
                 skills: self.capability.skills(),
                 agents: &self.subagents.names().into_iter().cloned().collect(),
-                workflows: &self.workflows.definitions().keys().cloned().collect(),
+                workflows: &self.workflows.admitted().clone(),
                 scope: AgentScope::Root,
             },
         );
@@ -158,7 +158,7 @@ impl RuntimeResourceSnapshot {
             AgentProfileAuthority, AgentScope, resolve_agent_profile,
         };
         let agents = self.subagents.names().into_iter().cloned().collect();
-        let workflows = self.workflows.definitions().keys().cloned().collect();
+        let workflows = self.workflows.admitted().clone();
         let authority = AgentProfileAuthority {
             tools: self.capability.available_tools(),
             availability: &self.capability_availability,
@@ -184,6 +184,7 @@ impl RuntimeResourceSnapshot {
     ) -> Option<&crate::runtime::agent_profile::ResolvedAgentProfile> {
         self.resolved_agents.get(name).map(AsRef::as_ref)
     }
+    #[must_use]
     pub fn root_profile(&self) -> Option<&crate::runtime::agent_profile::ResolvedAgentProfile> {
         self.capability.resolved_profile()
     }

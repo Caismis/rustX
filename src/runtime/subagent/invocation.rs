@@ -321,7 +321,7 @@ impl std::error::Error for SubagentOverrideError {}
 #[cfg(test)]
 mod tests {
     use super::{SubagentInvocationOverride, SubagentOverrideError};
-    use crate::extensions::{NativeAgentExtensions, NativeAgentExtensionsDocument};
+    use crate::extensions::NativeAgentExtensions;
 
     fn parse(value: serde_json::Value) -> Result<SubagentInvocationOverride, String> {
         serde_json::from_value(value).map_err(|error| error.to_string())
@@ -339,16 +339,17 @@ mod tests {
                 instructions: "instructions".to_owned(),
                 model: None,
                 execution_deadline: None,
-                tools: tools,
-                skills: skills,
-                project_instructions: crate::runtime::subagent::SubagentProjectInstructionPolicy {
-                    inherit: true,
-                    files: Vec::new(),
-                },
+                tools,
+                skills,
+                project_instructions:
+                    crate::runtime::agent_profile::AgentProjectInstructionPolicy {
+                        inherit: true,
+                        files: Vec::new(),
+                    },
                 workspace_policy: crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
-                extensions: extensions,
-                agents: Default::default(),
-                workflows: Default::default(),
+                extensions,
+                agents: std::collections::BTreeSet::default(),
+                workflows: std::collections::BTreeSet::default(),
             },
             std::path::PathBuf::from("/w/reviewer.md"),
         )
@@ -363,8 +364,10 @@ mod tests {
                 },
             ],
             vec!["code-review".to_owned()],
-            crate::extensions::NativeAgentExtensions::with_agent_status(Default::default())
-                .and_todo(),
+            crate::extensions::NativeAgentExtensions::with_agent_status(
+                crate::context::AgentStatusConfig::default(),
+            )
+            .and_todo(),
         )
     }
 
@@ -416,8 +419,10 @@ mod tests {
             "an explicit empty extension selection composes no extension at all"
         );
         assert_eq!(
-            crate::extensions::NativeAgentExtensions::with_agent_status(Default::default())
-                .and_todo(),
+            crate::extensions::NativeAgentExtensions::with_agent_status(
+                crate::context::AgentStatusConfig::default()
+            )
+            .and_todo(),
             *role.extensions(),
             "the authored document default is unchanged by the override vocabulary"
         );

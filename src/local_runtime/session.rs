@@ -2571,12 +2571,14 @@ mod tests {
 
     const CONFIG: &str = r#"agent_id = "agent-a"
 
-[model]
-model = "provider/model"
-
 [context]
 reserve_tokens = 1024
 keep_recent_tokens = 4096
+
+
+[agent]
+[agent.model]
+model = "provider/model"
 "#;
 
     fn config() -> CurrentRuntimeConfig {
@@ -3573,7 +3575,7 @@ keep_recent_tokens = 4096
             "approvalMode",
             "environment",
             "skills",
-            "default_tools",
+            "agent.tools",
         ] {
             assert!(
                 !json.contains(forbidden),

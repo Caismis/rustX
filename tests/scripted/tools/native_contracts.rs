@@ -581,21 +581,21 @@ fn selection_registry(fixture: &common::NativeFixture) -> rustx::tools::executor
     let plane = support::execution::subagent_plane_for(fixture.runtime.conversation_id().as_str());
     let catalog = AgentCatalog::new([NamedAgentDefinition::new(
         SubagentName::parse("worker").unwrap(),
-        crate::runtime::agent_profile::AgentProfile {
+        rustx::runtime::agent_profile::AgentProfile {
             description: "Worker".into(),
             instructions: "Do the task".into(),
             model: None,
             execution_deadline: None,
             tools: vec![],
             skills: vec![],
-            project_instructions: rustx::runtime::subagent::SubagentProjectInstructionPolicy {
+            project_instructions: rustx::runtime::agent_profile::AgentProjectInstructionPolicy {
                 inherit: false,
                 files: vec![],
             },
             workspace_policy: rustx::runtime::workspace::WorkspacePolicy::default(),
             extensions: rustx::extensions::NativeAgentExtensionsDocument::default().resolve(),
-            agents: Default::default(),
-            workflows: Default::default(),
+            agents: std::collections::BTreeSet::default(),
+            workflows: std::collections::BTreeSet::default(),
         },
         "worker.md".into(),
     )
@@ -660,11 +660,12 @@ fn selection_registry(fixture: &common::NativeFixture) -> rustx::tools::executor
 
 async fn selected_capabilities(
     fixture: &common::NativeFixture,
-    mut policy: rustx::capabilities::ToolActivationPolicy,
+    mut policy: rustx::capabilities::AgentActivation,
 ) -> Result<
     rustx::capabilities::CapabilityCoordinator,
     rustx::capabilities::CapabilityPreparationError,
 > {
+    policy.profile.skills = vec!["lazy".into()];
     let registry = selection_registry(fixture);
     for definition in registry.definitions() {
         if let Some(source) = definition.origin.source() {
@@ -683,7 +684,7 @@ async fn selected_capabilities(
             workspace: fixture.runtime.workspace().clone(),
             base_tool_registry: Arc::new(registry),
             extension_tools: fixture.runtime.extension_tool_plane(),
-            tool_activation: policy,
+            agent_activation: policy,
             skill_discovery: rustx::skills::SkillDiscoveryConfig {
                 automatic_roots: vec![fixture.runtime.workspace().root().join(".agents/skills")],
                 explicit_paths: vec![],
@@ -705,7 +706,7 @@ async fn selected_capabilities(
 
 #[tokio::test]
 async fn exact_selection_reaches_provider_requests_and_domain_skill_projection() {
-    use rustx::capabilities::ToolActivationPolicy as Selection;
+    use rustx::capabilities::AgentActivation as Selection;
     // The request projector never changes authority based on model capability
     // flags. Production adapter validation separately rejects unsupported
     // nonempty requests; the scripted adapter captures that exact boundary.
@@ -722,10 +723,6 @@ async fn exact_selection_reaches_provider_requests_and_domain_skill_projection()
                     "glob",
                     "grep",
                     "bash",
-                    "subagent",
-                    "review_task",
-                    "external",
-                    "python_echo",
                 ],
             ),
             (
@@ -748,10 +745,6 @@ async fn exact_selection_reaches_provider_requests_and_domain_skill_projection()
                     "glob",
                     "grep",
                     "bash",
-                    "subagent",
-                    "review_task",
-                    "external",
-                    "python_echo",
                 ],
             ),
             (
@@ -778,18 +771,10 @@ async fn exact_selection_reaches_provider_requests_and_domain_skill_projection()
             ),
             (
                 Selection {
-                    tools: Some(vec!["external".into(), "python_echo".into()]),
-                    ..Default::default()
-                },
-                vec!["external", "python_echo"],
-            ),
-            (
-                Selection {
                     no_builtin_tools: true,
-                    exclude_tools: vec!["external".into()],
                     ..Default::default()
                 },
-                vec!["python_echo"],
+                vec![],
             ),
         ] {
             let fixture = common::native_fixture_without_extensions();
@@ -810,7 +795,7 @@ async fn exact_selection_reaches_provider_requests_and_domain_skill_projection()
             let snapshot = coordinator.current_snapshot();
             assert_eq!(snapshot.skills().packages().len(), 1);
             assert!(
-                snapshot
+                !snapshot
                     .available_tools()
                     .definitions()
                     .iter()
@@ -929,7 +914,7 @@ async fn exact_selection_reaches_provider_requests_and_domain_skill_projection()
 
 #[tokio::test]
 async fn invalid_exact_selection_rejects_capability_preparation_without_fallback() {
-    use rustx::capabilities::ToolActivationPolicy as Selection;
+    use rustx::capabilities::AgentActivation as Selection;
     for selection in [
         Selection {
             tools: Some(vec![]),
@@ -1005,7 +990,7 @@ async fn filtered_calls_cannot_recover_available_native_or_generated_dispatchers
         let fixture = common::native_fixture_without_extensions();
         let coordinator = selected_capabilities(
             &fixture,
-            rustx::capabilities::ToolActivationPolicy {
+            rustx::capabilities::AgentActivation {
                 no_tools: true,
                 ..Default::default()
             },
@@ -1067,7 +1052,7 @@ async fn main_no_tools_coexists_with_independent_workflow_terminal_authority() {
     let fixture = common::native_fixture_without_extensions();
     let main = selected_capabilities(
         &fixture,
-        rustx::capabilities::ToolActivationPolicy {
+        rustx::capabilities::AgentActivation {
             no_tools: true,
             ..Default::default()
         },
@@ -1154,7 +1139,7 @@ async fn native_admission_pins_policy_axes_and_exposure_across_candidate_changes
     let fixture = common::native_fixture_without_extensions();
     let coordinator = selected_capabilities(
         &fixture,
-        rustx::capabilities::ToolActivationPolicy {
+        rustx::capabilities::AgentActivation {
             tools: Some(vec!["bash".into()]),
             ..Default::default()
         },
@@ -1194,7 +1179,7 @@ async fn native_admission_pins_policy_axes_and_exposure_across_candidate_changes
     let inputs = rustx::capabilities::CapabilityResourceInputs {
         source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
         base_tool_registry: Arc::new(replacement),
-        tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+        agent_activation: rustx::capabilities::AgentActivation::default(),
         skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
         mcp_servers: std::collections::BTreeMap::new(),
         base_environment: fixture.runtime.environment().clone(),

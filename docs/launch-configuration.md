@@ -5,12 +5,12 @@ programs. Markdown authors model-facing resources. JSON is reserved for wire dat
 generated schemas, and explicitly opaque provider-native data. TOML bytes enter
 strict snake_case structs, typed authority/merge rules, then resolved native state.
 
-`extensions.goal.enabled` defaults to `false`. Enabling it for a root launch
+`agent.extensions.goal.enabled` defaults to `false`. Enabling it for a root launch
 composes GoalDomain, the stable `get_goal`/`create_goal`/`update_goal` Tool surface,
 typed current context, controls and the round driver. Ordinary Tool selection
 cannot filter these Tools. Disabling it preserves durable Goal records; re-enabling
 restores state disarmed. [Goal extension](goal-extension.md) defines the scope and
-control contract. Effective child compositions with Goal enabled are refused.
+control contract. Complete child profiles suppress scope-ineligible Goal with a diagnostic; dynamic overrides requesting it are refused.
 
 See [canonical named Agent resources](subagent-resources.md) for schema 8
 Agent files, discovery/admission, bounded roots, source provenance, and frozen
@@ -90,16 +90,16 @@ higher layer would override them. Unknown fields fail at every schema boundary.
 | Field class | User | Trusted project | CLI | Merge |
 | --- | --- | --- | --- | --- |
 | Model/provider declarations, endpoint, protocol, limits, capabilities, credential source | Host catalog; `models` chooses path | Forbidden | `--models` selects host catalog | Catalog replacement; no provider inference |
-| Default Session model selection and request policy (`model`) | Yes | Existing host model only | `--model provider/model` | Explicit model-policy members; CLI selects fresh model policy |
+| Agent model selection and request policy (`agent.model`) | Yes | Existing host model only | `--model provider/model` | Explicit model-policy members; CLI selects fresh model policy |
 | `agent_id` | Yes | Yes | — | Scalar replacement |
 | `approval_mode` | Yes | Forbidden | — | Host scalar replacement |
 | `context`, `model_timeout_policy`, `tool_deadline_policy`, `extensions` | Yes | Yes | — | Explicit members of these finite records |
-| `default_tools`, `skills` | Yes | Yes | `--tools`, `--exclude-tools`, `--skill`, disable flags | Lists replace; repeated CLI Skill paths form one replacing list |
+| `agent.tools`, `agent.skills`, `agent.agents`, `agent.workflows` | Yes | Yes | Tool selection flags | Each selected dimension replaces; names select admitted resources |
 | `mcp_servers`, `environment` | Yes | Yes | — | Named entries replace whole entries; empty map clears |
 | `native_tools`, `mcp_tool_policies` | Yes | Forbidden | — | Host-only whole named entries; empty map clears |
 | `subagents.max_concurrent`, `.main`, `.workflow` | Yes | Yes | — | Scalar/list replacement |
-| `subagents.main`, `.workflow` | Yes | Yes | — | Selection lists replace and resolve against discovered Agents. |
-| `workflows.main` | Yes | Yes | — | Lists replace; YAML resources belong to workspace `.agents/workflows` |
+| `agent.agents`, `.workflow` | Yes | Yes | — | Selection lists replace and resolve against discovered Agents. |
+| `agent.workflows` | Yes | Yes | — | Lists replace; YAML resources belong to workspace `.agents/workflows` |
 | Runtime state root (`runtime_root`) | Yes | Forbidden | `--runtime-root` | Path replacement |
 | Workspace identity | No settings authority | Forbidden | `--workspace` | Canonical root selection |
 | Trust records/store, credential-store redirection | No settings authority | Forbidden | `--trust grant/revoke` only | Host-owned membership operation |
@@ -144,7 +144,7 @@ Provider parameters have one authoring form in catalogs, reasoning profiles,
 primary model overlays, and explicit summary model overlays:
 
 ```toml
-[model]
+[agent.model]
 model = "example/demo-model"
 request_params_json = '''
 {"temperature":0.7,"future":{"nested":[1,null,{"enabled":true}]}}
@@ -253,7 +253,7 @@ the [minimal catalog](../examples/local-runtime/minimal/models.toml) shows the
 required declarations. User `settings.toml` needs only the selected reference:
 
 ```toml
-[model]
+[agent.model]
 model = "example/demo-model"
 ```
 
@@ -282,25 +282,25 @@ The default native Agent Extension composition contains the Agent Status
 extension with its Time and Background contributors enabled and no configured
 timezone, and the Todo extension. Todo is deliberately absent from the native
 default *tool* list above: it is composed by `extensions.todo`, and naming it
-in `default_tools` is a validation error.
+in `agent.tools.builtin` is a validation error.
 
 ## Native Agent Extensions
 
-`extensions` is the single **closed, launch-scoped** configuration surface for
+`agent.extensions` is the root placement of the shared **closed, launch-scoped** profile composition surface for
 optional Agent augmentation:
 
 ```toml
-[extensions.agent_status]
+[agent.extensions.agent_status]
 enabled = true
 
-[extensions.agent_status.time]
+[agent.extensions.agent_status.time]
 enabled = true
 timezone = "Asia/Shanghai"
 
-[extensions.agent_status.background]
+[agent.extensions.agent_status.background]
 enabled = true
 
-[extensions.todo]
+[agent.extensions.todo]
 enabled = true
 ```
 
@@ -332,7 +332,7 @@ migration an extension may also contribute a model-facing Tool. The model's
 Tool set is therefore a composition of distinct owners:
 
 ```text
-  ordinary selected Tool capabilities          default_tools / --tools /
+  ordinary selected Tool capabilities          agent.tools.builtin / --tools /
                                                --exclude-tools / tools.builtin
 + enabled extension-provided Tool surfaces     extensions.<name>.enabled
 + already-admitted domain terminal protocols   Workflow output, ...
@@ -352,13 +352,13 @@ A truly Tool-free model request therefore requires **both** no ordinary Tools
 **and** no Tool-providing extension:
 
 ```toml
-[extensions.todo]
+[agent.extensions.todo]
 enabled = false
 ```
 
 Symmetrically, an extension can never be switched on by naming its Tool.
 `todo` is rejected — deterministically, with a diagnostic naming the extension
-— in `default_tools`, `--tools`, `--exclude-tools`, a named Subagent's
+— in `agent.tools.builtin`, `--tools`, `--exclude-tools`, a named Subagent's
 `tools.builtin`, a Workflow's admitted capability set, and every invocation
 override that shares that vocabulary. There is no alias and no compatibility
 parse.
@@ -366,7 +366,7 @@ parse.
 ### The Todo extension
 
 ```toml
-[extensions.todo]
+[agent.extensions.todo]
 enabled = true
 ```
 
@@ -379,8 +379,9 @@ enabled = true
 | the bounded read-only Todo status presentation | no Todo contribution to Agent Status |
 | the Runtime Client / TUI Todo projection | no active Todo panel for this runtime |
 
-It is enabled by default, which preserves the product behavior `default_tools`
-used to express — but the default now belongs to extension composition.
+The explicit lower-priority root product profile enables Todo. An omitted
+Extension in a complete profile is absent; named profiles have no hidden
+extension defaults. See [Agent Profiles](agent-profiles.md).
 
 Todo carries no contributor configuration. The list's bounds, transitions, and
 dependency rules belong to the list itself, not to launch configuration.
@@ -420,7 +421,7 @@ it rewrites no canonical Session history to match a changed extension set.
 The root Agent's composition comes from this document. A named Subagent's comes
 from its own canonical Agent TOML (see
 [canonical named Agent resources](subagent-resources.md)). A role that
-declares no `extensions` composes its own built-in defaults, never the root's
+declares no `extensions` composes none, independently of the root's
 configuration.
 
 A child never *implicitly inherits* the root's set. Since Issue #258 the

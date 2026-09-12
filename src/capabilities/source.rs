@@ -86,7 +86,7 @@ mod tests {
         ] {
             let config: crate::local_runtime::config::CurrentRuntimeConfig =
                 serde_json::from_value(serde_json::json!({
-                    "model": {"model":"local/test"},
+                    "agent": {"model": {"model":"local/test"}},
                     "mcpServers": {name: {"command":"unused", "enabled":true}}
                 }))
                 .unwrap();
@@ -111,7 +111,7 @@ mod tests {
         for name in ["python:analysis", "python:", "python:bad/name"] {
             let config: crate::local_runtime::config::CurrentRuntimeConfig =
                 serde_json::from_value(serde_json::json!({
-                    "model": {"model":"local/test"}, "mcpServers": {name: {"command":"unused"}}
+                    "agent": {"model": {"model":"local/test"}}, "mcpServers": {name: {"command":"unused"}}
                 }))
                 .unwrap();
             assert!(config.mcp_bindings().is_err());

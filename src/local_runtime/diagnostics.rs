@@ -547,7 +547,7 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
             "extensionTools": crate::extensions::composed_extension_tool_names(
                 &launch.config.extension_composition(),
             ),
-            "extensionToolsReason":"provided by composed Native Agent Extensions; not selectable through default_tools/--tools/--exclude-tools, and not removed by --no-tools",
+            "extensionToolsReason":"provided by composed Native Agent Extensions; not selectable through builtin_tools/--tools/--exclude-tools, and not removed by --no-tools",
             "onlineIdentities":"unresolved until source discovery"}),
         discovered_workflows: launch.workflows.definitions().keys().map(ToString::to_string)
             .collect(),
