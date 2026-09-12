@@ -1160,10 +1160,7 @@ def ping() -> str:
             agent_activation: rustx::capabilities::AgentActivation {
                 profile: rustx::local_runtime::config::AgentProfileDocument {
                     tools: rustx::capabilities::selection::ToolSelectionDocument {
-                        builtin: rustx::capabilities::AgentActivation::default()
-                            .profile
-                            .tools
-                            .builtin,
+                        builtin: vec!["unrelated_native".into()],
                         sources: ["healthy", "conflicting"]
                             .map(|package| {
                                 (
