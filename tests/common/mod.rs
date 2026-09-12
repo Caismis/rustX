@@ -1408,12 +1408,20 @@ pub async fn capability_lease(
 pub async fn capability_lease_with(
     tools: rustx::tools::executor::ToolRegistry,
     tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
-    tool_activation: rustx::capabilities::ToolActivationPolicy,
+    mut tool_activation: rustx::capabilities::ToolActivationPolicy,
 ) -> CapabilityFixture {
+    for definition in tools.definitions() {
+        if let Some(source) = definition.origin.source() {
+            tool_activation
+                .sources
+                .entry(source)
+                .or_insert(rustx::capabilities::selection::SourceToolSelection::All);
+        }
+    }
     let dir = tempfile::tempdir().expect("capability temp dir");
     let coordinator = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
-            python_sources: std::collections::BTreeMap::new(),
+            source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
             conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: std::sync::Arc::new(tools),
@@ -1698,4 +1706,31 @@ impl rustx::skills::SkillEnvironmentBackend for FakeSkillEnvironmentBackend {
             Ok(())
         })
     }
+}
+
+/// Explicit source demand for fixture composition, with an inert package catalog.
+pub fn source_demand(
+    workspace: &std::path::Path,
+    names: impl IntoIterator<Item = impl AsRef<str>>,
+) -> rustx::capabilities::source::ToolSourceDemand {
+    let packages = std::fs::read_dir(workspace.join(".agents/tools"))
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().is_dir())
+        .map(|entry| {
+            (
+                rustx::capabilities::ToolSourceId::ManagedPython(
+                    entry.file_name().to_str().unwrap().to_owned(),
+                ),
+                entry.path(),
+            )
+        })
+        .collect();
+    rustx::capabilities::source::ToolSourceDemand::new(
+        names.into_iter().map(|name| {
+            rustx::capabilities::ToolSourceId::try_from(name.as_ref().to_owned()).unwrap()
+        }),
+        rustx::runtime::resources::ManagedPythonCatalog::new(packages),
+    )
 }

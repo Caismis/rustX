@@ -1207,7 +1207,7 @@ mod tests {
         )
         .expect("tool runtime");
         let capability = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
-            python_sources: std::collections::BTreeMap::new(),
+            source_demand: crate::capabilities::source::ToolSourceDemand::default(),
             conversation_id: conversation_id.clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: Arc::new(ToolRegistry::new()),

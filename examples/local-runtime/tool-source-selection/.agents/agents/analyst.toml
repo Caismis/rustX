@@ -1,0 +1,9 @@
+description = "Inspect repositories and data with explicitly selected Tools."
+instructions = "Use the selected repository and data-analysis capabilities."
+
+[tools]
+builtin = ["read", "grep"]
+
+[tools.sources]
+github = "all"
+"python:data-analysis" = ["run_python", "inspect_dataframe"]

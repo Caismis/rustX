@@ -7389,7 +7389,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
             crate::capabilities::CapabilityCoordinatorConfig {
-                python_sources: std::collections::BTreeMap::new(),
+                source_demand: crate::capabilities::source::ToolSourceDemand::default(),
                 conversation_id: tool_runtime.conversation_id().clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: tools,

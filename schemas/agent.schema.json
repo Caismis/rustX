@@ -26,6 +26,12 @@
       },
       "type": "object"
     },
+    "AllTools": {
+      "enum": [
+        "all"
+      ],
+      "type": "string"
+    },
     "BackgroundStatusConfig": {
       "additionalProperties": false,
       "description": "Configuration of the bounded Background status contributor.",
@@ -86,6 +92,20 @@
         }
       },
       "type": "object"
+    },
+    "SourceToolSelection": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AllTools"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "Exactly two trust granularities for one source. This is also the authoring\nboundary: only the literal \"all\" or an exact array is accepted."
     },
     "SubagentAgentsMdDocument": {
       "additionalProperties": false,
@@ -156,25 +176,20 @@
     },
     "ToolSelectionDocument": {
       "additionalProperties": false,
-      "description": "The authored map form of an exact, source-qualified capability selection.\n\nThis is the one selection vocabulary shared by every trusted authoring\nsurface: named Agent TOML (`[tools]`), a Workflow Agent node's\ninvocation override, and the model-facing `subagent` Tool's `override`.\nOrigins are named explicitly rather than collapsed into bare strings, so a\nBuiltin `read` and an MCP server's `read` are never interchangeable.\nWildcards are deliberately absent: a selection is an exact list. Managed\nPython tool packages are selected through `mcp` under their synthesized\nserver identity (`python:<folder>`, Issue #174).\n\nThe `python:` namespace is reserved for those synthesized identities:\n`mcpServers` configuration may never declare a server under it (rejected\nduring validation), so a selection naming `python:<folder>` always resolves\nto the managed package, never to a configured server.",
+      "description": "Shared Agent and Workflow Agent override selection. Extensions are composed\nby their native owner and never enter this ordinary capability vocabulary.",
       "properties": {
         "builtin": {
           "default": [],
-          "description": "Built-in/native capabilities, by canonical model-facing name.",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
-        "mcp": {
+        "sources": {
           "additionalProperties": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
+            "$ref": "#/$defs/SourceToolSelection"
           },
           "default": {},
-          "description": "MCP capabilities, keyed by server identity.",
           "type": "object"
         }
       },
@@ -250,7 +265,7 @@
       "$ref": "#/$defs/ToolSelectionDocument",
       "default": {
         "builtin": [],
-        "mcp": {}
+        "sources": {}
       },
       "description": "The exact source-qualified capability selection."
     },

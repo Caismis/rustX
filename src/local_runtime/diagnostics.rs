@@ -462,7 +462,8 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
             SourceActivation::Unconfigured => ("inert", "no explicit activation grant; not loaded"),
             SourceActivation::Untrusted => ("inert", "host trust has not admitted this source"),
         };
-        let path = if launch.config.mcp_servers.contains_key(name) {
+        let path = if matches!(name, crate::capabilities::ToolSourceId::Mcp(id) if launch.config.mcp_servers.contains_key(id))
+        {
             format!("mcp_servers.{name}")
         } else {
             format!("tools.{name}")

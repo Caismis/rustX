@@ -351,7 +351,7 @@ pub enum RuntimeClientSessionRequest {
 /// `goal_changed` for bounded live updates, including activation-only changes.
 /// The Goal durable revision is independent of the Runtime Client cursor;
 /// successful snapshots expose only the Goal view folded at that cursor.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 31;
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 32;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1422,7 +1422,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 31);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 32);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

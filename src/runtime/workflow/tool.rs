@@ -5,7 +5,7 @@ use super::{
     WorkflowRunError, WorkflowRuntime, bound_workflow_diagnostic, execution, expressions,
     workflow_event_id,
 };
-use crate::capabilities::selection::ToolSelector;
+use crate::capabilities::selection::ExactToolSelector;
 use crate::runtime::subagent::AttemptSubagentContext;
 use crate::tools::executor::{PreflightOutcome, ToolExecutionContext};
 use crate::tools::invocation::{ForegroundInvocation, NativeInvocationFact, terminal};
@@ -16,7 +16,7 @@ use crate::tools::types::{
 pub(super) fn freeze(
     program: &WorkflowProgram,
     context: &AttemptSubagentContext,
-) -> Result<BTreeMap<ToolSelector, ToolDefinition>, WorkflowRunError> {
+) -> Result<BTreeMap<ExactToolSelector, ToolDefinition>, WorkflowRunError> {
     let resources = context.resources();
     let catalog = resources.capability().available_tools();
     program
@@ -34,7 +34,10 @@ pub(super) fn freeze(
                 } => WorkflowRunError::SourceUnavailable(error.to_string()),
                 crate::capabilities::selection::ToolSelectionError::UnknownCapability {
                     ..
-                } => WorkflowRunError::InvalidSelector(error.to_string()),
+                }
+                | crate::capabilities::selection::ToolSelectionError::ExactToolAbsent { .. } => {
+                    WorkflowRunError::InvalidSelector(error.to_string())
+                }
             })?;
             let definition = selected;
             if definition.execution_policy
@@ -130,21 +133,19 @@ impl WorkflowCatalog {
                 };
                 if let Some(selection) = &node.invocation_override.tools {
                     for selector in selection.selectors() {
-                        match crate::capabilities::selection::resolve_metadata(
+                        match crate::capabilities::selection::project(
                             &selector,
                             available,
                             availability,
                         ) {
                             Ok(selected)
-                                if !selected
+                                if selected.iter().all(|selected| !selected
                                     .id
                                     .as_str()
-                                    .starts_with(super::WORKFLOW_TOOL_ID_PREFIX) => {}
+                                    .starts_with(super::WORKFLOW_TOOL_ID_PREFIX)) => {}
                             Err(
-                                crate::capabilities::selection::ToolSelectionError::SourceUnavailable {
-                                    ..
-                                },
-                            ) => {}
+                                crate::capabilities::selection::ToolSelectionError::SourceUnavailable { reason, .. },
+                            ) if !matches!(reason, crate::capabilities::selection::SourceResolutionFailure::Undefined) => {}
                             _ => {
                                 return Err(failure(format!(
                                     "Agent override selects {selector}, which this generation \
@@ -232,20 +233,20 @@ impl WorkflowCatalog {
                             ..
                         },
                     ) => match selector {
-                        ToolSelector::Mcp { server_id, .. } => match availability.get(
-                            &crate::capabilities::CapabilitySourceId::Mcp(server_id.clone()),
-                        ) {
-                            Some(crate::capabilities::CapabilitySourceState::Inactive {
-                                activation,
-                            }) => super::inspection::DependencyState::Inert {
-                                activation: *activation,
-                            },
-                            Some(crate::capabilities::CapabilitySourceState::Unavailable {
-                                ..
-                            }) => super::inspection::DependencyState::Unavailable,
-                            _ => super::inspection::DependencyState::Unresolved,
-                        },
-                        ToolSelector::Builtin { .. } => {
+                        ExactToolSelector::Source { source_id, .. } => {
+                            match availability.get(source_id) {
+                                Some(crate::capabilities::CapabilitySourceState::Inactive {
+                                    activation,
+                                }) => super::inspection::DependencyState::Inert {
+                                    activation: *activation,
+                                },
+                                Some(crate::capabilities::CapabilitySourceState::Unavailable {
+                                    ..
+                                }) => super::inspection::DependencyState::Unavailable,
+                                _ => super::inspection::DependencyState::Unresolved,
+                            }
+                        }
+                        ExactToolSelector::Builtin { .. } => {
                             unreachable!("builtin has no external source")
                         }
                     },
@@ -267,7 +268,7 @@ impl WorkflowRuntime {
     pub(super) fn tool_workspace_use(
         run: &WorkflowRun,
         context: &AttemptSubagentContext,
-        selector: &ToolSelector,
+        selector: &ExactToolSelector,
     ) -> Result<crate::tools::executor::WorkspaceUse, WorkflowRunError> {
         let definition = run.tools.get(selector).ok_or_else(|| {
             WorkflowRunError::CapabilityNotAdmitted("capability was not admitted".into())
@@ -287,7 +288,7 @@ impl WorkflowRuntime {
         run: &WorkflowRun,
         context: &AttemptSubagentContext,
         node: &WorkflowNodeInstance,
-        selector: &ToolSelector,
+        selector: &ExactToolSelector,
         arguments: expressions::CommittedValue,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
         admitted_access: &mut Option<crate::runtime::workspace::WorkspaceAccess>,
@@ -394,7 +395,7 @@ impl WorkflowRuntime {
         run: &WorkflowRun,
         context: &AttemptSubagentContext,
         node: &WorkflowNodeInstance,
-        selector: &ToolSelector,
+        selector: &ExactToolSelector,
         arguments: Value,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
         workspace: Option<&crate::tools::workspace::Workspace>,

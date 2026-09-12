@@ -40,13 +40,15 @@
 //! or any one managed Python tool package compiled into the MCP plane) is
 //! not a preparation error: it is recorded as typed
 //! [`CapabilitySourceState::Unavailable`] state keyed by stable
-//! [`CapabilitySourceId`], and preparation continues with every other
+//! [`ToolSourceId`], and preparation continues with every other
 //! source. Only successfully prepared capability objects enter the
 //! committed active snapshot, and `CapabilityRevision` advances only when
 //! the effective committed executable set changes — never because a
 //! diagnostic reason changed.
 
 mod availability;
+pub mod source;
+pub use source::ToolSourceId;
 mod coordinator;
 mod error;
 pub mod selected;
@@ -56,8 +58,8 @@ mod tools;
 pub(crate) use tools::select_definitions;
 
 pub use availability::{
-    CAPABILITY_FAILURE_REASON_MAX_BYTES, CapabilityAvailability, CapabilitySourceId,
-    CapabilitySourceState, capability_failure_reason,
+    CAPABILITY_FAILURE_REASON_MAX_BYTES, CapabilityAvailability, CapabilitySourceState,
+    capability_failure_reason,
 };
 pub(crate) use coordinator::CommittedCapability;
 pub use coordinator::{
@@ -65,7 +67,7 @@ pub use coordinator::{
     CapabilityResourceInputs, PreparedCapabilityCandidate,
 };
 pub use error::{CapabilityCommitError, CapabilityPreparationError};
-pub use selected::{SelectedCapabilityPlan, SelectedMaterializationError, SelectedMcpTool};
+pub use selected::{SelectedCapabilityPlan, SelectedMaterializationError, SelectedSourceTool};
 pub use snapshot::CapabilitySnapshot;
 pub(crate) use tools::validate_names as validate_tool_names;
 pub use tools::{

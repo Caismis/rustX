@@ -14,7 +14,7 @@ it("CFG238 shares the native protocol fixture and explicit lifetimes", () => {
   // `effective_extensions.todo` member the fixture now carries in every state,
   // including the `todo_only` combination that proves the two extensions
   // project on independent axes.
-  assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 31);
+  assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 32);
   assert.equal(fixture.request.method, "default_save");
   if (fixture.request.method === "default_save") {
     assert.equal(fixture.request.scope, "user");

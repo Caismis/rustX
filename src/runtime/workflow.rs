@@ -291,7 +291,7 @@ pub struct WorkflowDefinition {
     pub description: String,
     /// Explicit capability admission, independent of main model exposure.
     #[serde(default)]
-    pub tools: BTreeSet<crate::capabilities::selection::ToolSelector>,
+    pub tools: BTreeSet<crate::capabilities::selection::ExactToolSelector>,
     /// Trusted finite total foreground lifetime, including descendant waits.
     #[serde(default = "default_workflow_timeout_ms")]
     pub timeout_ms: u64,
@@ -348,7 +348,7 @@ pub enum WorkflowNodeDefinition {
 
     /// One statically selected, explicitly admitted foreground capability.
     Tool {
-        selector: crate::capabilities::selection::ToolSelector,
+        selector: crate::capabilities::selection::ExactToolSelector,
         arguments: WorkflowValue,
         result: WorkflowToolResult,
     },
@@ -552,7 +552,7 @@ pub struct WorkflowProgram {
     execution_bound: usize,
     agent_bound: usize,
     retained_bound: usize,
-    tools: BTreeSet<crate::capabilities::selection::ToolSelector>,
+    tools: BTreeSet<crate::capabilities::selection::ExactToolSelector>,
     timeout_ms: u64,
 }
 
@@ -656,7 +656,7 @@ pub enum WorkflowNodeProgram {
     },
 
     Tool {
-        selector: crate::capabilities::selection::ToolSelector,
+        selector: crate::capabilities::selection::ExactToolSelector,
         arguments: WorkflowValue,
         result: WorkflowToolResult,
     },
@@ -933,7 +933,7 @@ fn compile_program(
     // Tool nodes never get one — so naming it is a static authoring error
     // rather than a selector that merely fails to resolve later (Issue #259).
     for selector in &definition.tools {
-        if let crate::capabilities::selection::ToolSelector::Builtin { name } = selector
+        if let crate::capabilities::selection::ExactToolSelector::Builtin { name } = selector
             && let Some(extension) = crate::capabilities::extension_provided_tool(name)
         {
             return Err(WorkflowCompileError::InvalidField(format!(
@@ -979,7 +979,7 @@ fn compile_program(
 fn compile_block(
     definition: WorkflowBlock,
     workflow_profiles: &BTreeSet<SubagentName>,
-    admitted_tools: &BTreeSet<crate::capabilities::selection::ToolSelector>,
+    admitted_tools: &BTreeSet<crate::capabilities::selection::ExactToolSelector>,
     path: Vec<String>,
     total_nodes: &mut usize,
 ) -> Result<WorkflowBlockProgram, WorkflowCompileError> {
@@ -2104,8 +2104,10 @@ pub struct WorkflowRun {
     run_id: WorkflowRunId,
     budgets: std::sync::Mutex<execution::RunBudgets>,
     terminal: Option<WorkflowTerminalState>,
-    tools:
-        BTreeMap<crate::capabilities::selection::ToolSelector, crate::tools::types::ToolDefinition>,
+    tools: BTreeMap<
+        crate::capabilities::selection::ExactToolSelector,
+        crate::tools::types::ToolDefinition,
+    >,
 }
 
 impl fmt::Debug for WorkflowRun {

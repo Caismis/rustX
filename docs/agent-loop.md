@@ -466,10 +466,9 @@ canonical boundary in `src/tools/executor.rs`:
 
 - The validating [`ToolRegistry`] pairs one canonical `ToolDefinition` with
   one `Arc<dyn ToolExecutor>`; an executor object does not own its
-  definition, so one implementation may serve many registrations. Native and
-  MCP executors — custom Python tool packages included, since each package is
-  served as one synthesized MCP server (`python:<folder>`) — all enter
-  through this same boundary.
+  definition, so one implementation may serve many registrations. Native Tools
+  and ordinary Tools published by MCP and Managed Python sources all enter
+  through this same boundary; their materialization owners remain distinct.
 - A `ToolExecutor` executes an already-resolved, already-validated
   `ToolInvocation` (call id, tool id, model-facing name, resolved
   foreground/background mode, and the stripped business arguments) inside a

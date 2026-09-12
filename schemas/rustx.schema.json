@@ -4,6 +4,12 @@
       "description": "Identifies an agent.",
       "type": "string"
     },
+    "AllTools": {
+      "enum": [
+        "all"
+      ],
+      "type": "string"
+    },
     "ApprovalMode": {
       "description": "The runtime-wide control state for tool approval behavior.\n\n`Policy` consults each resolved Tool's\n[`ToolApprovalPolicy`](crate::tools::types::ToolApprovalPolicy).\n`FullAccess` changes only the effective approval result to `Never`; it\nnever changes availability, activation, execution ownership, concurrency,\nor tool authority.",
       "oneOf": [
@@ -468,6 +474,20 @@
       "description": "JSON text with an object at its top level. Arbitrary nested provider-native JSON is retained, including null. Protected wire keys are rejected during model resolution.",
       "type": "string"
     },
+    "SourceToolSelection": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AllTools"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "Exactly two trust granularities for one source. This is also the authoring\nboundary: only the literal \"all\" or an exact array is accepted."
+    },
     "StatusLayer": {
       "additionalProperties": false,
       "properties": {
@@ -687,6 +707,27 @@
       },
       "type": "object"
     },
+    "ToolSelectionDocument": {
+      "additionalProperties": false,
+      "description": "Shared Agent and Workflow Agent override selection. Extensions are composed\nby their native owner and never enter this ordinary capability vocabulary.",
+      "properties": {
+        "builtin": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "sources": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SourceToolSelection"
+          },
+          "default": {},
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "WorkflowId": {
       "description": "The configured workflow identity.\n\nThis is both the catalog key and the eventual model-facing Tool name. It\nis deliberately not repeated inside YAML.",
       "type": "string"
@@ -794,6 +835,13 @@
       "anyOf": [
         {
           "$ref": "#/$defs/ToolDeadlineLayer"
+        }
+      ]
+    },
+    "tools": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ToolSelectionDocument"
         }
       ]
     },

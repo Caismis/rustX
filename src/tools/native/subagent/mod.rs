@@ -775,7 +775,7 @@ chat_reasoning_replay = "omit"
         use std::sync::Arc;
 
         use crate::capabilities::CapabilitySnapshot;
-        use crate::capabilities::selection::ToolSelector;
+        use crate::capabilities::selection::AgentToolSelection;
         use crate::context::SessionContextPolicy;
         use crate::model::catalog::{MapCredentialEnvironment, ModelCatalog, ModelRef};
         use crate::model::invocation::ModelBindingRegistry;
@@ -867,7 +867,7 @@ chat_reasoning_replay = "omit"
             workspace_root.join("reviewer.md"),
             Some(model.clone()),
             None,
-            vec![ToolSelector::Builtin {
+            vec![AgentToolSelection::Builtin {
                 name: "read".to_owned(),
             }],
             Vec::new(),

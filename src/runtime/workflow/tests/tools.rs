@@ -883,7 +883,7 @@ async fn normalization_and_schema_rejection_start_zero_executors() {
 
 #[test]
 fn authority_rejects_changed_identity_and_unadmitted_selection() {
-    use crate::capabilities::selection::ToolSelector;
+    use crate::capabilities::selection::ExactToolSelector;
     let probe = Probe::new(ToolExecutionStatus::Success);
     let registration = ToolRegistration::plain(definition(), probe);
     let mut changed = definition();
@@ -913,7 +913,7 @@ fn authority_rejects_changed_identity_and_unadmitted_selection() {
                 (
                     "tool".into(),
                     WorkflowNodeDefinition::Tool {
-                        selector: ToolSelector::Builtin {
+                        selector: ExactToolSelector::Builtin {
                             name: "check".into(),
                         },
                         arguments: WorkflowValue::Literal { value: json!({}) },

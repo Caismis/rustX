@@ -202,7 +202,7 @@ id_type! {
     /// nothing to another OS process, while this identity is exactly what a
     /// subagent child recomputes from its own connection to prove it
     /// materialized the Tool contract its parent froze.
-    McpToolIdentity
+    SourceToolIdentity
 }
 
 /// The conversation-scoped attempt identity domain (Issue #12, M9a).

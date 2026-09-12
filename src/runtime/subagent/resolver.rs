@@ -121,7 +121,7 @@ use crate::model::frozen::FrozenModelSpec;
 use crate::model::invocation::ModelBindingRegistry;
 use crate::model::session::SessionModelConfig;
 use crate::protocol::manifest::SkillBinding;
-use crate::runtime::identity::{McpServerId, McpToolIdentity, SkillId, SkillVersionId, ToolId};
+use crate::runtime::identity::{SkillId, SkillVersionId, SourceToolIdentity, ToolId};
 use crate::runtime::resources::{ProjectContextFile, RuntimeResourceSnapshot};
 use crate::skills::{SkillCatalogEntry, SkillSnapshot};
 use crate::tools::mcp::{McpServerBinding, McpServerBindings};
@@ -132,7 +132,7 @@ use super::catalog::{
     SubagentName,
 };
 use super::invocation::{SubagentInvocationOverride, SubagentOverrideError};
-use crate::capabilities::selection::ToolSelector;
+use crate::capabilities::selection::AgentToolSelection;
 use crate::runtime::workspace::WorkspacePolicy;
 
 /// One frozen capability identity of a resolved child.
@@ -153,10 +153,10 @@ pub enum ResolvedSubagentTool {
         /// The exact admitted definition.
         definition: ToolDefinition,
     },
-    /// One tool of one configured MCP server.
-    Mcp {
-        /// The authoritative MCP server identity.
-        server_id: McpServerId,
+    /// One ordinary Tool published by an exact `ToolSource`.
+    Source {
+        /// The authoritative typed source identity.
+        source_id: crate::capabilities::ToolSourceId,
         /// The exact `ToolId` of the admitted definition.
         tool_id: ToolId,
         /// The canonical tool name as the server publishes it.
@@ -173,7 +173,7 @@ pub enum ResolvedSubagentTool {
         /// process-local MCP invalidation epoch cannot serve this purpose:
         /// it stabilizes one process's catalog read and has no meaning in
         /// another process.
-        identity: McpToolIdentity,
+        identity: SourceToolIdentity,
     },
 }
 
@@ -182,7 +182,7 @@ impl ResolvedSubagentTool {
     #[must_use]
     pub fn name(&self) -> &str {
         match self {
-            Self::Builtin { name, .. } | Self::Mcp { name, .. } => name,
+            Self::Builtin { name, .. } | Self::Source { name, .. } => name,
         }
     }
 
@@ -190,7 +190,7 @@ impl ResolvedSubagentTool {
     #[must_use]
     pub const fn definition(&self) -> &ToolDefinition {
         match self {
-            Self::Builtin { definition, .. } | Self::Mcp { definition, .. } => definition,
+            Self::Builtin { definition, .. } | Self::Source { definition, .. } => definition,
         }
     }
 
@@ -199,9 +199,9 @@ impl ResolvedSubagentTool {
     pub fn canonical(&self) -> String {
         match self {
             Self::Builtin { name, .. } => format!("builtin:{name}"),
-            Self::Mcp {
-                server_id, name, ..
-            } => format!("mcp:{server_id}/{name}"),
+            Self::Source {
+                source_id, name, ..
+            } => format!("source:{source_id}/{name}"),
         }
     }
 }
@@ -253,14 +253,14 @@ pub struct ResolvedSubagentSkill {
 /// capabilities actually require:
 ///
 /// ```text
-/// selected mcp:github/get_issue   ->  mcp_servers = { github: <binding> }
+/// selected source:github/get_issue -> sources = { github: <binding> }
 ///                                     (never every configured server)
 /// selected nothing external       ->  empty
 /// ```
 ///
-/// Managed Python tool packages cross as ordinary frozen MCP bindings under
-/// their synthesized server identities (Issue #174); there is no
-/// Python-specific materialization channel.
+/// Each binding is keyed by typed source identity. The Managed Python owner
+/// has already prepared its immutable execution binding; the child reuses it
+/// through the existing MCP-compatible materializer without package discovery.
 ///
 /// The child never reads `rustx.toml` to obtain any of this: a
 /// configuration edit between the parent's freeze and the child's
@@ -269,9 +269,8 @@ pub struct ResolvedSubagentSkill {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResolvedSubagentMaterialization {
-    /// Exactly the MCP servers whose tools this child selected, keyed by
-    /// the one authoritative server identity.
-    pub mcp_servers: BTreeMap<McpServerId, McpServerBinding>,
+    /// Exactly the native materialization bindings the frozen source selection requires.
+    pub sources: BTreeMap<crate::capabilities::ToolSourceId, McpServerBinding>,
 }
 
 impl ResolvedSubagentMaterialization {
@@ -280,7 +279,7 @@ impl ResolvedSubagentMaterialization {
     /// deterministic base-only plane it always did.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.mcp_servers.is_empty()
+        self.sources.is_empty()
     }
 }
 
@@ -1099,43 +1098,6 @@ impl SubagentResolver {
     }
 }
 
-/// Subagent-specific admission and physical identity freezing after generic
-/// capability selection. Source matching and availability classification belong
-/// exclusively to `capabilities::selection`; both Subagent call sites consume
-/// that owner here before freezing the child launch identity.
-fn resolve_selector(
-    selector: &ToolSelector,
-    available: &AvailableToolCatalog,
-    availability: &CapabilityAvailability,
-) -> Result<ResolvedSubagentTool, SubagentResolutionError> {
-    let definition =
-        crate::capabilities::selection::resolve_selector(selector, available, availability)
-            .map_err(|error| match error {
-                crate::capabilities::selection::ToolSelectionError::SourceUnavailable {
-                    selector,
-                    source,
-                    reason,
-                } => SubagentResolutionError::SourceUnavailable {
-                    selector,
-                    source,
-                    reason,
-                },
-                crate::capabilities::selection::ToolSelectionError::UnknownCapability {
-                    selector,
-                } => SubagentResolutionError::UnknownCapability { selector },
-            })?;
-    if definition
-        .id
-        .as_str()
-        .starts_with(crate::runtime::workflow::WORKFLOW_TOOL_ID_PREFIX)
-    {
-        return Err(SubagentResolutionError::UnknownCapability {
-            selector: selector.canonical(),
-        });
-    }
-    Ok(freeze_tool(selector, definition))
-}
-
 /// **Invocation-time** resolution of the *effective* selection: fail fast on
 /// the first selector that cannot be satisfied, for any reason. A child must
 /// never start weaker than the invocation it was authorized with.
@@ -1145,14 +1107,45 @@ fn resolve_selector(
 /// directly. A requested capability is therefore never silently dropped, and
 /// a *replaced-away* default is never required.
 fn resolve_tools(
-    selected: &[ToolSelector],
+    selected: &[AgentToolSelection],
     available: &AvailableToolCatalog,
     availability: &CapabilityAvailability,
 ) -> Result<Vec<ResolvedSubagentTool>, SubagentResolutionError> {
-    selected
-        .iter()
-        .map(|selector| resolve_selector(selector, available, availability))
-        .collect()
+    let mut result = Vec::new();
+    for selector in selected {
+        let definitions = crate::capabilities::selection::project(
+            selector,
+            available.tools().iter().map(|tool| &tool.definition),
+            availability,
+        )
+        .map_err(|error| match error {
+            crate::capabilities::selection::ToolSelectionError::SourceUnavailable {
+                selector,
+                source,
+                reason,
+            } => SubagentResolutionError::SourceUnavailable {
+                selector,
+                source: source.to_string(),
+                reason: reason.to_string(),
+            },
+            crate::capabilities::selection::ToolSelectionError::ExactToolAbsent {
+                source,
+                name,
+            } => SubagentResolutionError::UnknownCapability {
+                selector: format!("source:{source}/{name}"),
+            },
+            crate::capabilities::selection::ToolSelectionError::UnknownCapability { selector } => {
+                SubagentResolutionError::UnknownCapability { selector }
+            }
+        })?;
+        result.extend(
+            definitions
+                .into_iter()
+                .map(|definition| freeze_tool(selector, definition)),
+        );
+    }
+    result.sort_by_key(ResolvedSubagentTool::canonical);
+    Ok(result)
 }
 
 /// The exact native identities the **named role** itself authorizes.
@@ -1175,8 +1168,14 @@ fn role_tool_authority(
         .tools()
         .iter()
         .filter_map(|selector| {
-            crate::capabilities::selection::resolve_selector(selector, available, availability).ok()
+            crate::capabilities::selection::project(
+                selector,
+                available.tools().iter().map(|tool| &tool.definition),
+                availability,
+            )
+            .ok()
         })
+        .flatten()
         .map(|definition| definition.id.clone())
         .collect()
 }
@@ -1244,7 +1243,7 @@ fn authorize_delegation(
         for tool in tools {
             let id = match tool {
                 ResolvedSubagentTool::Builtin { tool_id, .. }
-                | ResolvedSubagentTool::Mcp { tool_id, .. } => tool_id,
+                | ResolvedSubagentTool::Source { tool_id, .. } => tool_id,
             };
             if !allowed.contains(id) {
                 return Err(SubagentResolutionError::UnauthorizedTool {
@@ -1323,15 +1322,21 @@ pub(crate) fn validate_metadata_selectors(
     availability: &CapabilityAvailability,
 ) -> Result<(), SubagentResolutionError> {
     for selector in definition.tools() {
-        match crate::capabilities::selection::resolve_metadata(selector, available, availability) {
+        match crate::capabilities::selection::project(selector, available, availability) {
             Ok(selected)
-                if !selected
-                    .id
-                    .as_str()
-                    .starts_with(crate::runtime::workflow::WORKFLOW_TOOL_ID_PREFIX) => {}
+                if selected.iter().all(|selected| {
+                    !selected
+                        .id
+                        .as_str()
+                        .starts_with(crate::runtime::workflow::WORKFLOW_TOOL_ID_PREFIX)
+                }) => {}
             Err(crate::capabilities::selection::ToolSelectionError::SourceUnavailable {
+                reason,
                 ..
-            }) => {}
+            }) if !matches!(
+                reason,
+                crate::capabilities::selection::SourceResolutionFailure::Undefined
+            ) => {}
             _ => {
                 return Err(SubagentResolutionError::UnknownCapability {
                     selector: selector.canonical(),
@@ -1343,27 +1348,19 @@ pub(crate) fn validate_metadata_selectors(
 }
 
 /// Freezes one admitted definition into its exact source-qualified identity.
-fn freeze_tool(selector: &ToolSelector, definition: &ToolDefinition) -> ResolvedSubagentTool {
-    match (selector, &definition.origin) {
-        (ToolSelector::Mcp { server_id, .. }, _) => ResolvedSubagentTool::Mcp {
-            server_id: server_id.clone(),
+fn freeze_tool(
+    _selector: &AgentToolSelection,
+    definition: &ToolDefinition,
+) -> ResolvedSubagentTool {
+    match definition.origin.source() {
+        Some(source_id) => ResolvedSubagentTool::Source {
+            identity: crate::tools::mcp::source_tool_identity(&source_id, definition),
+            source_id,
             tool_id: definition.id.clone(),
             name: definition.name.clone(),
-            // The expected cross-process identity is derived here, once,
-            // from the exact definition this generation admitted. The child
-            // recomputes it from its own catalog read and compares.
-            identity: crate::tools::mcp::identity::mcp_tool_identity(
-                server_id,
-                &definition.name,
-                &definition.description,
-                &definition.input_schema,
-                definition.execution_policy,
-                definition.concurrency_policy,
-                definition.approval_policy,
-            ),
             definition: definition.clone(),
         },
-        _ => ResolvedSubagentTool::Builtin {
+        None => ResolvedSubagentTool::Builtin {
             tool_id: definition.id.clone(),
             name: definition.name.clone(),
             definition: definition.clone(),
@@ -1440,14 +1437,15 @@ fn resolve_materialization(
     tools: &[ResolvedSubagentTool],
     configured: &McpServerBindings,
 ) -> Result<ResolvedSubagentMaterialization, SubagentResolutionError> {
-    let mut mcp_servers = BTreeMap::new();
+    let mut sources = BTreeMap::new();
     for tool in tools {
         match tool {
             ResolvedSubagentTool::Builtin { .. } => {}
-            ResolvedSubagentTool::Mcp {
-                server_id, name, ..
+            ResolvedSubagentTool::Source {
+                source_id, name, ..
             } => {
-                if mcp_servers.contains_key(server_id) {
+                let server_id = &crate::tools::mcp::source_server_id(source_id);
+                if sources.contains_key(source_id) {
                     continue;
                 }
                 let binding = configured.get(server_id).ok_or_else(|| {
@@ -1457,11 +1455,11 @@ fn resolve_materialization(
                         reason: "the runtime generation configures no such MCP server".to_owned(),
                     }
                 })?;
-                mcp_servers.insert(server_id.clone(), binding.clone());
+                sources.insert(source_id.clone(), binding.clone());
             }
         }
     }
-    Ok(ResolvedSubagentMaterialization { mcp_servers })
+    Ok(ResolvedSubagentMaterialization { sources })
 }
 
 /// Freezes the child's model **authority**.
@@ -1604,15 +1602,15 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
                 field(&mut hasher, "tool.name", name);
                 frame_tool_definition(&mut hasher, "tool.definition", definition);
             }
-            ResolvedSubagentTool::Mcp {
-                server_id,
+            ResolvedSubagentTool::Source {
+                source_id,
                 tool_id,
                 name,
                 definition,
                 identity,
             } => {
-                field(&mut hasher, "tool", "mcp");
-                field(&mut hasher, "tool.server_id", server_id.as_str());
+                field(&mut hasher, "tool", "source");
+                field(&mut hasher, "tool.source_id", &source_id.to_string());
                 field(&mut hasher, "tool.tool_id", tool_id.as_str());
                 field(&mut hasher, "tool.name", name);
                 frame_tool_definition(&mut hasher, "tool.definition", definition);
@@ -1624,7 +1622,7 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
                 // is a different — failing — execution profile. It is framed
                 // here as that frozen value, and this digest never performs
                 // the verification itself.
-                field(&mut hasher, "tool.mcp_identity", identity.as_str());
+                field(&mut hasher, "tool.source_identity", identity.as_str());
             }
         }
     }
@@ -1679,14 +1677,14 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
     }
     count(
         &mut hasher,
-        "materialization_mcp_servers",
-        framing.materialization.mcp_servers.len(),
+        "materialization_sources",
+        framing.materialization.sources.len(),
     );
-    for server_id in framing.materialization.mcp_servers.keys() {
+    for server_id in framing.materialization.sources.keys() {
         field(
             &mut hasher,
-            "materialization_mcp_server",
-            server_id.as_str(),
+            "materialization_source",
+            &server_id.to_string(),
         );
     }
     field(
@@ -1762,6 +1760,9 @@ fn frame_tool_definition(hasher: &mut Sha256, prefix: &str, definition: &ToolDef
     field(hasher, &key("id"), id.as_str());
     field(hasher, &key("name"), name);
     match origin {
+        crate::tools::types::ToolOrigin::ManagedPython { package } => {
+            field(hasher, &key("origin"), &format!("python:{package}"));
+        }
         crate::tools::types::ToolOrigin::Builtin => field(hasher, &key("origin"), "builtin"),
         crate::tools::types::ToolOrigin::Mcp { server_id } => {
             field(
@@ -1972,9 +1973,9 @@ mod tests {
         ResolvedSubagentTool, SubagentResolutionError, freeze_tool, render_agent_routing,
         validate_selectors_for_admission,
     };
-    use crate::capabilities::selection::ToolSelector;
+    use crate::capabilities::selection::AgentToolSelection;
     use crate::capabilities::{
-        AvailableToolCatalog, CapabilityAvailability, CapabilitySourceId, CapabilitySourceState,
+        AvailableToolCatalog, CapabilityAvailability, CapabilitySourceState, ToolSourceId,
     };
     use crate::runtime::identity::{McpServerId, ToolId};
     use crate::runtime::subagent::catalog::{
@@ -2027,6 +2028,69 @@ mod tests {
         )
     }
 
+    #[test]
+    fn agent_all_freezes_finite_exact_tools_from_only_the_supplied_generation() {
+        use crate::capabilities::ToolSourceId;
+        for source in [
+            ToolSourceId::Mcp(McpServerId::new("github")),
+            ToolSourceId::ManagedPython("data-analysis".into()),
+        ] {
+            let origin = match &source {
+                ToolSourceId::Mcp(id) => ToolOrigin::Mcp {
+                    server_id: id.clone(),
+                },
+                ToolSourceId::ManagedPython(package) => ToolOrigin::ManagedPython {
+                    package: package.clone(),
+                },
+            };
+            let r1 = catalog(vec![tool("b", origin.clone()), tool("a", origin.clone())]);
+            let r2 = catalog(vec![
+                tool("c", origin.clone()),
+                tool("a", origin.clone()),
+                tool("b", origin),
+            ]);
+            let availability = [(source.clone(), CapabilitySourceState::Ready)].into();
+            let all = definition(vec![AgentToolSelection::All {
+                source_id: source.clone(),
+            }]);
+            let frozen = resolve_tools(&all, &r1, &availability).unwrap();
+            let names = |tools: &[ResolvedSubagentTool]| {
+                tools
+                    .iter()
+                    .map(|tool| {
+                        let ResolvedSubagentTool::Source {
+                            source_id,
+                            name,
+                            definition,
+                            identity,
+                            ..
+                        } = tool
+                        else {
+                            panic!("All must freeze exact source Tools")
+                        };
+                        assert_eq!(source_id, &source);
+                        assert_eq!(name, &definition.name);
+                        assert_eq!(
+                            identity,
+                            &crate::tools::mcp::source_tool_identity(source_id, definition)
+                        );
+                        name.clone()
+                    })
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(names(&frozen), ["a", "b"]);
+            assert_eq!(
+                names(&resolve_tools(&all, &r2, &availability).unwrap()),
+                ["a", "b", "c"]
+            );
+            assert_eq!(
+                names(&resolve_tools(&all, &r1, &availability).unwrap()),
+                ["a", "b"]
+            );
+            assert_eq!(names(&frozen), ["a", "b"]);
+        }
+    }
+
     fn available() -> AvailableToolCatalog {
         catalog(vec![
             tool("read", ToolOrigin::Builtin),
@@ -2039,10 +2103,8 @@ mod tests {
             ),
             tool(
                 "repository_symbols",
-                ToolOrigin::Mcp {
-                    // A managed Python package surfaces under its synthesized
-                    // server identity (Issue #174).
-                    server_id: McpServerId::new("python:symbols"),
+                ToolOrigin::ManagedPython {
+                    package: "symbols".into(),
                 },
             ),
         ])
@@ -2056,7 +2118,7 @@ mod tests {
         super::resolve_tools(definition.tools(), available, availability)
     }
 
-    fn definition(tools: Vec<ToolSelector>) -> SubagentDefinition {
+    fn definition(tools: Vec<AgentToolSelection>) -> SubagentDefinition {
         SubagentDefinition::new(
             SubagentName::parse("explore").expect("name"),
             "description".to_owned(),
@@ -2079,11 +2141,11 @@ mod tests {
     fn ready() -> CapabilityAvailability {
         let mut availability = CapabilityAvailability::new();
         availability.insert(
-            CapabilitySourceId::Mcp(McpServerId::new("python:symbols")),
+            ToolSourceId::ManagedPython("symbols".into()),
             CapabilitySourceState::Ready,
         );
         availability.insert(
-            CapabilitySourceId::Mcp(McpServerId::new("github")),
+            ToolSourceId::Mcp(McpServerId::new("github")),
             CapabilitySourceState::Ready,
         );
         availability
@@ -2093,15 +2155,19 @@ mod tests {
     fn every_origin_freezes_its_exact_source_identity() {
         let resolved = resolve_tools(
             &definition(vec![
-                ToolSelector::Builtin {
+                AgentToolSelection::Builtin {
                     name: "read".to_owned(),
                 },
-                ToolSelector::Mcp {
-                    server_id: McpServerId::new("github"),
+                AgentToolSelection::Source {
+                    source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
+                        .unwrap(),
                     name: "get_issue".to_owned(),
                 },
-                ToolSelector::Mcp {
-                    server_id: McpServerId::new("python:symbols"),
+                AgentToolSelection::Source {
+                    source_id: crate::capabilities::ToolSourceId::try_from(String::from(
+                        "python:symbols",
+                    ))
+                    .unwrap(),
                     name: "repository_symbols".to_owned(),
                 },
             ]),
@@ -2115,18 +2181,18 @@ mod tests {
         ));
         assert!(matches!(
             &resolved[1],
-            ResolvedSubagentTool::Mcp { server_id, name, .. }
-                if server_id.as_str() == "github" && name == "get_issue"
+            ResolvedSubagentTool::Source { source_id, name, .. }
+                if source_id.to_string() == "github" && name == "get_issue"
         ));
         assert!(matches!(
             &resolved[2],
-            ResolvedSubagentTool::Mcp { server_id, name, .. }
-                if server_id.as_str() == "python:symbols" && name == "repository_symbols"
+            ResolvedSubagentTool::Source { source_id, name, .. }
+                if source_id.to_string() == "python:symbols" && name == "repository_symbols"
         ));
         assert_eq!(
             resolved
                 .iter()
-                .filter(|tool| matches!(tool, ResolvedSubagentTool::Mcp { .. }))
+                .filter(|tool| matches!(tool, ResolvedSubagentTool::Source { .. }))
                 .count(),
             2,
             "both externally sourced origins keep their exact source-qualified identity"
@@ -2161,14 +2227,14 @@ mod tests {
 
         let tools = vec![
             freeze_tool(
-                &ToolSelector::Builtin {
+                &AgentToolSelection::Builtin {
                     name: "read".to_owned(),
                 },
                 &tool("read", ToolOrigin::Builtin),
             ),
             freeze_tool(
-                &ToolSelector::Mcp {
-                    server_id: github.clone(),
+                &AgentToolSelection::Source {
+                    source_id: crate::capabilities::ToolSourceId::Mcp(github.clone()),
                     name: "get_issue".to_owned(),
                 },
                 &tool(
@@ -2181,16 +2247,20 @@ mod tests {
         ];
         let plane = resolve_materialization(&tools, &configured).expect("plane");
         assert_eq!(
-            plane.mcp_servers.keys().collect::<Vec<_>>(),
-            vec![&github],
+            plane.sources.keys().collect::<Vec<_>>(),
+            vec![&crate::capabilities::ToolSourceId::Mcp(github.clone())],
             "the unrelated configured server is never frozen for this child"
         );
-        assert!(!plane.mcp_servers.contains_key(&unrelated));
+        assert!(
+            !plane
+                .sources
+                .contains_key(&crate::capabilities::ToolSourceId::Mcp(unrelated))
+        );
         assert!(!plane.is_empty());
 
         // A Builtin-only agent needs no external plane whatsoever.
         let builtin_only = vec![freeze_tool(
-            &ToolSelector::Builtin {
+            &AgentToolSelection::Builtin {
                 name: "read".to_owned(),
             },
             &tool("read", ToolOrigin::Builtin),
@@ -2212,13 +2282,14 @@ mod tests {
             },
         );
         let frozen = freeze_tool(
-            &ToolSelector::Mcp {
-                server_id: McpServerId::new("github"),
+            &AgentToolSelection::Source {
+                source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
+                    .unwrap(),
                 name: "get_issue".to_owned(),
             },
             &definition,
         );
-        let ResolvedSubagentTool::Mcp { identity, .. } = &frozen else {
+        let ResolvedSubagentTool::Source { identity, .. } = &frozen else {
             panic!("an MCP selector freezes an MCP identity: {frozen:?}");
         };
         assert_eq!(
@@ -2244,7 +2315,7 @@ mod tests {
             ),
         ]);
         let builtin = resolve_tools(
-            &definition(vec![ToolSelector::Builtin {
+            &definition(vec![AgentToolSelection::Builtin {
                 name: "search".to_owned(),
             }]),
             &catalog,
@@ -2253,26 +2324,30 @@ mod tests {
         .expect("builtin resolution");
         assert!(matches!(builtin[0], ResolvedSubagentTool::Builtin { .. }));
         let mcp = resolve_tools(
-            &definition(vec![ToolSelector::Mcp {
-                server_id: McpServerId::new("github"),
+            &definition(vec![AgentToolSelection::Source {
+                source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
+                    .unwrap(),
                 name: "search".to_owned(),
             }]),
             &catalog,
             &ready(),
         )
         .expect("mcp resolution");
-        assert!(matches!(mcp[0], ResolvedSubagentTool::Mcp { .. }));
+        assert!(matches!(mcp[0], ResolvedSubagentTool::Source { .. }));
         assert_eq!(
             resolve_tools(
-                &definition(vec![ToolSelector::Mcp {
-                    server_id: McpServerId::new("other"),
+                &definition(vec![AgentToolSelection::Source {
+                    source_id: crate::capabilities::ToolSourceId::try_from(String::from("other"))
+                        .unwrap(),
                     name: "search".to_owned(),
                 }]),
                 &catalog,
                 &ready(),
             ),
-            Err(SubagentResolutionError::UnknownCapability {
-                selector: "mcp:other/search".to_owned()
+            Err(SubagentResolutionError::SourceUnavailable {
+                selector: "source:other/search".to_owned(),
+                source: "other".into(),
+                reason: "source is not defined or discovered".into()
             })
         );
     }
@@ -2281,7 +2356,7 @@ mod tests {
     fn an_unavailable_source_is_distinct_from_an_invalid_selector() {
         let mut availability = ready();
         availability.insert(
-            CapabilitySourceId::Mcp(McpServerId::new("github")),
+            ToolSourceId::Mcp(McpServerId::new("github")),
             CapabilitySourceState::unavailable("the server refused the handshake"),
         );
         // The MCP capability is absent from the available catalog precisely
@@ -2290,8 +2365,9 @@ mod tests {
         let catalog = catalog(vec![tool("read", ToolOrigin::Builtin)]);
         assert!(matches!(
             resolve_tools(
-                &definition(vec![ToolSelector::Mcp {
-                    server_id: McpServerId::new("github"),
+                &definition(vec![AgentToolSelection::Source {
+                    source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
+                        .unwrap(),
                     name: "get_issue".to_owned(),
                 }]),
                 &catalog,
@@ -2301,7 +2377,7 @@ mod tests {
         ));
         assert_eq!(
             resolve_tools(
-                &definition(vec![ToolSelector::Builtin {
+                &definition(vec![AgentToolSelection::Builtin {
                     name: "write".to_owned()
                 }]),
                 &catalog,
@@ -2322,7 +2398,7 @@ mod tests {
     // ---------------------------------------------------------------
 
     fn role_with(
-        tools: Vec<ToolSelector>,
+        tools: Vec<AgentToolSelection>,
         extensions: crate::extensions::NativeAgentExtensions,
     ) -> SubagentDefinition {
         SubagentDefinition::new(
@@ -2348,7 +2424,7 @@ mod tests {
         super::SubagentInvocationOverride {
             tools: Some(crate::capabilities::selection::ToolSelectionDocument {
                 builtin: names.iter().map(|name| (*name).to_owned()).collect(),
-                mcp: std::collections::BTreeMap::new(),
+                sources: std::collections::BTreeMap::new(),
             }),
             ..super::SubagentInvocationOverride::default()
         }
@@ -2395,7 +2471,7 @@ mod tests {
     fn sub258_role_authority_and_parent_authority_both_delegate() {
         let available = available();
         let role = role_with(
-            vec![ToolSelector::Builtin {
+            vec![AgentToolSelection::Builtin {
                 name: "read".to_owned(),
             }],
             crate::extensions::NativeAgentExtensions::none(),
@@ -2439,7 +2515,7 @@ mod tests {
             tool("write", ToolOrigin::Builtin),
         ]);
         let role = role_with(
-            vec![ToolSelector::Builtin {
+            vec![AgentToolSelection::Builtin {
                 name: "read".to_owned(),
             }],
             crate::extensions::NativeAgentExtensions::none(),
@@ -2448,7 +2524,7 @@ mod tests {
         // this role's own selection and the invoking profile, never the
         // union of every admitted definition.
         let _other_role = role_with(
-            vec![ToolSelector::Builtin {
+            vec![AgentToolSelection::Builtin {
                 name: "write".to_owned(),
             }],
             crate::extensions::NativeAgentExtensions::none(),
@@ -2494,16 +2570,21 @@ mod tests {
         let mcp_request = super::SubagentInvocationOverride {
             tools: Some(crate::capabilities::selection::ToolSelectionDocument {
                 builtin: Vec::new(),
-                mcp: [(McpServerId::new("github"), vec!["search".to_owned()])]
-                    .into_iter()
-                    .collect(),
+                sources: [(
+                    crate::capabilities::ToolSourceId::Mcp(McpServerId::new("github")),
+                    crate::capabilities::selection::SourceToolSelection::Exact(vec![
+                        "search".to_owned(),
+                    ]),
+                )]
+                .into_iter()
+                .collect(),
             }),
             ..super::SubagentInvocationOverride::default()
         };
         assert_eq!(
             authorize(&mcp_request, &role, &available, &parent),
             Err(SubagentResolutionError::UnauthorizedTool {
-                selector: "mcp:github/search".to_owned()
+                selector: "source:github/search".to_owned()
             }),
             "a matching display name is not authorization"
         );
@@ -2516,7 +2597,7 @@ mod tests {
     fn sub258_an_unoverridden_dimension_is_never_judged_against_parent_authority() {
         let available = available();
         let role = role_with(
-            vec![ToolSelector::Builtin {
+            vec![AgentToolSelection::Builtin {
                 name: "read".to_owned(),
             }],
             crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
@@ -2887,25 +2968,30 @@ mod tests {
     fn admission_validates_every_selector_past_an_unavailable_source() {
         let mut availability = ready();
         availability.insert(
-            CapabilitySourceId::Mcp(McpServerId::new("github")),
+            ToolSourceId::Mcp(McpServerId::new("github")),
             CapabilitySourceState::Unavailable {
                 reason: "the server did not start".to_owned(),
             },
         );
         let definition = definition(vec![
-            ToolSelector::Mcp {
-                server_id: McpServerId::new("github"),
+            AgentToolSelection::Source {
+                source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
+                    .unwrap(),
                 name: "get_issue".to_owned(),
             },
-            ToolSelector::Mcp {
-                server_id: McpServerId::new("python:symbols"),
+            AgentToolSelection::Source {
+                source_id: crate::capabilities::ToolSourceId::try_from(String::from(
+                    "python:symbols",
+                ))
+                .unwrap(),
                 name: "not_a_real_tool".to_owned(),
             },
         ]);
         assert_eq!(
             definition.tools().first(),
-            Some(&ToolSelector::Mcp {
-                server_id: McpServerId::new("github"),
+            Some(&AgentToolSelection::Source {
+                source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
+                    .unwrap(),
                 name: "get_issue".to_owned(),
             }),
             "the unavailable selector really is inspected first"
@@ -2921,7 +3007,7 @@ mod tests {
         assert!(matches!(
             validate_selectors_for_admission(&definition, &available(), &availability),
             Err(SubagentResolutionError::UnknownCapability { selector })
-                if selector == "mcp:python:symbols/not_a_real_tool"
+                if selector == "source:python:symbols/not_a_real_tool"
         ));
     }
 
@@ -2932,17 +3018,18 @@ mod tests {
     fn an_unavailable_source_alone_never_rejects_admission() {
         let mut availability = ready();
         availability.insert(
-            CapabilitySourceId::Mcp(McpServerId::new("github")),
+            ToolSourceId::Mcp(McpServerId::new("github")),
             CapabilitySourceState::Unavailable {
                 reason: "the server did not start".to_owned(),
             },
         );
         let definition = definition(vec![
-            ToolSelector::Builtin {
+            AgentToolSelection::Builtin {
                 name: "read".to_owned(),
             },
-            ToolSelector::Mcp {
-                server_id: McpServerId::new("github"),
+            AgentToolSelection::Source {
+                source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
+                    .unwrap(),
                 name: "get_issue".to_owned(),
             },
         ]);
@@ -3036,7 +3123,7 @@ mod tests {
             std::path::PathBuf::from("/w/reviewer.md"),
             None,
             None,
-            vec![ToolSelector::Builtin {
+            vec![AgentToolSelection::Builtin {
                 name: "read".to_owned(),
             }],
             vec!["some-skill".to_owned()],
@@ -3501,7 +3588,7 @@ mod tests {
     /// An MCP tool frames the same complete definition **and** its frozen
     /// cross-process identity, and neither substitutes for the other.
     ///
-    /// `McpToolIdentity` commits the server-published contract — name,
+    /// `SourceToolIdentity` commits the server-published contract — name,
     /// description, canonical schema, and the three invocation policies — but
     /// deliberately not `replay_policy` or `ToolId`. Relying on it alone would
     /// therefore reintroduce exactly the collision this issue corrects, on the
@@ -3530,8 +3617,8 @@ mod tests {
         };
         let spec_with = |definition: ToolDefinition| {
             let mut spec = frozen_spec();
-            spec.tools = vec![ResolvedSubagentTool::Mcp {
-                server_id: server.clone(),
+            spec.tools = vec![ResolvedSubagentTool::Source {
+                source_id: crate::capabilities::ToolSourceId::Mcp(server.clone()),
                 tool_id: definition.id.clone(),
                 name: definition.name.clone(),
                 identity: identity_of(&definition),
@@ -3568,12 +3655,12 @@ mod tests {
         // crossed the boundary carrying an identity its definition does not
         // derive is a different — failing — execution profile.
         let mut mismatched = spec_with(definition.clone());
-        let ResolvedSubagentTool::Mcp { identity, .. } =
+        let ResolvedSubagentTool::Source { identity, .. } =
             mismatched.tools.first_mut().expect("one frozen tool")
         else {
             panic!("the variant is an MCP tool");
         };
-        *identity = crate::runtime::identity::McpToolIdentity::new("sha256:00");
+        *identity = crate::runtime::identity::SourceToolIdentity::new("sha256:00");
         assert_ne!(
             spec_with(definition).profile_digest(),
             mismatched.profile_digest(),
@@ -3593,7 +3680,7 @@ mod tests {
     fn sub258_the_tool_framing_covers_the_real_frozen_value_and_excludes_the_physical_plane() {
         let definition = frozen_builtin_definition();
         let frozen = freeze_tool(
-            &ToolSelector::Builtin {
+            &AgentToolSelection::Builtin {
                 name: "read".to_owned(),
             },
             &definition,
@@ -3624,7 +3711,12 @@ mod tests {
         let plane = |command: &str| {
             let mut spec = frozen_spec();
             spec.materialization = super::ResolvedSubagentMaterialization {
-                mcp_servers: [(server.clone(), binding(command))].into_iter().collect(),
+                sources: [(
+                    crate::capabilities::ToolSourceId::Mcp(server.clone()),
+                    binding(command),
+                )]
+                .into_iter()
+                .collect(),
             };
             spec
         };

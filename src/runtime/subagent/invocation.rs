@@ -46,7 +46,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::capabilities::selection::{ToolSelectionDocument, ToolSelector};
+use crate::capabilities::selection::{AgentToolSelection, ToolSelectionDocument};
 use crate::extensions::{NativeAgentExtensionSelection, NativeAgentExtensions};
 
 use super::catalog::{CHILD_UNSAFE_BUILTIN_TOOLS, SubagentDefinition};
@@ -125,7 +125,7 @@ impl SubagentInvocationOverride {
     /// "an override restating the defaults" produce one identical effective
     /// profile rather than two profiles that merely look alike.
     #[must_use]
-    pub fn effective_tools(&self, definition: &SubagentDefinition) -> Vec<ToolSelector> {
+    pub fn effective_tools(&self, definition: &SubagentDefinition) -> Vec<AgentToolSelection> {
         match &self.tools {
             None => definition.tools().to_vec(),
             Some(selection) => canonical_selectors(selection.selectors()),
@@ -185,7 +185,7 @@ impl SubagentInvocationOverride {
                 });
             }
             for selector in &selectors {
-                if let ToolSelector::Builtin { name } = selector {
+                if let AgentToolSelection::Builtin { name } = selector {
                     if name == crate::tools::native::SUBAGENT_TOOL_NAME {
                         return Err(SubagentOverrideError::RecursiveSelector {
                             selector: selector.canonical(),
@@ -230,13 +230,13 @@ impl SubagentInvocationOverride {
     /// The canonically ordered, deduplicated selectors of one authored
     /// selection document, for bounded authoring projections.
     #[must_use]
-    pub fn canonical_selectors_of(selection: &ToolSelectionDocument) -> Vec<ToolSelector> {
+    pub fn canonical_selectors_of(selection: &ToolSelectionDocument) -> Vec<AgentToolSelection> {
         canonical_selectors(selection.selectors())
     }
 }
 
 /// Canonically orders and deduplicates a Tool selection.
-fn canonical_selectors(mut selectors: Vec<ToolSelector>) -> Vec<ToolSelector> {
+fn canonical_selectors(mut selectors: Vec<AgentToolSelection>) -> Vec<AgentToolSelection> {
     selectors.sort();
     selectors.dedup();
     selectors
@@ -328,7 +328,7 @@ mod tests {
     }
 
     fn definition(
-        tools: Vec<crate::capabilities::selection::ToolSelector>,
+        tools: Vec<crate::capabilities::selection::AgentToolSelection>,
         skills: Vec<String>,
         extensions: NativeAgentExtensions,
     ) -> crate::runtime::subagent::SubagentDefinition {
@@ -353,9 +353,11 @@ mod tests {
 
     fn role() -> crate::runtime::subagent::SubagentDefinition {
         definition(
-            vec![crate::capabilities::selection::ToolSelector::Builtin {
-                name: "read".to_owned(),
-            }],
+            vec![
+                crate::capabilities::selection::AgentToolSelection::Builtin {
+                    name: "read".to_owned(),
+                },
+            ],
             vec!["code-review".to_owned()],
             NativeAgentExtensionsDocument::default().resolve(),
         )
@@ -380,7 +382,7 @@ mod tests {
             tools_only
                 .effective_tools(&role)
                 .iter()
-                .map(crate::capabilities::selection::ToolSelector::canonical)
+                .map(crate::capabilities::selection::AgentToolSelection::canonical)
                 .collect::<Vec<_>>(),
             vec!["builtin:grep"],
             "a present tools dimension replaces rather than unions"
@@ -501,7 +503,7 @@ mod tests {
             shuffled
                 .effective_tools(&role)
                 .iter()
-                .map(crate::capabilities::selection::ToolSelector::canonical)
+                .map(crate::capabilities::selection::AgentToolSelection::canonical)
                 .collect::<Vec<_>>(),
             vec!["builtin:grep", "builtin:read"]
         );
@@ -519,7 +521,7 @@ mod tests {
         let restated = SubagentInvocationOverride {
             tools: Some(crate::capabilities::selection::ToolSelectionDocument {
                 builtin: vec!["read".to_owned()],
-                mcp: std::collections::BTreeMap::new(),
+                sources: std::collections::BTreeMap::new(),
             }),
             skills: Some(vec!["code-review".to_owned()]),
             extensions: Some(crate::extensions::NativeAgentExtensionSelection::of(

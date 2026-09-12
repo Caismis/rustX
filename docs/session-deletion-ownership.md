@@ -45,7 +45,7 @@ Management resolves existing product identity without creating missing state.
 `confined()` still rejects escapes and symlinks below that root; it does not
 canonicalize arbitrary caller-authored private paths into authority.
 
-`SubagentSpawnPlan` retains `ProductRoot`. Child IPC version 22 carries its canonical
+`SubagentSpawnPlan` retains `ProductRoot`. Child IPC version 23 carries its canonical
 root, the child Conversation identity, and a validated incarnation name. It carries
 no second absolute runtime root. The child derives
 `subagents/<ConversationId>/<incarnation>/` and requires that exact private

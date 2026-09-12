@@ -2,7 +2,7 @@
 #![allow(clippy::needless_pass_by_value, clippy::too_many_lines)] // linear fixture scenarios
 use super::launch::*;
 use super::{LocalRuntimeDependencies, LocalSessionProduct};
-use crate::capabilities::{CapabilitySourceId, CapabilitySourceState};
+use crate::capabilities::{CapabilitySourceState, ToolSourceId};
 use crate::model::ModelCatalog;
 use serde_json::json;
 use std::path::Path;
@@ -191,7 +191,7 @@ fn cfg237_online_schema_unresolved_and_disabled_source_are_distinct() {
     use crate::runtime::workflow::inspection::DependencyState;
     let f = Fixture::new();
     let text = r"description: Inspect a declared external capability.
-tools: [{origin: mcp, server_id: external, name: inspect}]
+tools: [{origin: source, source_id: external, name: inspect}]
 block:
   input: {type: object, properties: {}, additionalProperties: false}
   output: {type: object, properties: {text: {type: string}}, required: [text], additionalProperties: false}
@@ -199,7 +199,7 @@ block:
   nodes:
     inspect:
       type: tool
-      selector: {origin: mcp, server_id: external, name: inspect}
+      selector: {origin: source, source_id: external, name: inspect}
       arguments: {type: literal, value: {secret: SECRET_LITERAL}}
       result: {type: text, part: 0}
     done:
@@ -548,7 +548,7 @@ fn cfg271_offline_python_discovery_never_parses_or_prepares_packages() {
         if trusted {
             let source = &report.launch.as_ref().unwrap().sources["python:foo"];
             assert!(source.discovered_package);
-            assert_eq!(source.readiness, "inert");
+            assert_eq!(source.readiness, "unresolved");
         }
     }
 }
@@ -1498,7 +1498,7 @@ async fn cfg233_provider_binding_uses_launch_snapshot_and_ignores_unused_missing
 #[tokio::test]
 async fn cfg233_enabled_missing_credentials_and_connection_failures_are_source_local() {
     let f = Fixture::new();
-    f.user(json!({"model":{"model":"host/one"},"mcp_servers":{
+    f.user(json!({"tools":{"sources":{"credential":"all","connection":"all","disabled":"all"}},"model":{"model":"host/one"},"mcp_servers":{
         "credential":{"enabled":true,"command":"/does/not/exist","sensitive_env":{"TOKEN":"$REQUIRED_KEY"}},
         "connection":{"enabled":true,"command":"/does/not/exist"},
         "disabled":{"enabled":false,"command":"/does/not/exist","sensitive_env":{"TOKEN":"$IGNORED_KEY"}}
@@ -1507,7 +1507,7 @@ async fn cfg233_enabled_missing_credentials_and_connection_failures_are_source_l
         .await
         .unwrap();
     let sources = product.runtime().capability().availability();
-    let source = |id| CapabilitySourceId::Mcp(crate::runtime::identity::McpServerId::new(id));
+    let source = |id| ToolSourceId::Mcp(crate::runtime::identity::McpServerId::new(id));
     let CapabilitySourceState::Unavailable { reason } = &sources[&source("credential")] else {
         panic!("source failure")
     };
@@ -1548,9 +1548,15 @@ async fn cfg271_missing_empty_and_unprepared_python_allow_native_startup() {
                 .len(),
             usize::from(populated == Some(true))
         );
-        assert!(!product.runtime().capability().availability().keys().any(
-            |id| matches!(id, CapabilitySourceId::Mcp(id) if id.as_str().starts_with("python:"))
-        ));
+        assert!(
+            product
+                .runtime()
+                .capability()
+                .availability()
+                .iter()
+                .filter(|(id, _)| matches!(id, ToolSourceId::ManagedPython(_)))
+                .all(|(_, state)| *state == CapabilitySourceState::Unprepared)
+        );
         product.runtime().shutdown().await.unwrap();
     }
 }
@@ -1659,7 +1665,7 @@ async fn cfg233_http_credential_failure_redacts_peer_echo_and_configuration() {
         let body = format!("credential rejected: {SENTINEL}");
         socket.write_all(format!("HTTP/1.1 401 Unauthorized\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
     });
-    f.user(json!({"model":{"model":"host/one"},"mcp_servers":{"authenticated":{"enabled":true,"url":format!("http://{endpoint}/mcp"),"sensitive_headers":{"Authorization":"$AUTH"}}}}));
+    f.user(json!({"tools":{"sources":{"authenticated":"all"}},"model":{"model":"host/one"},"mcp_servers":{"authenticated":{"enabled":true,"url":format!("http://{endpoint}/mcp"),"sensitive_headers":{"Authorization":"$AUTH"}}}}));
     let launch = f.resolve();
     let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
         .await

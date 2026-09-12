@@ -43,8 +43,11 @@ use crate::tools::types::{ToolDefinition, ToolOrigin};
 /// and CLI options. They are never Session-persisted.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ToolActivationPolicy {
+    /// Source-qualified main Agent exposure, independent of materialization demand.
+    pub sources:
+        std::collections::BTreeMap<super::ToolSourceId, super::selection::SourceToolSelection>,
     /// Built-in names selected by default. None selects all applicable
-    /// built-ins; external Tools remain default-eligible.
+    /// built-ins; external Tools require explicit source selection.
     pub default_tools: Option<Vec<String>>,
     /// Remove all built-ins from default selection, including generated Tools.
     pub no_builtin_tools: bool,
@@ -115,6 +118,11 @@ impl ToolActivationPolicy {
     /// or an entry naming a Tool an Agent Extension owns rather than the
     /// ordinary capability plane (Issue #259).
     pub fn validate(&self) -> Result<(), String> {
+        super::selection::ToolSelectionDocument {
+            builtin: Vec::new(),
+            sources: self.sources.clone(),
+        }
+        .validate_spelling()?;
         if let Some((first, second)) = self.conflict() {
             return Err(format!("{first} conflicts with {second}"));
         }
@@ -124,8 +132,8 @@ impl ToolActivationPolicy {
         if !self.exclude_tools.is_empty() {
             validate_names(&self.exclude_tools, "exclusion")?;
         }
-        // An extension-provided Tool is refused on *every* ordinary selection
-        // surface, including `default_tools` — where an unknown name is
+        // An extension-provided Tool is refused on bare-name startup selection
+        // surfaces, including `default_tools` — where an unknown name is
         // otherwise harmlessly ignored, and would therefore have made
         // `defaultTools: ["todo"]` look like it worked while deciding
         // nothing at all (Issue #259).
@@ -315,6 +323,18 @@ pub(crate) fn select_definitions<'a>(
         .filter(|registration| {
             !policy.no_builtin_tools || !matches!(registration.origin, ToolOrigin::Builtin)
         })
+        .filter(|definition| {
+            definition
+                .origin
+                .source()
+                .is_none_or(|source| match policy.sources.get(&source) {
+                    Some(super::selection::SourceToolSelection::All) => true,
+                    Some(super::selection::SourceToolSelection::Exact(names)) => {
+                        names.contains(&definition.name)
+                    }
+                    None => false,
+                })
+        })
         .collect::<Vec<_>>();
 
     let mut selected = if policy.no_tools {
@@ -329,11 +349,21 @@ pub(crate) fn select_definitions<'a>(
             .iter()
             .copied()
             .filter(|registration| {
-                !matches!(registration.origin, ToolOrigin::Builtin)
-                    || policy
-                        .default_tools
-                        .as_ref()
-                        .is_none_or(|names| names.contains(&registration.name))
+                registration.origin.source().map_or_else(
+                    || {
+                        policy
+                            .default_tools
+                            .as_ref()
+                            .is_none_or(|names| names.contains(&registration.name))
+                    },
+                    |source| match policy.sources.get(&source) {
+                        Some(super::selection::SourceToolSelection::All) => true,
+                        Some(super::selection::SourceToolSelection::Exact(names)) => {
+                            names.contains(&registration.name)
+                        }
+                        None => false,
+                    },
+                )
             })
             .collect::<Vec<_>>()
     };
@@ -396,6 +426,26 @@ mod tests {
         }
     }
 
+    fn source_policy() -> ToolActivationPolicy {
+        ToolActivationPolicy {
+            sources: [(
+                crate::capabilities::ToolSourceId::Mcp(crate::runtime::identity::McpServerId::new(
+                    "search",
+                )),
+                crate::capabilities::selection::SourceToolSelection::All,
+            )]
+            .into(),
+            ..ToolActivationPolicy::default()
+        }
+    }
+
+    #[test]
+    fn materialization_does_not_implicitly_expose_external_tools_to_main() {
+        let (_, active) =
+            select_tools(&registrations(), &[], &ToolActivationPolicy::default()).unwrap();
+        assert_eq!(names(&active), ["read", "bash"]);
+    }
+
     fn definition(name: &str, origin: ToolOrigin) -> ToolDefinition {
         ToolDefinition {
             id: ToolId::new(format!("tool-{name}")),
@@ -444,7 +494,7 @@ mod tests {
     fn available_and_active_sets_are_distinct_and_selection_is_deterministic() {
         let policy = ToolActivationPolicy {
             default_tools: Some(vec!["read".to_owned()]),
-            ..ToolActivationPolicy::default()
+            ..source_policy()
         };
         let (available, active) =
             select_tools(&registrations(), &[], &policy).expect("activation selection");
@@ -468,7 +518,7 @@ mod tests {
             &[],
             &ToolActivationPolicy {
                 default_tools: Some(Vec::new()),
-                ..ToolActivationPolicy::default()
+                ..source_policy()
             },
         )
         .expect("empty native defaults");
@@ -480,7 +530,7 @@ mod tests {
             &[],
             &ToolActivationPolicy {
                 no_builtin_tools: true,
-                ..ToolActivationPolicy::default()
+                ..source_policy()
             },
         )
         .expect("native disable");
@@ -492,7 +542,7 @@ mod tests {
             &[],
             &ToolActivationPolicy {
                 no_tools: true,
-                ..ToolActivationPolicy::default()
+                ..source_policy()
             },
         )
         .expect("all tools disable");
@@ -508,7 +558,7 @@ mod tests {
             &ToolActivationPolicy {
                 tools: Some(vec!["bash".to_owned(), "search".to_owned()]),
                 exclude_tools: vec!["bash".to_owned()],
-                ..ToolActivationPolicy::default()
+                ..source_policy()
             },
         )
         .expect("cross-origin allowlist");
@@ -520,7 +570,7 @@ mod tests {
             &[],
             &ToolActivationPolicy {
                 tools: Some(vec!["missing".to_owned()]),
-                ..ToolActivationPolicy::default()
+                ..source_policy()
             },
         )
         .expect_err("unknown allowlist entry");
@@ -560,6 +610,16 @@ mod tests {
             &[],
             &ToolActivationPolicy {
                 tools: Some(vec!["duplicate".to_owned()]),
+                sources: ["one", "two"]
+                    .map(|id| {
+                        (
+                            crate::capabilities::ToolSourceId::Mcp(
+                                crate::runtime::identity::McpServerId::new(id),
+                            ),
+                            crate::capabilities::selection::SourceToolSelection::All,
+                        )
+                    })
+                    .into(),
                 ..ToolActivationPolicy::default()
             },
         )
@@ -570,6 +630,16 @@ mod tests {
             &[],
             &ToolActivationPolicy {
                 exclude_tools: vec!["duplicate".to_owned()],
+                sources: ["one", "two"]
+                    .map(|id| {
+                        (
+                            crate::capabilities::ToolSourceId::Mcp(
+                                crate::runtime::identity::McpServerId::new(id),
+                            ),
+                            crate::capabilities::selection::SourceToolSelection::All,
+                        )
+                    })
+                    .into(),
                 ..ToolActivationPolicy::default()
             },
         )
@@ -640,21 +710,18 @@ mod tests {
             );
         }
         for (policy, expected) in [
-            (
-                ToolActivationPolicy::default(),
-                vec!["read", "bash", "search"],
-            ),
+            (source_policy(), vec!["read", "bash", "search"]),
             (
                 ToolActivationPolicy {
                     tools: Some(vec!["bash".into()]),
-                    ..Default::default()
+                    ..source_policy()
                 },
                 vec!["bash"],
             ),
             (
                 ToolActivationPolicy {
                     exclude_tools: vec!["read".into()],
-                    ..Default::default()
+                    ..source_policy()
                 },
                 vec!["bash", "search"],
             ),
@@ -662,7 +729,7 @@ mod tests {
                 ToolActivationPolicy {
                     tools: Some(vec!["read".into()]),
                     exclude_tools: vec!["read".into()],
-                    ..Default::default()
+                    ..source_policy()
                 },
                 vec![],
             ),
@@ -670,7 +737,7 @@ mod tests {
                 ToolActivationPolicy {
                     no_builtin_tools: true,
                     exclude_tools: vec!["search".into()],
-                    ..Default::default()
+                    ..source_policy()
                 },
                 vec![],
             ),
@@ -698,7 +765,7 @@ mod tests {
                 &[],
                 &ToolActivationPolicy {
                     no_tools: true,
-                    ..ToolActivationPolicy::default()
+                    ..source_policy()
                 },
             )
             .expect_err("reserved candidate must be rejected before selection");

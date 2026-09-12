@@ -1031,7 +1031,7 @@ async fn sub258_equivalent_workflow_and_tool_inputs_resolve_equivalently() {
 
     // A differently spelled but semantically identical request agrees too.
     let respelled = parse_override(serde_json::json!({
-        "tools": {"builtin": ["read", "grep", "read"]},
+        "tools": {"builtin": ["read", "grep"]},
         "skills": ["review-guidance", "review-guidance"],
     }));
     assert_eq!(
@@ -1039,7 +1039,7 @@ async fn sub258_equivalent_workflow_and_tool_inputs_resolve_equivalently() {
             .expect("resolution")
             .profile_digest(),
         from_tool.profile_digest(),
-        "order and repetition are normalization, not identity"
+        "Tool order and Skill repetition are normalization, not identity"
     );
 }
 
@@ -1323,8 +1323,8 @@ async fn sub258_the_effective_profile_digest_follows_its_documented_contract() {
         .expect("the role");
     let restated = SubagentInvocationOverride {
         tools: Some(rustx::capabilities::selection::ToolSelectionDocument {
-            builtin: vec!["read".to_owned(), "read".to_owned()],
-            mcp: std::collections::BTreeMap::new(),
+            builtin: vec!["read".to_owned()],
+            sources: std::collections::BTreeMap::new(),
         }),
         skills: Some(vec!["review-guidance".to_owned()]),
         extensions: Some(NativeAgentExtensionSelection::of(role.extensions())),

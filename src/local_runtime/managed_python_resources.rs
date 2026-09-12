@@ -1,6 +1,6 @@
 //! Inert canonical Python identities. Package parsing and materialization remain
 //! owned by the source lifecycle; directory discovery never enters those owners.
-use crate::runtime::identity::McpServerId;
+use crate::capabilities::ToolSourceId;
 use crate::runtime::resources::{
     ManagedPythonCatalog, RuntimeResourceLoadError, validate_project_resource_path,
 };
@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 pub(crate) fn discover(workspace: &Path) -> Result<ManagedPythonCatalog, RuntimeResourceLoadError> {
     let root = workspace.join(".agents/tools");
-    let mut packages = BTreeMap::<McpServerId, PathBuf>::new();
+    let mut packages = BTreeMap::<ToolSourceId, PathBuf>::new();
     for path in super::resource_directory::entries(workspace, &root)? {
         let fail = |detail: String| RuntimeResourceLoadError::new(detail).at(&path, "tools");
         let meta = std::fs::symlink_metadata(&path).map_err(|e| fail(e.to_string()))?;
@@ -28,7 +28,7 @@ pub(crate) fn discover(workspace: &Path) -> Result<ManagedPythonCatalog, Runtime
         }
         crate::tools::python::validate_identifier(name).map_err(|e| fail(e.to_string()))?;
         validate_project_resource_path(workspace, &path)?;
-        packages.insert(crate::tools::python::python_server_id(name), path);
+        packages.insert(ToolSourceId::ManagedPython(name.to_owned()), path);
     }
     if packages.len() > 128 {
         return Err(
@@ -63,7 +63,7 @@ mod tests {
             catalog
                 .packages()
                 .keys()
-                .map(McpServerId::as_str)
+                .map(ToString::to_string)
                 .collect::<Vec<_>>(),
             ["python:alpha", "python:zeta"]
         );
@@ -84,7 +84,7 @@ mod tests {
                     .unwrap()
                     .packages()
                     .keys()
-                    .map(McpServerId::as_str)
+                    .map(ToString::to_string)
                     .collect::<Vec<_>>(),
                 ["python:alpha", "python:zeta"]
             );

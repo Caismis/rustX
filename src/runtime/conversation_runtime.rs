@@ -6600,6 +6600,10 @@ mod tests {
 
     /// The configurable headless fixture variant used by exact context-input
     /// regressions without changing the defaults of the broad runtime suite.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "complete headless runtime fixture composition"
+    )]
     async fn headless_runtime_with_options(
         dir: &tempfile::TempDir,
         scripts: Vec<Vec<FakeStep>>,
@@ -6616,14 +6620,43 @@ mod tests {
             dir.path().join("artifacts"),
         )
         .expect("tool runtime");
+        let base_tool_registry = base_tool_registry.unwrap_or_default();
+        let source_selection: std::collections::BTreeMap<_, _> = base_tool_registry
+            .definitions()
+            .into_iter()
+            .filter_map(|definition| definition.origin.source())
+            .chain(
+                options
+                    .mcp_servers
+                    .keys()
+                    .cloned()
+                    .map(crate::capabilities::ToolSourceId::Mcp),
+            )
+            .map(|source| {
+                (
+                    source,
+                    crate::capabilities::selection::SourceToolSelection::All,
+                )
+            })
+            .collect();
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
             crate::capabilities::CapabilityCoordinatorConfig {
-                python_sources: std::collections::BTreeMap::new(),
+                source_demand: crate::capabilities::source::ToolSourceDemand::new(
+                    options
+                        .mcp_servers
+                        .keys()
+                        .cloned()
+                        .map(crate::capabilities::ToolSourceId::Mcp),
+                    crate::runtime::resources::ManagedPythonCatalog::default(),
+                ),
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
-                base_tool_registry: Arc::new(base_tool_registry.unwrap_or_default()),
+                base_tool_registry: Arc::new(base_tool_registry),
                 extension_tools: tool_runtime.extension_tool_plane(),
-                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                tool_activation: crate::capabilities::ToolActivationPolicy {
+                    sources: source_selection,
+                    ..Default::default()
+                },
                 skill_discovery: options.skill_discovery,
                 mcp_servers: options.mcp_servers.clone(),
                 base_environment: tool_runtime.environment().clone(),
@@ -6746,7 +6779,7 @@ mod tests {
         .expect("tool runtime");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
             crate::capabilities::CapabilityCoordinatorConfig {
-                python_sources: std::collections::BTreeMap::new(),
+                source_demand: crate::capabilities::source::ToolSourceDemand::default(),
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
@@ -6824,7 +6857,7 @@ mod tests {
         .expect("tool runtime");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
             crate::capabilities::CapabilityCoordinatorConfig {
-                python_sources: std::collections::BTreeMap::new(),
+                source_demand: crate::capabilities::source::ToolSourceDemand::default(),
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
@@ -6941,7 +6974,7 @@ mod tests {
         .expect("tool runtime");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
             crate::capabilities::CapabilityCoordinatorConfig {
-                python_sources: std::collections::BTreeMap::new(),
+                source_demand: crate::capabilities::source::ToolSourceDemand::default(),
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
@@ -9040,7 +9073,7 @@ mod tests {
         )
         .expect("edit Skill metadata");
         loader.set_capability_inputs(crate::capabilities::CapabilityResourceInputs {
-            python_sources: std::collections::BTreeMap::new(),
+            source_demand: crate::capabilities::source::ToolSourceDemand::default(),
             base_tool_registry: Arc::new(tool_registry(
                 "tool-generation-b",
                 "tool_generation_b",
@@ -9172,7 +9205,7 @@ mod tests {
         let mut registry = ToolRegistry::new();
         tool.register(&mut registry);
         loader.set_capability_inputs(crate::capabilities::CapabilityResourceInputs {
-            python_sources: std::collections::BTreeMap::new(),
+            source_demand: crate::capabilities::source::ToolSourceDemand::default(),
             base_tool_registry: Arc::new(with_native_read(registry)),
             tool_activation: crate::capabilities::ToolActivationPolicy::default(),
             skill_discovery: crate::skills::SkillDiscoveryConfig {
@@ -9332,6 +9365,10 @@ mod tests {
 
     #[cfg(feature = "mcp-fixture")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one gated resource reload and retirement scenario"
+    )]
     async fn failed_reload_retires_candidate_mcp_runtime_after_project_failure() {
         use crate::tools::mcp::fixture::{
             FIXTURE_MODE_ENV, FixtureServer, PAGE_SIZE_ENV, fixture_spawn_args,
@@ -9370,9 +9407,19 @@ mod tests {
         let candidate_binding = fixture_binding(Some("2"));
         let loader = Arc::new(MutableResourceLoader::new(Vec::new()));
         loader.set_capability_inputs(crate::capabilities::CapabilityResourceInputs {
-            python_sources: std::collections::BTreeMap::new(),
+            source_demand: crate::capabilities::source::ToolSourceDemand::new(
+                [crate::capabilities::ToolSourceId::Mcp(server_id.clone())],
+                crate::runtime::resources::ManagedPythonCatalog::default(),
+            ),
             base_tool_registry: Arc::new(ToolRegistry::new()),
-            tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+            tool_activation: crate::capabilities::ToolActivationPolicy {
+                sources: [(
+                    crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
+                    crate::capabilities::selection::SourceToolSelection::All,
+                )]
+                .into(),
+                ..Default::default()
+            },
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::from([(server_id.clone(), candidate_binding)]),
             base_environment: crate::tools::environment::ToolEnvironment::new(),
@@ -9740,9 +9787,19 @@ mod tests {
         let server_id = crate::runtime::identity::McpServerId::new("failed-retirement");
         let loader = Arc::new(MutableResourceLoader::new(Vec::new()));
         loader.set_capability_inputs(crate::capabilities::CapabilityResourceInputs {
-            python_sources: std::collections::BTreeMap::new(),
+            source_demand: crate::capabilities::source::ToolSourceDemand::new(
+                [crate::capabilities::ToolSourceId::Mcp(server_id.clone())],
+                crate::runtime::resources::ManagedPythonCatalog::default(),
+            ),
             base_tool_registry: Arc::new(ToolRegistry::new()),
-            tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+            tool_activation: crate::capabilities::ToolActivationPolicy {
+                sources: [(
+                    crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
+                    crate::capabilities::selection::SourceToolSelection::All,
+                )]
+                .into(),
+                ..Default::default()
+            },
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::from([(
                 server_id.clone(),
@@ -9869,9 +9926,19 @@ mod tests {
         let server_id = crate::runtime::identity::McpServerId::new("reload-terminal-race");
         let loader = Arc::new(MutableResourceLoader::new(Vec::new()));
         loader.set_capability_inputs(crate::capabilities::CapabilityResourceInputs {
-            python_sources: std::collections::BTreeMap::new(),
+            source_demand: crate::capabilities::source::ToolSourceDemand::new(
+                [crate::capabilities::ToolSourceId::Mcp(server_id.clone())],
+                crate::runtime::resources::ManagedPythonCatalog::default(),
+            ),
             base_tool_registry: Arc::new(ToolRegistry::new()),
-            tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+            tool_activation: crate::capabilities::ToolActivationPolicy {
+                sources: [(
+                    crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
+                    crate::capabilities::selection::SourceToolSelection::All,
+                )]
+                .into(),
+                ..Default::default()
+            },
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::from([(
                 server_id.clone(),
@@ -9994,9 +10061,19 @@ mod tests {
         let binding_b = fixture_binding(Some("2"));
         let binding_c = fixture_binding(None);
         let inputs = |binding| crate::capabilities::CapabilityResourceInputs {
-            python_sources: std::collections::BTreeMap::new(),
+            source_demand: crate::capabilities::source::ToolSourceDemand::new(
+                [crate::capabilities::ToolSourceId::Mcp(server_id.clone())],
+                crate::runtime::resources::ManagedPythonCatalog::default(),
+            ),
             base_tool_registry: Arc::new(ToolRegistry::new()),
-            tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+            tool_activation: crate::capabilities::ToolActivationPolicy {
+                sources: [(
+                    crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
+                    crate::capabilities::selection::SourceToolSelection::All,
+                )]
+                .into(),
+                ..Default::default()
+            },
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::from([(server_id.clone(), binding)]),
             base_environment: crate::tools::environment::ToolEnvironment::new(),
@@ -10257,9 +10334,19 @@ mod tests {
         let server_id = crate::runtime::identity::McpServerId::new("late-background-failure");
         let loader = Arc::new(MutableResourceLoader::new(Vec::new()));
         loader.set_capability_inputs(crate::capabilities::CapabilityResourceInputs {
-            python_sources: std::collections::BTreeMap::new(),
+            source_demand: crate::capabilities::source::ToolSourceDemand::new(
+                [crate::capabilities::ToolSourceId::Mcp(server_id.clone())],
+                crate::runtime::resources::ManagedPythonCatalog::default(),
+            ),
             base_tool_registry: Arc::new(ToolRegistry::new()),
-            tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+            tool_activation: crate::capabilities::ToolActivationPolicy {
+                sources: [(
+                    crate::capabilities::ToolSourceId::Mcp(server_id.clone()),
+                    crate::capabilities::selection::SourceToolSelection::All,
+                )]
+                .into(),
+                ..Default::default()
+            },
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::from([(
                 server_id.clone(),
@@ -10711,7 +10798,7 @@ mod tests {
         .expect("other tool runtime");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
             crate::capabilities::CapabilityCoordinatorConfig {
-                python_sources: std::collections::BTreeMap::new(),
+                source_demand: crate::capabilities::source::ToolSourceDemand::default(),
                 conversation_id: other_runtime.conversation_id().clone(),
                 workspace: other_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
@@ -10794,7 +10881,7 @@ mod tests {
         .expect("tool runtime");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
             crate::capabilities::CapabilityCoordinatorConfig {
-                python_sources: std::collections::BTreeMap::new(),
+                source_demand: crate::capabilities::source::ToolSourceDemand::default(),
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
@@ -14570,7 +14657,7 @@ mod tests {
         .expect("tool runtime");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
             crate::capabilities::CapabilityCoordinatorConfig {
-                python_sources: std::collections::BTreeMap::new(),
+                source_demand: crate::capabilities::source::ToolSourceDemand::default(),
                 conversation_id,
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(registry),
@@ -15364,7 +15451,7 @@ mod tests {
         .expect("tool runtime");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
             crate::capabilities::CapabilityCoordinatorConfig {
-                python_sources: std::collections::BTreeMap::new(),
+                source_demand: crate::capabilities::source::ToolSourceDemand::default(),
                 conversation_id,
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(registry),
@@ -17050,7 +17137,7 @@ mod tests {
         .expect("tool runtime");
         let capability = crate::capabilities::CapabilityCoordinator::new(
             crate::capabilities::CapabilityCoordinatorConfig {
-                python_sources: std::collections::BTreeMap::new(),
+                source_demand: crate::capabilities::source::ToolSourceDemand::default(),
                 conversation_id,
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(ToolRegistry::new()),
@@ -17159,7 +17246,7 @@ mod tests {
         .expect("tool runtime");
         let capability = crate::capabilities::CapabilityCoordinator::new(
             crate::capabilities::CapabilityCoordinatorConfig {
-                python_sources: std::collections::BTreeMap::new(),
+                source_demand: crate::capabilities::source::ToolSourceDemand::default(),
                 conversation_id,
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(ToolRegistry::new()),
@@ -17243,7 +17330,7 @@ mod tests {
         .expect("tool runtime");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
             crate::capabilities::CapabilityCoordinatorConfig {
-                python_sources: std::collections::BTreeMap::new(),
+                source_demand: crate::capabilities::source::ToolSourceDemand::default(),
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),

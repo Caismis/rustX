@@ -19,29 +19,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::runtime::identity::McpServerId;
-
-/// The stable identity of one optional capability source.
-///
-/// Native tools are the base registry of the core runtime: their
-/// construction failure is a fatal composition error, so they never
-/// appear here. Only optional external capability sources have
-/// availability state.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum CapabilitySourceId {
-    /// One MCP server, keyed by its authoritative identity: a configured
-    /// server or a synthesized managed Python package (`python:<folder>`,
-    /// Issue #174).
-    Mcp(McpServerId),
-}
-
-impl core::fmt::Display for CapabilitySourceId {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::Mcp(server_id) => write!(formatter, "mcp:{server_id}"),
-        }
-    }
-}
+use super::ToolSourceId;
 
 /// The availability of one optional capability source.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,7 +118,7 @@ pub fn capability_failure_reason(diagnostic: impl core::fmt::Display) -> String 
 ///
 /// Deterministic by construction (`BTreeMap` identity order). A source
 /// absent from the map was never evaluated (not configured).
-pub type CapabilityAvailability = BTreeMap<CapabilitySourceId, CapabilitySourceState>;
+pub type CapabilityAvailability = BTreeMap<ToolSourceId, CapabilitySourceState>;
 
 #[cfg(test)]
 mod tests {

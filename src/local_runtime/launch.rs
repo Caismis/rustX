@@ -198,7 +198,7 @@ pub struct ProspectiveLaunch {
     pub(crate) role_sources:
         BTreeMap<crate::runtime::subagent::SubagentName, super::agent_resources::AgentSource>,
     pub(crate) source_activations: BTreeMap<
-        crate::runtime::identity::McpServerId,
+        crate::capabilities::ToolSourceId,
         crate::capabilities::activation::SourceActivation,
     >,
     pub(crate) selected_tools: Option<Vec<String>>,
@@ -872,7 +872,7 @@ pub fn analyze(
     let mut source_activations = BTreeMap::new();
     for (id, source) in &config.mcp_servers {
         source_activations.insert(
-            id.clone(),
+            crate::capabilities::ToolSourceId::Mcp(id.clone()),
             SourceActivation::evaluate(
                 source.enabled.map(|enabled| {
                     if enabled {
@@ -893,14 +893,14 @@ pub fn analyze(
     };
     {
         for id in managed_python.packages().keys() {
-            source_activations.insert(id.clone(), SourceActivation::Unconfigured);
+            source_activations.insert(id.clone(), SourceActivation::Enabled);
         }
     }
     let availability = source_activations
         .iter()
         .map(|(id, activation)| {
             (
-                crate::capabilities::CapabilitySourceId::Mcp(id.clone()),
+                id.clone(),
                 crate::capabilities::CapabilitySourceState::before_preparation(*activation),
             )
         })
@@ -969,6 +969,11 @@ pub fn analyze(
         .values()
         .any(|source| source.enabled == Some(true));
     let policy = crate::capabilities::ToolActivationPolicy {
+        sources: config
+            .tools
+            .as_ref()
+            .map(|selection| selection.sources.clone())
+            .unwrap_or_default(),
         default_tools: Some(defaults),
         no_tools: locations.no_tools,
         no_builtin_tools: locations.no_builtin_tools,

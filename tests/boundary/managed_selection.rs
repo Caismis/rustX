@@ -8,7 +8,7 @@ use super::{common, support};
 use rustx::agent::{AgentCancellation, AgentExecution, AgentExecutionRequest};
 use rustx::capabilities::{
     CapabilityCoordinator, CapabilityCoordinatorConfig, CapabilityPreparationError,
-    CapabilityResourceInputs, CapabilitySourceId, CapabilitySourceState, ToolActivationPolicy,
+    CapabilityResourceInputs, CapabilitySourceState, ToolActivationPolicy, ToolSourceId,
 };
 use rustx::events::AttemptOutcome;
 use rustx::events::types::{AttemptFailure, RuntimeEvent};
@@ -22,7 +22,7 @@ use support::fake::{FakeStep, ScriptedCall, fake_model, tool_call_events};
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fastmcp4_availability_selection_request_and_invocation_share_one_authority() {
     // CI's boundary jobs provide uv; absence must not make this acceptance green.
-    for (selection, admitted) in [
+    for (mut selection, admitted) in [
         (ToolActivationPolicy::default(), true),
         (
             ToolActivationPolicy {
@@ -46,6 +46,10 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
             false,
         ),
     ] {
+        selection.sources.insert(
+            ToolSourceId::ManagedPython("healthy".into()),
+            rustx::capabilities::selection::SourceToolSelection::All,
+        );
         let fixture = common::native_fixture_without_extensions();
         let root = fixture.runtime.workspace().root();
         let marker = root.join("calls.txt");
@@ -62,14 +66,10 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
             )).unwrap();
         }
         let mut inputs = CapabilityResourceInputs {
-            python_sources: ["healthy", "conflicting"]
-                .map(|name| {
-                    (
-                        python_server_id(name),
-                        rustx::capabilities::activation::SourceActivation::Enabled,
-                    )
-                })
-                .into(),
+            source_demand: common::source_demand(
+                fixture.runtime.workspace().root(),
+                ["healthy", "conflicting"].map(|name| format!("python:{name}")),
+            ),
             base_tool_registry: Arc::new(fixture.registry.clone()),
             tool_activation: selection.clone(),
             skill_discovery: rustx::skills::SkillDiscoveryConfig {
@@ -83,7 +83,7 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
             conversation_id: fixture.runtime.conversation_id().clone(),
             workspace: fixture.runtime.workspace().clone(),
             environment_store_root: fixture.dir().path().join("environments"),
-            python_sources: inputs.python_sources.clone(),
+            source_demand: inputs.source_demand.clone(),
             base_tool_registry: inputs.base_tool_registry.clone(),
             extension_tools: fixture.runtime.extension_tool_plane(),
             tool_activation: selection.clone(),
@@ -102,12 +102,12 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
         assert_eq!(
             candidate
                 .availability()
-                .get(&CapabilitySourceId::Mcp(python_server_id("healthy"))),
+                .get(&ToolSourceId::ManagedPython("healthy".into())),
             Some(&CapabilitySourceState::Ready)
         );
         let Some(CapabilitySourceState::Unavailable { reason }) = candidate
             .availability()
-            .get(&CapabilitySourceId::Mcp(python_server_id("conflicting")))
+            .get(&ToolSourceId::ManagedPython("conflicting".into()))
         else {
             panic!("the conflicting dependency must fail only its source");
         };

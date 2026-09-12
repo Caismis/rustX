@@ -5233,7 +5233,7 @@ mod tests {
     use super::super::catalog::SubagentExecutionDeadline;
     use super::super::ipc::{ChildFrame, ChildResultStatus, ParentFrame, ResultFrame};
     use super::*;
-    use crate::capabilities::selection::ToolSelector;
+    use crate::capabilities::selection::AgentToolSelection;
     use crate::durable::ConversationStore;
     use crate::runtime::types::{CancellationReason, SystemClock};
 
@@ -5736,8 +5736,10 @@ mod tests {
                 server_id: crate::runtime::identity::McpServerId::new("github"),
             },
         };
-        spec.resolved.tools = vec![super::super::resolver::ResolvedSubagentTool::Mcp {
-            server_id: crate::runtime::identity::McpServerId::new("github"),
+        spec.resolved.tools = vec![super::super::resolver::ResolvedSubagentTool::Source {
+            source_id: crate::capabilities::ToolSourceId::Mcp(
+                crate::runtime::identity::McpServerId::new("github"),
+            ),
             tool_id: definition.id.clone(),
             name: definition.name.clone(),
             identity: crate::tools::mcp::identity::definition_identity(&definition)
@@ -5779,12 +5781,13 @@ mod tests {
         // The selector vocabulary is unchanged: #145 removed a physical
         // limitation, not a capability model.
         assert_eq!(
-            ToolSelector::Mcp {
-                server_id: crate::runtime::identity::McpServerId::new("github"),
+            AgentToolSelection::Source {
+                source_id: crate::capabilities::ToolSourceId::try_from(String::from("github"))
+                    .unwrap(),
                 name: "get_issue".to_owned(),
             }
             .canonical(),
-            "mcp:github/get_issue"
+            "source:github/get_issue"
         );
     }
 

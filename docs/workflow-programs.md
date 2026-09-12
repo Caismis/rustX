@@ -76,9 +76,10 @@ block:
   edges: [{from: check, to: done}]
 ```
 
-Builtin selectors are `{origin: builtin, name: <name>}`; MCP selectors also
-require `server_id`. Managed Python uses its existing synthesized
-`python:<package>` MCP identity. Selectors must occur in the definition's
+Builtin selectors are `{origin: builtin, name: <name>}`. External Tool leaves
+use `{origin: source, source_id: <source>, name: <name>}` for both configured
+MCP sources and Managed Python sources (`python:<package>`). Agent overrides
+use the shared `tools.sources` All/Exact vocabulary. Selectors must occur in the definition's
 explicit `tools` admission set. The compiler checks admission, typed lexical
 bindings, object arguments, and the closed result schema. The invoking
 resource generation resolves the actual capability and native input schema;
@@ -151,7 +152,7 @@ the prompt. It does not depend on a Prepared execution event. A concrete node
 visit cannot acquire a replacement approval subject; another visit needs its own
 interaction. Publication failure is interaction authority loss, not human Denied.
 
-The capability plane owns `ToolSelector` and source-qualified resolution; neither
+The capability plane owns `ExactToolSelector` and source-qualified resolution; neither
 Workflow nor generic Tool selection depends on the Subagent feature's resolver.
 Registration/admission owns Leaf/Composite policy; executors cannot declare a
 Workflow timeout. Ancestor deadlines propagate through the native lifecycle's

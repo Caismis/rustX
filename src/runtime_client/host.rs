@@ -2849,7 +2849,7 @@ mod tests {
         }
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
             crate::capabilities::CapabilityCoordinatorConfig {
-                python_sources: std::collections::BTreeMap::new(),
+                source_demand: crate::capabilities::source::ToolSourceDemand::default(),
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(tools),
@@ -2949,7 +2949,7 @@ mod tests {
         .expect("tool runtime");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
             crate::capabilities::CapabilityCoordinatorConfig {
-                python_sources: std::collections::BTreeMap::new(),
+                source_demand: crate::capabilities::source::ToolSourceDemand::default(),
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(ToolRegistry::new()),
@@ -6888,7 +6888,7 @@ mod tests {
         }
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
             crate::capabilities::CapabilityCoordinatorConfig {
-                python_sources: std::collections::BTreeMap::new(),
+                source_demand: crate::capabilities::source::ToolSourceDemand::default(),
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(tools),
@@ -6987,7 +6987,7 @@ mod tests {
         .expect("tool runtime");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
             crate::capabilities::CapabilityCoordinatorConfig {
-                python_sources: std::collections::BTreeMap::new(),
+                source_demand: crate::capabilities::source::ToolSourceDemand::default(),
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(ToolRegistry::new()),
@@ -7119,7 +7119,7 @@ mod tests {
         .expect("tool runtime");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
             crate::capabilities::CapabilityCoordinatorConfig {
-                python_sources: std::collections::BTreeMap::new(),
+                source_demand: crate::capabilities::source::ToolSourceDemand::default(),
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(tools),
@@ -8359,7 +8359,7 @@ keep_recent_tokens = 0
         .expect("tool runtime");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
             crate::capabilities::CapabilityCoordinatorConfig {
-                python_sources: std::collections::BTreeMap::new(),
+                source_demand: crate::capabilities::source::ToolSourceDemand::default(),
                 conversation_id: conversation_id.clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(tools),

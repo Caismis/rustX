@@ -26,6 +26,12 @@
       },
       "type": "object"
     },
+    "AllTools": {
+      "enum": [
+        "all"
+      ],
+      "type": "string"
+    },
     "BackgroundStatusConfig": {
       "additionalProperties": false,
       "description": "Configuration of the bounded Background status contributor.",
@@ -38,6 +44,49 @@
       },
       "type": "object"
     },
+    "ExactToolSelector": {
+      "description": "One exact executable identity, used by Workflow Tool leaves and allowlists.\nSource-wide Agent capability selection cannot be authored in this type.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "origin": {
+              "const": "builtin",
+              "type": "string"
+            }
+          },
+          "required": [
+            "origin",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "origin": {
+              "const": "source",
+              "type": "string"
+            },
+            "source_id": {
+              "$ref": "#/$defs/ToolSourceId"
+            }
+          },
+          "required": [
+            "origin",
+            "source_id",
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "GoalExtensionDocument": {
       "additionalProperties": false,
       "description": "Authored opt-in Goal composition.",
@@ -48,10 +97,6 @@
         }
       },
       "type": "object"
-    },
-    "McpServerId": {
-      "description": "Identifies an MCP server bound to the runtime.",
-      "type": "string"
     },
     "NativeAgentExtensionSelection": {
       "additionalProperties": false,
@@ -70,6 +115,20 @@
         }
       },
       "type": "object"
+    },
+    "SourceToolSelection": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AllTools"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "Exactly two trust granularities for one source. This is also the authoring\nboundary: only the literal \"all\" or an exact array is accepted."
     },
     "SubagentInvocationOverride": {
       "additionalProperties": false,
@@ -130,72 +189,28 @@
     },
     "ToolSelectionDocument": {
       "additionalProperties": false,
-      "description": "The authored map form of an exact, source-qualified capability selection.\n\nThis is the one selection vocabulary shared by every trusted authoring\nsurface: named Agent TOML (`[tools]`), a Workflow Agent node's\ninvocation override, and the model-facing `subagent` Tool's `override`.\nOrigins are named explicitly rather than collapsed into bare strings, so a\nBuiltin `read` and an MCP server's `read` are never interchangeable.\nWildcards are deliberately absent: a selection is an exact list. Managed\nPython tool packages are selected through `mcp` under their synthesized\nserver identity (`python:<folder>`, Issue #174).\n\nThe `python:` namespace is reserved for those synthesized identities:\n`mcpServers` configuration may never declare a server under it (rejected\nduring validation), so a selection naming `python:<folder>` always resolves\nto the managed package, never to a configured server.",
+      "description": "Shared Agent and Workflow Agent override selection. Extensions are composed\nby their native owner and never enter this ordinary capability vocabulary.",
       "properties": {
         "builtin": {
           "default": [],
-          "description": "Built-in/native capabilities, by canonical model-facing name.",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
-        "mcp": {
+        "sources": {
           "additionalProperties": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
+            "$ref": "#/$defs/SourceToolSelection"
           },
           "default": {},
-          "description": "MCP capabilities, keyed by server identity.",
           "type": "object"
         }
       },
       "type": "object"
     },
-    "ToolSelector": {
-      "description": "Trusted selection syntax shared by Subagent and Workflow authoring.\nManaged Python uses the existing `python:<package>` MCP server identity.",
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "name": {
-              "type": "string"
-            },
-            "origin": {
-              "const": "builtin",
-              "type": "string"
-            }
-          },
-          "required": [
-            "origin",
-            "name"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "name": {
-              "type": "string"
-            },
-            "origin": {
-              "const": "mcp",
-              "type": "string"
-            },
-            "server_id": {
-              "$ref": "#/$defs/McpServerId"
-            }
-          },
-          "required": [
-            "origin",
-            "server_id",
-            "name"
-          ],
-          "type": "object"
-        }
-      ]
+    "ToolSourceId": {
+      "description": "A configured MCP source or a canonical Managed Python package.\nNamespace parsing happens only at the authoring boundary; runtime dispatch\nmatches these variants, never display strings.",
+      "type": "string"
     },
     "WorkflowBlock": {
       "additionalProperties": false,
@@ -359,7 +374,7 @@
               "$ref": "#/$defs/WorkflowToolResult"
             },
             "selector": {
-              "$ref": "#/$defs/ToolSelector"
+              "$ref": "#/$defs/ExactToolSelector"
             },
             "type": {
               "const": "tool",
@@ -824,7 +839,7 @@
       "default": [],
       "description": "Explicit capability admission, independent of main model exposure.",
       "items": {
-        "$ref": "#/$defs/ToolSelector"
+        "$ref": "#/$defs/ExactToolSelector"
       },
       "type": "array",
       "uniqueItems": true

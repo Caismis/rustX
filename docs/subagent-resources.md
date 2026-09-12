@@ -74,7 +74,7 @@ and child Agent profiles are a subsequent architecture step.
 | `model` | Optional `provider/model` reference. Omission inherits the invoking attempt's frozen effective model, including reasoning and request contracts. Explicit references use the native model catalog. |
 | `timeout_ms` | Optional integer, 1–86,400,000; the whole-child lifecycle deadline. |
 | `tools.builtin` | Exact array of **ordinary** native Tool names; default empty. A Tool provided by an Agent Extension (`todo`) is rejected here by name: compose it under `extensions` instead. |
-| `tools.mcp` | Map of source identities to exact Tool-name arrays; default empty. Managed Python uses the existing `python:<package>` source identity. |
+| `tools.sources` | Map of typed source identities to `"all"` or exact Tool-name arrays; default empty. MCP and `python:<package>` use this same selection vocabulary. |
 | `skills` | Exact Skill-name array; default empty. |
 | `agents_md.inherit` | Boolean, default true; include the parent's frozen project guidance. |
 | `agents_md.files` | Ordered supplemental guidance paths; default empty, at most eight. They are distinct project instructions, never the primary role body. |
@@ -432,7 +432,7 @@ effective tools         origin, exact ToolId, model-facing name, and the
                         COMPLETE frozen ToolDefinition the child executes:
                         description, canonical input schema, and the
                         execution, concurrency, approval and replay policies.
-                        An MCP tool additionally frames its frozen
+                        An external source tool additionally frames its frozen
                         cross-process identity
 effective Skills        exact SkillId + SkillVersionId, and the
                         model-visible name AND description, both of which
@@ -441,7 +441,7 @@ materialization plane   exactly the external source identities required. The
                         bindings behind them are physical (transport, resource
                         root) or secret (credentials); the one behavior they
                         carry — the invocation policy a server imposes on its
-                        tools — is already framed exactly, through each MCP
+                        tools — is already framed exactly, through each external source
                         tool's cross-process identity above
 effective extensions    the closed composition's EFFECTIVE framing: an
                         omitted timezone frames as the UTC it renders, and a
@@ -496,8 +496,8 @@ disclosure — deciding whether the model opens the Skill at all — which
 identity, and the second is represented exactly by `version_id`, which hashes
 every package-relative path and its bytes.
 
-An MCP tool frames the same complete definition **and** its frozen
-`McpToolIdentity`. The identity is not redundant framing: it is an
+An external source tool frames the same complete definition **and** its frozen
+`SourceToolIdentity`. The identity is not redundant framing: it is an
 independently frozen field that gates the child's startup, since the child
 recomputes it from its own `tools/list` and refuses to run on a mismatch. The
 profile digest frames that frozen value; it never performs the verification
@@ -604,3 +604,6 @@ rejects child inspection or restored private allocation even while files remain.
 Cleanup removes the exact child allocation and identity-derived root-level routing
 socket; retained workspace resources still block preflight and require explicit
 disposal. See [Session deletion lifecycle](session-deletion-lifecycle.md).
+
+Source demand, trust granularity, typed resolution and frozen child identity rules
+are specified in [ordinary Tool source selection](tool-source-selection.md).

@@ -1080,9 +1080,10 @@ impl ExtensionToolPlaneShape {
         let goal_tools = crate::tools::native::goal_tool_registrations();
         let goal = goal_tools.iter().all(|tool| carries(&tool.definition));
         let claims_goal = |definition: &crate::tools::types::ToolDefinition| {
-            goal_tools.iter().any(|tool| {
-                tool.definition.id == definition.id || tool.definition.name == definition.name
-            })
+            definition.origin == crate::tools::types::ToolOrigin::Builtin
+                && goal_tools.iter().any(|tool| {
+                    tool.definition.id == definition.id || tool.definition.name == definition.name
+                })
         };
         let invalid_goal = published.iter().any(|definition| {
             claims_goal(definition)

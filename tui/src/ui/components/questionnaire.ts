@@ -373,6 +373,9 @@ export function requesterLines(requester: InteractionRequester): string[] {
   if (requester.origin === "builtin") {
     return [`Requested by ${requester.tool_name}`];
   }
+  if ("managed_python" in requester.origin) {
+    return [`Requested by Python source: ${requester.origin.managed_python.package}`, `Tool: ${requester.tool_name}`];
+  }
   return [
     `Requested by MCP server: ${requester.origin.mcp.server_id}`,
     `Tool: ${requester.tool_name}`,
@@ -388,14 +391,14 @@ export function requesterLines(requester: InteractionRequester): string[] {
 export function requesterName(requester: InteractionRequester): string {
   return requester.origin === "builtin"
     ? requester.tool_name
-    : `mcp:${requester.origin.mcp.server_id}/${requester.tool_name}`;
+    : "mcp" in requester.origin ? `mcp:${requester.origin.mcp.server_id}/${requester.tool_name}` : `python:${requester.origin.managed_python.package}/${requester.tool_name}`;
 }
 
 /** The popup frame title for one requester. */
 export function requesterTitle(requester: InteractionRequester): string {
   return requester.origin === "builtin"
     ? NATIVE_POPUP_TITLE
-    : `MCP elicitation · ${requester.origin.mcp.server_id}`;
+    : "mcp" in requester.origin ? `MCP elicitation · ${requester.origin.mcp.server_id}` : `Python source · ${requester.origin.managed_python.package}`;
 }
 
 /**

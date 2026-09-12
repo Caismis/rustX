@@ -111,6 +111,9 @@ pub struct CurrentRuntimeConfig {
     /// than a silently ineffective entry (Issue #259).
     #[serde(default = "default_tools")]
     pub default_tools: Vec<String>,
+    /// Explicit ordinary main Agent selection; external sources require this demand.
+    #[serde(default)]
+    pub tools: Option<crate::capabilities::selection::ToolSelectionDocument>,
     /// Explicit Skill roots/packages; launch provenance retains host/project/CLI authority.
     #[serde(default)]
     pub skills: Vec<PathBuf>,
@@ -466,6 +469,7 @@ impl CurrentRuntimeConfig {
             native_tools: NativeToolPoliciesDocument::default(),
             environment: BTreeMap::default(),
             default_tools: default_tools(),
+            tools: None,
             skills: Vec::default(),
             subagents: SubagentsDocument::default(),
             workflows: WorkflowsDocument::default(),
@@ -518,6 +522,11 @@ impl CurrentRuntimeConfig {
             });
         }
         self.timeout_policy()?;
+        if let Some(selection) = &self.tools {
+            selection
+                .validate_spelling()
+                .map_err(|detail| CurrentRuntimeConfigError::Invalid { detail })?;
+        }
         if self.default_tools.iter().any(|name| name.trim().is_empty()) {
             return Err(CurrentRuntimeConfigError::Invalid {
                 detail: "default_tools entries must be non-empty names".to_owned(),

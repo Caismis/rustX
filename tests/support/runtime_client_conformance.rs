@@ -1751,9 +1751,7 @@ pub async fn capability_projection_is_deterministic(factory: &dyn DriverFactory)
     }
 }
 
-/// Managed Python tool packages (Issue #174) are projected with typed MCP
-/// origin metadata carrying the synthesized server identity
-/// (`python:<folder>`).
+/// Managed Python tool packages are projected with their typed package provenance.
 ///
 /// Unlike the macro-driven scenarios this one is deliberately **not** run
 /// once per driver with a fresh fixture each time: preparing the package's
@@ -1811,9 +1809,9 @@ pub async fn capability_projection_covers_python_origins() {
         assert!(
             matches!(
                 &python.origin,
-                ToolOrigin::Mcp { server_id } if server_id.as_str() == "python:py-echo"
+                ToolOrigin::ManagedPython { package } if package == "py-echo"
             ),
-            "the origin is the synthesized server identity ({})",
+            "the origin is the canonical Managed Python package ({})",
             factory.name()
         );
         if let Some(first) = &projected {

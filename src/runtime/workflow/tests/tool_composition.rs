@@ -287,7 +287,7 @@ async fn every_native_non_success_survives_the_actual_outer_adapter_once() {
 
 #[tokio::test]
 async fn fixed_admission_rejects_orchestration_background_and_composite_leaves() {
-    use crate::capabilities::selection::ToolSelector;
+    use crate::capabilities::selection::ExactToolSelector;
     // `todo` is deliberately absent: it is no longer an ordinary Builtin
     // capability, so a Workflow that names it is refused at compile time
     // (see `ext259_a_workflow_cannot_admit_an_extension_tool`) rather than
@@ -322,7 +322,7 @@ async fn fixed_admission_rejects_orchestration_background_and_composite_leaves()
             registration,
             crate::agent::AttemptLifecycle::default(),
         );
-        let selector = ToolSelector::Builtin { name: name.into() };
+        let selector = ExactToolSelector::Builtin { name: name.into() };
         let mut definition = program_definition();
         definition.tools = BTreeSet::from([selector.clone()]);
         if let WorkflowNodeDefinition::Tool {
@@ -355,8 +355,8 @@ async fn fixed_admission_rejects_orchestration_background_and_composite_leaves()
 /// diagnostic that names the plane it actually lives in.
 #[test]
 fn ext259_a_workflow_cannot_admit_an_extension_tool() {
-    use crate::capabilities::selection::ToolSelector;
-    let selector = ToolSelector::Builtin {
+    use crate::capabilities::selection::ExactToolSelector;
+    let selector = ExactToolSelector::Builtin {
         name: "todo".into(),
     };
     let mut definition = program_definition();

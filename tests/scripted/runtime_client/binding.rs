@@ -61,7 +61,7 @@ async fn new_bundle(conversation: &str) -> Bundle {
     )
     .expect("tool runtime");
     let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
-        python_sources: std::collections::BTreeMap::new(),
+        source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
         conversation_id: runtime.conversation_id().clone(),
         workspace: runtime.workspace().clone(),
         base_tool_registry: Arc::new(ToolRegistry::new()),

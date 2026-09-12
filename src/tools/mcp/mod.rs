@@ -8188,3 +8188,59 @@ mod tests {
         );
     }
 }
+
+/// Physical MCP-compatible binding key, derived from typed source provenance at
+/// the materialization boundary. Python remains owned by its preparation store.
+#[must_use]
+pub fn source_server_id(source: &crate::capabilities::ToolSourceId) -> McpServerId {
+    match source {
+        crate::capabilities::ToolSourceId::Mcp(id) => id.clone(),
+        crate::capabilities::ToolSourceId::ManagedPython(package) => {
+            crate::tools::python::python_server_id(package)
+        }
+    }
+}
+
+/// Freeze the canonical materializer identity without making callers interpret
+/// a transport namespace as capability provenance.
+#[must_use]
+pub fn source_tool_identity(
+    source: &crate::capabilities::ToolSourceId,
+    definition: &ToolDefinition,
+) -> crate::runtime::identity::SourceToolIdentity {
+    identity::mcp_tool_identity(
+        &source_server_id(source),
+        &definition.name,
+        &definition.description,
+        &definition.input_schema,
+        definition.execution_policy,
+        definition.concurrency_policy,
+        definition.approval_policy,
+    )
+}
+
+/// Publish ordinary Tools with the identity of their native source owner.
+pub(crate) fn definitions_owned_for_source(
+    source: &crate::capabilities::ToolSourceId,
+    server_id: &McpServerId,
+    policy: ToolInvocationPolicy,
+    binding: &McpRuntimeBinding,
+    tools: Vec<CanonicalMcpTool>,
+) -> Vec<(ToolDefinition, Arc<dyn ToolExecutor>)> {
+    definitions_owned(server_id, policy, binding, tools)
+        .into_iter()
+        .map(|(mut definition, executor)| {
+            definition.origin = match source {
+                crate::capabilities::ToolSourceId::Mcp(id) => ToolOrigin::Mcp {
+                    server_id: id.clone(),
+                },
+                crate::capabilities::ToolSourceId::ManagedPython(package) => {
+                    ToolOrigin::ManagedPython {
+                        package: package.clone(),
+                    }
+                }
+            };
+            (definition, executor)
+        })
+        .collect()
+}

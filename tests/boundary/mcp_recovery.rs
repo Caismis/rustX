@@ -100,12 +100,22 @@ async fn recovery_capability(
     let dir = tempfile::tempdir().expect("capability temp dir");
     let server_id = McpServerId::new("recovery");
     let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
-        python_sources: std::collections::BTreeMap::new(),
+        source_demand: rustx::capabilities::source::ToolSourceDemand::new(
+            [rustx::capabilities::ToolSourceId::Mcp(server_id.clone())],
+            rustx::runtime::resources::ManagedPythonCatalog::default(),
+        ),
         conversation_id: tool_runtime.conversation_id().clone(),
         workspace: tool_runtime.workspace().clone(),
         base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
         extension_tools: tool_runtime.extension_tool_plane(),
-        tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+        tool_activation: rustx::capabilities::ToolActivationPolicy {
+            sources: [(
+                rustx::capabilities::ToolSourceId::Mcp(server_id.clone()),
+                rustx::capabilities::selection::SourceToolSelection::All,
+            )]
+            .into(),
+            ..Default::default()
+        },
         skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
         mcp_servers: std::collections::BTreeMap::from([(
             server_id.clone(),
@@ -1467,7 +1477,7 @@ async fn a_failed_capability_refresh_keeps_the_last_known_good_generation() {
         matches!(
             candidate
                 .availability()
-                .get(&rustx::capabilities::CapabilitySourceId::Mcp(
+                .get(&rustx::capabilities::ToolSourceId::Mcp(
                     capability.server_id.clone()
                 )),
             Some(rustx::capabilities::CapabilitySourceState::Unavailable { .. })
@@ -1896,12 +1906,22 @@ async fn http_capability(
 ) -> McpCapability {
     let dir = tempfile::tempdir().expect("capability temp dir");
     let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
-        python_sources: std::collections::BTreeMap::new(),
+        source_demand: rustx::capabilities::source::ToolSourceDemand::new(
+            [rustx::capabilities::ToolSourceId::Mcp(server_id.clone())],
+            rustx::runtime::resources::ManagedPythonCatalog::default(),
+        ),
         conversation_id: tool_runtime.conversation_id().clone(),
         workspace: tool_runtime.workspace().clone(),
         base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
         extension_tools: tool_runtime.extension_tool_plane(),
-        tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+        tool_activation: rustx::capabilities::ToolActivationPolicy {
+            sources: [(
+                rustx::capabilities::ToolSourceId::Mcp(server_id.clone()),
+                rustx::capabilities::selection::SourceToolSelection::All,
+            )]
+            .into(),
+            ..Default::default()
+        },
         skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
         mcp_servers: std::collections::BTreeMap::from([(server_id.clone(), binding)]),
         base_environment: tool_runtime.environment().clone(),
@@ -2229,9 +2249,19 @@ fn reload_inputs(
     binding: rustx::tools::mcp::McpServerBinding,
 ) -> rustx::capabilities::CapabilityResourceInputs {
     rustx::capabilities::CapabilityResourceInputs {
-        python_sources: std::collections::BTreeMap::new(),
+        source_demand: rustx::capabilities::source::ToolSourceDemand::new(
+            [rustx::capabilities::ToolSourceId::Mcp(server_id.clone())],
+            rustx::runtime::resources::ManagedPythonCatalog::default(),
+        ),
         base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
-        tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+        tool_activation: rustx::capabilities::ToolActivationPolicy {
+            sources: [(
+                rustx::capabilities::ToolSourceId::Mcp(server_id.clone()),
+                rustx::capabilities::selection::SourceToolSelection::All,
+            )]
+            .into(),
+            ..Default::default()
+        },
         skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
         mcp_servers: std::collections::BTreeMap::from([(server_id.clone(), binding)]),
         base_environment: tool_runtime.environment().clone(),
@@ -2336,9 +2366,12 @@ async fn same_binding_carry_forward_keeps_the_published_binding_identity() {
     );
     assert!(
         matches!(
-            capability.coordinator.availability().get(
-                &rustx::capabilities::CapabilitySourceId::Mcp(capability.server_id.clone())
-            ),
+            capability
+                .coordinator
+                .availability()
+                .get(&rustx::capabilities::ToolSourceId::Mcp(
+                    capability.server_id.clone()
+                )),
             Some(rustx::capabilities::CapabilitySourceState::Unavailable { .. })
         ),
         "availability and capability knowledge stay separate facts"
@@ -2447,9 +2480,12 @@ async fn a_changed_binding_never_publishes_the_previous_bindings_executors() {
     );
     assert!(
         matches!(
-            capability.coordinator.availability().get(
-                &rustx::capabilities::CapabilitySourceId::Mcp(capability.server_id.clone())
-            ),
+            capability
+                .coordinator
+                .availability()
+                .get(&rustx::capabilities::ToolSourceId::Mcp(
+                    capability.server_id.clone()
+                )),
             Some(rustx::capabilities::CapabilitySourceState::Unavailable { .. })
         ),
         "B2 is reported unavailable rather than silently satisfied by B1"
