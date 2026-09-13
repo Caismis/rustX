@@ -1,5 +1,7 @@
 # Fixed scoped Workflow programs
 
+See [Workflow admission and Agent selection](workflow-admission.md) for static capability ownership and atomic disable semantics.
+
 Goal answers WHAT persists; Workflow answers HOW finite work executes. A Goal
 round can invoke Workflow Tools normally, but Workflow completion never completes
 Goal, and WorkflowRun never owns Goal state or continuation. Workflow Agent-node
@@ -13,13 +15,13 @@ remain native execution and settlement conformance evidence.
 The fixed Workflow architecture (#216–#223) extends the native Workflow foundation (#83). A selected
 Workflow remains one foreground Tool. Canonical discovery reads
 `.agents/workflows/<id>.yaml`; settings expose it through
-`agent.workflows`. Profiles must belong to `subagents.workflow`. Files do not
-grant admission, and a block never rediscovers capabilities or resources.
+`agent.workflows`. Agent nodes reference discovered named Profiles. Static admission
+freezes all required capabilities before publication; a block never rediscovers them.
 
 ## Authoring and lexical scope
 
-A definition contains `description`, `block`, an optional explicit `tools`
-admission set, and trusted `timeout_ms` (default 600000). Every block contains
+A definition contains `description`, `block`, optional `workspace`,
+and trusted `timeout_ms` (default 600000). Every block contains
 `input` and `output` JSON Schemas, `entry`, `nodes`, and `edges`. Parallel
 branches contain an `input` value expression and another `block` of exactly
 the same shape. There is no Block node, callable subworkflow, conversation,
@@ -29,7 +31,6 @@ or independent job. The node vocabulary is Agent, Tool, Branch, Parallel, Review
 
 ```yaml
 description: Execute the fixed greeting checker.
-tools: [{origin: builtin, name: bash}]
 timeout_ms: 600000
 block:
   input: {type: object, properties: {}, additionalProperties: false}
@@ -79,8 +80,8 @@ block:
 Builtin selectors are `{origin: builtin, name: <name>}`. External Tool leaves
 use `{origin: source, source_id: <source>, name: <name>}` for both configured
 MCP sources and Managed Python sources (`python:<package>`). Agent overrides
-use the shared `tools.sources` All/Exact vocabulary. Selectors must occur in the definition's
-explicit `tools` admission set. The compiler checks admission, typed lexical
+use the shared `tools.sources` All/Exact vocabulary. Each Tool node is its own
+exact executable declaration. Static admission freezes each exact capability; the compiler checks typed lexical
 bindings, object arguments, and the closed result schema. The invoking
 resource generation resolves the actual capability and native input schema;
 normalization and complete input validation remain authoritative at invocation.
@@ -90,8 +91,8 @@ prepared as foreground without changing its canonical definition.
 
 Workflow authority comes from the invoking attempt's immutable available
 capability registrations, **not** its model-visible registry. Source availability,
-invalid selectors, changed identity, missing explicit admission and ineligible
-leaves fail closed. Available-but-inactive capabilities remain invisible to the
+absent exact Tools and ineligible leaves disable the whole Workflow before
+execution. Exact identity changes at invocation fail closed. Available-but-inactive capabilities remain invisible to the
 parent model. Admission rejects background-only capabilities, composites,
 Workflow dispatch, subagents and execution control. Ordinary ask_user is eligible.
 An extension-provided Tool such as `todo` is not an ordinary capability at all

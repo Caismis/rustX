@@ -9,14 +9,13 @@ Minimum project selection:
 
 ```toml
 [subagents]
-workflow = ["reviewer"]
 
 [agent]
 workflows = ["typed_agent"]
 ```
 
 The role need not appear in `agent.agents`. The canonical Agent TOML file defines the resource;
-`subagents.workflow` admits it to Workflow Agent nodes. `agent.workflows`
+Workflow YAML references the discovered Agent directly. `agent.workflows`
 permits this concrete Workflow Tool to be exposed to the main model. Inspection
 changes none of those lists.
 

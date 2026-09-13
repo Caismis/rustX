@@ -109,7 +109,7 @@ fn program() -> Arc<WorkflowProgram> {
 
 fn program_definition() -> WorkflowDefinition {
     serde_json::from_value(json!({
-        "description":"fixed verification", "tools":[{"origin":"builtin","name":"check"}], "timeout_ms":100,
+        "description":"fixed verification",  "timeout_ms":100,
         "block": {
             "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
             "output":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
@@ -198,8 +198,7 @@ fn context_with_workspace_policy(
             crate::context::ContextAssembly::new(),
             capability,
         )
-        .with_subagent_catalog(agents.resources().subagents().clone())
-        .with_workflow_admission(BTreeSet::from([profile("reviewer")])),
+        .with_subagent_catalog(agents.resources().subagents().clone()),
     );
     let mut context = crate::runtime::subagent::AttemptSubagentContext::new(
         crate::runtime::identity::AttemptId::new("workflow-test-attempt"),
@@ -246,7 +245,7 @@ async fn goal84_workflow_completion_and_goal_completion_are_independent() {
     );
     let (_, cancellation) = workflow_cancellation();
     let value = workflow_runtime(&plane)
-        .run_foreground(
+        .run_test_foreground(
             program(),
             ToolCallId::new("goal-workflow"),
             context,
@@ -277,7 +276,7 @@ async fn tool_only_inactive_capability_has_no_provider_or_canonical_history_and_
     let frozen = context.resources().capability().clone();
     let (_, cancellation) = workflow_cancellation();
     let result = runtime
-        .run_foreground(
+        .run_test_foreground(
             program(),
             ToolCallId::new("outer"),
             context,
@@ -392,7 +391,7 @@ async fn cancellation_before_node_admission_starts_zero_executors() {
     trigger.cancel(); // cancellation is observable before execute_block's node frontier
     assert!(
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 program(),
                 ToolCallId::new("outer"),
                 context,
@@ -423,7 +422,7 @@ async fn cancellation_during_execution_drains_native_settlement_before_node_term
     let mut cancelled = probe.cancelled.subscribe();
     let task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 program(),
                 ToolCallId::new("outer"),
                 context,
@@ -505,7 +504,7 @@ async fn durable_approval_preparation_failure_never_publishes_or_starts() {
     let context = context(&plane, probe.clone(), lifecycle);
     let (_, cancellation) = workflow_cancellation();
     let error = runtime
-        .run_foreground(
+        .run_test_foreground(
             program(),
             ToolCallId::new("outer"),
             context,
@@ -528,6 +527,7 @@ async fn run_outer(
     ToolExecutionResult,
     Vec<crate::tools::invocation::InvocationFact>,
 ) {
+    let context = context.with_test_workflow(&program);
     let executor = crate::tools::native::test_workflow_executor(runtime, program);
     drive_executor(executor, context, cancellation, None).await
 }
@@ -726,7 +726,7 @@ async fn agent_tool_branch_return_uses_committed_typed_binding() {
     let (_, cancellation) = workflow_cancellation();
     let task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 program,
                 ToolCallId::new("outer"),
                 context,
@@ -823,7 +823,7 @@ async fn ordinary_approval_denial_starts_zero_and_allow_executes_exact_prepared_
         let context = context_with_registration(&plane, registration, lifecycle);
         let (_, cancellation) = workflow_cancellation();
         let result = runtime
-            .run_foreground(
+            .run_test_foreground(
                 program(),
                 ToolCallId::new("outer"),
                 context,
@@ -864,7 +864,7 @@ async fn normalization_and_schema_rejection_start_zero_executors() {
         );
         let (_, cancellation) = workflow_cancellation();
         let error = runtime
-            .run_foreground(
+            .run_test_foreground(
                 program(),
                 ToolCallId::new("outer"),
                 context,
@@ -899,11 +899,10 @@ fn authority_rejects_changed_identity_and_unadmitted_selection() {
             )
             .is_err()
     );
-    let program = program();
-    let mut definition = WorkflowDefinition {
+    let definition = WorkflowDefinition {
         workspace: None,
         description: "unadmitted".into(),
-        tools: BTreeSet::new(),
+
         timeout_ms: 100,
         block: WorkflowBlock {
             input: json!({"type":"object"}),
@@ -933,7 +932,11 @@ fn authority_rejects_changed_identity_and_unadmitted_selection() {
             edges: vec![edge("tool", "done")],
         },
     };
-    assert!(compile_test(definition.clone()).is_err());
-    definition.tools = program.tools.clone();
+    let mut obsolete = serde_json::to_value(&definition).unwrap();
+    obsolete["tools"] = json!([]);
+    assert!(serde_json::from_value::<WorkflowDefinition>(obsolete).is_err());
     assert!(compile_test(definition).is_ok());
 }
+
+#[path = "admission.rs"]
+mod admission;

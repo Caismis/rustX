@@ -737,14 +737,6 @@
           "type": [
             "integer"
           ]
-        },
-        "workflow": {
-          "items": {
-            "$ref": "#/$defs/SubagentName"
-          },
-          "type": [
-            "array"
-          ]
         }
       },
       "type": "object"

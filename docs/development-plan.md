@@ -1392,7 +1392,7 @@ M9.5 adds the bounded native Workflow layer over named SubagentRuntime. The
 authoring surface is `.agents/workflows/<configured-id>.yaml`, but YAML is only
 serialization. Configuration registers exact ids and separately admits
 `agent.workflows`; the discovered Agent catalog remains the one profile source of
-truth, with independent `agent.agents` and `subagents.workflow` domains.
+truth, with Agent selection independent of static Workflow authority.
 
 The loader compiles each registered definition into an immutable
 `WorkflowProgram`. The compiler enforces an explicit-entry acyclic graph within each block,

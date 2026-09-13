@@ -1,6 +1,5 @@
 # Runtime child capacity; Workflow static admission remains separate.
 [subagents]
-workflow = ["reviewer"]
 max_concurrent = 2
 
 # One Agent Profile selects from admitted resources. It does not create them.

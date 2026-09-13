@@ -72,7 +72,7 @@
 //! defaults are not bounded by the invoking model's registry — while an
 //! override's *additions* are bounded by exactly that frozen registry. A
 //! trusted Workflow program carries its own typed authority and is bounded by
-//! the generation catalog instead; see [`SubagentOverrideAuthority`].
+//! the generation catalog through static Workflow admission.
 //!
 //! # Complete profiles and dynamic replacements
 //!
@@ -742,52 +742,6 @@ impl core::fmt::Display for SubagentResolutionError {
 
 impl std::error::Error for SubagentResolutionError {}
 
-/// The independent profile-admission domains.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SubagentDomain {
-    /// Profiles callable by the main Agent's `subagent` capability.
-    Main,
-    /// Profiles callable by Workflow Agent and Parallel nodes.
-    Workflow,
-}
-
-/// **Who** may ask for an invocation-scoped override (Issue #258).
-///
-/// This is a typed native input supplied by the launch site, never a field of
-/// the payload being authorized. A model emits `override`; it cannot emit the
-/// authority under which its `override` is judged, cannot select an admission
-/// domain, and cannot supply an authority snapshot of its own.
-///
-/// ```text
-/// main `subagent` Tool   ->  DelegatedByModel   ceiling = role ∪ invoking Agent
-/// Workflow Agent node    ->  TrustedProgram     ceiling = the admitted generation
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SubagentOverrideAuthority {
-    /// Model-generated input, bounded by the dynamic delegation ceiling.
-    ///
-    /// For each dimension `d`:
-    ///
-    /// ```text
-    /// allowed[d] = authorized_role_baseline[d] ∪ invoking_agent_frozen_authority[d]
-    /// ```
-    ///
-    /// The union is an authorization **ceiling**, not a merge: it decides
-    /// what may be requested, never what the child ends up selecting.
-    DelegatedByModel,
-    /// Trusted static program data admitted by the caller's own generation.
-    ///
-    /// A Workflow Agent node's override is part of the compiled program, is
-    /// validated at compilation and at resource-generation preparation
-    /// against that generation's authority, and is not reachable from model
-    /// output, node input values, or task text. It may therefore legitimately
-    /// exceed both the role's defaults and the invoking main model's active
-    /// capabilities. It never exceeds the admitted generation: every
-    /// selection still resolves through the same catalog, availability, and
-    /// Skill visibility rules.
-    TrustedProgram,
-}
-
 /// The invoking Agent's **frozen admitted execution profile** — the only
 /// parent-side contribution to the dynamic delegation ceiling (Issue #258).
 ///
@@ -886,8 +840,8 @@ impl InvokingAgentAuthority {
 /// One complete resolution request (Issue #258).
 ///
 /// Every input the frozen contract depends on is named here explicitly, so
-/// both launch sites reach the same algorithm with the same shape and neither
-/// can smuggle in an implicit authority source.
+/// dynamic delegation cannot introduce an implicit authority source. Static
+/// Workflow admission freezes composition separately through the shared profile resolver.
 pub struct SubagentResolution<'a> {
     /// The invoking attempt's immutable runtime resource generation.
     pub resources: &'a RuntimeResourceSnapshot,
@@ -897,21 +851,82 @@ pub struct SubagentResolution<'a> {
     pub attempt_model: &'a SessionModelConfig,
     /// The admitted model binding authority of that same generation.
     pub models: &'a ModelBindingRegistry,
-    /// The independent profile-admission domain of this launch site.
-    pub domain: SubagentDomain,
     /// The invocation-scoped capability override, when the caller supplied
     /// one. `None` and an empty override are deliberately equivalent.
     pub invocation: Option<&'a SubagentInvocationOverride>,
-    /// The caller's typed delegation authority mode.
-    pub authority: SubagentOverrideAuthority,
     /// The invoking Agent's frozen admitted execution profile. It is read
-    /// only under [`SubagentOverrideAuthority::DelegatedByModel`].
+    /// when authorizing model-generated overrides.
     pub invoking: &'a InvokingAgentAuthority,
 }
 
-/// The one resolution core shared by every capability origin and by both
-/// resolution callers (invocation-time resolution and admission-time
-/// validation of a prepared generation).
+/// Shared frozen child composition, independent of dynamic or static authority.
+/// Capability selection has already resolved; only attempt model binding remains.
+#[derive(Debug, Clone)]
+pub(crate) struct FrozenAgentComposition {
+    definition: NamedAgentDefinition,
+    tools: Vec<ResolvedSubagentTool>,
+    skills: Vec<ResolvedSubagentSkill>,
+    extensions: crate::extensions::NativeAgentExtensions,
+    materialization: ResolvedSubagentMaterialization,
+}
+
+impl FrozenAgentComposition {
+    pub(crate) fn freeze(
+        definition: &NamedAgentDefinition,
+        profile: &crate::runtime::agent_profile::ResolvedAgentProfile,
+        skills: &crate::skills::SkillSnapshot,
+        servers: &crate::tools::mcp::McpServerBindings,
+    ) -> Result<Self, SubagentResolutionError> {
+        let tools = profile
+            .tools
+            .iter()
+            .map(|definition| {
+                let selector = definition.origin.source().map_or_else(
+                    || AgentToolSelection::Builtin {
+                        name: definition.name.clone(),
+                    },
+                    |source_id| AgentToolSelection::Source {
+                        source_id,
+                        name: definition.name.clone(),
+                    },
+                );
+                freeze_tool(&selector, definition)
+            })
+            .collect::<Vec<_>>();
+        Ok(Self {
+            definition: definition.clone(),
+            skills: resolve_skills(&profile.skills, skills)?,
+            extensions: profile.extensions.clone(),
+            materialization: resolve_materialization(&tools, servers)?,
+            tools,
+        })
+    }
+
+    pub(crate) fn bind(
+        &self,
+        resources: &RuntimeResourceSnapshot,
+        attempt_model: &SessionModelConfig,
+        models: &ModelBindingRegistry,
+    ) -> Result<ResolvedSubagentSpec, SubagentResolutionError> {
+        let definition = &self.definition;
+        Ok(ResolvedSubagentSpec {
+            agent: definition.name().clone(),
+            definition_digest: definition.digest().clone(),
+            execution_deadline: definition.execution_deadline(),
+            workspace_policy: definition.workspace_policy(),
+            instructions: definition.instructions().to_owned(),
+            model: resolve_model(definition, attempt_model, models)?,
+            tools: self.tools.clone(),
+            skills: self.skills.clone(),
+            project_instructions: resolve_project_instructions(definition, resources),
+            materialization: self.materialization.clone(),
+            extensions: self.extensions.clone(),
+        })
+    }
+}
+
+/// Dynamic delegation and named-profile authoring validation. Static Workflow
+/// admission shares `AgentProfile` replacement/resolution and `FrozenAgentComposition`.
 pub struct SubagentResolver;
 
 impl SubagentResolver {
@@ -953,10 +968,7 @@ impl SubagentResolver {
     ) -> Result<ResolvedSubagentSpec, SubagentResolutionError> {
         let resources = request.resources;
         let catalog = resources.subagents();
-        let admission = match request.domain {
-            SubagentDomain::Main => resources.delegatable_agents(),
-            SubagentDomain::Workflow => resources.subagent_workflow_admission(),
-        };
+        let admission = resources.delegatable_agents();
         let definition = catalog
             .get(request.agent)
             .filter(|_| admission.contains(request.agent))
@@ -1000,12 +1012,7 @@ impl SubagentResolver {
                 reason: unsupported.reason.into(),
             });
         }
-        let mut profile = definition.profile().clone();
-        profile.tools = selected_tools;
-        // A per-invocation replacement is always an exact identity list: it
-        // replaces the whole Skill dimension, and it is never a deny-list.
-        profile.skills = crate::runtime::agent_profile::AgentSkillSelection::Exact(selected_skills);
-        profile.extensions = extensions;
+        let profile = invocation.effective_profile(definition);
         let resolved = if invocation.is_empty() {
             resources
                 .resolved_agent(definition.name())
@@ -1022,66 +1029,29 @@ impl SubagentResolver {
                     availability: resources.capability_availability(),
                     skills: capability.skills(),
                     agents: &catalog.names().into_iter().cloned().collect(),
-                    workflows: resources.workflows().admitted(),
+                    workflows: &resources.workflows().enabled_ids(),
                     scope: AgentScope::OneShotChild,
                 },
             )
         };
-        let tools = resolved
-            .tools
-            .iter()
-            .map(|definition| {
-                let selector = definition.origin.source().map_or_else(
-                    || AgentToolSelection::Builtin {
-                        name: definition.name.clone(),
-                    },
-                    |source_id| AgentToolSelection::Source {
-                        source_id,
-                        name: definition.name.clone(),
-                    },
-                );
-                freeze_tool(&selector, definition)
-            })
-            .collect::<Vec<_>>();
-        let skills = resolve_skills(&resolved.skills, capability.skills())?;
-        let extensions = resolved.extensions;
-
-        if request.authority == SubagentOverrideAuthority::DelegatedByModel {
-            authorize_delegation(
-                invocation,
-                definition,
-                &tools,
-                &skills,
-                &extensions,
-                capability.available_tools(),
-                capability.skills(),
-                resources.capability_availability(),
-                request.invoking,
-            )?;
-        }
-        if let Some(unsupported) = crate::extensions::unsupported_child_scope(&extensions) {
-            return Err(SubagentResolutionError::ExtensionScopeUnsupported {
-                extension: unsupported.extension.to_owned(),
-                reason: unsupported.reason.to_owned(),
-            });
-        }
-
-        let model = resolve_model(definition, request.attempt_model, request.models)?;
-        let project_instructions = resolve_project_instructions(definition, resources);
-        let materialization = resolve_materialization(&tools, capability.mcp_servers())?;
-        Ok(ResolvedSubagentSpec {
-            agent: definition.name().clone(),
-            definition_digest: definition.digest().clone(),
-            execution_deadline: definition.execution_deadline(),
-            workspace_policy: definition.workspace_policy(),
-            instructions: definition.instructions().to_owned(),
-            model,
-            tools,
-            skills,
-            project_instructions,
-            materialization,
-            extensions,
-        })
+        let frozen = FrozenAgentComposition::freeze(
+            definition,
+            &resolved,
+            capability.skills(),
+            capability.mcp_servers(),
+        )?;
+        authorize_delegation(
+            invocation,
+            definition,
+            &frozen.tools,
+            &frozen.skills,
+            &frozen.extensions,
+            capability.available_tools(),
+            capability.skills(),
+            resources.capability_availability(),
+            request.invoking,
+        )?;
+        frozen.bind(resources, request.attempt_model, request.models)
     }
 
     /// Validates every definition of a prepared catalog against the

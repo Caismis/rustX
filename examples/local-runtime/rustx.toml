@@ -18,7 +18,6 @@ stream_idle_timeout_ms = 15000
 # Runtime child capacity; Workflow static admission remains separate.
 [subagents]
 max_concurrent = 4
-workflow = ["reviewer", "planner", "implementer"]
 
 [environment]
 RUSTX_EXAMPLE_MODE = "local-runtime"

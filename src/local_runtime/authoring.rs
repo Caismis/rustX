@@ -101,7 +101,9 @@ partial!(ToolDeadlineLayer {
     hard_deadline_ms: u64,
     idle_liveness_ms: IdleLiveness
 });
-partial!(SubagentsLayer { max_concurrent: usize, workflow: Vec<crate::runtime::subagent::SubagentName> });
+partial!(SubagentsLayer {
+    max_concurrent: usize
+});
 
 partial!(NativeToolsLayer {
     read: NativePolicyOverrideDocument,
@@ -304,7 +306,7 @@ merge_record!(
     [],
     []
 );
-merge_record!(SubagentsLayer, [max_concurrent, workflow], [], []);
+merge_record!(SubagentsLayer, [max_concurrent], [], []);
 merge_record!(SkillsLayer, [sources], [], []);
 merge_record!(
     AgentProfileLayer,
@@ -465,7 +467,6 @@ impl RuntimeLayer {
             "agent.extensions.goal",
             "subagents.max_concurrent",
             "agent.agents",
-            "subagents.workflow",
             "agent.workflows",
             "native_tools.read",
             "native_tools.write",
@@ -567,7 +568,7 @@ impl RuntimeLayer {
         }
         if let Some(layer) = self.subagents {
             let mut subagents = config.subagents;
-            apply!(layer, subagents, max_concurrent, workflow);
+            apply!(layer, subagents, max_concurrent);
             config.subagents = subagents;
         }
         if let Some(layer) = self.skills {

@@ -14,7 +14,7 @@ async fn cfg237_human_plan_template_uses_native_review_and_settlement() {
     let program = super::super::templates::template("human_plan");
     let mut task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 program,
                 ToolCallId::new("template-review"),
                 context,
@@ -99,7 +99,7 @@ fn human_definition(question: bool) -> WorkflowDefinition {
     } else {
         json!({"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[]})
     };
-    serde_json::from_value(json!({"description":"Human business decision","timeout_ms":100,"tools":if question {json!([{"origin":"builtin","name":"ask_user"}])} else {json!([])},"block":{
+    serde_json::from_value(json!({"description":"Human business decision","timeout_ms":100,"block":{
         "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),"output":result,"entry":"human",
         "nodes":{"human":node,"branch":{"type":"branch","condition":{"type":"boolean","value":{"type":"reference","path":["human",if question {"cancelled"} else {"accepted"}]}}},"yes":{"type":"return","output":{"type":"reference","path":["human"]}},"no":{"type":"return","output":{"type":"reference","path":["human"]}}},
         "edges":[{"from":"human","to":"branch"},{"from":"branch","to":"yes","port":"true"},{"from":"branch","to":"no","port":"false"}]}})).unwrap()
@@ -157,7 +157,7 @@ async fn loop_review_and_questionnaire_reject_old_responses_and_allocate_fresh_i
         let definition = feedback_definition(question);
         let task = tokio::spawn(async move {
             runtime
-                .run_foreground(
+                .run_test_foreground(
                     Arc::new(compile_test(definition).unwrap()),
                     ToolCallId::new("loop-human"),
                     context,
@@ -230,7 +230,7 @@ async fn unavailable_loop_human_step_fails_without_exhaustion_or_reprompt() {
     let (_, cancellation) = workflow_cancellation();
     assert!(
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 Arc::new(compile_test(feedback_definition(false)).unwrap()),
                 ToolCallId::new("unavailable-loop"),
                 context,
@@ -303,7 +303,7 @@ async fn fixed_native_questions_and_plan_review_branch_without_model_or_history_
             let (_, cancellation) = workflow_cancellation();
             let task = tokio::spawn(async move {
                 runtime
-                    .run_foreground(
+                    .run_test_foreground(
                         human_program(question),
                         ToolCallId::new("outer"),
                         context,
@@ -397,7 +397,7 @@ async fn review_wrong_instance_subject_and_kind_leave_original_pending_detach_re
     let runtime = workflow_runtime(&plane);
     let task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 human_program(false),
                 ToolCallId::new("outer"),
                 context,
@@ -463,7 +463,7 @@ async fn review_provider_absence_audit_failures_and_cancel_before_response_are_n
         let runtime = workflow_runtime(&plane);
         let task = tokio::spawn(async move {
             runtime
-                .run_foreground(
+                .run_test_foreground(
                     human_program(false),
                     ToolCallId::new("outer"),
                     context,
@@ -512,7 +512,7 @@ async fn simultaneous_workflow_review_and_questionnaire_settle_only_their_origin
         let (_, cancellation) = workflow_cancellation();
         tasks.push(tokio::spawn(async move {
             runtime
-                .run_foreground(
+                .run_test_foreground(
                     human_program(question),
                     ToolCallId::new("outer"),
                     context,

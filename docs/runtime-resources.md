@@ -1,5 +1,7 @@
 # Runtime resources and executable authority
 
+See [Workflow admission and Agent selection](workflow-admission.md) for static capability ownership and atomic disable semantics.
+
 See [canonical named Agent resources](subagent-resources.md) for schema 8
 Agent files, discovery/admission, bounded roots, source provenance, and frozen
 reload/child contracts.

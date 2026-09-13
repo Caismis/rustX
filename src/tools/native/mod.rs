@@ -305,7 +305,23 @@ pub(crate) fn register_workflow_tools(
     runtime: &WorkflowRuntime,
     catalog: &WorkflowCatalog,
 ) -> Result<(), ToolRegistryError> {
-    for registration in workflow::registrations(runtime, catalog) {
+    register_workflow_registrations(registry, workflow::registrations(runtime, catalog))
+}
+
+/// Prepare source identity metadata off-side; never a published model registry.
+pub(crate) fn register_workflow_sources(
+    registry: &mut ToolRegistry,
+    runtime: &WorkflowRuntime,
+    catalog: &WorkflowCatalog,
+) -> Result<(), ToolRegistryError> {
+    register_workflow_registrations(registry, workflow::source_registrations(runtime, catalog))
+}
+
+fn register_workflow_registrations(
+    registry: &mut ToolRegistry,
+    registrations: Vec<NativeToolRegistration>,
+) -> Result<(), ToolRegistryError> {
+    for registration in registrations {
         let NativeToolRegistration {
             definition,
             executor,

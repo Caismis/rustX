@@ -177,15 +177,12 @@ pub struct SubagentsDocument {
     /// under already-committed children would either orphan ownership or
     /// silently lie about the bound.
     pub max_concurrent: usize,
-    /// Profiles admitted to Workflow Agent and Parallel nodes.
-    pub workflow: Vec<SubagentName>,
 }
 
 impl Default for SubagentsDocument {
     fn default() -> Self {
         Self {
             max_concurrent: DEFAULT_MAX_CONCURRENT_SUBAGENTS,
-            workflow: Vec::new(),
         }
     }
 }
@@ -646,7 +643,6 @@ impl CurrentRuntimeConfig {
             });
         }
         Self::validate_subagent_admission("agent.agents", &self.agent.agents)?;
-        Self::validate_subagent_admission("subagents.workflow", &self.subagents.workflow)?;
         Ok(())
     }
 
@@ -1905,17 +1901,16 @@ model = "p/m"
         let json = MINIMAL.replace(
             r#"agent_id = "agent-a""#,
             r#"agent_id = "agent-a"
-subagents = {  "workflow" = ["worker"] }"#,
+subagents = {  "max_concurrent" = 4 }"#,
         );
         let config = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect("valid");
         assert!(config.agent.agents.is_empty());
-        assert_eq!(config.subagents.workflow.len(), 1);
         assert!(config.agent.agents.is_empty());
 
         let defined_but_unadmitted = MINIMAL.replace(
             r#"agent_id = "agent-a""#,
             r#"agent_id = "agent-a"
-subagents = {  "workflow" = [] }"#,
+subagents = {  "max_concurrent" = 4 }"#,
         );
         assert!(CurrentRuntimeConfig::from_toml_slice(defined_but_unadmitted.as_bytes()).is_ok());
     }

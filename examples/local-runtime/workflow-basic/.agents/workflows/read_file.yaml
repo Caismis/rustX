@@ -1,6 +1,4 @@
 description: Read one explicitly supplied file through the native Read Tool.
-tools:
-  - {origin: builtin, name: read}
 timeout_ms: 30000
 block:
   input:

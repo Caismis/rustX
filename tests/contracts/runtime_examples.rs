@@ -155,15 +155,6 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
     );
     assert_eq!(
         config
-            .subagents
-            .workflow
-            .iter()
-            .map(rustx::runtime::subagent::SubagentName::as_str)
-            .collect::<Vec<_>>(),
-        vec!["reviewer", "planner", "implementer"]
-    );
-    assert_eq!(
-        config
             .agent
             .workflows
             .iter()
@@ -236,8 +227,6 @@ fn committed_example_skill_is_found_by_project_agents_discovery() {
 #[test]
 fn every_shipped_workflow_is_discovered_and_compiles() {
     use rustx::runtime::workflow::{WorkflowDefinition, WorkflowProgram};
-    let config = CurrentRuntimeConfig::from_toml_slice(&read_example("rustx.toml")).unwrap();
-    let profiles = config.subagents.workflow.iter().cloned().collect();
     let directory = examples_root().join("workspace/.agents/workflows");
     let mut paths = std::fs::read_dir(&directory)
         .unwrap()
@@ -253,23 +242,14 @@ fn every_shipped_workflow_is_discovered_and_compiles() {
         .unwrap();
         let definition: WorkflowDefinition =
             serde_yaml::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        WorkflowProgram::compile(id.clone(), definition, &profiles)
+        WorkflowProgram::compile(id.clone(), definition)
             .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-    }
-    for profile in &config.subagents.workflow {
-        assert!(
-            examples_root()
-                .join(format!("workspace/.agents/agents/{profile}.toml"))
-                .is_file()
-        );
     }
 }
 
 #[test]
 fn reference_authoring_errors_fail_before_execution() {
     use rustx::runtime::workflow::{WorkflowDefinition, WorkflowId, WorkflowProgram};
-    let config = CurrentRuntimeConfig::from_toml_slice(&read_example("rustx.toml")).unwrap();
-    let profiles = config.subagents.workflow.iter().cloned().collect();
     let source: serde_json::Value = serde_yaml::from_slice(&read_example(
         "workspace/.agents/workflows/implement_and_review.yaml",
     ))
@@ -278,14 +258,6 @@ fn reference_authoring_errors_fail_before_execution() {
         (
             "/block/nodes/plan/input/brief/path",
             serde_json::json!(["args", "missing"]),
-        ),
-        (
-            "/block/nodes/plan/profile",
-            serde_json::json!("unavailable_profile"),
-        ),
-        (
-            "/block/nodes/repair/body/nodes/check/selector/name",
-            serde_json::json!("unadmitted_tool"),
         ),
         (
             "/block/nodes/repair/body/nodes/implement/input/plan/path",
@@ -308,7 +280,6 @@ fn reference_authoring_errors_fail_before_execution() {
         let error = WorkflowProgram::compile(
             WorkflowId::parse("implement_and_review").unwrap(),
             definition,
-            &profiles,
         )
         .unwrap_err();
         let diagnostic = error.to_string();

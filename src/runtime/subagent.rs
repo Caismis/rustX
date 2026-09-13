@@ -191,8 +191,8 @@ pub use registry::{
 };
 pub use resolver::{
     InvokingAgentAuthority, ResolvedSubagentSkill, ResolvedSubagentSpec, ResolvedSubagentTool,
-    SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION, SubagentDomain, SubagentExecutionProfileDigest,
-    SubagentOverrideAuthority, SubagentResolution, SubagentResolutionError, SubagentResolver,
+    SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION, SubagentExecutionProfileDigest, SubagentResolution,
+    SubagentResolutionError, SubagentResolver,
 };
 
 use std::sync::Arc;
@@ -351,41 +351,43 @@ impl AttemptSubagentContext {
             agent,
             attempt_model: &self.inner.model,
             models: &self.inner.models,
-            domain: SubagentDomain::Main,
+
             invocation,
-            authority: SubagentOverrideAuthority::DelegatedByModel,
+
             invoking: &self.inner.invoking,
         })
     }
 
-    /// Resolves one named profile for a Workflow `AgentRun`, with the node's
-    /// optional **trusted static** invocation override, using the independent
-    /// Workflow admission set.
-    ///
-    /// A Workflow override is compiled program data validated against the
-    /// Workflow's own admitted generation, so it is not bounded by the
-    /// invoking main model's narrower active tool set. The authority mode is
-    /// again fixed by the launch site and unreachable from model output.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`SubagentResolutionError`] when the profile is not
-    /// Workflow-admitted or its frozen resources cannot be resolved.
-    pub fn resolve_workflow(
+    /// Bind attempt model inputs to previously admitted static child capabilities.
+    pub(crate) fn bind_workflow_agent(
         &self,
-        agent: &SubagentName,
-        invocation: Option<&SubagentInvocationOverride>,
+        agent: &resolver::FrozenAgentComposition,
     ) -> Result<ResolvedSubagentSpec, SubagentResolutionError> {
-        SubagentResolver::resolve(&SubagentResolution {
-            resources: &self.inner.resources,
-            agent,
-            attempt_model: &self.inner.model,
-            models: &self.inner.models,
-            domain: SubagentDomain::Workflow,
-            invocation,
-            authority: SubagentOverrideAuthority::TrustedProgram,
-            invoking: &self.inner.invoking,
-        })
+        agent.bind(&self.inner.resources, &self.inner.model, &self.inner.models)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_test_workflow(&self, program: &super::workflow::WorkflowProgram) -> Self {
+        let mut catalog = super::workflow::WorkflowCatalog::new([program.clone()]).unwrap();
+        let resources = self.resources();
+        catalog.admit(
+            resources.capability().available_tools(),
+            resources.capability_availability(),
+            resources.capability().skills(),
+            resources.subagents(),
+            resources.capability().mcp_servers(),
+        );
+        Self {
+            inner: Arc::new(AttemptSubagentContextInner {
+                attempt_id: self.inner.attempt_id.clone(),
+                resources: Arc::new((**resources).clone().with_workflow_catalog(catalog)),
+                model: self.inner.model.clone(),
+                models: self.inner.models.clone(),
+                approval_mode: self.inner.approval_mode,
+                invoking: self.inner.invoking.clone(),
+            }),
+            native: self.native.clone(),
+        }
     }
 
     /// The bounded model-facing routing catalog of this generation.

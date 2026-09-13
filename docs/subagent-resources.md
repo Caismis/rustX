@@ -285,7 +285,7 @@ resource, with no field-level merging. Each directory scan has a 1024-entry
 bound and the resulting catalog obeys the native Agent count bound. Incidental
 non-TOML files do not define Agents; malformed canonical TOML rejects the candidate.
 
-`agent.agents` and `subagents.workflow` remain independent selection lists.
+`agent.agents` selects dynamic delegation; Workflow YAML owns static Agent references.
 They resolve against the discovered catalog. Neither selection bypasses source
 authority, capability validation or invocation approval.
 
@@ -316,10 +316,11 @@ guidance is explicit and ordered after inherited guidance.
 `rustx config check` uses the same role loader as runtime preparation. It checks
 file bounds, trust, strict TOML and native model contracts. Unavailable profile
 capabilities produce typed warnings and suppression during generation resolution.
-Workflow static admission retains its separate contract. It performs no model, Tool, Python,
-MCP, package-preparation or network work, creates no Session/runtime state, and
-writes no trust. Unknown online Tool identities remain deferred to their source
-owner rather than being invented by static analysis.
+Offline checking performs no model, Tool, Python, MCP, package-preparation or
+network work, creates no Session/runtime state, and writes no trust. Online
+identities remain unresolved in that prospective report. Runtime Workflow
+admission checks the complete candidate generation after source preparation;
+any required dependency failure disables the whole program.
 
 `rustx config show --sources` reports prospective `roles` keyed by identity:
 `identity`, `selected` path, `layer` (`user` or `project`), and optional

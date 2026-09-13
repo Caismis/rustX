@@ -66,7 +66,6 @@ keep_recent_tokens = 8192
 
 [subagents]
 max_concurrent = 4
-workflow = []
 
 [subagents.roles]
 [subagents.roles.explore]
@@ -92,7 +91,6 @@ keep_recent_tokens = 8192
 
 [subagents]
 max_concurrent = 4
-workflow = []
 
 [subagents.roles]
 [subagents.roles.explore]

@@ -26,6 +26,7 @@ pub use crate::tools::executor::WORKFLOW_OUTPUT_TOOL_NAME;
 
 use super::subagent::SubagentName;
 
+mod admission;
 mod execution;
 pub mod inspection;
 pub mod read_model;
@@ -289,9 +290,6 @@ pub struct WorkflowDefinition {
     pub workspace: Option<WorkflowWorkspace>,
     /// The model-facing description of the workflow Tool.
     pub description: String,
-    /// Explicit capability admission, independent of main model exposure.
-    #[serde(default)]
-    pub tools: BTreeSet<crate::capabilities::selection::ExactToolSelector>,
     /// Trusted finite total foreground lifetime, including descendant waits.
     #[serde(default = "default_workflow_timeout_ms")]
     pub timeout_ms: u64,
@@ -554,6 +552,10 @@ pub struct WorkflowProgram {
     retained_bound: usize,
     tools: BTreeSet<crate::capabilities::selection::ExactToolSelector>,
     timeout_ms: u64,
+    frozen_tools: BTreeMap<
+        crate::capabilities::selection::ExactToolSelector,
+        crate::tools::types::ToolDefinition,
+    >,
 }
 
 /// Immutable compiled graph shared by root, Parallel branches and Loop bodies.
@@ -578,13 +580,12 @@ impl WorkflowProgram {
     /// # Errors
     ///
     /// Returns a [`WorkflowCompileError`] when the definition's graph,
-    /// schemas, references, or admitted profiles are invalid.
+    /// schemas, references, or override authoring are invalid.
     pub fn compile(
         id: WorkflowId,
         definition: WorkflowDefinition,
-        workflow_profiles: &BTreeSet<SubagentName>,
     ) -> Result<Self, WorkflowCompileError> {
-        compile_program(id, definition, workflow_profiles)
+        compile_program(id, definition)
     }
 
     /// The configured identity.
@@ -632,6 +633,26 @@ impl WorkflowProgram {
         &self.block.nodes
     }
 
+    pub(crate) fn agent_nodes(&self) -> Vec<&WorkflowAgentProgram> {
+        fn walk<'a>(block: &'a WorkflowBlockProgram, found: &mut Vec<&'a WorkflowAgentProgram>) {
+            for node in block.nodes.values() {
+                match node {
+                    WorkflowNodeProgram::Agent(agent) => found.push(agent),
+                    WorkflowNodeProgram::Loop { body, .. } => walk(body, found),
+                    WorkflowNodeProgram::Parallel { branches, .. } => {
+                        for branch in branches.values() {
+                            walk(&branch.block, found);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut found = Vec::new();
+        walk(&self.block, &mut found);
+        found
+    }
+
     /// The compiled outgoing edges of a node.
     #[must_use]
     pub fn outgoing(&self, node: &str) -> &[WorkflowEdgeProgram] {
@@ -676,6 +697,7 @@ pub enum WorkflowNodeProgram {
 /// A compiled `AgentRun` template.
 #[derive(Debug, Clone)]
 pub struct WorkflowAgentProgram {
+    pub(crate) resolved: Option<Arc<crate::runtime::subagent::resolver::FrozenAgentComposition>>,
     /// The admitted native profile.
     pub profile: SubagentName,
     /// The fixed task string.
@@ -707,108 +729,142 @@ pub struct WorkflowEdgeProgram {
     pub port: WorkflowPort,
 }
 
-/// An immutable discovered workflow catalog.
+/// A discovered source and its generation-owned admission decision.
+#[derive(Debug, Clone)]
+pub struct WorkflowEntry {
+    pub source: Arc<WorkflowProgram>,
+    pub admission: WorkflowAdmission,
+}
+
+/// Only Enabled carries a frozen executable program. Discovery alone is inert.
+#[derive(Debug, Clone)]
+pub enum WorkflowAdmission {
+    Enabled(Arc<WorkflowProgram>),
+    Disabled(Vec<WorkflowAdmissionDiagnostic>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorkflowAdmissionDiagnostic {
+    pub path: String,
+    pub reason: WorkflowDependencyFailure,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
+pub enum WorkflowDependencyFailure {
+    NotAdmitted,
+    Materialization(String),
+    Agent(crate::runtime::agent_profile::AgentProfileDiagnostic),
+    Tool(crate::capabilities::selection::ToolSelectionError),
+    IneligibleTool(crate::capabilities::selection::ExactToolSelector),
+}
+
+/// One immutable catalog; enabled identities are derived, never separately authored.
 #[derive(Debug, Clone, Default)]
 pub struct WorkflowCatalog {
-    definitions: BTreeMap<WorkflowId, Arc<WorkflowProgram>>,
-    admitted: BTreeSet<WorkflowId>,
+    entries: BTreeMap<WorkflowId, WorkflowEntry>,
 }
 
 impl WorkflowCatalog {
-    /// Creates a catalog and validates the model-visible admission subset.
+    /// Discovers structurally compiled sources. Admission is a separate candidate phase.
     ///
     /// # Errors
-    ///
-    /// Returns a [`WorkflowCatalogError`] for duplicate definitions,
-    /// duplicate model-visible ids, or an unknown model-visible id.
+    /// Rejects duplicate identities or an oversized catalog.
     pub fn new(
         programs: impl IntoIterator<Item = WorkflowProgram>,
-        admitted: impl IntoIterator<Item = WorkflowId>,
     ) -> Result<Self, WorkflowCatalogError> {
-        let mut definitions = BTreeMap::new();
+        let mut entries = BTreeMap::new();
         for program in programs {
-            if definitions
-                .insert(program.id.clone(), Arc::new(program))
+            if entries
+                .insert(
+                    program.id.clone(),
+                    WorkflowEntry {
+                        source: Arc::new(program),
+                        admission: WorkflowAdmission::Disabled(vec![WorkflowAdmissionDiagnostic {
+                            path: "block".into(),
+                            reason: WorkflowDependencyFailure::NotAdmitted,
+                        }]),
+                    },
+                )
                 .is_some()
             {
                 return Err(WorkflowCatalogError::DuplicateDefinition);
             }
-        }
-        let mut admitted_ids = BTreeSet::new();
-        for id in admitted {
-            if !admitted_ids.insert(id.clone()) {
-                return Err(WorkflowCatalogError::DuplicateAdmission(id));
+            if entries.len() > MAX_WORKFLOW_DEFINITIONS {
+                return Err(WorkflowCatalogError::TooManyDefinitions);
             }
         }
-        let admitted = admitted_ids;
-        if let Some(unknown) = admitted.iter().find(|id| !definitions.contains_key(*id)) {
-            return Err(WorkflowCatalogError::UnknownAdmission(unknown.clone()));
-        }
-        Ok(Self {
-            definitions,
-            admitted,
-        })
+        Ok(Self { entries })
     }
 
-    /// The empty catalog.
     #[must_use]
     pub fn empty() -> Self {
         Self::default()
     }
 
-    /// Looks up a discovered immutable program.
+    /// Discovered source, including disabled programs, for inert inspection.
     #[must_use]
     pub fn get(&self, id: &WorkflowId) -> Option<&Arc<WorkflowProgram>> {
-        self.definitions.get(id)
+        self.entries.get(id).map(|entry| &entry.source)
     }
 
-    /// All discovered programs in identity order.
     #[must_use]
-    pub fn definitions(&self) -> &BTreeMap<WorkflowId, Arc<WorkflowProgram>> {
-        &self.definitions
+    pub fn entries(&self) -> &BTreeMap<WorkflowId, WorkflowEntry> {
+        &self.entries
     }
 
-    /// The explicitly model-visible workflow ids.
     #[must_use]
-    pub fn admitted(&self) -> &BTreeSet<WorkflowId> {
-        &self.admitted
+    pub fn enabled_ids(&self) -> BTreeSet<WorkflowId> {
+        self.entries
+            .iter()
+            .filter_map(|(id, entry)| {
+                matches!(entry.admission, WorkflowAdmission::Enabled(_)).then_some(id.clone())
+            })
+            .collect()
     }
 
-    /// Whether this catalog has no discovered definitions.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.definitions.is_empty()
-    }
-}
-
-/// A workflow catalog admission failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WorkflowCatalogError {
-    /// Two compiled programs used one configured identity.
-    DuplicateDefinition,
-    /// A model-visible id is not discovered.
-    UnknownAdmission(WorkflowId),
-    /// A model-visible id was repeated in the admission list.
-    DuplicateAdmission(WorkflowId),
-}
-
-impl fmt::Display for WorkflowCatalogError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DuplicateDefinition => formatter.write_str("duplicate workflow definition id"),
-            Self::UnknownAdmission(id) => {
-                write!(
-                    formatter,
-                    "Workflow admission names unknown workflow {id:?}"
-                )
-            }
-            Self::DuplicateAdmission(id) => {
-                write!(formatter, "Workflow admission repeats workflow {id:?}")
-            }
+    /// The common direct/native execution gate; it never rediscovers dependencies.
+    ///
+    /// # Errors
+    /// Returns the generation's retained disabled reason or an unknown identity.
+    pub fn executable(&self, id: &WorkflowId) -> Result<&Arc<WorkflowProgram>, WorkflowRunError> {
+        match self.entries.get(id) {
+            Some(WorkflowEntry {
+                admission: WorkflowAdmission::Enabled(program),
+                ..
+            }) => Ok(program),
+            Some(WorkflowEntry {
+                admission: WorkflowAdmission::Disabled(diagnostics),
+                ..
+            }) => Err(WorkflowRunError::Disabled {
+                workflow: id.clone(),
+                diagnostics: diagnostics.clone(),
+            }),
+            None => Err(WorkflowRunError::InvalidProgram(format!(
+                "Workflow {id} is not discovered"
+            ))),
         }
     }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkflowCatalogError {
+    DuplicateDefinition,
+    TooManyDefinitions,
+}
+impl fmt::Display for WorkflowCatalogError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::DuplicateDefinition => "duplicate workflow definition id",
+            Self::TooManyDefinitions => "too many Workflow definitions",
+        })
+    }
+}
 impl std::error::Error for WorkflowCatalogError {}
 
 /// A compile-time graph/type/reference rejection.
@@ -836,8 +892,6 @@ pub enum WorkflowCompileError {
     InvalidReference(String),
     /// A reference has an incompatible statically known schema.
     IncompatibleReference(String),
-    /// An Agent profile is not workflow-admitted.
-    ProfileNotAdmitted { node: String, profile: SubagentName },
 }
 
 impl fmt::Display for WorkflowCompileError {
@@ -857,10 +911,6 @@ impl fmt::Display for WorkflowCompileError {
                 "workflow graph contains a cycle; residual node {node:?}"
             ),
             Self::Unreachable(node) => write!(formatter, "workflow node {node:?} is unreachable"),
-            Self::ProfileNotAdmitted { node, profile } => write!(
-                formatter,
-                "workflow Agent {node:?} profile {profile:?} is not admitted by subagents.workflow"
-            ),
         }
     }
 }
@@ -904,7 +954,6 @@ impl WorkflowCompileError {
 fn compile_program(
     id: WorkflowId,
     definition: WorkflowDefinition,
-    workflow_profiles: &BTreeSet<SubagentName>,
 ) -> Result<WorkflowProgram, WorkflowCompileError> {
     if definition.timeout_ms == 0 || definition.timeout_ms > 86_400_000 {
         return Err(
@@ -933,31 +982,9 @@ fn compile_program(
         "{:x}",
         Sha256::digest(serde_json::to_vec(&definition).expect("validated definition"))
     );
-    // A Workflow's admitted capability set is the *ordinary* capability
-    // plane. An extension-provided Tool is not selectable there — a Workflow
-    // Agent node composes it by composing the extension, and a Workflow's own
-    // Tool nodes never get one — so naming it is a static authoring error
-    // rather than a selector that merely fails to resolve later (Issue #259).
-    for selector in &definition.tools {
-        if let crate::capabilities::selection::ExactToolSelector::Builtin { name } = selector
-            && let Some(extension) = crate::capabilities::extension_provided_tool(name)
-        {
-            return Err(WorkflowCompileError::InvalidField(format!(
-                "builtin:{name} is provided by the {extension:?} Agent Extension, not by \
-                 ordinary Tool selection; a Workflow cannot admit it as a capability"
-            ))
-            .at("tools"));
-        }
-    }
     let mut total_nodes = 0;
-    let block = compile_block(
-        definition.block,
-        workflow_profiles,
-        &definition.tools,
-        Vec::new(),
-        &mut total_nodes,
-    )
-    .map_err(|error| error.at("block"))?;
+    let block = compile_block(definition.block, Vec::new(), &mut total_nodes)
+        .map_err(|error| error.at("block"))?;
     let retained_bound = execution::static_retained_bound(&block);
     let (execution_bound, agent_bound) =
         execution::static_execution_bound(&block).map_err(|e| e.at("block"))?;
@@ -972,20 +999,42 @@ fn compile_program(
         workspace: definition.workspace,
         id,
         description: definition.description,
+        tools: collect_tool_selectors(&block),
         block,
         execution_bound,
         agent_bound,
         retained_bound,
-        tools: definition.tools,
         timeout_ms: definition.timeout_ms,
+        frozen_tools: BTreeMap::new(),
     })
+}
+
+fn collect_tool_selectors(
+    block: &WorkflowBlockProgram,
+) -> BTreeSet<crate::capabilities::selection::ExactToolSelector> {
+    let mut selectors = BTreeSet::new();
+    for node in block.nodes.values() {
+        match node {
+            WorkflowNodeProgram::Tool { selector, .. } => {
+                selectors.insert(selector.clone());
+            }
+            WorkflowNodeProgram::Loop { body, .. } => {
+                selectors.extend(collect_tool_selectors(body));
+            }
+            WorkflowNodeProgram::Parallel { branches, .. } => {
+                for branch in branches.values() {
+                    selectors.extend(collect_tool_selectors(&branch.block));
+                }
+            }
+            _ => {}
+        }
+    }
+    selectors
 }
 
 #[allow(clippy::too_many_lines)]
 fn compile_block(
     definition: WorkflowBlock,
-    workflow_profiles: &BTreeSet<SubagentName>,
-    admitted_tools: &BTreeSet<crate::capabilities::selection::ExactToolSelector>,
     path: Vec<String>,
     total_nodes: &mut usize,
 ) -> Result<WorkflowBlockProgram, WorkflowCompileError> {
@@ -1189,9 +1238,7 @@ fn compile_block(
                 child_path.extend([node_id.clone(), "body".into()]);
                 let body = compile_block(
                     *body.clone(),
-                    workflow_profiles,
-                    admitted_tools,
-                    child_path,
+                                child_path,
                     total_nodes,
                 ).map_err(|e| e.at("body"))?;
                 let output_schema = execution::loop_result_schema(&body.output_schema);
@@ -1244,9 +1291,11 @@ fn compile_block(
                 arguments,
                 result,
             } => {
-                if !admitted_tools.contains(selector) {
+                if let crate::capabilities::selection::ExactToolSelector::Builtin { name } = selector
+                    && let Some(extension) = crate::capabilities::extension_provided_tool(name)
+                {
                     return Err(WorkflowCompileError::InvalidField(format!(
-                        "Tool {node_id} selects unadmitted capability {selector}"
+                        "builtin:{name} belongs to Agent Extension {extension}, not ordinary Tool selection"
                     )).at("selector"));
                 }
                 let input = value_schema(arguments, &available_before, &node_id, 0).map_err(|e| e.at("arguments"))?;
@@ -1275,16 +1324,15 @@ fn compile_block(
                 invocation_override,
             } => {
                 validate_agent(
-                    profile,
                     task,
                     input,
                     output,
                     invocation_override.as_ref(),
-                    workflow_profiles,
-                    &available_before,
+                                &available_before,
                     &node_id,
                 )?;
                 let agent = WorkflowAgentProgram {
+                    resolved: None,
                     profile: profile.clone(),
                     task: task.clone(),
                     input: input.clone(),
@@ -1340,9 +1388,7 @@ fn compile_block(
                     child_path.extend([node_id.clone(), key.clone()]);
                     let block = compile_block(
                         branch.block.clone(),
-                        workflow_profiles,
-                        admitted_tools,
-                        child_path,
+                                            child_path,
                         total_nodes,
                     ).map_err(|e| e.at(format!("branches.{key}.block")))?;
                     output_properties.insert(key.clone(), block.output_schema.clone());
@@ -1678,12 +1724,10 @@ fn validate_workflow_schema_at(
 
 #[allow(clippy::too_many_arguments)] // one Agent node's complete static contract
 fn validate_agent(
-    profile: &SubagentName,
     task: &str,
     input: &BTreeMap<String, WorkflowValue>,
     output: &Value,
     invocation_override: Option<&crate::runtime::subagent::SubagentInvocationOverride>,
-    workflow_profiles: &BTreeSet<SubagentName>,
     available: &SchemaMap,
     node: &str,
 ) -> Result<(), WorkflowCompileError> {
@@ -1698,13 +1742,6 @@ fn validate_agent(
             ))
             .at(crate::runtime::subagent::SubagentInvocationOverride::dimension_path(&error))
         })?;
-    }
-    if !workflow_profiles.contains(profile) {
-        return Err(WorkflowCompileError::ProfileNotAdmitted {
-            node: node.to_owned(),
-            profile: profile.clone(),
-        }
-        .at("profile"));
     }
     if task.trim().is_empty() || task.len() > 32 * 1024 {
         return Err(WorkflowCompileError::InvalidField(format!(
@@ -2239,6 +2276,20 @@ impl WorkflowRuntime {
         }
     }
 
+    #[cfg(test)]
+    async fn run_test_foreground(
+        &self,
+        program: Arc<WorkflowProgram>,
+        run_id: ToolCallId,
+        context: crate::runtime::subagent::AttemptSubagentContext,
+        input: Value,
+        cancellation: crate::runtime::cancellation::ExecutionCancellation,
+    ) -> Result<Value, WorkflowRunError> {
+        let context = context.with_test_workflow(&program);
+        self.run_foreground(program.id().clone(), run_id, context, input, cancellation)
+            .await
+    }
+
     /// Executes one immutable foreground Workflow program.
     ///
     /// The returned value is suitable for the parent Workflow `ToolResult`.
@@ -2253,12 +2304,17 @@ impl WorkflowRuntime {
     #[allow(clippy::too_many_lines)] // One admission and terminal resource-settlement protocol.
     pub async fn run_foreground(
         &self,
-        program: Arc<WorkflowProgram>,
+        workflow: WorkflowId,
         run_id: ToolCallId,
         context: crate::runtime::subagent::AttemptSubagentContext,
         input: Value,
         cancellation: crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<Value, WorkflowRunError> {
+        let program = context
+            .resources()
+            .workflows()
+            .executable(&workflow)?
+            .clone();
         #[cfg(test)]
         crate::local_runtime::static_effects::observe(
             crate::local_runtime::static_effects::Effect::WorkflowRun,
@@ -2326,52 +2382,49 @@ impl WorkflowRuntime {
         let (execution, workspace, candidate_reference) = {
             let id = run.run_id.clone();
             let execute = async {
-                let execution = match tool::freeze(&program, &context) {
-                    Ok(tools) => {
-                        run.tools = tools;
-                        let admission =
-                            match execution::validate_commit(&program.block.input_schema, &input) {
-                                Ok(()) => {
-                                    if program.workspace.is_some() {
-                                        self.read_model.update(&run.run_id, |view| {
-                                            if !matches!(
-                                                view.state,
-                                                read_model::WorkflowState::Draining
-                                            ) {
-                                                view.state = read_model::WorkflowState::Waiting {
-                                                    reason: read_model::WorkflowWait::Workspace,
-                                                };
-                                            }
-                                        });
-                                    }
-                                    self.prepare_workspace(&run, &context, &cancellation).await
+                let execution = {
+                    run.tools = program.frozen_tools.clone();
+                    let admission =
+                        match execution::validate_commit(&program.block.input_schema, &input) {
+                            Ok(()) => {
+                                if program.workspace.is_some() {
+                                    self.read_model.update(&run.run_id, |view| {
+                                        if !matches!(
+                                            view.state,
+                                            read_model::WorkflowState::Draining
+                                        ) {
+                                            view.state = read_model::WorkflowState::Waiting {
+                                                reason: read_model::WorkflowWait::Workspace,
+                                            };
+                                        }
+                                    });
                                 }
-                                Err(error) => Err(error),
-                            };
-                        match admission {
-                            Ok(candidate) => {
-                                run.candidate = candidate;
-                                self.read_model.update(&run.run_id, |view| {
-                                    if !matches!(view.state, read_model::WorkflowState::Draining) {
-                                        view.state = read_model::WorkflowState::Running;
-                                    }
-                                });
-                                self.execute_block(
-                                    &run,
-                                    &program.block,
-                                    &context,
-                                    input.into(),
-                                    execution::Acceptance::default(),
-                                    vec![0],
-                                    &cancellation,
-                                )
-                                .await
-                                .map(|output| output.value.value.clone())
+                                self.prepare_workspace(&run, &context, &cancellation).await
                             }
                             Err(error) => Err(error),
+                        };
+                    match admission {
+                        Ok(candidate) => {
+                            run.candidate = candidate;
+                            self.read_model.update(&run.run_id, |view| {
+                                if !matches!(view.state, read_model::WorkflowState::Draining) {
+                                    view.state = read_model::WorkflowState::Running;
+                                }
+                            });
+                            self.execute_block(
+                                &run,
+                                &program.block,
+                                &context,
+                                input.into(),
+                                execution::Acceptance::default(),
+                                vec![0],
+                                &cancellation,
+                            )
+                            .await
+                            .map(|output| output.value.value.clone())
                         }
+                        Err(error) => Err(error),
                     }
-                    Err(error) => Err(error),
                 };
                 self.read_model.update(&run.run_id, |view| {
                     if !matches!(view.state, read_model::WorkflowState::Draining) {
@@ -2534,7 +2587,12 @@ impl WorkflowRuntime {
         WorkflowRunError,
     > {
         let resolved = context
-            .resolve_workflow(&agent.profile, agent.invocation_override.as_ref())
+            .bind_workflow_agent(
+                agent
+                    .resolved
+                    .as_ref()
+                    .expect("admission froze every Agent"),
+            )
             .map_err(|error| WorkflowRunError::ChildStart {
                 node: node_id.to_string(),
                 detail: bound_workflow_diagnostic(error.to_string()),
@@ -2834,6 +2892,10 @@ impl WorkflowRuntime {
 /// never converted into workflow-local values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkflowRunError {
+    Disabled {
+        workflow: WorkflowId,
+        diagnostics: Vec<WorkflowAdmissionDiagnostic>,
+    },
     LimitExceeded(WorkflowLimit),
     ChildOutcome {
         node: String,
@@ -2844,8 +2906,6 @@ pub enum WorkflowRunError {
         error: Box<WorkflowRunError>,
         workspace: Box<crate::runtime::workspace::WorkspaceSettlement>,
     },
-    SourceUnavailable(String),
-    InvalidSelector(String),
     CapabilityNotAdmitted(String),
     IneligibleCapability(String),
     IdentityChanged(String),
@@ -2954,6 +3014,14 @@ impl WorkflowRunError {
 impl fmt::Display for WorkflowRunError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Disabled {
+                workflow,
+                diagnostics,
+            } => write!(
+                formatter,
+                "Workflow {workflow} is disabled: {}",
+                serde_json::to_string(diagnostics).expect("typed diagnostics serialize")
+            ),
             Self::WorkspaceSettlement { error, .. } => error.fmt(formatter),
             Self::LimitExceeded(limit) => {
                 write!(formatter, "Workflow run {limit:?} limit exceeded")
@@ -2963,12 +3031,6 @@ impl fmt::Display for WorkflowRunError {
             }
             Self::ToolFailed { node, status } => {
                 write!(formatter, "Workflow Tool {node:?}: {status:?}")
-            }
-            Self::SourceUnavailable(detail) => {
-                write!(formatter, "capability source unavailable: {detail}")
-            }
-            Self::InvalidSelector(detail) => {
-                write!(formatter, "invalid capability selector: {detail}")
             }
             Self::CapabilityNotAdmitted(detail) => {
                 write!(formatter, "capability not admitted: {detail}")
@@ -3175,7 +3237,7 @@ mod tests {
     ) -> WorkflowDefinition {
         WorkflowDefinition {
             workspace: None,
-            tools: std::collections::BTreeSet::default(),
+
             timeout_ms: 600_000,
             description: "Test workflow".to_owned(),
             block: WorkflowBlock {
@@ -3191,11 +3253,7 @@ mod tests {
     fn compile_test(
         definition: WorkflowDefinition,
     ) -> Result<WorkflowProgram, WorkflowCompileError> {
-        WorkflowProgram::compile(
-            WorkflowId::parse("test_workflow").expect("id"),
-            definition,
-            &BTreeSet::from([profile("reviewer")]),
-        )
+        WorkflowProgram::compile(WorkflowId::parse("test_workflow").expect("id"), definition)
     }
 
     #[cfg(unix)]
@@ -3379,7 +3437,6 @@ chat_reasoning_replay = "omit"
                 capabilities,
             )
             .with_subagent_catalog(catalog)
-            .with_workflow_admission(BTreeSet::from([reviewer]))
             .with_workflow_catalog(workflow_catalog),
         );
         crate::runtime::subagent::AttemptSubagentContext::new(
@@ -3520,7 +3577,7 @@ chat_reasoning_replay = "omit"
         let branch_output = schema(json!({"summary": {"type": "string"}}), &["summary"]);
         let definition = WorkflowDefinition {
             workspace: None,
-            tools: std::collections::BTreeSet::default(),
+
             timeout_ms: 600_000,
             description: description.to_owned(),
             block: WorkflowBlock {
@@ -3558,7 +3615,6 @@ chat_reasoning_replay = "omit"
             WorkflowProgram::compile(
                 WorkflowId::parse("snapshot_workflow").expect("snapshot workflow id"),
                 definition,
-                &BTreeSet::from([profile("reviewer")]),
             )
             .expect("snapshot workflow program"),
         )
@@ -3572,7 +3628,7 @@ chat_reasoning_replay = "omit"
                 WorkflowId::parse("event_journal_workflow").expect("event workflow id"),
                 WorkflowDefinition {
                     workspace: None,
-                    tools: std::collections::BTreeSet::default(),
+
                     timeout_ms: 600_000,
                     description: "Event journal test workflow".to_owned(),
                     block: WorkflowBlock {
@@ -3589,7 +3645,6 @@ chat_reasoning_replay = "omit"
                         edges: Vec::new(),
                     },
                 },
-                &BTreeSet::new(),
             )
             .expect("return-only workflow program"),
         )
@@ -3610,7 +3665,7 @@ chat_reasoning_replay = "omit"
         let (result_tx, mut result_rx) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
             let result = runtime
-                .run_foreground(
+                .run_test_foreground(
                     program,
                     ToolCallId::new("parallel-reversed"),
                     context,
@@ -3716,7 +3771,7 @@ chat_reasoning_replay = "omit"
         let (result_tx, mut result_rx) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
             let result = runtime
-                .run_foreground(
+                .run_test_foreground(
                     program,
                     ToolCallId::new("parallel-failures"),
                     context,
@@ -3787,7 +3842,7 @@ chat_reasoning_replay = "omit"
         let (_, cancellation) = workflow_cancellation();
         let task = tokio::spawn(async move {
             runtime
-                .run_foreground(
+                .run_test_foreground(
                     program,
                     ToolCallId::new("parallel-capacity"),
                     context,
@@ -3836,7 +3891,7 @@ chat_reasoning_replay = "omit"
         let (signal, cancellation) = workflow_cancellation();
         let task = tokio::spawn(async move {
             runtime
-                .run_foreground(
+                .run_test_foreground(
                     program,
                     ToolCallId::new("parallel-cancel"),
                     context,
@@ -3907,8 +3962,7 @@ chat_reasoning_replay = "omit"
         let runtime = workflow_runtime(&plane);
         let old_program = snapshot_test_program("old", "old generation");
         let old_catalog =
-            WorkflowCatalog::new([(*old_program).clone()], [old_program.id().clone()])
-                .expect("old workflow catalog");
+            WorkflowCatalog::new([(*old_program).clone()]).expect("old workflow catalog");
         let old_snapshot = Arc::clone(
             old_catalog
                 .get(old_program.id())
@@ -3936,7 +3990,7 @@ chat_reasoning_replay = "omit"
             let runtime = runtime.clone();
             async move {
                 runtime
-                    .run_foreground(
+                    .run_test_foreground(
                         old_snapshot,
                         ToolCallId::new("snapshot-old"),
                         old_context.clone(),
@@ -3953,8 +4007,7 @@ chat_reasoning_replay = "omit"
         // cannot observe this future-invocation program.
         let new_program = snapshot_test_program("new", "new generation");
         let new_catalog =
-            WorkflowCatalog::new([(*new_program).clone()], [new_program.id().clone()])
-                .expect("new workflow catalog");
+            WorkflowCatalog::new([(*new_program).clone()]).expect("new workflow catalog");
         let new_snapshot = Arc::clone(
             new_catalog
                 .get(new_program.id())
@@ -3994,7 +4047,7 @@ chat_reasoning_replay = "omit"
             let runtime = runtime.clone();
             async move {
                 runtime
-                    .run_foreground(
+                    .run_test_foreground(
                         new_snapshot,
                         ToolCallId::new("snapshot-new"),
                         new_context,
@@ -4034,7 +4087,7 @@ chat_reasoning_replay = "omit"
         let context = workflow_test_context(&plane);
         let (_, cancellation) = workflow_cancellation();
         let result = runtime
-            .run_foreground(
+            .run_test_foreground(
                 return_only_program(),
                 ToolCallId::new("event-best-effort"),
                 context,
@@ -4089,7 +4142,7 @@ chat_reasoning_replay = "omit"
         );
         let definition = WorkflowDefinition {
             workspace: None,
-            tools: std::collections::BTreeSet::default(),
+
             timeout_ms: 600_000,
             description: "Review".to_owned(),
             block: WorkflowBlock {
@@ -4117,12 +4170,9 @@ chat_reasoning_replay = "omit"
                 }],
             },
         };
-        let program = WorkflowProgram::compile(
-            WorkflowId::parse("review_pr").expect("id"),
-            definition,
-            &BTreeSet::from([profile("reviewer")]),
-        )
-        .expect("program");
+        let program =
+            WorkflowProgram::compile(WorkflowId::parse("review_pr").expect("id"), definition)
+                .expect("program");
         assert_eq!(program.entry(), "review");
         assert_eq!(program.nodes().len(), 2);
     }
@@ -4139,7 +4189,7 @@ chat_reasoning_replay = "omit"
     fn rejects_branch_without_boolean_condition_or_complete_ports() {
         let definition = WorkflowDefinition {
             workspace: None,
-            tools: std::collections::BTreeSet::default(),
+
             timeout_ms: 600_000,
             description: "Branch".to_owned(),
             block: WorkflowBlock {
@@ -4157,12 +4207,8 @@ chat_reasoning_replay = "omit"
                 edges: Vec::new(),
             },
         };
-        let error = WorkflowProgram::compile(
-            WorkflowId::parse("branch").expect("id"),
-            definition,
-            &BTreeSet::new(),
-        )
-        .expect_err("invalid branch");
+        let error = WorkflowProgram::compile(WorkflowId::parse("branch").expect("id"), definition)
+            .expect_err("invalid branch");
         assert!(matches!(
             error.cause(),
             WorkflowCompileError::IncompatibleReference(_)
@@ -4262,7 +4308,7 @@ block:
         };
         let missing_ports = WorkflowDefinition {
             workspace: None,
-            tools: std::collections::BTreeSet::default(),
+
             timeout_ms: 600_000,
             description: "Branch".to_owned(),
             block: WorkflowBlock {
@@ -4444,7 +4490,7 @@ block:
 
         let optional_input = WorkflowDefinition {
             workspace: None,
-            tools: std::collections::BTreeSet::default(),
+
             timeout_ms: 600_000,
             description: "Optional nested input".to_owned(),
             block: WorkflowBlock {
@@ -4767,7 +4813,7 @@ block:
     }
 
     #[test]
-    fn workflow_catalog_rejects_unknown_and_duplicate_main_admission() {
+    fn workflow_catalog_preserves_inert_discovery_and_rejects_duplicates() {
         let definition = base_definition(
             "done",
             BTreeMap::from([("done".to_owned(), return_node(BTreeMap::new()))]),
@@ -4775,18 +4821,11 @@ block:
             schema(json!({}), &[]),
         );
         let program = compile_test(definition).expect("program");
-        let unknown = WorkflowId::parse("missing").expect("id");
+        let catalog = WorkflowCatalog::new([program.clone()]).unwrap();
+        assert!(catalog.enabled_ids().is_empty());
+        assert!(catalog.get(program.id()).is_some());
         assert!(matches!(
-            WorkflowCatalog::new([program.clone()], [unknown]),
-            Err(WorkflowCatalogError::UnknownAdmission(_))
-        ));
-        let id = program.id().clone();
-        assert!(matches!(
-            WorkflowCatalog::new([program.clone()], [id.clone(), id]),
-            Err(WorkflowCatalogError::DuplicateAdmission(_))
-        ));
-        assert!(matches!(
-            WorkflowCatalog::new([program.clone(), program], []),
+            WorkflowCatalog::new([program.clone(), program]),
             Err(WorkflowCatalogError::DuplicateDefinition)
         ));
     }

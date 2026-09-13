@@ -31,9 +31,8 @@ use rustx::model::invocation::ModelBindingRegistry;
 use rustx::model::session::SessionModelConfig;
 use rustx::runtime::RuntimeResourceSnapshot;
 use rustx::runtime::subagent::{
-    InvokingAgentAuthority, ResolvedSubagentSpec, SubagentDomain, SubagentInvocationOverride,
-    SubagentName, SubagentOverrideAuthority, SubagentResolution, SubagentResolutionError,
-    SubagentResolver,
+    InvokingAgentAuthority, ResolvedSubagentSpec, SubagentInvocationOverride, SubagentName,
+    SubagentResolution, SubagentResolutionError, SubagentResolver,
 };
 
 const KEY_ENV: &str = "RUSTX_ISSUE258_KEY";
@@ -59,10 +58,8 @@ async fn goal84_root_only_scope_is_enforced_for_definition_model_and_workflow_ov
             .diagnostics
             .is_empty()
     );
-    for result in [
-        delegate(&resources, "plain", Some(&invocation), &parent),
-        workflow_resolve(&resources, "plain", Some(&invocation)),
-    ] {
+    {
+        let result = delegate(&resources, "plain", Some(&invocation), &parent);
         assert!(
             matches!(result, Err(SubagentResolutionError::ExtensionScopeUnsupported { extension, .. }) if extension == "goal")
         );
@@ -152,30 +149,10 @@ fn delegate(
         agent: &agent(name),
         attempt_model: &attempt_model(),
         models: &model_registry(),
-        domain: SubagentDomain::Main,
-        invocation,
-        authority: SubagentOverrideAuthority::DelegatedByModel,
-        invoking: parent,
-    })
-}
 
-/// One Workflow (trusted static program) resolution.
-fn workflow_resolve(
-    resources: &RuntimeResourceSnapshot,
-    name: &str,
-    invocation: Option<&SubagentInvocationOverride>,
-) -> Result<ResolvedSubagentSpec, SubagentResolutionError> {
-    SubagentResolver::resolve(&SubagentResolution {
-        resources,
-        agent: &agent(name),
-        attempt_model: &attempt_model(),
-        models: &model_registry(),
-        domain: SubagentDomain::Workflow,
         invocation,
-        authority: SubagentOverrideAuthority::TrustedProgram,
-        // A trusted static override is not bounded by the invoking main
-        // model's narrower profile, so the parent contributes nothing here.
-        invoking: &InvokingAgentAuthority::none(),
+
+        invoking: parent,
     })
 }
 
@@ -258,8 +235,7 @@ impl Lab {
             .keys()
             .map(|name| serde_json::Value::String(name.clone()))
             .collect::<Vec<_>>();
-        let root_agents = serde_json::Value::Array(names.clone());
-        subagents["workflow"] = serde_json::Value::Array(names);
+        let root_agents = serde_json::Value::Array(names);
         crate::launch_fixture::write_roles(&self.workspace(), &mut subagents);
         let document = serde_json::json!({"schema_version": 8, "agent_id": "agent-issue258", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "subagents": subagents, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": builtin_tools}, "agents": root_agents, "workflows": []}});
         std::fs::write(
@@ -909,84 +885,28 @@ async fn goal84_workflow_program_cannot_enable_goal_for_an_agent_node() {
         &OVERRIDE_WORKFLOW.replace("agentStatus:", "goal:"),
     );
     lab.write_config(&reviewer_roles(), &[]);
-    let launch = lab.paths().try_resolve();
-    let error = match launch {
-        Err(error) => error,
-        Ok(launch) => match LocalSessionProduct::compose(&launch, &dependencies()).await {
-            Err(error) => error.to_string(),
-            Ok(_) => panic!("invalid Goal child program must fail before invocation"),
-        },
-    };
-    assert!(
-        error.contains("goal") && error.contains("one-shot"),
-        "{error}"
-    );
-}
-
-/// A trusted static override may legitimately exceed both the role's defaults
-/// and the invoking main model's active capabilities, because the Workflow's
-/// admitted generation authorizes it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn sub258_a_trusted_workflow_override_exceeds_the_main_model_capabilities() {
-    let lab = Lab::new();
-    lab.write_skill("review-guidance", "How to review", "guidance body");
-    lab.write_skill("security-review", "How to review security", "security body");
-    lab.write_workflow("specialized", OVERRIDE_WORKFLOW);
-    // The invoking main model holds neither grep nor bash.
-    lab.write_config(&reviewer_roles(), &["read"]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
-    let parent = parent_of(&resources);
-
-    let node_override = parse_override(serde_json::json!({
-        "tools": {"builtin": ["read", "grep", "bash"]},
-        "skills": ["security-review"],
-        "extensions": {"agentStatus": {"enabled": true}},
-    }));
-
-    let workflow = workflow_resolve(&resources, "reviewer", Some(&node_override))
-        .expect("the Workflow generation authorizes the static override");
-    assert_eq!(
-        tool_names(&workflow),
-        vec![
-            "builtin:bash".to_owned(),
-            "builtin:grep".to_owned(),
-            "builtin:read".to_owned()
-        ]
-    );
-    assert_eq!(skill_names(&workflow), vec!["security-review".to_owned()]);
-    assert!(workflow.extensions.agent_status().is_some());
-
-    // The same request from the main model is refused: the two authority
-    // modes are genuinely different, and neither is reachable from the other.
-    assert!(
-        matches!(
-            delegate(&resources, "reviewer", Some(&node_override), &parent),
-            Err(SubagentResolutionError::UnauthorizedTool { .. })
-        ),
-        "the dynamic ceiling does not cover what the Workflow generation does"
-    );
-
-    // A trusted override still cannot exceed the admitted generation.
-    assert_eq!(
-        workflow_resolve(
-            &resources,
-            "reviewer",
-            Some(&parse_override(
-                serde_json::json!({"skills": ["not-a-skill"]})
-            )),
-        ),
-        Err(SubagentResolutionError::UnknownSkill {
-            skill: "not-a-skill".to_owned()
-        })
-    );
+    let id = rustx::runtime::workflow::WorkflowId::parse("goal-child").unwrap();
+    let rustx::runtime::workflow::WorkflowAdmission::Disabled(diagnostics) =
+        &resources.workflows().entries()[&id].admission
+    else {
+        panic!("Goal child must disable the entire program")
+    };
+    assert!(diagnostics.iter().any(|diagnostic| matches!(
+        diagnostic.reason,
+        rustx::runtime::workflow::WorkflowDependencyFailure::Agent(
+            rustx::runtime::agent_profile::AgentProfileDiagnostic::ScopeUnsupported { .. }
+        )
+    )));
+    assert!(resources.workflows().executable(&id).is_err());
 }
 
 /// Equivalent authorized inputs resolve to one specification on both paths.
 /// This is the "one resolver" property stated as an assertion rather than as
 /// a comment.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn sub258_equivalent_workflow_and_tool_inputs_resolve_equivalently() {
+async fn sub258_equivalent_dynamic_overrides_have_one_frozen_identity() {
     let lab = Lab::new();
     lab.write_skill("review-guidance", "How to review", "guidance body");
     lab.write_config(&reviewer_roles(), &["read", "grep"]);
@@ -1000,14 +920,6 @@ async fn sub258_equivalent_workflow_and_tool_inputs_resolve_equivalently() {
     }));
     let from_tool = delegate(&resources, "reviewer", Some(&requested), &parent)
         .expect("the main model holds both capabilities");
-    let from_workflow = workflow_resolve(&resources, "reviewer", Some(&requested))
-        .expect("the Workflow generation authorizes the same request");
-    assert_eq!(
-        from_tool, from_workflow,
-        "one resolver, one frozen specification"
-    );
-    assert_eq!(from_tool.profile_digest(), from_workflow.profile_digest());
-
     // A differently spelled but semantically identical request agrees too.
     let respelled = parse_override(serde_json::json!({
         "tools": {"builtin": ["read", "grep"]},
@@ -1080,21 +992,18 @@ block:
     lab.write_skill("review-guidance", "How to review", "guidance body");
     lab.write_workflow("nested", nested);
     lab.write_config(&reviewer_roles(), &["read"]);
-    let error = lab.offline_error();
-    assert!(
-        error.contains("definitely_not_a_capability"),
-        "the refusal names the offending selector: {error}"
-    );
-    assert!(
-        error.contains("branches.only.block.nodes.work.override"),
-        "the refusal names the precise nested authored path: {error}"
-    );
-    // Offline inspection is side-effect free: no runtime state was created
-    // in order to produce that diagnostic.
-    assert!(
-        !lab.root().join("runtime").exists(),
-        "static validation creates no runtime state"
-    );
+    let product = lab.compose().await;
+    let resources = product.runtime().runtime_resources();
+    let id = rustx::runtime::workflow::WorkflowId::parse("nested").unwrap();
+    let rustx::runtime::workflow::WorkflowAdmission::Disabled(diagnostics) =
+        &resources.workflows().entries()[&id].admission
+    else {
+        panic!("required missing Tool must disable the program")
+    };
+    assert!(diagnostics.iter().any(|diagnostic| diagnostic.path == "block.nodes.fan.branches.only.block.nodes.work"
+        && matches!(&diagnostic.reason, rustx::runtime::workflow::WorkflowDependencyFailure::Agent(
+            rustx::runtime::agent_profile::AgentProfileDiagnostic::Tool(rustx::capabilities::selection::ToolSelectionError::UnknownCapability { selector })
+        ) if selector == "builtin:definitely_not_a_capability")));
 }
 
 /// Structural child rules apply to a Workflow override at compilation, with
@@ -1695,34 +1604,4 @@ async fn ext259_todo_obeys_the_shared_override_authority_distinction() {
         .extensions,
         NativeAgentExtensions::with_todo()
     );
-
-    // A trusted Workflow override is bounded by the admitted generation, not
-    // by any invoking model profile, so it composes Todo without one.
-    let from_workflow = workflow_resolve(&resources, "reviewer", Some(&enable_todo))
-        .expect("a trusted static override carries the generation's authority");
-    assert_eq!(from_workflow.extensions, NativeAgentExtensions::with_todo());
-
-    // And a Workflow override can disable it just as ordinarily, without
-    // touching what the Workflow itself owns: the child's capability set and
-    // its terminal contract are unchanged either way.
-    let disabled = workflow_resolve(
-        &resources,
-        "reviewer",
-        Some(&parse_override(
-            serde_json::json!({"extensions": {"todo": {"enabled": false}}}),
-        )),
-    )
-    .expect("narrowing is always authorized");
-    assert!(disabled.extensions.todo().is_none());
-    assert_eq!(
-        tool_names(&from_workflow),
-        tool_names(&disabled),
-        "composing or not composing Todo changes no ordinary capability"
-    );
-    assert_eq!(skill_names(&from_workflow), skill_names(&disabled));
-    assert_eq!(
-        from_workflow.model, disabled.model,
-        "nor the child's model, terminal contract, or any other frozen dimension"
-    );
-    assert_ne!(from_workflow.profile_digest(), disabled.profile_digest());
 }

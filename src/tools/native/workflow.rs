@@ -17,28 +17,48 @@ use crate::tools::types::{
     ToolOrigin, ToolReplayPolicy,
 };
 
-/// Builds one registration per explicitly model-visible Workflow id.
+/// Only enabled programs can contribute executable Workflow registrations.
 pub(super) fn registrations(
     runtime: &WorkflowRuntime,
     catalog: &WorkflowCatalog,
 ) -> Vec<NativeToolRegistration> {
     catalog
-        .admitted()
-        .iter()
-        .map(|id| {
-            let program = catalog
-                .get(id)
-                .expect("WorkflowCatalog validates every main id");
-            NativeToolRegistration::new(
-                definition(program),
-                Arc::new(WorkflowToolExecutor {
-                    runtime: runtime.clone(),
-                    program: Arc::clone(program),
-                }),
-            )
-            .with_foreground_policy(foreground_policy(program))
+        .entries()
+        .values()
+        .filter_map(|entry| match &entry.admission {
+            crate::runtime::workflow::WorkflowAdmission::Enabled(program) => {
+                Some(registration(runtime, program))
+            }
+            crate::runtime::workflow::WorkflowAdmission::Disabled(_) => None,
         })
         .collect()
+}
+
+/// Off-side source metadata for CLI/name validation before source preparation.
+/// These registrations never publish: admission replaces them with Enabled programs.
+pub(super) fn source_registrations(
+    runtime: &WorkflowRuntime,
+    catalog: &WorkflowCatalog,
+) -> Vec<NativeToolRegistration> {
+    catalog
+        .entries()
+        .values()
+        .map(|entry| registration(runtime, &entry.source))
+        .collect()
+}
+
+fn registration(
+    runtime: &WorkflowRuntime,
+    program: &Arc<WorkflowProgram>,
+) -> NativeToolRegistration {
+    NativeToolRegistration::new(
+        definition(program),
+        Arc::new(WorkflowToolExecutor {
+            runtime: runtime.clone(),
+            program: program.clone(),
+        }),
+    )
+    .with_foreground_policy(foreground_policy(program))
 }
 
 fn foreground_policy(program: &WorkflowProgram) -> crate::tools::deadline::ForegroundPolicy {
@@ -114,7 +134,7 @@ impl ToolExecutor for WorkflowToolExecutor {
             Box::pin(async move {
                 let mut result = match runtime
                     .run_foreground(
-                        program,
+                        program.id().clone(),
                         run_id,
                         subagent_context,
                         invocation.arguments,

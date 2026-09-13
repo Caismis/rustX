@@ -7,11 +7,7 @@ use std::path::Path;
 
 /// Discover and compile canonical Workflow files before resource publication.
 #[allow(clippy::too_many_lines)] // One deterministic compile transaction with structured diagnostics.
-pub(crate) fn load(
-    workspace: &Path,
-    profiles: &super::config::SubagentsDocument,
-    agents: &crate::runtime::subagent::AgentCatalog,
-) -> Result<WorkflowCatalog, RuntimeResourceLoadError> {
+pub(crate) fn load(workspace: &Path) -> Result<WorkflowCatalog, RuntimeResourceLoadError> {
     let mut programs = Vec::new();
     let paths =
         super::resource_directory::files(workspace, &workspace.join(".agents/workflows"), "yaml")?;
@@ -61,11 +57,7 @@ pub(crate) fn load(
                     failure.inspection.correction = Some("correct this YAML using schemas/workflow.schema.json; fields and mapping keys must be unique");
                     failure
                 })?;
-        let program = WorkflowProgram::compile(
-            id.clone(),
-            definition,
-            &profiles.workflow.iter().cloned().collect(),
-        )
+        let program = WorkflowProgram::compile(id.clone(), definition)
         .map_err(|error| {
             let mut failure = RuntimeResourceLoadError::new(format!(
                 "cannot compile discovered workflow {id} at {}: {error}",
@@ -73,15 +65,6 @@ pub(crate) fn load(
             ))
             .at(&path, error.path())
             .because(match error.cause() {
-                crate::runtime::workflow::WorkflowCompileError::ProfileNotAdmitted {
-                    profile,
-                    ..
-                } if agents.get(profile).is_none() => {
-                    "named Agent has no canonical discovered resource"
-                }
-                crate::runtime::workflow::WorkflowCompileError::ProfileNotAdmitted { .. } => {
-                    "named role exists but is not admitted by subagents.workflow"
-                }
                 crate::runtime::workflow::WorkflowCompileError::InvalidReference(_) => {
                     "binding cannot resolve in this lexical scope on every incoming control path"
                 }
@@ -93,17 +76,8 @@ pub(crate) fn load(
                 }
                 _ => "Workflow graph, control structure, or configured bound is invalid",
             });
-            failure.inspection.category = Some(match error.cause() {
-                WorkflowCompileError::ProfileNotAdmitted { profile, .. }
-                    if agents.get(profile).is_none() =>
-                {
-                    "resource_missing"
-                }
-                WorkflowCompileError::ProfileNotAdmitted { .. } => "resource_not_admitted",
-                _ => "workflow_language",
-            });
+            failure.inspection.category = Some("workflow_language");
             failure.inspection.correction = Some(match error.cause() {
-                WorkflowCompileError::ProfileNotAdmitted { .. } => "create the canonical .agents/agents/<name>.toml resource and explicitly admit its name in subagents.workflow",
                 WorkflowCompileError::InvalidReference(_) => "bind args or earlier values guaranteed on every incoming path; nested blocks only see their explicitly projected input",
                 WorkflowCompileError::IncompatibleReference(_) => "make the binding type, required fields and finite values satisfy the destination schema",
                 WorkflowCompileError::InvalidSchema(_) => "use only the closed Workflow schema vocabulary: type, properties, required, additionalProperties, items, const and enum",
@@ -120,11 +94,7 @@ pub(crate) fn load(
         })?;
         programs.push(program);
     }
-    WorkflowCatalog::new(
-        programs.clone(),
-        programs.iter().map(|program| program.id().clone()),
-    )
-    .map_err(|error| {
+    WorkflowCatalog::new(programs).map_err(|error| {
         RuntimeResourceLoadError::new(format!("cannot admit Workflow catalog: {error}"))
     })
 }
@@ -194,25 +164,23 @@ mod tests {
                 std::fs::write(root.join(format!("{name}.yaml")), PROGRAM).unwrap();
             }
             std::fs::write(root.join("incidental.txt"), "invalid YAML: [").unwrap();
-            let profiles = super::super::config::SubagentsDocument::default();
-            let agents = crate::runtime::subagent::AgentCatalog::empty();
-            let catalog = load(&workspace, &profiles, &agents).unwrap();
+            let catalog = load(&workspace).unwrap();
             assert_eq!(
                 catalog
-                    .definitions()
+                    .entries()
                     .keys()
                     .map(crate::runtime::workflow::WorkflowId::as_str)
                     .collect::<Vec<_>>(),
                 ["alpha", "zeta"]
             );
-            assert_eq!(catalog.admitted().len(), catalog.definitions().len());
+            assert!(catalog.enabled_ids().is_empty());
             for name in names {
                 std::fs::write(root.join(format!("{name}.yaml")), "invalid: [").unwrap();
             }
-            let error = load(&workspace, &profiles, &agents).unwrap_err();
+            let error = load(&workspace).unwrap_err();
             assert_eq!(error.source_file, Some(root.join("alpha.yaml")));
-            assert_eq!(error, load(&workspace, &profiles, &agents).unwrap_err());
-            assert_eq!(catalog.definitions().len(), 2);
+            assert_eq!(error, load(&workspace).unwrap_err());
+            assert_eq!(catalog.entries().len(), 2);
         }
     }
 }

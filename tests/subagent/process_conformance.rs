@@ -79,7 +79,6 @@ stream_idle_timeout_ms = 300
 
 [subagents]
 max_concurrent = 4
-workflow = []
 
 [subagents.roles]
 [subagents.roles.conformance]

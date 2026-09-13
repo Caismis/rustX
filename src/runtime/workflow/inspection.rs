@@ -137,6 +137,10 @@ pub struct AgentOverrideNode<'a> {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum DependencyState {
+    Missing {
+        reason: crate::capabilities::selection::ToolSelectionError,
+    },
+    Ineligible,
     /// Real local metadata exists; concrete arguments still require native preparation.
     Known,
     Inert {

@@ -20,8 +20,7 @@ use rustx::model::session::SessionModelConfig;
 use rustx::runtime::RuntimeResourceSnapshot;
 use rustx::runtime::subagent::{
     InvokingAgentAuthority, NamedAgentDefinitionDigest, ResolvedSubagentSpec, ResolvedSubagentTool,
-    SubagentDomain, SubagentName, SubagentOverrideAuthority, SubagentResolution,
-    SubagentResolutionError, SubagentResolver,
+    SubagentName, SubagentResolution, SubagentResolutionError, SubagentResolver,
 };
 use rustx::runtime_client::settings::EffectiveNativeAgentExtensions;
 
@@ -106,9 +105,9 @@ fn resolve(
         agent: name,
         attempt_model,
         models,
-        domain: SubagentDomain::Main,
+
         invocation: None,
-        authority: SubagentOverrideAuthority::DelegatedByModel,
+
         invoking: &InvokingAgentAuthority::none(),
     })
 }
@@ -202,9 +201,6 @@ impl Lab {
         if let Some(document) = subagents.as_object_mut() {
             document
                 .entry("agents".to_owned())
-                .or_insert_with(|| serde_json::Value::Array(definition_names.clone()));
-            document
-                .entry("workflow".to_owned())
                 .or_insert_with(|| serde_json::Value::Array(definition_names));
         }
         let root_agents = subagents.as_object_mut().unwrap().remove("agents").unwrap();
@@ -359,8 +355,7 @@ fn explore(builtin: &[&str]) -> serde_json::Value {
                 "tools": {"builtin": builtin},
             }
         },
-        "agents": ["explore"],
-        "workflow": []
+        "agents": ["explore"]
     })
 }
 
@@ -846,7 +841,7 @@ async fn an_unavailable_source_warns_and_suppresses_without_blocking_the_agent()
     let lab = Lab::new();
     let mut document = serde_json::json!({"schema_version": 8, "agent_id": "agent-issue144", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "mcp_servers": {
             "offline": {"enabled": true, "type": "stdio", "command": "missing-rustx-issue144-mcp"}
-        }, "subagents": {"max_concurrent": 4, "roles": {"explore": {"description": "Read-only repository exploration.", "tools": {"sources": {"offline": ["get_issue"]}}}}, "workflow": []}, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": ["read"]}, "agents": ["explore"]}});
+        }, "subagents": {"max_concurrent": 4, "roles": {"explore": {"description": "Read-only repository exploration.", "tools": {"sources": {"offline": ["get_issue"]}}}}}, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": ["read"]}, "agents": ["explore"]}});
     crate::launch_fixture::write_roles(&lab.workspace(), &mut document["subagents"]);
     std::fs::write(
         lab.root().join("rustx.toml"),
@@ -1663,7 +1658,7 @@ async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
                         // selector order, so the unavailable source is
                         // inspected first.
                         "sources": {"offline": ["get_issue"], "python:ghost": ["duplicate", "duplicate"]},
-                    }}}, "workflow": []}, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": ["read"]}, "agents": ["explore"]}});
+                    }}}}, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": ["read"]}, "agents": ["explore"]}});
     crate::launch_fixture::write_roles(&lab.workspace(), &mut document["subagents"]);
     std::fs::write(
         lab.root().join("rustx.toml"),
@@ -1824,9 +1819,6 @@ fn write_config_with_root_extensions(
     if let Some(document) = subagents.as_object_mut() {
         document
             .entry("agents".to_owned())
-            .or_insert_with(|| serde_json::Value::Array(definition_names.clone()));
-        document
-            .entry("workflow".to_owned())
             .or_insert_with(|| serde_json::Value::Array(definition_names));
     }
     let root_agents = subagents.as_object_mut().unwrap().remove("agents").unwrap();

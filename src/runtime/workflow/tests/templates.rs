@@ -4,24 +4,13 @@ use super::*;
 pub(super) fn template(id: &str) -> Arc<WorkflowProgram> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples/local-runtime/workflow-templates");
-    let profiles = serde_json::from_value(json!({ "workflow":["reviewer"]})).unwrap();
     // Canonical role parsing is part of this fixture, not a replacement inline role format.
-    let (roles, sources) = crate::local_runtime::agent_resources::load(
-        &root,
-        &root.join("absent-user-roles"),
-        &profiles,
-    )
-    .unwrap();
+    let (roles, sources) =
+        crate::local_runtime::agent_resources::load(&root, &root.join("absent-user-roles"))
+            .unwrap();
     assert_eq!(roles.len(), 1);
     assert_eq!(sources[&profile("reviewer")].layer, "project");
-    let catalog = crate::local_runtime::workflow_resources::load(
-        &root,
-        &profiles,
-        &crate::local_runtime::agent_resources::load(&root, &root.join("user-agents"), &profiles)
-            .unwrap()
-            .0,
-    )
-    .unwrap();
+    let catalog = crate::local_runtime::workflow_resources::load(&root).unwrap();
     catalog
         .get(&WorkflowId::parse(id).unwrap())
         .unwrap()
@@ -85,7 +74,6 @@ fn cfg237_loop_and_control_failures_keep_authored_paths() {
         WorkflowProgram::compile(
             WorkflowId::parse("review_loop").unwrap(),
             serde_json::from_value(value).unwrap(),
-            &BTreeSet::new(),
         )
     };
     let valid = compile(original.clone()).unwrap();
@@ -157,7 +145,6 @@ fn cfg237_compiled_explanation_ignores_yaml_map_insertion_order() {
         WorkflowProgram::compile(
             WorkflowId::parse("parallel_checks").unwrap(),
             serde_yaml::from_str(text).unwrap(),
-            &BTreeSet::from([profile("reviewer")]),
         )
         .unwrap()
     };
@@ -181,7 +168,7 @@ async fn cfg237_typed_agent_template_executes_native_typed_terminal() {
     let (_, cancellation) = workflow_cancellation();
     let task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 template("typed_agent"),
                 ToolCallId::new("template-agent"),
                 context,
@@ -231,7 +218,7 @@ async fn cfg237_parallel_template_preserves_keys_under_reverse_completion() {
         let (_, cancellation) = workflow_cancellation();
         let task = tokio::spawn(async move {
             runtime
-                .run_foreground(
+                .run_test_foreground(
                     program,
                     ToolCallId::new("template-parallel"),
                     context,

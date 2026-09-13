@@ -27,7 +27,6 @@ use rustx::runtime_client::{
 
 const MODEL: &str = "workflow-model";
 const TOOL_WORKFLOW: &str = r"description: Inspect discovered workflow files.
-tools: [{origin: builtin, name: glob}]
 timeout_ms: 10000
 block:
   input:
@@ -199,7 +198,6 @@ keep_recent_tokens = 0
 
 [subagents]
 max_concurrent = 4
-workflow = ["reviewer"]
 
 
 [agent]
@@ -361,19 +359,12 @@ impl Driver {
         assert!(
             resources
                 .workflows()
-                .admitted()
+                .enabled_ids()
                 .iter()
                 .any(|id| id.as_str() == "review_pr")
         );
         assert!(resources.delegatable_agents().is_empty());
-        assert_eq!(
-            resources
-                .subagent_workflow_admission()
-                .iter()
-                .map(rustx::runtime::subagent::SubagentName::as_str)
-                .collect::<Vec<_>>(),
-            vec!["reviewer"]
-        );
+
         let tools = resources.capability().tool_registry().names();
         assert!(tools.contains(&"review_pr"));
         assert!(
@@ -479,7 +470,7 @@ async fn workflow_selection_rejects_an_identity_outside_the_canonical_root() {
             .await
             .expect("missing selected Workflow leaves the Agent usable");
     let resources = core.runtime().runtime_resources();
-    assert!(resources.workflows().definitions().is_empty());
+    assert!(resources.workflows().entries().is_empty());
     let profile = resources.root_profile().unwrap();
     assert!(profile.workflows.is_empty());
     assert!(profile.diagnostics.iter().any(|diagnostic| matches!(
@@ -536,7 +527,7 @@ async fn discovered_workflow_can_remain_out_of_main_model_admission() {
     assert!(
         resources
             .workflows()
-            .definitions()
+            .entries()
             .contains_key(&WorkflowId::parse("review_pr").expect("workflow id"))
     );
     assert!(resources.root_profile().unwrap().workflows.is_empty());
@@ -661,10 +652,6 @@ async fn fixed_question_and_review_use_root_client_while_parent_model_remains_in
             return;
         };
         let mut definition: serde_json::Value = serde_yaml::from_str(TOOL_WORKFLOW).unwrap();
-        definition["tools"]
-            .as_array_mut()
-            .unwrap()
-            .push(serde_json::json!({"origin":"builtin","name":"ask_user"}));
         definition["block"]["entry"] = serde_json::json!("question");
         definition["block"]["nodes"]["question"] = serde_json::json!({
             "type":"tool","selector":{"origin":"builtin","name":"ask_user"},

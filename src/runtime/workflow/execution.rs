@@ -1018,7 +1018,6 @@ pub(super) fn outcome<T>(result: &Result<T, WorkflowRunError>) -> WorkflowExecut
 mod tests {
     use super::*;
     use crate::runtime::workflow::{MAX_LOCAL_BYTES, WorkflowId, WorkflowProgram, test_instance};
-    use std::collections::BTreeSet;
     use std::sync::Arc;
 
     #[test]
@@ -1069,12 +1068,7 @@ mod tests {
             }
         })).unwrap();
         let program = Arc::new(
-            WorkflowProgram::compile(
-                WorkflowId::parse("budget").unwrap(),
-                definition,
-                &BTreeSet::new(),
-            )
-            .unwrap(),
+            WorkflowProgram::compile(WorkflowId::parse("budget").unwrap(), definition).unwrap(),
         );
         let run = WorkflowRun::new(program, test_instance("budget", "done").block.run);
         // Exercise the counter at its global limit independently of the

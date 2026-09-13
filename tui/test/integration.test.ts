@@ -117,7 +117,6 @@ it("native Workflow retirement preserves visible Tool identity through stdio, re
   writeFileSync(fixture.path("models.toml"), modelsToml(provider.url("/v1")).replaceAll("integration-model", "workflow-model"));
   writeFileSync(fixture.path("rustx.toml"), RUNTIME_CONFIG_TOML.replace("fixture/integration-model", "fixture/workflow-model") + '\nworkflows = ["review_pr"]\n[agent.tools]\nbuiltin = ["read"]\n' );
   writeFileSync(join(workspace, ".agents/workflows/review_pr.yaml"), `description: Inspect registered workflow files.
-tools: [{origin: builtin, name: glob}]
 block:
   input:
     type: object

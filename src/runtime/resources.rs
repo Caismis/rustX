@@ -85,9 +85,6 @@ pub struct RuntimeResourceSnapshot {
         SubagentName,
         Arc<crate::runtime::agent_profile::ResolvedAgentProfile>,
     >,
-    /// The profiles explicitly admitted to the main Agent domain.
-    /// The profiles explicitly admitted to Workflow Agent nodes.
-    subagent_workflow: BTreeSet<SubagentName>,
     /// The immutable discovered Workflow programs of this generation.
     workflows: Arc<WorkflowCatalog>,
     managed_python: ManagedPythonCatalog,
@@ -141,7 +138,7 @@ impl RuntimeResourceSnapshot {
                 availability: &self.capability_availability,
                 skills: self.capability.skills(),
                 agents: &self.subagents.names().into_iter().cloned().collect(),
-                workflows: &self.workflows.admitted().clone(),
+                workflows: &self.workflows.enabled_ids(),
                 scope: AgentScope::Root,
             },
         );
@@ -159,7 +156,7 @@ impl RuntimeResourceSnapshot {
             AgentProfileAuthority, AgentScope, resolve_agent_profile,
         };
         let agents = self.subagents.names().into_iter().cloned().collect();
-        let workflows = self.workflows.admitted().clone();
+        let workflows = self.workflows.enabled_ids();
         let authority = AgentProfileAuthority {
             tools: self.capability.available_tools(),
             availability: &self.capability_availability,
@@ -235,7 +232,6 @@ impl RuntimeResourceSnapshot {
             capability,
             subagents: Arc::new(AgentCatalog::empty()),
             resolved_agents: std::collections::BTreeMap::new(),
-            subagent_workflow: BTreeSet::new(),
             workflows: Arc::new(WorkflowCatalog::empty()),
             managed_python: ManagedPythonCatalog::default(),
             capability_availability: CapabilityAvailability::new(),
@@ -247,17 +243,6 @@ impl RuntimeResourceSnapshot {
     pub fn with_subagent_catalog(mut self, catalog: AgentCatalog) -> Self {
         self.subagents = Arc::new(catalog);
         self.resolve_profiles();
-        self
-    }
-
-    /// Freezes the independent main and Workflow profile admissions.
-    #[must_use]
-    pub fn with_workflow_admission(mut self, workflow: BTreeSet<SubagentName>) -> Self {
-        #[cfg(test)]
-        crate::local_runtime::static_effects::observe(
-            crate::local_runtime::static_effects::Effect::AuthorityMutation,
-        );
-        self.subagent_workflow = workflow;
         self
     }
 
@@ -329,7 +314,6 @@ impl RuntimeResourceSnapshot {
             capability,
         )
         .with_subagent_catalog(prepared.subagents)
-        .with_workflow_admission(prepared.subagent_workflow)
         .with_workflow_catalog(prepared.workflows)
         .with_managed_python_catalog(prepared.managed_python)
         .with_capability_availability(prepared.capability_availability)
@@ -408,12 +392,6 @@ impl RuntimeResourceSnapshot {
             .map_or(&EMPTY, |profile| &profile.agents)
     }
 
-    /// The explicitly Workflow-admitted profile ids.
-    #[must_use]
-    pub fn subagent_workflow_admission(&self) -> &BTreeSet<SubagentName> {
-        &self.subagent_workflow
-    }
-
     /// The immutable discovered Workflow catalog.
     #[must_use]
     pub fn workflows(&self) -> &WorkflowCatalog {
@@ -434,7 +412,6 @@ pub struct PreparedRuntimeResources {
     agent_profile: Option<String>,
     context_assembly: ContextAssembly,
     subagents: AgentCatalog,
-    subagent_workflow: BTreeSet<SubagentName>,
     workflows: WorkflowCatalog,
     managed_python: ManagedPythonCatalog,
     capability: PreparedCapabilityCandidate,
@@ -447,7 +424,6 @@ pub(crate) struct PreparedRuntimeResourceData {
     agent_profile: Option<String>,
     context_assembly: ContextAssembly,
     subagents: AgentCatalog,
-    subagent_workflow: BTreeSet<SubagentName>,
     workflows: WorkflowCatalog,
     managed_python: ManagedPythonCatalog,
     capability_availability: CapabilityAvailability,
@@ -467,7 +443,6 @@ impl PreparedRuntimeResources {
             agent_profile,
             context_assembly,
             subagents: AgentCatalog::empty(),
-            subagent_workflow: BTreeSet::new(),
             workflows: WorkflowCatalog::empty(),
             managed_python: ManagedPythonCatalog::default(),
             capability,
@@ -483,13 +458,6 @@ impl PreparedRuntimeResources {
     #[must_use]
     pub fn with_subagent_catalog(mut self, catalog: AgentCatalog) -> Self {
         self.subagents = catalog;
-        self
-    }
-
-    /// Adds the independent profile admissions to the candidate generation.
-    #[must_use]
-    pub fn with_workflow_admission(mut self, workflow: BTreeSet<SubagentName>) -> Self {
-        self.subagent_workflow = workflow;
         self
     }
 
@@ -536,7 +504,6 @@ impl PreparedRuntimeResources {
             agent_profile,
             context_assembly,
             subagents,
-            subagent_workflow,
             workflows,
             managed_python,
             capability,
@@ -549,7 +516,6 @@ impl PreparedRuntimeResources {
                 agent_profile,
                 context_assembly,
                 subagents,
-                subagent_workflow,
                 workflows,
                 managed_python,
                 capability_availability,

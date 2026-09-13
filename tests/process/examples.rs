@@ -59,14 +59,7 @@ fn assert_example_resource_snapshot(resources: &RuntimeResourceSnapshot) {
             .collect::<Vec<_>>(),
         vec!["navigator"]
     );
-    assert_eq!(
-        resources
-            .subagent_workflow_admission()
-            .iter()
-            .map(rustx::runtime::subagent::SubagentName::as_str)
-            .collect::<Vec<_>>(),
-        vec!["implementer", "planner", "reviewer"]
-    );
+
     assert!(
         resources
             .skill_catalog()

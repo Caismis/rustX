@@ -2,9 +2,6 @@ description: Implement greeting.py in one retained candidate, execute real check
   human acceptance.
 timeout_ms: 1800000
 workspace: {require_clean_parent: true}
-tools:
-- {origin: builtin, name: ask_user}
-- {origin: builtin, name: bash}
 block:
   input:
     type: object

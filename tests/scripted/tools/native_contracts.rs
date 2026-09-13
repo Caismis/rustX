@@ -618,8 +618,15 @@ fn selection_registry(fixture: &common::NativeFixture) -> rustx::tools::executor
         "block":{"input":{"type":"object","additionalProperties":false},
         "output":{"type":"object","additionalProperties":false},"entry":"done",
         "nodes":{"done":{"type":"return","output":{"type":"reference","path":["args"]}}},"edges":[]}
-    })).unwrap(), &std::collections::BTreeSet::new()).unwrap();
-    let workflows = WorkflowCatalog::new([program], [id]).unwrap();
+    })).unwrap()).unwrap();
+    let mut workflows = WorkflowCatalog::new([program]).unwrap();
+    workflows.admit(
+        &rustx::capabilities::AvailableToolCatalog::default(),
+        &std::collections::BTreeMap::new(),
+        &rustx::skills::SkillSnapshot::new(Vec::new()),
+        &rustx::runtime::subagent::AgentCatalog::empty(),
+        &std::collections::BTreeMap::new(),
+    );
     let runtime = WorkflowRuntime::new(
         plane.registry.clone(),
         fixture.runtime.durable_store(),
