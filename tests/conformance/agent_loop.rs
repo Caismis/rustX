@@ -139,7 +139,7 @@ struct Setup {
     /// Explicit Skill resources for this isolated provider fixture.
     skill_paths: Vec<PathBuf>,
     /// Keep the provider fixture independent from the invoking user's roots.
-    no_skills: bool,
+    no_automatic_skills: bool,
 }
 
 impl Setup {
@@ -151,7 +151,7 @@ impl Setup {
             keep_recent_tokens: 8_192,
             summary_model: None,
             skill_paths: Vec::new(),
-            no_skills: true,
+            no_automatic_skills: true,
         }
     }
 }
@@ -179,9 +179,9 @@ impl Driver {
             models: root.path().join("models.toml"),
             config: root.path().join("rustx.toml"),
             skill_paths: setup.skill_paths.clone(),
-            no_skills: setup.no_skills,
+            no_automatic_skills: setup.no_automatic_skills,
             no_builtin_tools: false,
-            no_tools: false,
+            no_direct_tools: false,
             startup_session: rustx::local_runtime::StartupSession::Empty,
             session_name: None,
             tools: None,
@@ -1270,9 +1270,9 @@ async fn a_crash_after_the_request_start_commit_never_resends_the_request() {
         models: root.path().join("models.toml"),
         config: root.path().join("rustx.toml"),
         skill_paths: setup.skill_paths.clone(),
-        no_skills: setup.no_skills,
+        no_automatic_skills: setup.no_automatic_skills,
         no_builtin_tools: false,
-        no_tools: false,
+        no_direct_tools: false,
         startup_session: rustx::local_runtime::StartupSession::Empty,
         session_name: None,
         tools: None,

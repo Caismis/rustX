@@ -7,7 +7,6 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::launch::{HostEnvironment, LaunchRequest, Origin, ProspectiveLaunch};
-use crate::capabilities::activation::SourceActivation;
 
 pub(super) const OUTPUT_LIMIT: usize = 256 * 1024;
 
@@ -151,15 +150,6 @@ impl std::fmt::Debug for LaunchFailure {
 impl std::error::Error for LaunchFailure {}
 
 #[derive(Debug, Serialize)]
-pub struct SourceProjection {
-    pub activation: SourceActivation,
-    /// Canonical package identity exists; readiness remains a separate fact.
-    pub discovered_package: bool,
-    pub readiness: &'static str,
-    pub reason: &'static str,
-}
-
-#[derive(Debug, Serialize)]
 pub struct LaunchProjection {
     pub roles:
         BTreeMap<crate::runtime::subagent::SubagentName, super::agent_resources::AgentSource>,
@@ -169,28 +159,7 @@ pub struct LaunchProjection {
     pub selected_model: String,
     pub configuration: Value,
     pub provenance: BTreeMap<String, ProvenanceProjection>,
-    pub sources: BTreeMap<String, SourceProjection>,
-    pub tool_selection: Value,
-    pub discovered_workflows: Vec<String>,
-    pub local_skills: Vec<String>,
-    /// The effective source provenance of every admitted Skill identity,
-    /// including what each one shadowed (Issue #280).
-    pub skill_provenance: Vec<crate::skills::SkillProvenance>,
-    /// The typed generation-scoped Skill discovery facts of this launch.
-    /// They are already canonically ordered; this projection only reports
-    /// them, and #275 owns their final presentation.
-    pub skill_diagnostics: Vec<SkillDiagnosticProjection>,
     pub provider: Value,
-}
-
-/// One typed Skill diagnostic with its severity and rendered explanation.
-#[derive(Debug, Serialize)]
-pub struct SkillDiagnosticProjection {
-    pub severity: crate::skills::SkillDiagnosticSeverity,
-    pub source: Option<crate::skills::SkillSource>,
-    #[serde(flatten)]
-    pub fact: crate::skills::SkillDiagnostic,
-    pub explanation: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -227,6 +196,8 @@ impl PartialProjection {
 
 #[derive(Debug, Serialize)]
 pub struct Report {
+    pub capabilities: Option<crate::runtime::capability_inspection::CapabilityInspection>,
+    pub agent: Option<crate::runtime::capability_inspection::AgentInspection>,
     pub workflow: Option<super::workflow_inspection::WorkflowProjection>,
     pub version: u32,
     pub operation: &'static str,
@@ -243,7 +214,9 @@ pub struct Report {
 impl Report {
     pub(super) fn new(operation: &'static str) -> Self {
         Self {
-            version: 1,
+            version: 2,
+            capabilities: None,
+            agent: None,
             workflow: None,
             operation,
             scope: "prospective_next_launch",
@@ -322,6 +295,8 @@ impl Report {
         if fits(&value) {
             return value;
         }
+        value["capabilities"] = Value::Null;
+        value["agent"] = Value::Null;
         value["launch"] = Value::Null;
         value["workflow"] = Value::Null;
         value["partial"] = Value::Null;
@@ -442,6 +417,7 @@ pub(super) fn inspect(
 #[allow(clippy::too_many_lines)] // One redacted projection, no alternate resolution.
 fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
     let mut report = Report::new(operation);
+    report.capabilities = Some(launch.inspection.clone());
     report.diagnostics.push(Diagnostic {
         classification: "warning",
         category: "unresolved",
@@ -465,93 +441,22 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
             column: None,
         });
     }
-    let mut sources = BTreeMap::new();
-    for (name, activation) in &launch.source_activations {
-        let activation = *activation;
-        let discovered_package = launch.managed_python.packages().contains_key(name);
-        let (readiness, reason) = match activation {
-            SourceActivation::Enabled => {
-                report.readiness = Some(Readiness::Unresolved);
-                (
-                    "unresolved",
-                    "capabilities require explicit online discovery",
-                )
-            }
-            SourceActivation::Disabled => ("inert", "explicitly disabled; not loaded"),
-            SourceActivation::Unconfigured => ("inert", "no explicit activation grant; not loaded"),
-            SourceActivation::Untrusted => ("inert", "host trust has not admitted this source"),
-        };
-        let path = if matches!(name, crate::capabilities::ToolSourceId::Mcp(id) if launch.config.mcp_servers.contains_key(id))
-        {
-            format!("mcp_servers.{name}")
-        } else {
-            format!("tools.{name}")
-        };
-        let file = launch
-            .provenance
-            .get(&path)
-            .and_then(|origin| match origin {
-                Origin::User { document, .. } | Origin::Project { document, .. } => {
-                    Some(document.clone())
-                }
-                Origin::Builtin | Origin::Cli { .. } => None,
-            });
+    // Source lifecycle decisions are already frozen in the candidate. Human
+    // descriptions render those facts, never evaluate source configuration.
+    for (name, state) in &launch.inspection.sources {
+        let path = format!("tools.sources.{name}");
         report.diagnostics.push(Diagnostic {
-            classification: if readiness == "unresolved" {
-                "warning"
-            } else {
-                "info"
-            },
-            category: readiness,
-            file,
-            path,
-            reason: reason.into(),
-            correction: match activation {
-                SourceActivation::Enabled => {
-                    "use doctor --probe for explicitly authorized readiness checks"
-                }
-                SourceActivation::Untrusted => {
-                    "review the workspace and grant trust explicitly before activation"
-                }
-                SourceActivation::Disabled | SourceActivation::Unconfigured => {
-                    "discovery grants no execution authority; preparation requires admitted source demand"
-                }
-            }
-            .into(),
-            line: None,
-            column: None,
+            classification: "info", category: "source_state", file: None, path,
+            reason: serde_json::to_string(state).expect("source fact serializes"),
+            correction: "offline inspection never prepares sources; preparation requires source authority and admitted demand".into(),
+            line: None, column: None,
         });
-        sources.insert(
-            name.to_string(),
-            SourceProjection {
-                activation,
-                discovered_package,
-                readiness,
-                reason,
-            },
-        );
     }
     let mut configuration =
         serde_json::to_value(&*launch.config).expect("configuration serializes");
     redact(&mut configuration);
     report.launch = Some(LaunchProjection {
         roles: launch.role_sources.clone(),
-        local_skills: launch
-            .skill_provenance
-            .iter()
-            .map(|entry| entry.name.clone())
-            .collect(),
-        skill_provenance: launch.skill_provenance.clone(),
-        skill_diagnostics: launch
-            .skill_diagnostics
-            .iter()
-            .map(|fact| SkillDiagnosticProjection {
-                severity: fact.severity(),
-                source: fact.source(),
-                explanation: fact.to_string(),
-                fact: fact.clone(),
-            })
-            .collect(),
         provider: launch.models.providers().find(|provider| &provider.id == launch.config.initial_model().model.provider()).map_or(Value::Null, |provider| json!({"id":provider.id, "endpoint":provider.base_url, "credential":provider.api_key.view(), "verification":"deferred; no credential value or connectivity was checked"})),
         workspace: launch.workspace.clone(),
         runtime_root: launch.runtime_root.clone(),
@@ -568,23 +473,6 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
             };
             (field.clone(), ProvenanceProjection { origin: origin.clone(), authority, reason })
         }).collect(),
-        sources,
-        tool_selection: json!({"selected": launch.selected_tools, "noTools":launch.no_tools, "noBuiltinTools":launch.no_builtin_tools,
-            "allowlist":launch.tools, "exclusions":launch.exclude_tools, "defaults":launch.config.agent.tools.builtin,
-            "exclusionReason": if launch.no_tools { "--no-tools removes every ordinary main-model Tool" } else { "exact allowlist/default selection followed by final exclusions; no mandatory Read insertion" },
-            // The second authority plane (Issue #259). Everything above
-            // describes ordinary execution capabilities; a Tool contributed by
-            // a composed Agent Extension is not selectable through any of it,
-            // and `--no-tools` does not remove one. Reporting the two together
-            // is what keeps this projection an honest account of the Tool set
-            // a next launch would publish.
-            "extensionTools": crate::extensions::composed_extension_tool_names(
-                &launch.config.extension_composition(),
-            ),
-            "extensionToolsReason":"provided by composed Native Agent Extensions; not selectable through builtin_tools/--tools/--exclude-tools, and not removed by --no-tools",
-            "onlineIdentities":"unresolved until source discovery"}),
-        discovered_workflows: launch.workflows.entries().keys().map(ToString::to_string)
-            .collect(),
     });
     report
 }

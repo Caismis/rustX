@@ -26,21 +26,22 @@ fn report(output: &Output, exit: i32) -> serde_json::Value {
     serde_json::from_slice(&output.stdout).expect("one structured JSON record")
 }
 
+fn state_tree(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>> {
+    let mut tree = std::collections::BTreeMap::new();
+    for entry in std::fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            tree.insert(path.clone(), None);
+            tree.extend(state_tree(&path));
+        } else {
+            tree.insert(path.clone(), Some(std::fs::read(path).unwrap()));
+        }
+    }
+    tree
+}
+
 #[test]
 fn cfg237_binary_workflow_commands_share_json_exit_and_read_only_contract() {
-    fn state_tree(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>> {
-        let mut tree = std::collections::BTreeMap::new();
-        for entry in std::fs::read_dir(root).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                tree.insert(path.clone(), None);
-                tree.extend(state_tree(&path));
-            } else {
-                tree.insert(path.clone(), Some(std::fs::read(path).unwrap()));
-            }
-        }
-        tree
-    }
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().join("workspace");
     let user = root.path().join("home/.config/rustx");
@@ -82,8 +83,7 @@ workflows = []
         );
         assert_eq!(value["validity"], "valid");
         assert_eq!(value["readiness"], "unresolved");
-        assert_eq!(value["workflow"]["discovered"], true);
-        assert_eq!(value["workflow"]["configured_main_admission"], false);
+        assert_eq!(value["workflow"]["admission"]["status"], "enabled");
         assert_eq!(
             value["workflow"]["program"].is_object(),
             operation == "explain"
@@ -270,4 +270,56 @@ command = "must-never-spawn"
     assert_eq!(records[1]["results"][1]["state"], "skipped");
     assert_eq!(records[0]["targets"][1]["prepare_environment"], false);
     assert!(!root.path().join("workspace/.rustx").exists());
+}
+
+#[test]
+fn cfg275_agent_inspection_and_removed_flags_are_offline() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("workspace")).unwrap();
+    let user = root.path().join("home/.config/rustx");
+    std::fs::create_dir_all(&user).unwrap();
+    std::fs::write(
+        user.join("models.toml"),
+        include_bytes!("../../examples/local-runtime/minimal/models.toml"),
+    )
+    .unwrap();
+    std::fs::write(
+        user.join("settings.toml"),
+        include_bytes!("../../examples/local-runtime/minimal/settings.toml"),
+    )
+    .unwrap();
+    assert!(run(root.path(), &["--trust", "grant"]).status.success());
+    let before = state_tree(&root.path().join("home/.local/state"));
+    let result = run(
+        root.path(),
+        &["config", "show", "--agent", "main", "--json"],
+    );
+    let value = report(&result, 3);
+    assert_eq!(value["agent"]["identity"]["kind"], "main");
+    assert!(value["agent"]["diagnostics"].is_array());
+    for args in [
+        vec!["config", "show"],
+        vec!["config", "show", "--agent"],
+        vec!["config", "show", "--sources", "--agent", "main"],
+        vec!["config", "show", "--agent", "main", "--sources"],
+    ] {
+        let output = run(root.path(), &args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(
+            output.stdout.is_empty(),
+            "invalid modes produce no inspection"
+        );
+    }
+    for flag in ["--no-tools", "--no-skills"] {
+        assert_eq!(
+            run(
+                root.path(),
+                &["config", "show", "--agent", "main", flag, "--json"]
+            )
+            .status
+            .code(),
+            Some(2)
+        );
+    }
+    assert_eq!(before, state_tree(&root.path().join("home/.local/state")));
 }

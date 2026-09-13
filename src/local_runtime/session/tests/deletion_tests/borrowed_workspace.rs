@@ -384,6 +384,7 @@ fn deletion_overridden_borrowers_keep_profile_identity_out_of_ownership_revision
     let root = tempfile::tempdir().unwrap();
     let mut fixture = Fixture::create(root.path(), 0);
     let mut spec = ResolvedSubagentSpec {
+        selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
         agent: crate::runtime::subagent::SubagentName::parse("explore").unwrap(),
         definition_digest: serde_json::from_value(serde_json::json!("sha256:definition")).unwrap(),
         execution_deadline: None,

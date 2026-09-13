@@ -27,11 +27,11 @@ pub struct LaunchLocations {
     /// Repeatable explicit Skill package/root paths from the command line.
     pub skill_paths: Vec<PathBuf>,
     /// Disable automatic/default Skill roots while retaining explicit paths.
-    pub no_skills: bool,
-    /// Remove built-ins, including Read and generated Tools, from default selection.
+    pub no_automatic_skills: bool,
+    /// Remove ordinary builtin Tools from direct selection; delegation and Workflow dispatch stay independent.
     pub no_builtin_tools: bool,
-    /// Expose zero ordinary main-model Tools; source activation stays independent.
-    pub no_tools: bool,
+    /// Remove ordinary direct Tool exposure; source activation and dispatch stay independent.
+    pub no_direct_tools: bool,
     /// The Session this launch binds. Startup never resumes on its own;
     /// `--continue` is the explicit request behind
     /// [`StartupSession::ContinueActive`] and `--session` the one behind
@@ -90,9 +90,9 @@ pub struct LaunchRequest {
     pub model: Option<String>,
     pub trust: Option<TrustAction>,
     pub skill_paths: Vec<PathBuf>,
-    pub no_skills: bool,
+    pub no_automatic_skills: bool,
     pub no_builtin_tools: bool,
-    pub no_tools: bool,
+    pub no_direct_tools: bool,
     pub startup_session: StartupSession,
     pub session_name: Option<String>,
     pub tools: Option<Vec<String>>,
@@ -190,30 +190,16 @@ pub struct ResolvedLaunch {
 /// no credential snapshot. Only runtime admission can produce a resolved launch.
 #[derive(Clone)]
 pub struct ProspectiveLaunch {
+    pub(crate) inspection: crate::runtime::capability_inspection::CapabilityInspection,
     pub(crate) request: LaunchRequest,
     pub(crate) host: HostEnvironment,
     pub(crate) managed_python: crate::runtime::resources::ManagedPythonCatalog,
     pub(crate) trusted: bool,
     pub(crate) workflows: std::sync::Arc<crate::runtime::workflow::WorkflowCatalog>,
-    pub(crate) workflow_dependencies: std::sync::Arc<
-        BTreeMap<
-            crate::runtime::workflow::WorkflowId,
-            Vec<crate::runtime::workflow::inspection::ToolDependency>,
-        >,
-    >,
     pub(crate) subagents: crate::runtime::subagent::AgentCatalog,
-    /// The effective source provenance of every admitted Skill identity.
-    pub(crate) skill_provenance: Vec<crate::skills::SkillProvenance>,
-    /// The typed Skill discovery facts of this prospective launch.
-    pub(crate) skill_diagnostics: Vec<crate::skills::SkillDiagnostic>,
     pub(crate) agent_root: PathBuf,
     pub(crate) role_sources:
         BTreeMap<crate::runtime::subagent::SubagentName, super::agent_resources::AgentSource>,
-    pub(crate) source_activations: BTreeMap<
-        crate::capabilities::ToolSourceId,
-        crate::capabilities::activation::SourceActivation,
-    >,
-    pub(crate) selected_tools: Option<Vec<String>>,
     pub(crate) locations: LaunchLocations,
     pub(crate) config: std::sync::Arc<CurrentRuntimeConfig>,
     pub(crate) models: ModelCatalog,
@@ -306,7 +292,7 @@ impl ProspectiveLaunch {
             approval_mode: self.config.approval_mode,
             approval_origin: origin("approval_mode"),
             runtime_root_origin: origin("runtime_root"),
-            tool_selection_origin: if self.no_tools
+            tool_selection_origin: if self.no_direct_tools
                 || self.no_builtin_tools
                 || self.tools.is_some()
                 || self.request.exclude_tools.is_some()
@@ -328,7 +314,7 @@ impl ProspectiveLaunch {
     /// admitted, including what each one shadowed (Issue #280).
     #[must_use]
     pub fn skill_provenance(&self) -> &[crate::skills::SkillProvenance] {
-        &self.skill_provenance
+        &self.inspection.skills
     }
 
     /// The typed, canonically ordered Skill discovery facts of this launch.
@@ -337,7 +323,7 @@ impl ProspectiveLaunch {
     /// launch; only the explicit `--skill` authority itself can fail one.
     #[must_use]
     pub fn skill_diagnostics(&self) -> &[crate::skills::SkillDiagnostic] {
-        &self.skill_diagnostics
+        &self.inspection.skill_diagnostics
     }
 
     /// Safe field origins, without configuration values.
@@ -408,7 +394,7 @@ pub fn resolve_locations(
         crate::capabilities::validate_tool_names(names, "exclusion")?;
     }
     crate::capabilities::AgentActivation {
-        no_tools: request.no_tools,
+        no_direct_tools: request.no_direct_tools,
         no_builtin_tools: request.no_builtin_tools,
         tools: request.tools.clone(),
         exclude_tools: request.exclude_tools.clone().unwrap_or_default(),
@@ -437,9 +423,9 @@ pub fn resolve_locations(
                 .iter()
                 .map(|p| absolute(&launch, p))
                 .collect(),
-            no_skills: request.no_skills,
+            no_automatic_skills: request.no_automatic_skills,
             no_builtin_tools: request.no_builtin_tools,
-            no_tools: request.no_tools,
+            no_direct_tools: request.no_direct_tools,
             startup_session: request.startup_session.clone(),
             session_name: request.session_name.clone(),
             tools: request.tools.clone(),
@@ -729,8 +715,8 @@ pub fn analyze(
     RuntimeLayer::record_default_origins(&config, &mut provenance);
     for (key, present) in [
         ("skills.cli", !request.skill_paths.is_empty()),
-        ("no_skills", request.no_skills),
-        ("no_tools", request.no_tools),
+        ("no_automatic_skills", request.no_automatic_skills),
+        ("no_direct_tools", request.no_direct_tools),
         ("no_builtin_tools", request.no_builtin_tools),
         ("tools", request.tools.is_some()),
         ("exclude_tools", request.exclude_tools.is_some()),
@@ -778,10 +764,10 @@ pub fn analyze(
         );
     }
     // The session Skill source policy decides *where* packages may be
-    // discovered. `--no-skills` is the launch-level off switch for automatic
+    // discovered. `--no-automatic-skills` is the launch-level off switch for automatic
     // discovery; the policy itself never names a rustX configuration
     // directory, and the global root is resolved from the captured host home.
-    let skill_sources = if request.no_skills {
+    let skill_sources = if request.no_automatic_skills {
         Vec::new()
     } else {
         crate::skills::automatic_skill_roots(
@@ -814,7 +800,7 @@ pub fn analyze(
             BTreeMap::new(),
         )
     };
-    let workflows = if trusted {
+    let mut workflows = if trusted {
         super::workflow_resources::load(&locations.workspace).map_err(LaunchFailure::resource)?
     } else {
         crate::runtime::workflow::WorkflowCatalog::empty()
@@ -848,9 +834,7 @@ pub fn analyze(
     } else {
         crate::skills::SkillDiscoveryOutcome::default()
     };
-    let skill_diagnostics = skill_discovery.diagnostics.clone();
     let skills = crate::skills::SkillSnapshot::from_discovery(skill_discovery);
-    let skill_provenance = skills.provenance().to_vec();
     crate::runtime::subagent::SubagentResolver::validate_local_references(
         &subagents,
         &skills,
@@ -932,69 +916,80 @@ pub fn analyze(
             )
         })
         .collect();
-    let workflow_dependencies = workflows
-        .inspect_metadata(&definitions, &availability, |definition| {
-            Ok(native_leaves.contains(&definition.id))
-        })
-        .map_err(|e| {
-            let reason: String = e.reason.chars().take(1024).collect();
-            LaunchFailure::at(
-                Some(
-                    locations
-                        .workspace
-                        .join(".agents/workflows")
-                        .join(format!("{}.yaml", e.workflow)),
-                ),
-                &e.path,
-                &reason,
-                "select a known eligible native leaf or a declared external source",
-                e.to_string(),
-            )
-        })?;
-    let online = config
-        .mcp_servers
-        .values()
-        .any(|source| source.enabled == Some(true));
+    let available_catalog =
+        crate::capabilities::AvailableToolCatalog::metadata(definitions.clone());
+    workflows.admit_metadata(
+        &available_catalog,
+        &availability,
+        &skills,
+        &subagents,
+        &native_leaves,
+    );
     let policy = crate::capabilities::AgentActivation {
         profile: config.agent.clone(),
         admitted_agents: subagents.names().into_iter().cloned().collect(),
         admitted_workflows: workflows.enabled_ids().clone(),
         project_files: super::agent_resources::load_profile_files(&config.agent.agents_md.files)
             .map_err(LaunchFailure::resource)?,
-        no_tools: locations.no_tools,
+        no_direct_tools: locations.no_direct_tools,
         no_builtin_tools: locations.no_builtin_tools,
         tools: locations.tools.clone(),
         exclude_tools: locations.exclude_tools.clone(),
     };
-    let selected_tools = if (online || !trusted) && !locations.no_tools {
-        None
-    } else {
-        Some(
-            crate::capabilities::select_definitions(
-                &definitions.iter().collect::<Vec<_>>(),
-                &policy,
-                &skills,
-                &availability,
-            )?
-            .into_iter()
-            .map(|definition| definition.name.clone())
-            .collect(),
-        )
+    let main = crate::capabilities::inspect_profile(
+        &definitions.iter().collect::<Vec<_>>(),
+        &policy,
+        &skills,
+        &availability,
+    )?;
+    let names = subagents.names().into_iter().cloned().collect();
+    let admitted_workflows = workflows.enabled_ids();
+    let authority = crate::runtime::agent_profile::AgentProfileAuthority {
+        tools: &available_catalog,
+        availability: &availability,
+        skills: &skills,
+        agents: &names,
+        workflows: &admitted_workflows,
+        scope: crate::runtime::agent_profile::AgentScope::OneShotChild,
     };
+    let profiles: BTreeMap<_, _> = subagents
+        .definitions()
+        .map(|definition| {
+            (
+                definition.name().clone(),
+                crate::runtime::agent_profile::resolve_agent_profile(
+                    definition.profile(),
+                    &authority,
+                ),
+            )
+        })
+        .collect();
+    let inspection = crate::runtime::capability_inspection::CapabilityInspection::collect(
+        Some(&main),
+        profiles.iter().map(|(name, profile)| {
+            (
+                name,
+                profile,
+                subagents
+                    .get(name)
+                    .expect("resolved definition")
+                    .instructions_source(),
+            )
+        }),
+        &workflows,
+        &availability,
+        &skills,
+    );
     Ok(ProspectiveLaunch {
+        inspection,
         request: request.clone(),
         host: host.clone(),
-        workflow_dependencies: std::sync::Arc::new(workflow_dependencies),
         managed_python,
         trusted,
         workflows: std::sync::Arc::new(workflows),
         subagents,
         agent_root,
         role_sources,
-        skill_provenance,
-        skill_diagnostics,
-        source_activations,
-        selected_tools,
         locations,
         config: std::sync::Arc::new(config),
         models,

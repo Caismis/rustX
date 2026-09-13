@@ -1150,9 +1150,9 @@ async fn published_tools(
 /// Todo on,  every ordinary default        -> todo present
 /// Todo on,  agent.tools.builtin naming only read -> todo present
 /// Todo on,  --tools read (exact)          -> todo present
-/// Todo on,  --no-tools                    -> todo present
+/// Todo on,  --no-direct-tools                    -> todo present
 /// Todo off, every ordinary default        -> todo absent
-/// Todo off, --no-tools                    -> no Tool at all
+/// Todo off, --no-direct-tools                    -> no Tool at all
 /// ```
 ///
 /// The last two rows are the documented refinement of #234's exact-selection
@@ -1183,7 +1183,7 @@ async fn ext259_ordinary_tool_selection_neither_adds_nor_removes_the_extension_t
             ..Selection::default()
         },
         Selection {
-            no_tools: true,
+            no_direct_tools: true,
             ..Selection::default()
         },
         Selection {
@@ -1210,23 +1210,23 @@ async fn ext259_ordinary_tool_selection_neither_adds_nor_removes_the_extension_t
     }
 
     // The exact shape of the two ends of the range.
-    let (no_tools_with_todo, _) = published_tools(
+    let (no_direct_tools_with_todo, _) = published_tools(
         &enabled,
         Selection {
-            no_tools: true,
+            no_direct_tools: true,
             ..Selection::default()
         },
     )
     .await;
     assert_eq!(
-        no_tools_with_todo,
+        no_direct_tools_with_todo,
         vec!["todo".to_owned()],
-        "--no-tools selects zero ordinary capabilities and says nothing about an extension"
+        "--no-direct-tools selects zero ordinary capabilities and says nothing about an extension"
     );
     let (nothing, _) = published_tools(
         &todo_and_status(false, true),
         Selection {
-            no_tools: true,
+            no_direct_tools: true,
             ..Selection::default()
         },
     )
@@ -1792,7 +1792,7 @@ async fn ext259_a_resource_reload_cannot_install_or_remove_the_todo_extension() 
                 source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
                 base_tool_registry: Arc::new(ordinary_base()),
                 agent_activation: rustx::capabilities::AgentActivation {
-                    no_tools: true,
+                    no_direct_tools: true,
                     ..rustx::capabilities::AgentActivation::default()
                 },
                 skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),

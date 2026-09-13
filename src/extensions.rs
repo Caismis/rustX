@@ -34,7 +34,7 @@
 //! + already-admitted domain protocols        the admitting domain decides
 //! ```
 //!
-//! Neither plane filters the other. `--no-tools` selects zero *ordinary*
+//! Neither plane filters the other. `--no-direct-tools` selects zero *ordinary*
 //! capabilities; it does not disable an independently composed extension, so a
 //! genuinely Tool-free model request needs no ordinary Tools **and** no
 //! Tool-providing extension. Symmetrically, naming an extension's Tool in
@@ -673,7 +673,7 @@ impl NativeAgentExtensions {
     /// + already-admitted domain protocols      Workflow output, ...
     /// ```
     ///
-    /// The two planes never filter one another: `--no-tools` selects zero
+    /// The two planes never filter one another: `--no-direct-tools` selects zero
     /// *ordinary* capabilities and says nothing about an independently
     /// composed extension, and an extension can never be switched on by
     /// naming its Tool in an ordinary allowlist.

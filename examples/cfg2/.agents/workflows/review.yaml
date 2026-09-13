@@ -1,0 +1,38 @@
+description: Echo a review topic, then produce a bounded Agent review.
+block:
+  input:
+    type: object
+    properties: {topic: {type: string}}
+    required: [topic]
+    additionalProperties: false
+  output: &result
+    type: object
+    properties: {summary: {type: string}}
+    required: [summary]
+    additionalProperties: false
+  entry: inspect
+  nodes:
+    inspect:
+      type: tool
+      selector: {origin: source, source_id: 'python:echo', name: echo}
+      arguments:
+        type: object
+        fields:
+          message: {type: reference, path: [args, topic]}
+      result: {type: text, part: 0}
+    review:
+      type: agent
+      profile: reviewer
+      task: Review the supplied topic and return a summary.
+      input:
+        topic: {type: reference, path: [inspect]}
+      # Replace the whole Tool dimension; the optional selection is not a
+      # static dependency of this child. Skills retain the named default.
+      override:
+        tools:
+          builtin: [read, grep]
+      output: *result
+    done:
+      type: return
+      output: {type: reference, path: [review]}
+  edges: [{from: inspect, to: review}, {from: review, to: done}]

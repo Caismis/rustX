@@ -307,7 +307,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
             // rereads the source policy itself, so a running composition
             // cannot gain or lose a source mid-session.
             let skill_discovery = SkillDiscoveryConfig {
-                automatic: if self.paths.no_skills {
+                automatic: if self.paths.no_automatic_skills {
                     Vec::new()
                 } else {
                     self.paths.skill_sources.clone()
@@ -338,7 +338,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                             &config.agent.agents_md.files,
                         )?,
                         no_builtin_tools: self.paths.no_builtin_tools,
-                        no_tools: self.paths.no_tools,
+                        no_direct_tools: self.paths.no_direct_tools,
                         tools: self.paths.tools.clone(),
                         exclude_tools: self.paths.exclude_tools.clone(),
                     },
@@ -723,7 +723,7 @@ async fn run_preparation_gate_if_armed(
 /// entries with their locations remapped onto the child's own copies.
 fn materialize_frozen_skills(
     spec: &crate::runtime::subagent::ipc::SubagentChildSpec,
-) -> Result<Vec<crate::skills::SkillCatalogEntry>, LocalRuntimeError> {
+) -> Result<crate::skills::SkillSnapshot, LocalRuntimeError> {
     let root = spec
         .runtime_root()
         .map_err(|e| LocalRuntimeError::ToolRuntime {
@@ -742,12 +742,18 @@ fn materialize_frozen_skills(
         .map_err(|error| LocalRuntimeError::Capability {
             detail: error.to_string(),
         })?;
-        entries.push(crate::skills::SkillCatalogEntry {
-            location,
-            ..skill.catalog_entry.clone()
-        });
+        let mut provenance = skill.provenance.clone();
+        provenance.location.clone_from(&location);
+        entries.push((
+            crate::skills::SkillCatalogEntry {
+                location,
+                ..skill.catalog_entry.clone()
+            },
+            skill.binding.clone(),
+            provenance,
+        ));
     }
-    Ok(entries)
+    Ok(crate::skills::SkillSnapshot::from_frozen(entries))
 }
 
 /// Projects the frozen specification into the child's selected-only
@@ -929,7 +935,7 @@ fn validate_subagent_catalog(
 
 /// Rejects a model-facing Workflow id that is already used by another
 /// capability in the same candidate generation. The active Tool selection can
-/// hide a duplicate under `noTools`, but hiding it must not turn an identity
+/// hide a duplicate under `noDirectTools`, but hiding it must not turn an identity
 /// collision into a valid configuration.
 fn validate_workflow_tool_name_collisions(
     candidate: &crate::capabilities::PreparedCapabilityCandidate,
@@ -1210,7 +1216,7 @@ impl LocalConversationCore {
             // explicit launch paths according to authority. Package discovery
             // retains its own canonical identity validation.
             let skill_discovery = SkillDiscoveryConfig {
-                automatic: if paths.no_skills {
+                automatic: if paths.no_automatic_skills {
                     Vec::new()
                 } else {
                     paths.skill_sources.clone()
@@ -1247,7 +1253,7 @@ impl LocalConversationCore {
                         detail: error.to_string(),
                     })?,
                     no_builtin_tools: paths.no_builtin_tools,
-                    no_tools: paths.no_tools,
+                    no_direct_tools: paths.no_direct_tools,
                     tools: paths.tools.clone(),
                     exclude_tools: paths.exclude_tools.clone(),
                 },
@@ -1582,11 +1588,12 @@ impl LocalConversationCore {
             // already gone, and every preparatory supervised unit observes the
             // one preparation cancellation authority.
             let candidate = if plan.is_empty() && !preparation_gate_armed(&runtime_root) {
-                capability.prepare_base_only_candidate().map_err(|error| {
-                    LocalRuntimeError::Capability {
+                capability
+                    .prepare_selected_candidate(&plan, &preparation.cancellation())
+                    .await
+                    .map_err(|error| LocalRuntimeError::Capability {
                         detail: format!("{error:?}"),
-                    }
-                })?
+                    })?
             } else {
                 let cancellation = preparation.cancellation();
                 let step = async {
@@ -1633,7 +1640,7 @@ impl LocalConversationCore {
                 }
             };
             capability
-                .commit(candidate)
+                .commit(candidate.with_frozen_child(&spec.resolved, skills))
                 .map_err(|error| LocalRuntimeError::Capability {
                     detail: format!("{error:?}"),
                 })?;
@@ -1654,7 +1661,7 @@ impl LocalConversationCore {
                     crate::context::ContextAssembly::new(),
                     capability.current_snapshot(),
                 )
-                .with_frozen_skill_catalog(&skills),
+                .with_capability_availability(capability.availability()),
             );
             let workflow_output_latch = match &spec.terminal {
                 crate::runtime::subagent::ipc::ChildTerminalMode::Normal => None,
@@ -2717,6 +2724,25 @@ chat_reasoning_replay = "omit"
             child_agent_id: AgentId::new("agent-child"),
             parent_agent_id: AgentId::new("agent-parent"),
             resolved: ResolvedSubagentSpec {
+                selection: crate::runtime::agent_profile::FrozenAgentSelection {
+                    tools: tools
+                        .iter()
+                        .map(|tool| match tool {
+                            ResolvedSubagentTool::Builtin { name, .. } => {
+                                crate::capabilities::selection::AgentToolSelection::Builtin {
+                                    name: name.clone(),
+                                }
+                            }
+                            ResolvedSubagentTool::Source {
+                                source_id, name, ..
+                            } => crate::capabilities::selection::AgentToolSelection::Source {
+                                source_id: source_id.clone(),
+                                name: name.clone(),
+                            },
+                        })
+                        .collect(),
+                    ..Default::default()
+                },
                 agent: SubagentName::parse("explore").expect("canonical name"),
                 definition_digest: serde_json::from_value(serde_json::json!("sha256:frozen"))
                     .expect("digest"),
@@ -3438,6 +3464,12 @@ enabled = true
             vec![builtin("read"), builtin("grep")],
             Vec::new(),
             vec![crate::runtime::subagent::ResolvedSubagentSkill {
+                provenance: crate::skills::SkillProvenance {
+                    name: "selected".into(),
+                    source: crate::skills::SkillSource::Workspace,
+                    location: source.join("SKILL.md").display().to_string(),
+                    shadowed: Vec::new(),
+                },
                 binding: crate::protocol::manifest::SkillBinding {
                     skill_id: crate::runtime::identity::SkillId::new("selected"),
                     version_id,
@@ -3556,6 +3588,12 @@ enabled = true
             vec![builtin("read")],
             Vec::new(),
             vec![crate::runtime::subagent::ResolvedSubagentSkill {
+                provenance: crate::skills::SkillProvenance {
+                    name: "selected".into(),
+                    source: crate::skills::SkillSource::Workspace,
+                    location: source.join("SKILL.md").display().to_string(),
+                    shadowed: Vec::new(),
+                },
                 binding: crate::protocol::manifest::SkillBinding {
                     skill_id: crate::runtime::identity::SkillId::new("selected"),
                     version_id,
@@ -4201,9 +4239,9 @@ mod conversation_inspection_tests {
 
         let paths = LaunchLocations {
             skill_paths: Vec::new(),
-            no_skills: true,
+            no_automatic_skills: true,
             no_builtin_tools: false,
-            no_tools: false,
+            no_direct_tools: false,
             startup_session: StartupSession::Empty,
             session_name: None,
             tools: None,
@@ -4265,9 +4303,9 @@ mod conversation_inspection_tests {
             .expect("the running child owns its transient liveness lease");
         let paths = LaunchLocations {
             skill_paths: Vec::new(),
-            no_skills: true,
+            no_automatic_skills: true,
             no_builtin_tools: false,
-            no_tools: false,
+            no_direct_tools: false,
             startup_session: StartupSession::InspectConversation {
                 conversation_id: conversation_id.clone(),
             },
@@ -4339,9 +4377,9 @@ mod composition_tests {
             models: root.join("models.toml"),
             config: root.join("rustx.toml"),
             skill_paths: Vec::new(),
-            no_skills: true,
+            no_automatic_skills: true,
             no_builtin_tools: false,
-            no_tools: false,
+            no_direct_tools: false,
             startup_session: super::StartupSession::Empty,
             session_name: None,
             tools: None,

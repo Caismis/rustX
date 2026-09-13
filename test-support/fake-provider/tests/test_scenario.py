@@ -88,7 +88,7 @@ def test_exact_matching_rejects_unexpected_top_level_keys():
 
 
 def test_a_summary_request_is_identified_by_the_absence_of_tools():
-    expect = Expect(protocol=OPENAI_CHAT_COMPLETIONS, no_tools=True)
+    expect = Expect(protocol=OPENAI_CHAT_COMPLETIONS, no_direct_tools=True)
     assert expect.failures(recorded({"model": "m"}), CODEC) == []
     body = {"model": "m", "tools": [{"type": "function", "function": {"name": "read"}}]}
     assert expect.failures(recorded(body), CODEC) != []

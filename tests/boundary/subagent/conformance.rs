@@ -331,6 +331,7 @@ fn test_spawn_plan(runtime_root: &std::path::Path) -> SubagentSpawnPlan {
 /// path.
 fn resolved_child_spec(agent: &str) -> ResolvedSubagentSpec {
     ResolvedSubagentSpec {
+        selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
         agent: SubagentName::parse(agent).expect("canonical subagent name"),
         definition_digest: serde_json::from_value(serde_json::json!(
             "sha256:0000000000000000000000000000000000000000000000000000000000000000"
@@ -4777,9 +4778,9 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
         models: dir.path().join("unused-models.toml"),
         config: dir.path().join("unused-config.toml"),
         skill_paths: Vec::new(),
-        no_skills: true,
+        no_automatic_skills: true,
         no_builtin_tools: false,
-        no_tools: false,
+        no_direct_tools: false,
         startup_session: rustx::local_runtime::StartupSession::InspectConversation {
             conversation_id: child_conversation_id.clone(),
         },

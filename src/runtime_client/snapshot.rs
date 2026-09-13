@@ -1136,11 +1136,8 @@ pub enum CapabilitySourceStateView {
     Unprepared,
     /// The source initialized; its capabilities are usable.
     Ready,
-    /// The source is unavailable; `reason` is the bounded diagnostic.
-    Unavailable {
-        /// The bounded failure diagnostic.
-        reason: String,
-    },
+    /// Preparation failed. External failure payloads are private owner data.
+    Unavailable,
 }
 
 /// One optional capability source's availability projection.
@@ -1188,6 +1185,8 @@ pub struct RuntimeClientTool {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeClientResourcesView {
+    /// Facts copied from the same immutable generation as this revision.
+    pub inspection: Box<crate::runtime::capability_inspection::CapabilityInspection>,
     /// The monotonic process-local resource generation.
     #[serde(default)]
     pub revision: RuntimeResourceRevision,

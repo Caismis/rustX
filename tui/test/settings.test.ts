@@ -14,7 +14,7 @@ it("CFG238 shares the native protocol fixture and explicit lifetimes", () => {
   // `effective_extensions.todo` member the fixture now carries in every state,
   // including the `todo_only` combination that proves the two extensions
   // project on independent axes.
-  assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 32);
+  assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 33);
   assert.equal(fixture.request.method, "default_save");
   if (fixture.request.method === "default_save") {
     assert.equal(fixture.request.scope, "user");
@@ -29,7 +29,7 @@ it("CFG238 reconstructs distinct launch, Session, pending and frozen facts from 
     launch_settings: { model: { model: "local/a", reasoning_profile: null }, model_origin: { kind: "user", document: "/config/settings.toml" }, reasoning_origin: { kind: "builtin" }, approval_mode: "policy", approval_origin: { kind: "builtin" }, runtime_root_origin: { kind: "cli" }, tool_selection_origin: { kind: "builtin" } },
     model: sessionModel("local/b"),
     effective_approval_mode: "policy", pending_approval_mode: "full_access",
-    resources: { revision: 8, context_files: [], agent_profile: false },
+    resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] }, revision: 8, context_files: [], agent_profile: false },
     attempt: attemptView({ model: attemptModel("local/c"), execution_settings: { resource_revision: 7, approval_mode: "policy" } }),
   });
   const live = replaceFromSnapshot(native, runtimeCursor(50));
@@ -200,4 +200,151 @@ it("EXT256 historical inspection reports no effective extension composition", ()
   assert.ok(!rendered.includes("launch capture"), "no boundary is claimed for an absent value");
   assert.ok(!rendered.includes("Agent Status: enabled"));
   assert.ok(!rendered.includes("Agent Status: disabled"));
+});
+
+
+it("CFG275 renders the native generation fixture without resolving capability state", () => {
+  const facts: import("../src/protocol/types.ts").CapabilityInspection = JSON.parse(readFileSync(new URL("../../tests/fixtures/runtime-client/capabilities-v33.json", import.meta.url), "utf8"));
+  const state = replaceFromSnapshot(snapshot({ resources: { revision: 7, inspection: facts } }), runtimeCursor(1));
+  const original = JSON.stringify(facts);
+  for (let index = 0; index < 3; index++) {
+    const output = renderSettings(state);
+    for (const expected of ["source_unavailable", "unprepared", "duplicate_identity", "workspace", "global", "block.nodes.inspect.selector"])
+      assert.ok(output.includes(expected), expected);
+    assert.equal(JSON.stringify(state.resources.inspection), original);
+  }
+});
+
+it("CFG275 redacted native causes match the TypeScript wire unions", () => {
+  const expected: {
+    source: import("../src/protocol/types.ts").SourceResolutionFailure;
+    workflow: import("../src/protocol/types.ts").WorkflowDependencyFailure;
+    skills: import("../src/protocol/types.ts").SkillDiagnostic[];
+  } = {
+  "source": {
+    "kind": "unavailable",
+    "detail": {}
+  },
+  "workflow": {
+    "kind": "materialization",
+    "detail": {}
+  },
+  "skills": [
+    {
+      "kind": "source_root_invalid",
+      "source": "workspace",
+      "root": "/workspace/.agents/skills"
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "invalid_name",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "name_directory_mismatch",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "missing_skill_markdown",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "skill_markdown_not_regular_file",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "malformed_frontmatter",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "invalid_description",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "invalid_compatibility",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "malformed_metadata",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "invalid_dependency_declaration",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "unsupported_symlink",
+        "path": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "unrepresentable_root",
+        "path": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "io",
+        "path": "/workspace/.agents/skills/review"
+      }
+    }
+  ]
+};
+  const fixture = JSON.parse(readFileSync(new URL("../../tests/fixtures/runtime-client/redacted-diagnostics-v33.json", import.meta.url), "utf8"));
+  assert.deepEqual(fixture, expected);
 });

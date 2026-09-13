@@ -87,7 +87,7 @@
 // Version 31: Goal joins coherent projection bootstrap and the bounded
 // `goal_changed` stream. Activation-only changes advance the client cursor
 // while preserving the independent durable Goal revision.
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 32;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 33;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -1297,7 +1297,74 @@ export interface RuntimeClientSkill {
  * The revision is deliberately independent of `CapabilityView.revision`: a
  * reload that changes only an `AGENTS.md` advances this one alone.
  */
+/** Generation facts copied from native owners; never resolved by the client. */
+export type SourceActivation = "unconfigured" | "disabled" | "enabled" | "untrusted";
+export type SourceResolutionFailure =
+  | { kind: "undefined" | "unprepared" }
+  | { kind: "inactive"; detail: SourceActivation }
+  | { kind: "unavailable"; detail: Record<string, never> };
+export type ToolSelectionError =
+  | { kind: "source_unavailable"; selector: string; source: string; reason: SourceResolutionFailure }
+  | { kind: "exact_tool_absent"; source: string; name: string }
+  | { kind: "unknown_capability"; selector: string };
+export type ScopeCapability =
+  | { kind: "agent" | "workflow" | "builtin_tool"; identity: string }
+  | { kind: "goal" };
+export type AgentProfileDiagnostic =
+  | { kind: "tool"; detail: ToolSelectionError }
+  | { kind: "skill_unavailable" | "disabled_skill_absent" | "agent_unavailable"; detail: { name: string } }
+  | { kind: "workflow_unavailable"; detail: { id: string } }
+  | { kind: "host_tool_suppressed"; detail: { id: string; name: string; source: string | null } }
+  | { kind: "scope_unsupported"; detail: { capability: ScopeCapability } };
+export type SkillSource = "global" | "workspace" | "explicit";
+export interface SkillProvenance {
+  name: string;
+  source: SkillSource;
+  location: string;
+  shadowed: { source: SkillSource; location: string }[];
+}
+export type SkillPackageError =
+  | { cause: "invalid_name" | "name_directory_mismatch" | "missing_skill_markdown" | "skill_markdown_not_regular_file" | "malformed_frontmatter" | "invalid_description" | "invalid_compatibility" | "malformed_metadata" | "invalid_dependency_declaration"; directory: string }
+  | { cause: "unsupported_symlink" | "unrepresentable_root" | "io"; path: string };
+export type SkillDiagnostic =
+  | { kind: "source_root_missing" | "source_root_invalid"; source: SkillSource; root: string }
+  | { kind: "source_budget_exceeded"; source: SkillSource; roots: string[]; candidates: number; limit: number }
+  | { kind: "package_invalid"; source: SkillSource; package: string; cause: SkillPackageError }
+  | { kind: "package_escapes_source"; source: SkillSource; package: string; root: string }
+  | { kind: "duplicate_identity"; source: SkillSource; name: string; packages: string[] }
+  | { kind: "shadowed"; name: string; effective_source: SkillSource; effective_location: string; shadowed_source: SkillSource; shadowed_location: string };
+export type WorkflowDependencyFailure =
+  | { kind: "not_admitted" }
+  | { kind: "materialization"; detail: Record<string, never> }
+  | { kind: "agent"; detail: AgentProfileDiagnostic }
+  | { kind: "tool"; detail: ToolSelectionError }
+  | { kind: "ineligible_tool"; detail: { origin: "builtin"; name: string } | { origin: "source"; source_id: string; name: string } };
+export type WorkflowAdmissionInspection =
+  | { status: "enabled" }
+  | { status: "disabled"; diagnostics: { path: string; reason: WorkflowDependencyFailure }[] };
+export interface AgentCapabilityInspection {
+  tool_selection: ({ origin: "builtin"; name: string } | { origin: "source"; source_id: string; name: string } | { origin: "all"; source_id: string })[];
+  identity: { kind: "main" } | { kind: "named"; name: string };
+  source: string | null;
+  tools: { id: string; name: string; origin: "builtin" | { mcp: { server_id: string } } | { managed_python: { package: string } } }[];
+  skills: SkillProvenance[];
+  disabled_skills: string[];
+  agents: string[];
+  workflows: string[];
+  extensions: { identity: "agent_status" | "todo" | "goal"; active: boolean }[];
+  diagnostics: AgentProfileDiagnostic[];
+}
+export interface CapabilityInspection {
+  main: AgentCapabilityInspection | null;
+  agents: Record<string, AgentCapabilityInspection>;
+  workflows: Record<string, WorkflowAdmissionInspection>;
+  sources: Record<string, { status: "unprepared" | "ready" | "unavailable" } | { status: "inactive"; activation: SourceActivation }>;
+  skills: SkillProvenance[];
+  skill_diagnostics: SkillDiagnostic[];
+}
+
 export interface RuntimeClientResourcesView {
+  inspection: CapabilityInspection;
   revision: number;
   /** Root-most to workspace, in the runtime's own concatenation order. */
   context_files?: RuntimeClientContextFile[];
@@ -1334,7 +1401,7 @@ export type CapabilitySourceStateView =
   /** Prospective coordinator state before first preparation, not writable intent. */
   | { type: "unprepared" }
   | { type: "ready" }
-  | { type: "unavailable"; reason: string };
+  | { type: "unavailable" };
 
 export interface CapabilitySourceView {
   source: CapabilitySourceDescriptor;

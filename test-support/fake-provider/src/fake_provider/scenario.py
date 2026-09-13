@@ -204,7 +204,7 @@ class Expect:
     body_contains: tuple[str, ...] = ()
     body_excludes: tuple[str, ...] = ()
     tools_include: tuple[str, ...] = ()
-    no_tools: bool = False
+    no_direct_tools: bool = False
     headers_present: tuple[str, ...] = ()
 
     def failures(self, request: "RecordedRequest", codec: Any) -> list[str]:
@@ -240,7 +240,7 @@ class Expect:
             for name in self.tools_include:
                 if name not in names:
                     failures.append(f"tools: expected {name!r}, found {sorted(names)}")
-        if self.no_tools and codec.tool_names(request.json):
+        if self.no_direct_tools and codec.tool_names(request.json):
             failures.append("tools: expected no tool definitions on this request")
         for header in self.headers_present:
             if header.lower() not in request.headers:

@@ -10,71 +10,7 @@ use super::{
 };
 use serde_json::json;
 
-#[derive(Debug, Clone, Serialize)]
-pub struct ToolDependency {
-    pub selector: crate::capabilities::selection::ExactToolSelector,
-    pub paths: Vec<String>,
-    pub state: DependencyState,
-}
-
-#[derive(Debug)]
-pub struct CapabilityError {
-    pub workflow: super::WorkflowId,
-    pub path: String,
-    pub reason: String,
-}
-impl std::fmt::Display for CapabilityError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "Workflow {} {}: {}",
-            self.workflow, self.path, self.reason
-        )
-    }
-}
-
 impl WorkflowProgram {
-    pub(super) fn selector_paths(
-        &self,
-        selector: &crate::capabilities::selection::ExactToolSelector,
-    ) -> Vec<String> {
-        fn walk(
-            block: &WorkflowBlockProgram,
-            path: &str,
-            selector: &crate::capabilities::selection::ExactToolSelector,
-            paths: &mut Vec<String>,
-        ) {
-            for (id, node) in &block.nodes {
-                let path = format!("{path}.nodes.{id}");
-                match node {
-                    WorkflowNodeProgram::Tool {
-                        selector: selected, ..
-                    } if selected == selector => paths.push(format!("{path}.selector")),
-                    WorkflowNodeProgram::Loop { body, .. } => {
-                        walk(body, &format!("{path}.body"), selector, paths);
-                    }
-                    WorkflowNodeProgram::Parallel { branches, .. } => {
-                        for (key, branch) in branches {
-                            walk(
-                                &branch.block,
-                                &format!("{path}.branches.{key}.block"),
-                                selector,
-                                paths,
-                            );
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-        let mut paths = Vec::new();
-        walk(&self.block, "block", selector, &mut paths);
-        if paths.is_empty() {
-            paths.push("tools".into());
-        }
-        paths
-    }
-
     /// Every Agent node that carries a trusted static invocation override,
     /// with its precise authored path.
     ///
@@ -132,23 +68,6 @@ pub struct AgentOverrideNode<'a> {
     pub profile: &'a SubagentName,
     /// The compiled override itself.
     pub invocation_override: &'a crate::runtime::subagent::SubagentInvocationOverride,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum DependencyState {
-    Missing {
-        reason: crate::capabilities::selection::ToolSelectionError,
-    },
-    Ineligible,
-    /// Real local metadata exists; concrete arguments still require native preparation.
-    Known,
-    Inert {
-        activation: crate::capabilities::activation::SourceActivation,
-    },
-    Unavailable,
-    /// No online schema or capability identity was fabricated.
-    Unresolved,
 }
 
 /// Static program facts. Literals and task text are deliberately not exported.

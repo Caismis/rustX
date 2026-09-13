@@ -1,8 +1,8 @@
 //! Fixed Tool input and result contracts; native invocation owns execution.
 use super::{
-    BTreeMap, Deserialize, EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope, Serialize,
-    Utc, Value, WorkflowCatalog, WorkflowNodeInstance, WorkflowRun, WorkflowRunError,
-    WorkflowRuntime, bound_workflow_diagnostic, execution, expressions, workflow_event_id,
+    Deserialize, EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope, Serialize, Utc, Value,
+    WorkflowNodeInstance, WorkflowRun, WorkflowRunError, WorkflowRuntime,
+    bound_workflow_diagnostic, execution, expressions, workflow_event_id,
 };
 use crate::capabilities::selection::ExactToolSelector;
 use crate::runtime::subagent::AttemptSubagentContext;
@@ -26,79 +26,6 @@ pub(super) fn eligible(definition: &ToolDefinition) -> bool {
         // have been selected.
         && !(definition.origin == crate::tools::types::ToolOrigin::Builtin
             && matches!(definition.name.as_str(), "subagent" | "execution"))
-}
-
-impl WorkflowCatalog {
-    pub(crate) fn inspect_metadata(
-        &self,
-        available: &[ToolDefinition],
-        availability: &crate::capabilities::CapabilityAvailability,
-        leaf: impl Fn(&ToolDefinition) -> Result<bool, String>,
-    ) -> Result<
-        BTreeMap<super::WorkflowId, Vec<super::inspection::ToolDependency>>,
-        super::inspection::CapabilityError,
-    > {
-        let mut dependencies = BTreeMap::new();
-        for program in self.entries().values().map(|entry| &entry.source) {
-            let mut selected_dependencies = Vec::new();
-            for selector in &program.tools {
-                let paths = program.selector_paths(selector);
-                let failure = |reason| super::inspection::CapabilityError {
-                    workflow: program.id().clone(),
-                    path: paths[0].clone(),
-                    reason,
-                };
-                let state = match crate::capabilities::selection::resolve_metadata(
-                    selector,
-                    available,
-                    availability,
-                ) {
-                    Ok(selected) => {
-                        let definition = selected;
-                        if !eligible(definition) || !leaf(definition).map_err(failure)? {
-                            selected_dependencies.push(super::inspection::ToolDependency {
-                                selector: selector.clone(),
-                                paths,
-                                state: super::inspection::DependencyState::Ineligible,
-                            });
-                            continue;
-                        }
-                        super::inspection::DependencyState::Known
-                    }
-                    Err(
-                        crate::capabilities::selection::ToolSelectionError::SourceUnavailable {
-                            ..
-                        },
-                    ) => match selector {
-                        ExactToolSelector::Source { source_id, .. } => {
-                            match availability.get(source_id) {
-                                Some(crate::capabilities::CapabilitySourceState::Inactive {
-                                    activation,
-                                }) => super::inspection::DependencyState::Inert {
-                                    activation: *activation,
-                                },
-                                Some(crate::capabilities::CapabilitySourceState::Unavailable {
-                                    ..
-                                }) => super::inspection::DependencyState::Unavailable,
-                                _ => super::inspection::DependencyState::Unresolved,
-                            }
-                        }
-                        ExactToolSelector::Builtin { .. } => {
-                            unreachable!("builtin has no external source")
-                        }
-                    },
-                    Err(error) => super::inspection::DependencyState::Missing { reason: error },
-                };
-                selected_dependencies.push(super::inspection::ToolDependency {
-                    selector: selector.clone(),
-                    paths,
-                    state,
-                });
-            }
-            dependencies.insert(program.id().clone(), selected_dependencies);
-        }
-        Ok(dependencies)
-    }
 }
 
 impl WorkflowRuntime {

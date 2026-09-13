@@ -82,7 +82,7 @@ impl std::fmt::Display for ExactToolSelector {
 
 /// Agent admission/projection intent, lowered from `ToolSelectionDocument`.
 /// This is never a Workflow Tool leaf or a frozen child executable identity.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "origin", rename_all = "snake_case")]
 pub enum AgentToolSelection {
     Builtin {
@@ -207,13 +207,16 @@ impl ToolSelectionDocument {
 }
 
 /// Typed facts for admission owners; they choose their own failure policy.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
 pub enum SourceResolutionFailure {
     Undefined,
     Inactive(super::activation::SourceActivation),
     Unprepared,
-    Unavailable { reason: String },
+    Unavailable {
+        #[serde(skip)]
+        reason: String,
+    },
 }
 impl std::fmt::Display for SourceResolutionFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -227,7 +230,7 @@ impl std::fmt::Display for SourceResolutionFailure {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToolSelectionError {
     SourceUnavailable {
@@ -243,6 +246,20 @@ pub enum ToolSelectionError {
         selector: String,
     },
 }
+impl ToolSelectionError {
+    pub(crate) fn redacted(&self) -> Self {
+        let mut fact = self.clone();
+        if let Self::SourceUnavailable {
+            reason: SourceResolutionFailure::Unavailable { reason },
+            ..
+        } = &mut fact
+        {
+            reason.clear();
+        }
+        fact
+    }
+}
+
 impl std::fmt::Display for ToolSelectionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

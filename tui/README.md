@@ -144,25 +144,27 @@ combines with `--continue`, `--session`, and neither, and a replacement spawn
 drops it so a later Session cannot inherit the label.
 
 The TUI may also forward the runtime's bounded startup controls:
-`--skill <path>` (repeatable), `--no-skills`, `--no-builtin-tools`,
-`--no-tools`, `--tools <a,b,c>`, and `--exclude-tools <a,b,c>`. It preserves
+`--skill <path>` (repeatable), `--no-automatic-skills`, `--no-builtin-tools`,
+`--no-direct-tools`, `--tools <a,b,c>`, and `--exclude-tools <a,b,c>`. It preserves
 their supplied values and order; Rust owns discovery, validation, activation,
 and all semantic errors. `--skill` is the explicit Skill launch authority and
-`--no-skills` disables automatic discovery; the automatic sources themselves
+`--no-automatic-skills` disables automatic discovery; the automatic sources themselves
 are `global` (`~/.agents/skills`) and `workspace`
 (`<workspace>/.agents/skills`), selected by the runtime's `[skills].sources`
-policy, with `workspace` shadowing `global` and explicit paths shadowing both. `--no-tools` means zero ordinary main-model tools,
-including Read and generated dispatchers; `--tools` is exact and exclusions
-subtract last. `--no-tools` conflicts with the other three Tool flags, and
+policy, with `workspace` shadowing `global` and explicit paths shadowing both. `--no-direct-tools` removes ordinary direct Tools,
+including Read. Agent/Workflow dispatch remains independently selected by
+`agent.agents` / `agent.workflows`, and Extensions keep their own composition.
+`--tools` selects exact direct Tools and exclusions
+subtract last. `--no-direct-tools` conflicts with the other three Tool flags, and
 `--tools` conflicts with `--no-builtin-tools`. Lists reject empty entries,
 duplicates and unknown/unavailable/ambiguous names.
 
 All four flags address the *ordinary* capability plane only. A Tool contributed
 by a Native Agent Extension — `todo` — is composed under `extensions` in the
 launch configuration and cannot be named here: listing it is a validation
-error, and `--no-tools` does not remove it. A model request with no Tools at
-all therefore needs `--no-tools` **and** a composition with no Tool-providing
-extension. `/settings` shows which extensions the attached Agent is actually
+error, and `--no-direct-tools` does not remove it. A model request with no Tools at
+all therefore needs zero direct Tools, empty Agent/Workflow selections, and
+a composition with no Tool-providing Extensions. `/settings` shows which extensions the attached Agent is actually
 running with. `/tools` distinguishes
 model authority from available but inactive capabilities; exposure filtering
 does not disable source preparation. Lazy Skills require native Read in the
@@ -964,3 +966,7 @@ A typed native Session failure from execute means deletion failed before logical
 commit. The TUI reloads native visibility and offers no cleanup recovery for that
 failure; another attempt starts with a new preview. This differs from an unknown
 client outcome. Terminal transport ends observation without replay or migration.
+
+Direct Tool restrictions leave separately selected Agent/Workflow dispatch intact.
+A model request with no Tool surfaces also needs empty Agent/Workflow selections
+and no Tool-providing Native Extensions.

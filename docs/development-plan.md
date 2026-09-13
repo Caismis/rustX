@@ -798,8 +798,8 @@ The mailbox is process-local coordination/wakeup, and Runtime Client state is
 projection/control only. There is no full transcript, `ConversationRecord`,
 request-message copy, generic repository, or client recovery cache.
 
-M8 introduced development schema version 1. The current store gate is schema
-version 13; incompatible files fail explicitly at open. There is no migration
+M8 introduced development schema version 1. The current store gate is defined
+by `SQLITE_SCHEMA_VERSION`; incompatible files fail explicitly at open. There is no migration
 framework, legacy reader, fallback, or dual write.
 File-backed SQLite uses rollback journaling (`DELETE`), `synchronous=FULL`, foreign keys, and a busy
 timeout. Commit is the local durability linearization point.

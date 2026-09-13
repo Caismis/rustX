@@ -71,9 +71,9 @@ fn startup(root: &tempfile::TempDir, session: &str) -> (std::path::PathBuf, Laun
             models: models_path,
             config: session_path,
             skill_paths: Vec::new(),
-            no_skills: false,
+            no_automatic_skills: false,
             no_builtin_tools: false,
-            no_tools: false,
+            no_direct_tools: false,
             startup_session: rustx::local_runtime::StartupSession::Empty,
             session_name: None,
             tools: None,
@@ -253,7 +253,7 @@ async fn a_python_capability_failure_is_isolated_from_runtime_startup() {
     );
     assert!(matches!(
         source_state(&snapshot, &python_source("broken-tool")),
-        Some(CapabilitySourceStateView::Unavailable { .. })
+        Some(CapabilitySourceStateView::Unavailable)
     ));
     assert!(
         runtime
@@ -306,7 +306,7 @@ async fn python_store_initialization_failure_is_isolated_from_runtime_startup() 
 
     assert!(matches!(
         source_state(&snapshot, &python_source("fixture-tool")),
-        Some(CapabilitySourceStateView::Unavailable { .. })
+        Some(CapabilitySourceStateView::Unavailable)
     ));
     assert!(
         runtime
@@ -538,17 +538,12 @@ mod mcp {
             "the successful server is ready: {:?}",
             snapshot.capabilities.sources
         );
-        let Some(CapabilitySourceStateView::Unavailable { reason }) = source_state(&snapshot, &bad)
-        else {
+        let Some(CapabilitySourceStateView::Unavailable) = source_state(&snapshot, &bad) else {
             panic!(
                 "the failing server is observably unavailable: {:?}",
                 snapshot.capabilities.sources
             );
         };
-        assert!(
-            !reason.is_empty(),
-            "the unavailable state carries a diagnostic"
-        );
 
         let names = tool_names(&snapshot);
         for expected in ["echo", "mutate", "slow"] {
@@ -603,17 +598,16 @@ mod mcp {
         let alien = CapabilitySourceDescriptor::Mcp {
             server_id: rustx::runtime::identity::McpServerId::new("alien"),
         };
-        let Some(CapabilitySourceStateView::Unavailable { reason }) =
-            source_state(&snapshot, &alien)
-        else {
+        let Some(CapabilitySourceStateView::Unavailable) = source_state(&snapshot, &alien) else {
             panic!(
                 "the incompatible server is observably unavailable: {:?}",
                 snapshot.capabilities.sources
             );
         };
         assert!(
-            reason.contains("1999-01-01"),
-            "the diagnostic names the server's revision set: {reason}"
+            !serde_json::to_string(&snapshot.capabilities.sources)
+                .unwrap()
+                .contains("1999-01-01")
         );
         let names = tool_names(&snapshot);
         assert!(names.contains(&"bash"), "native tools survive: {names:?}");
@@ -666,26 +660,18 @@ mod mcp {
         let loud = CapabilitySourceDescriptor::Mcp {
             server_id: rustx::runtime::identity::McpServerId::new("loud"),
         };
-        let Some(CapabilitySourceStateView::Unavailable { reason }) =
-            source_state(&snapshot, &loud)
-        else {
+        let Some(CapabilitySourceStateView::Unavailable) = source_state(&snapshot, &loud) else {
             panic!(
                 "the loud server is observably unavailable: {:?}",
                 snapshot.capabilities.sources
             );
         };
+        // External error payloads stay private; typed failure remains inspectable.
         assert!(
-            reason.len() <= rustx::capabilities::CAPABILITY_FAILURE_REASON_MAX_BYTES,
-            "the projected reason respects the documented bound: {} bytes",
-            reason.len()
+            !serde_json::to_string(&snapshot.capabilities.sources)
+                .unwrap()
+                .contains("catalog unavailable")
         );
-        assert!(
-            reason.contains("catalog unavailable"),
-            "the bounded reason keeps the peer's diagnostic prefix: {reason}"
-        );
-        // Projection consistency: the Runtime Client snapshot carries
-        // exactly the authoritative coordinator value; nothing downstream
-        // re-truncates.
         let authoritative = runtime.capability().availability();
         let Some(rustx::capabilities::CapabilitySourceState::Unavailable {
             reason: authoritative_reason,
@@ -695,9 +681,8 @@ mod mcp {
         else {
             panic!("the coordinator owns the unavailable state: {authoritative:?}");
         };
-        assert_eq!(
-            *authoritative_reason, reason,
-            "the projection carries the authoritative bounded value verbatim"
+        assert!(
+            authoritative_reason.len() <= rustx::capabilities::CAPABILITY_FAILURE_REASON_MAX_BYTES
         );
         let names = tool_names(&snapshot);
         assert!(names.contains(&"bash"), "native tools survive: {names:?}");
@@ -832,7 +817,7 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
     assert!(
         matches!(
             source_state(&snapshot, &python_source("broken-tool")),
-            Some(CapabilitySourceStateView::Unavailable { .. })
+            Some(CapabilitySourceStateView::Unavailable)
         ),
         "demanded malformed package is unavailable"
     );
@@ -842,7 +827,7 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
     assert!(
         matches!(
             source_state(&snapshot, &exa),
-            Some(CapabilitySourceStateView::Unavailable { .. })
+            Some(CapabilitySourceStateView::Unavailable)
         ),
         "the unreachable MCP server is typed and observable: {:?}",
         snapshot.capabilities.sources

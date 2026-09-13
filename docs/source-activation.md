@@ -170,12 +170,12 @@ operations. Positive `ttlMs` cannot answer a refresh from cache, nor can an erro
 be converted into stale cached success. The committed rustX capability snapshot
 remains the only semantic capability cache (PR #244).
 
-Runtime Client protocol 23 projects inactive decisions (`disabled`,
+Runtime Client protocol 33 projects inactive decisions (`disabled`,
 `unconfigured`, `untrusted`), enabled/unprepared, preparation failure
-(`unavailable`, with a bounded reason), and available (`ready`) through the
+(`unavailable`, without external error payloads), and available (`ready`) through the
 existing source availability owner. These states are not Tool identities.
 
-`--no-tools` controls ordinary main-model Tool exposure. Independently admitted
+`--no-direct-tools` controls ordinary main-model Tool exposure. Independently admitted
 Agent/Workflow source demand may still require preparation. Unreferenced sources
 are not prepared; source selection cannot override MCP disablement. Minimal native-only startup needs no Python, `uv`, MCP
 executables/endpoints or external-source secrets, even when an unrelated demo

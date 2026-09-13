@@ -1,6 +1,8 @@
 # Offline Workflow authoring
 
-See [Workflow admission and Agent selection](workflow-admission.md) for static capability ownership and atomic disable semantics.
+See [Workflow admission and Agent selection](workflow-admission.md) for static
+capability ownership and atomic disable semantics, and [capability inspection](capability-inspection.md)
+for the shared generation projection.
 
 ```text
 rustx workflow check <id> [--workspace <dir>] [--config <path>]
@@ -9,97 +11,58 @@ rustx workflow explain <id> [--workspace <dir>] [--config <path>]
   [--models <path>] [--model <provider/model>] [--json]
 ```
 
-Both commands inspect the prospective launch environment. `<id>` is a discovered canonical identity resolved to the trusted workspace's
-`.agents/workflows/<id>.yaml`. It is not a path, discovery request, or execution
-entry point. The configured environment is validated before the selected program
-is projected, so another invalid canonical resource can prevent inspection.
-Trust/Session mutation, preparation/probe flags, runtime-state paths, and Tool or
-Skill selection overrides are rejected. `--help` contains the grammar.
+Both commands inspect a prospective launch. The identity resolves to the trusted
+workspace's `.agents/workflows/<id>.yaml`; it is not an execution entry point.
+Another malformed canonical resource can prevent construction of the candidate.
+Trust/Session mutations, probe flags, runtime-state paths and Tool/Skill launch
+overrides are rejected by this command grammar.
 
-Both reuse CFG-04's version 1 report. `--json` emits one JSON object; human output
-adds a status line and formatted JSON. Argument or static errors exit **2**. A
-valid static structure exits **3**, because readiness remains `unresolved`.
-Missing online facts, inert dependencies or untrusted resources produce
-`validity: incomplete`, also exit **3**. Neither command issues a readiness
-certificate. File discovery, Agent admission, main-model
-admission/exposure and concrete runtime admission are separate facts.
+The version-2 report contains `workflow.id`, `source`, typed `admission`, and an
+optional compiled `program` explanation. Argument and authoring errors exit 2.
+Well-formed inspection exits 3 because provider execution readiness remains
+unresolved. Disabled dependencies produce incomplete validity. Enabled static
+admission never grants invocation approval or certifies provider connectivity.
 
 ## One authority
 
-The shared pipeline is:
+1. `launch::analyze` resolves authorized configuration, source policy and canonical
+   resources without capturing credentials or preparing sources.
+2. `workflow_resources::load` reads canonical YAML through strict owner-native
+   authoring types. `WorkflowProgram::compile` validates graph structure, lexical
+   scope, schemas, bindings, finite bounds and retained-value reservation.
+3. `WorkflowCatalog::admit_metadata` uses the same dependency traversal as online
+   `WorkflowCatalog::admit`, with native leaf metadata and unprepared external
+   sources. Agent nodes use shared whole-dimension replacement and the one
+   `resolve_agent_profile` semantic boundary. One failed dependency disables the
+   entire program; no partial executable program is exposed.
+4. The candidate freezes `CapabilityInspection`. The command copies the Workflow
+   admission fact from that snapshot. `explain` additionally renders compiler-owned
+   graph metadata through `WorkflowProgram::inspect`.
 
-1. `launch::analyze` resolves bounded authorized local configuration, model
-   selection, source enablement/trust and canonical Subagent resources.
-2. `workflow_resources::load` discovers canonical YAML identities. Serde YAML,
-   wrapped by `serde_path_to_error`, deserializes `WorkflowDefinition`.
-   Strict unknown fields and unique graph keys remain parser-owned.
-3. `WorkflowProgram::compile` validates graphs, lexical scopes, schemas,
-   bindings, finite bounds and retained-value reservation. Missing capability
-   dependencies are not structural compile errors.
-4. `WorkflowCatalog::inspect_metadata` projects genuine prospective metadata,
-   including known, missing, ineligible, inert, unavailable and unresolved
-   dependencies. Offline checking does not fabricate executable admission.
-   At runtime, `WorkflowCatalog::admit` checks every node against one complete
-   candidate generation. Agent nodes use shared whole-dimension replacement,
-   `resolve_agent_profile`, and frozen child composition. Any required static
-   dependency diagnostic disables the whole program. Malformed overrides and
-   structural child rules remain compiler-owned authoring failures.
-5. `WorkflowProgram::inspect` projects compiled facts; the local report adds
-   resolution provenance and configured source/profile policies.
-
-Static compilation ends before any executor is constructed, resource generation
-published or execution authority granted. Candidate-generation admission freezes
-capabilities before execution; invocation consumes only the Enabled program. Native preparation normalizes and validates concrete
-Tool arguments; execution validates concrete values. An online-only Tool schema
-is never supplied or assumed compatible offline. Provider behavior, source
-availability, human decisions and candidate acquisition remain runtime facts.
-The offline owner accepts no executor, interaction/workspace manager, credential
-snapshot or publication handle. There is no alternative parser/compiler/executor.
+Inspection starts zero nodes, Tools or child Agents. It does not install, run uv,
+connect to MCP/provider endpoints, create environments or capture credentials.
+External Tool schemas are never fabricated offline. Online runtime generations
+may establish readiness through demand-driven ToolSource preparation. Each run
+retains its own frozen admitted program after later resource publication.
 
 ## Diagnostics and explanation
 
-Compiler context preserves nested paths such as
-`block.nodes.check_text.branches.clarity.block.nodes.assess_clarity.input.text`.
-An `Agent` node's invocation override keeps the same precision: a structural
-violation reports `override.tools` or `override.skills`, and a reference the
-generation does not authorize reports the node's full nested path plus
-`.override`, for example
-`block.nodes.fan.branches.only.block.nodes.work.override`.
-Loop bodies use `.body`; schema recursion uses `.properties.<name>` and `.items`.
-Edges retain their zero-based authored index: dangling sources/destinations use
-`.edges.<index>.from` / `.to`, and invalid or duplicate ports use `.port`.
-Duplicate ports identify the later conflicting authored edge and name its source
-node and port. Cycles identify `.nodes.<id>` using the lexicographically smallest
-node whose indegree remains positive after Kahn processing (which can be downstream
-of the cycle). Node/edge declaration order does not change that selection.
-Description failures use `description`; aggregate program/block limits retain
-aggregate context. These paths compose through every Loop body and Parallel branch.
-Parser failures retain typed container paths and YAML line/column when available;
-unknown failing field names are redacted using the generated structural vocabulary.
-Semantic
-diagnostics have compiler-authored paths and do not invent parser coordinates.
-Categories distinguish `workflow_language`, `resource_missing`,
-`resource_not_admitted`, `dependency_inert` and `unresolved`. Resolution stops at
-its first authoritative failure. Untrusted contents are not read or compiled.
+Disabled admission carries deterministic node paths such as
+`block.nodes.inspect.selector` and native `WorkflowDependencyFailure` facts.
+Tool reasons distinguish an undefined source, disabled/untrusted/unprepared
+source, preparation failure and exact Tool absent from a ready source. Agent
+reasons preserve unavailable Skills/Agents/Workflows and unsupported native
+Extension scope. These are typed facts, not conclusions reconstructed from prose.
 
-`check` gives discovery/admission/exposure, role provenance and dependencies.
-`explain` additionally gives compiled identity/digest, explicit validation stage,
-root/block schemas, entries, nodes, deterministic edges, bindings and reference
-paths, keyed branches, loop limits, selected profiles/tools, timeout, workspace
-request and candidate-handoff expectation. Role facts include canonical selected
-source/layer/overridden source, model, configured timeout, Tools and workspace
-policy. Agent parallel capacity and native caps are separate from compiler-derived
-conservative step, Agent-run and retained-byte reservations. Agent-run bounds are
-**not** provider-request predictions. Branch outcomes and actual loop iterations
-are never predicted.
+Compiler failures retain parser coordinates and structural paths independently
+of capability admission. A disabled source remains discoverable and inspectable,
+but never appears in active model-facing Workflow exposure and cannot execute.
 
-Blocks/nodes/roles use sorted identity maps; edges are compiler-sorted by port
-then target. Branch keys are independent of completion order. Prompts/tasks and
-literal values are omitted. Schema `const`/`enum` contents and annotations have
-explicit redaction markers: these are schema projections, not replacement editor
-schemas. CFG-04 redaction and its 256 KiB output bound apply. Oversized projections
-are explicitly omitted without changing validity/readiness or losing the causal
-diagnostic. Editor schemas continue to derive from authoritative Rust types.
+The compiled explanation includes schemas, nodes, sorted edges, bindings, branch
+keys, limits and selected profile/Tool references. Prompts/tasks and literal
+values are omitted; schema constants, enum contents and annotations are redacted.
+The report's 256 KiB bound explicitly marks omitted projections. Editor schemas
+continue to derive from the authoritative Rust authoring types.
 
 ## Templates and execution invariants
 

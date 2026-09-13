@@ -927,7 +927,7 @@ mod tests {
                 agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
             },
-            std::path::PathBuf::from("/w/.agents/subagents/explore.md"),
+            std::path::PathBuf::from("/w/.agents/agents/explore.toml"),
         )
     }
 
@@ -952,7 +952,7 @@ mod tests {
                 agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
             },
-            std::path::PathBuf::from("/w/.agents/subagents/reviewer.md"),
+            std::path::PathBuf::from("/w/.agents/agents/reviewer.toml"),
         )
     }
 
@@ -1180,7 +1180,7 @@ mod tests {
                 agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
             },
-            std::path::PathBuf::from("/w/.agents/subagents/explore.md"),
+            std::path::PathBuf::from("/w/.agents/agents/explore.toml"),
         )
         .expect("definition");
         let with_file = NamedAgentDefinition::new(
@@ -1196,9 +1196,7 @@ mod tests {
                     crate::runtime::agent_profile::AgentProjectInstructionPolicy {
                         inherit: true,
                         files: vec![ProjectContextFile {
-                            path: std::path::PathBuf::from(
-                                "/w/.agents/subagents/explore/AGENTS.md",
-                            ),
+                            path: std::path::PathBuf::from("/w/.agents/agents/explore/AGENTS.md"),
                             content: "explicit".to_owned(),
                         }],
                     },
@@ -1207,7 +1205,7 @@ mod tests {
                 agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
             },
-            std::path::PathBuf::from("/w/.agents/subagents/explore.md"),
+            std::path::PathBuf::from("/w/.agents/agents/explore.toml"),
         )
         .expect("definition");
         let changed_content = NamedAgentDefinition::new(
@@ -1223,9 +1221,7 @@ mod tests {
                     crate::runtime::agent_profile::AgentProjectInstructionPolicy {
                         inherit: true,
                         files: vec![ProjectContextFile {
-                            path: std::path::PathBuf::from(
-                                "/w/.agents/subagents/explore/AGENTS.md",
-                            ),
+                            path: std::path::PathBuf::from("/w/.agents/agents/explore/AGENTS.md"),
                             content: "explicit, revised".to_owned(),
                         }],
                     },
@@ -1234,7 +1230,7 @@ mod tests {
                 agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
             },
-            std::path::PathBuf::from("/w/.agents/subagents/explore.md"),
+            std::path::PathBuf::from("/w/.agents/agents/explore.toml"),
         )
         .expect("definition");
         let changed_instructions = NamedAgentDefinition::new(
@@ -1252,13 +1248,13 @@ mod tests {
                 agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
             },
-            std::path::PathBuf::from("/w/.agents/subagents/explore.md"),
+            std::path::PathBuf::from("/w/.agents/agents/explore.toml"),
         )
         .expect("definition");
         let isolated = NamedAgentDefinition::new(SubagentName::parse("explore").expect("name"), crate::runtime::agent_profile::AgentProfile { description: "a description".to_owned(), instructions: "instructions".to_owned(), model: None, execution_deadline: None, tools: Vec::new(), skills: crate::runtime::agent_profile::AgentSkillSelection::default(), project_instructions: policy(), workspace_policy: // The default isolated definition (Issue #188) is strict.
             WorkspacePolicy::GitWorktree {
                 require_clean_parent: true,
-            }, extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(), agents: std::collections::BTreeSet::default(), workflows: std::collections::BTreeSet::default() }, std::path::PathBuf::from("/w/.agents/subagents/explore.md"))
+            }, extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(), agents: std::collections::BTreeSet::default(), workflows: std::collections::BTreeSet::default() }, std::path::PathBuf::from("/w/.agents/agents/explore.toml"))
         .expect("definition");
         let mut digests = vec![
             inherit.digest().clone(),
@@ -1354,7 +1350,7 @@ mod tests {
                 agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
             },
-            std::path::PathBuf::from("/w/.agents/subagents/explore.md"),
+            std::path::PathBuf::from("/w/.agents/agents/explore.toml"),
         )
         .expect("definition");
         assert_eq!(with_deadline.execution_deadline(), Some(deadline));

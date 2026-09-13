@@ -258,7 +258,7 @@ async fn hidden_skills_keep_attempt_provenance_but_not_model_visibility() {
 async fn lazy_skills_follow_frozen_read_authority_without_changing_discovery() {
     let policies = [
         rustx::capabilities::AgentActivation {
-            no_tools: true,
+            no_direct_tools: true,
             ..fixture_activation()
         },
         rustx::capabilities::AgentActivation {
@@ -2264,6 +2264,7 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
         rustx::context::ContextAssembly::new(),
         Arc::new(snapshot.clone()),
     );
+    let generation_facts = serde_json::to_value(resources.inspection()).unwrap();
     let runtime = rustx::context::ContextRuntime::for_attempt(
         rustx::context::SessionContextPolicy {
             reserve_tokens: 0,
@@ -2296,6 +2297,11 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
     ));
     let requests = model.requests();
     assert_eq!(requests.len(), 2, "two model turns");
+    assert_eq!(
+        serde_json::to_value(resources.inspection()).unwrap(),
+        generation_facts,
+        "turns never append or re-resolve generation diagnostics"
+    );
     for request in &requests {
         assert_eq!(
             request.effective_system_prompt, catalog,

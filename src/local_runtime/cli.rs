@@ -69,7 +69,7 @@ pub const CONFIG_USAGE: &str = "Workflow authoring (offline, no execution or aut
     [--models <path>] [--model <provider/model>] [--json]\n\
   rustx workflow explain <id> [--workspace <dir>] [--config <path>]\n\
     [--models <path>] [--model <provider/model>] [--json]\n\
-  Only configured Workflow ids are inspected. Static validity is not runtime readiness.\n\
+  Only discovered Workflow ids are inspected. Static validity is not runtime readiness.\n\
   Exit 2: invalid; exit 3: static valid/incomplete, runtime readiness unresolved.\n\
 Configuration commands:\n\
   rustx init --template openai-chat|openai-responses|anthropic|custom\n\
@@ -79,7 +79,7 @@ Configuration commands:\n\
   custom replaces model flags with --model-document <path>.\n\
   OpenAI templates require explicit --compat; no compatibility is inferred.\n\
   rustx config check [launch selection/path flags] [--json]\n\
-  rustx config show --sources [launch selection/path flags] [--json]\n\
+  rustx config show (--sources | --agent <main|name>) [launch selection/path flags] [--json]\n\
   rustx doctor --probe [--prepare] [launch selection/path flags] [--json]\n\
 Diagnostic commands reject Session and trust-change flags.\n\
 Exit: 0 initialization/help complete; 1 probe or output failure; 2 invalid;\n\
@@ -106,6 +106,7 @@ pub enum Command {
         json: bool,
     },
     Show {
+        agent: Option<String>,
         request: LaunchRequest,
         json: bool,
     },
@@ -189,10 +190,29 @@ pub fn parse_command(
     } else {
         false
     };
-    if operation == "show" && !remove_switch(&mut arguments, "--sources")? {
-        return Err(ArgumentError::MissingValue {
-            flag: "config show --sources".into(),
-        });
+    let mut agent = None;
+    if operation == "show" {
+        let sources = remove_switch(&mut arguments, "--sources")?;
+        if let Some(index) = arguments.iter().position(|value| value == "--agent") {
+            arguments.remove(index);
+            if index == arguments.len() || arguments[index].starts_with("--") {
+                return Err(ArgumentError::MissingValue {
+                    flag: "--agent".into(),
+                });
+            }
+            agent = Some(arguments.remove(index));
+        }
+        if sources && agent.is_some() {
+            return Err(ArgumentError::Conflicting {
+                first: "--sources",
+                second: "--agent",
+            });
+        }
+        if !sources && agent.is_none() {
+            return Err(ArgumentError::MissingValue {
+                flag: "config show --sources or --agent".into(),
+            });
+        }
     }
     let request = parse_arguments(arguments)?;
     if request.trust.is_some()
@@ -205,7 +225,11 @@ pub fn parse_command(
     }
     match operation.as_str() {
         "check" => Ok(Command::Check { request, json }),
-        "show" => Ok(Command::Show { request, json }),
+        "show" => Ok(Command::Show {
+            request,
+            json,
+            agent,
+        }),
         "doctor" => Ok(Command::Doctor {
             request,
             json,
@@ -285,18 +309,19 @@ pub const USAGE: &str = "usage: rustx [--models <models.toml>] [--config <rustx.
                          [--model <provider/model>] [--trust grant|revoke] \
                          [--inspect-conversation <conversation-id>] \
                          [--continue | --session <session-id> [--node <node-id>]] \
-                         [--name <text>] [--skill <path>] [--no-skills] \
-                         [--no-tools | --tools <a,b> | --no-builtin-tools] \
+                         [--name <text>] [--skill <path>] [--no-automatic-skills] \
+                         [--no-direct-tools | --tools <a,b> | --no-builtin-tools] \
                          [--exclude-tools <a,b>]\n\
-Tool selection: defaults include Read. --tools is exact; exclusions subtract last.\n\
---no-tools exposes zero main-model Tools and conflicts with --tools, --exclude-tools,\n\
+Direct Tool selection: defaults include Read. --tools is exact; exclusions subtract last.\n\
+--no-direct-tools removes direct ordinary Tools. Agent/Workflow dispatch and Extensions remain.\n\
+It conflicts with --tools, --exclude-tools,\n\
 and --no-builtin-tools. --tools conflicts with --no-builtin-tools.\n\
 Explicit lists must be non-empty, unique, known and unambiguous.\n\
 Tool exposure does not disable source preparation; use source enabled:false.\n\
 Skills: automatic sources are global (~/.agents/skills) and workspace\n\
 (<workspace>/.agents/skills), selected by [skills].sources. Precedence is\n\
 explicit --skill > workspace > global; array order is never precedence.\n\
---no-skills disables automatic discovery. A malformed package is excluded with\n\
+--no-automatic-skills disables automatic discovery. A malformed package is excluded with\n\
 a diagnostic, never failing the rest of the catalog. The root Agent sees every\n\
 eligible catalog Skill minus agent.disabled_skills; named Agents select\n\
 identities explicitly. Lazy Skills are advertised only when this domain admits\n\
@@ -320,9 +345,9 @@ pub fn parse_arguments(
     let mut workspace: Option<PathBuf> = None;
     let mut runtime_root: Option<PathBuf> = None;
     let mut skill_paths = Vec::new();
-    let mut no_skills = false;
+    let mut no_automatic_skills = false;
     let mut no_builtin_tools = false;
-    let mut no_tools = false;
+    let mut no_direct_tools = false;
     let mut continue_active_session = false;
     let mut inspect_conversation: Option<String> = None;
     let mut session: Option<String> = None;
@@ -364,9 +389,9 @@ pub fn parse_arguments(
                     _ => unreachable!(),
                 }
             }
-            "--no-skills" => set_bool(&mut no_skills, flag.as_str())?,
+            "--no-automatic-skills" => set_bool(&mut no_automatic_skills, flag.as_str())?,
             "--no-builtin-tools" => set_bool(&mut no_builtin_tools, flag.as_str())?,
-            "--no-tools" => set_bool(&mut no_tools, flag.as_str())?,
+            "--no-direct-tools" => set_bool(&mut no_direct_tools, flag.as_str())?,
             "--continue" => set_bool(&mut continue_active_session, flag.as_str())?,
             other => {
                 return Err(ArgumentError::UnknownFlag {
@@ -377,7 +402,7 @@ pub fn parse_arguments(
     }
 
     let selection = crate::capabilities::AgentActivation {
-        no_tools,
+        no_direct_tools,
         no_builtin_tools,
         tools: tools.clone(),
         exclude_tools: exclude_tools.clone().unwrap_or_default(),
@@ -411,9 +436,9 @@ pub fn parse_arguments(
         model,
         trust,
         skill_paths,
-        no_skills,
+        no_automatic_skills,
         no_builtin_tools,
-        no_tools,
+        no_direct_tools,
         startup_session,
         session_name,
         tools,
@@ -640,7 +665,7 @@ mod tests {
                 "--prepare",
                 "--probe",
                 "--tools",
-                "--no-tools",
+                "--no-direct-tools",
                 "--skill",
             ] {
                 assert!(
@@ -654,6 +679,40 @@ mod tests {
         assert!(parse(&["workflow", "run", "typed_agent"]).is_err());
         assert!(parse(&["workflow", "check"]).is_err());
     }
+    #[test]
+    fn cfg275_show_requires_exactly_one_target() {
+        use super::{Command, parse_command};
+        let parse = |args: &[&str]| parse_command(args.iter().map(ToString::to_string));
+        for args in [
+            vec!["--sources"],
+            vec!["--agent", "main"],
+            vec!["--agent", "reviewer"],
+        ] {
+            assert!(matches!(
+                parse(&[vec!["config", "show"], args].concat()),
+                Ok(Command::Show { .. })
+            ));
+        }
+        for args in [
+            vec!["--sources", "--agent", "main"],
+            vec!["--agent", "main", "--sources"],
+        ] {
+            assert!(matches!(
+                parse(&[vec!["config", "show"], args].concat()),
+                Err(ArgumentError::Conflicting {
+                    first: "--sources",
+                    second: "--agent"
+                })
+            ));
+        }
+        for args in [vec![], vec!["--agent"], vec!["--agent", "--json"]] {
+            assert!(matches!(
+                parse(&[vec!["config", "show"], args].concat()),
+                Err(ArgumentError::MissingValue { .. })
+            ));
+        }
+    }
+
     #[test]
     fn cfg235_finite_command_grammar_and_switch_values() {
         use super::{Command, parse_command};
@@ -1001,7 +1060,7 @@ mod tests {
             "w",
             "--runtime-root",
             "p",
-            "--no-skills",
+            "--no-automatic-skills",
             "--skill",
             "one",
             "--skill",
@@ -1012,7 +1071,7 @@ mod tests {
             "bash,grep",
         ]))
         .expect("options");
-        assert!(paths.no_skills);
+        assert!(paths.no_automatic_skills);
         assert_eq!(
             paths.skill_paths,
             vec![
@@ -1034,9 +1093,9 @@ mod tests {
     #[test]
     fn exact_tool_flag_conflicts_and_explicit_lists_fail_closed() {
         for flags in [
-            vec!["--no-tools", "--tools", "read"],
-            vec!["--no-tools", "--exclude-tools", "read"],
-            vec!["--no-tools", "--no-builtin-tools"],
+            vec!["--no-direct-tools", "--tools", "read"],
+            vec!["--no-direct-tools", "--exclude-tools", "read"],
+            vec!["--no-direct-tools", "--no-builtin-tools"],
             vec!["--tools", "read", "--no-builtin-tools"],
         ] {
             assert!(matches!(
@@ -1065,7 +1124,7 @@ mod tests {
             }
         }
         for flags in [
-            vec!["--no-tools"],
+            vec!["--no-direct-tools"],
             vec!["--tools", "read,grep", "--exclude-tools", "read"],
             vec!["--no-builtin-tools", "--exclude-tools", "external"],
         ] {

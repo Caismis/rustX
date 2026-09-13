@@ -215,9 +215,15 @@ pub struct AgentProfileAuthority<'a> {
 }
 
 /// Typed native facts retained with the generation, never emitted per model turn.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
 pub enum AgentProfileDiagnostic {
+    /// A selected direct Tool excluded by the explicit host launch restriction.
+    HostToolSuppressed {
+        id: crate::runtime::identity::ToolId,
+        name: String,
+        source: Option<crate::capabilities::ToolSourceId>,
+    },
     Tool(ToolSelectionError),
     SkillUnavailable {
         name: String,
@@ -239,7 +245,7 @@ pub enum AgentProfileDiagnostic {
     },
 }
 /// Closed scope-ineligible capability identities, requiring no string parsing.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", content = "identity", rename_all = "snake_case")]
 pub enum ScopeCapability {
     Agent(SubagentName),
@@ -258,8 +264,16 @@ impl ScopeCapability {
     }
 }
 impl AgentProfileDiagnostic {
-    fn key(&self) -> (u8, String) {
+    /// Copy the typed fact without external preparation payloads.
+    pub(crate) fn redacted(&self) -> Self {
         match self {
+            Self::Tool(reason) => Self::Tool(reason.redacted()),
+            fact => fact.clone(),
+        }
+    }
+    pub(crate) fn key(&self) -> (u8, String) {
+        match self {
+            Self::HostToolSuppressed { id, .. } => (8, id.to_string()),
             Self::Tool(ToolSelectionError::UnknownCapability { selector }) => (0, selector.clone()),
             Self::Tool(ToolSelectionError::SourceUnavailable { selector, .. }) => {
                 (1, selector.clone())
@@ -285,7 +299,10 @@ pub struct ResolvedAgentProfile {
     pub model: Option<SessionModelConfig>,
     pub execution_deadline: Option<SubagentExecutionDeadline>,
     pub tools: Vec<ToolDefinition>,
+    /// Frozen typed selection intent, including ready sources publishing no Tools.
+    pub tool_selection: Vec<AgentToolSelection>,
     pub skills: Vec<String>,
+    pub disabled_skills: Vec<String>,
     pub extensions: NativeAgentExtensions,
     pub agents: BTreeSet<SubagentName>,
     pub workflows: BTreeSet<WorkflowId>,
@@ -294,12 +311,37 @@ pub struct ResolvedAgentProfile {
     pub diagnostics: Vec<AgentProfileDiagnostic>,
 }
 
-pub(crate) fn is_dispatcher(definition: &ToolDefinition, workflows: &BTreeSet<WorkflowId>) -> bool {
+/// Selection facts that cross a child boundary beside its executable composition.
+/// These retain authoring intent and suppression, never a second executable set.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenAgentSelection {
+    pub tools: Vec<AgentToolSelection>,
+    pub disabled_skills: Vec<String>,
+    pub diagnostics: Vec<AgentProfileDiagnostic>,
+}
+
+impl ResolvedAgentProfile {
+    pub(crate) fn frozen_selection(&self) -> FrozenAgentSelection {
+        FrozenAgentSelection {
+            tools: self.tool_selection.clone(),
+            disabled_skills: self.disabled_skills.clone(),
+            diagnostics: self
+                .diagnostics
+                .iter()
+                .map(AgentProfileDiagnostic::redacted)
+                .collect(),
+        }
+    }
+}
+
+pub(crate) fn is_dispatcher(definition: &ToolDefinition) -> bool {
     definition.origin == ToolOrigin::Builtin
         && (definition.id == crate::tools::native::subagent_tool_id()
-            || workflows
-                .iter()
-                .any(|id| definition.id == crate::tools::native::workflow_tool_id(id)))
+            || definition
+                .id
+                .as_str()
+                .starts_with(crate::runtime::workflow::WORKFLOW_TOOL_ID_PREFIX))
 }
 
 /// Resolves one Agent's Skill dimension against the admitted catalog.
@@ -364,7 +406,7 @@ pub fn resolve_agent_profile(
                 .tools()
                 .iter()
                 .map(|entry| &entry.definition)
-                .filter(|definition| !is_dispatcher(definition, authority.workflows)),
+                .filter(|definition| !is_dispatcher(definition)),
             authority.availability,
         ) {
             Ok(selected) => {
@@ -429,6 +471,22 @@ pub fn resolve_agent_profile(
         model: profile.model.clone(),
         execution_deadline: profile.execution_deadline,
         tools: tools.into_values().collect(),
+        tool_selection: profile
+            .tools
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+        disabled_skills: match &profile.skills {
+            AgentSkillSelection::EligibleExcept(names) => names
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            AgentSkillSelection::Exact(_) => Vec::new(),
+        },
         skills: skills.into_iter().collect(),
         extensions,
         agents,

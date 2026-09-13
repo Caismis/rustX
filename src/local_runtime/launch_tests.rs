@@ -129,11 +129,11 @@ fn cfg237_check_explain_zero_effects_precise_errors_and_authority() {
                 assert_eq!(report.diagnostics[0].path, path);
             } else {
                 let projection = report.workflow.as_ref().unwrap();
-                assert!(projection.discovered);
-                assert!(!projection.configured_main_admission);
-                assert_eq!(projection.prospective_main_exposure, Some(false));
+                assert!(matches!(
+                    projection.admission,
+                    crate::runtime::capability_inspection::WorkflowInspection::Enabled
+                ));
                 assert_eq!(projection.program.is_some(), explain);
-                assert!(projection.execution_admission.starts_with("not_performed"));
             }
             assert!(!report.render(true).contains("SECRET_ROLE_PROMPT"));
             assert_eq!(std::fs::read_to_string(&file).unwrap(), source);
@@ -220,7 +220,8 @@ fn cfg237_graph_paths_reach_diagnostics_with_zero_side_effects() {
 
 #[test]
 fn cfg237_online_schema_unresolved_and_disabled_source_are_distinct() {
-    use crate::runtime::workflow::inspection::DependencyState;
+    use crate::capabilities::selection::{SourceResolutionFailure, ToolSelectionError};
+    use crate::runtime::workflow::WorkflowDependencyFailure;
     let f = Fixture::new();
     let text = r"description: Inspect a declared external capability.
 block:
@@ -254,23 +255,29 @@ block:
             });
             assert_eq!(effects, [0; 13]);
             assert_eq!(report.validity, super::diagnostics::Validity::Incomplete);
-            let state = &report.workflow.as_ref().unwrap().dependencies[0].state;
+            let crate::runtime::capability_inspection::WorkflowInspection::Disabled(facts) =
+                &report.workflow.as_ref().unwrap().admission
+            else {
+                panic!("dependency disables Workflow")
+            };
+            assert_eq!(facts[0].path, "block.nodes.inspect.selector");
+            let WorkflowDependencyFailure::Tool(ToolSelectionError::SourceUnavailable {
+                reason,
+                ..
+            }) = &facts[0].reason
+            else {
+                panic!("source reason")
+            };
             if enabled {
-                assert!(matches!(state, DependencyState::Unresolved));
+                assert!(matches!(reason, SourceResolutionFailure::Unprepared));
             } else {
                 assert!(matches!(
-                    state,
-                    DependencyState::Inert {
-                        activation: crate::capabilities::activation::SourceActivation::Disabled
-                    }
+                    reason,
+                    SourceResolutionFailure::Inactive(
+                        crate::capabilities::activation::SourceActivation::Disabled
+                    )
                 ));
             }
-            assert!(
-                report
-                    .diagnostics
-                    .iter()
-                    .any(|d| d.path == "block.nodes.inspect.selector")
-            );
             assert!(!report.render(true).contains("SECRET_LITERAL"));
             assert_eq!(report.exit_code(), 3);
         }
@@ -568,9 +575,12 @@ fn cfg271_offline_python_discovery_never_parses_or_prepares_packages() {
         assert_eq!(launch.managed_python.packages().len(), usize::from(trusted));
         assert!(!launch.runtime_root.exists());
         if trusted {
-            let source = &report.launch.as_ref().unwrap().sources["python:foo"];
-            assert!(source.discovered_package);
-            assert_eq!(source.readiness, "unresolved");
+            let source = &report.capabilities.as_ref().unwrap().sources
+                [&ToolSourceId::ManagedPython("foo".into())];
+            assert!(matches!(
+                source,
+                crate::runtime::capability_inspection::SourceInspection::Unprepared
+            ));
         }
     }
 }
@@ -608,12 +618,12 @@ fn cfg235_provider_readiness_is_unresolved_without_credential_lookup() {
                         .any(|d| d.path == "providers.host" && d.category == "unresolved")
                 );
                 if mcp {
-                    assert!(
-                        report
-                            .diagnostics
-                            .iter()
-                            .any(|d| d.path == "mcp_servers.online" && d.category == "unresolved")
-                    );
+                    assert!(matches!(
+                        report.capabilities.as_ref().unwrap().sources[&ToolSourceId::Mcp(
+                            crate::runtime::identity::McpServerId::new("online")
+                        )],
+                        crate::runtime::capability_inspection::SourceInspection::Unprepared
+                    ));
                 }
                 for output in [
                     report.render(false),
@@ -648,14 +658,13 @@ fn cfg235_static_check_show_have_zero_effects_and_redacted_outputs() {
                 super::diagnostics::inspect(operation, &f.request, &f.host)
             });
             assert_eq!(counts, [0; 13]);
-            if let Some(projection) = &report.launch {
+            if let Some(projection) = &report.capabilities {
                 for name in projection.sources.keys() {
                     let diagnostic = report
                         .diagnostics
                         .iter()
-                        .find(|diagnostic| diagnostic.path == format!("mcp_servers.{name}"))
+                        .find(|diagnostic| diagnostic.path == format!("tools.sources.{name}"))
                         .unwrap();
-                    assert!(diagnostic.file.is_some());
                     assert!(!diagnostic.reason.is_empty() && !diagnostic.correction.is_empty());
                     assert!(matches!(diagnostic.classification, "info" | "warning"));
                 }
@@ -699,10 +708,13 @@ fn cfg235_prospective_values_and_origins_equal_runtime_resolution() {
     assert_eq!(prospective.runtime_root, runtime.runtime_root);
     assert!(
         !prospective
-            .selected_tools
+            .inspection
+            .main
             .as_ref()
             .unwrap()
-            .contains(&"read".into())
+            .tools
+            .iter()
+            .any(|tool| tool.name == "read")
     );
     assert!(!format!("{prospective:?} {runtime:?}").contains("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"));
 }
@@ -1388,17 +1400,17 @@ fn exact_selection_validates_non_cli_launch_requests_before_resolution() {
             ..Default::default()
         },
         LaunchRequest {
-            no_tools: true,
+            no_direct_tools: true,
             tools: Some(vec!["read".into()]),
             ..Default::default()
         },
         LaunchRequest {
-            no_tools: true,
+            no_direct_tools: true,
             exclude_tools: Some(vec!["read".into()]),
             ..Default::default()
         },
         LaunchRequest {
-            no_tools: true,
+            no_direct_tools: true,
             no_builtin_tools: true,
             ..Default::default()
         },
@@ -1576,7 +1588,7 @@ async fn cfg271_missing_empty_and_unprepared_python_allow_native_startup() {
 #[tokio::test]
 async fn cfg233_native_composition_keeps_disabled_and_discovered_resources_inert() {
     let mut f = Fixture::new();
-    f.request.no_tools = true;
+    f.request.no_direct_tools = true;
     let package = f.host.launch_directory.join(".agents/tools/discovered");
     std::fs::create_dir_all(&package).unwrap();
     std::fs::write(
@@ -2464,7 +2476,8 @@ async fn cfg280_launch_resolves_the_canonical_skill_sources_and_explicit_authori
     let resolved = f.resolve();
     let names = |launch: &ResolvedLaunch| {
         launch
-            .skill_provenance
+            .inspection
+            .skills
             .iter()
             .map(|entry| entry.name.clone())
             .collect::<Vec<_>>()
@@ -2473,7 +2486,8 @@ async fn cfg280_launch_resolves_the_canonical_skill_sources_and_explicit_authori
     // (13) The workspace package wins the shared identity; (22) `legacy` is
     // never discovered, and its bytes are left untouched.
     let shared = resolved
-        .skill_provenance
+        .inspection
+        .skills
         .iter()
         .find(|entry| entry.name == "shared")
         .unwrap();
@@ -2497,7 +2511,8 @@ async fn cfg280_launch_resolves_the_canonical_skill_sources_and_explicit_authori
     assert_eq!(names(&f.resolve()), ["global-only", "shared"]);
     assert_eq!(
         f.resolve()
-            .skill_provenance
+            .inspection
+            .skills
             .iter()
             .find(|entry| entry.name == "shared")
             .unwrap()
@@ -2524,7 +2539,8 @@ async fn cfg280_launch_resolves_the_canonical_skill_sources_and_explicit_authori
     f.request.skill_paths = vec![explicit.clone()];
     let resolved = f.resolve();
     let shared = resolved
-        .skill_provenance
+        .inspection
+        .skills
         .iter()
         .find(|entry| entry.name == "shared")
         .unwrap();
@@ -2532,6 +2548,7 @@ async fn cfg280_launch_resolves_the_canonical_skill_sources_and_explicit_authori
     assert_eq!(shared.shadowed.len(), 2);
     assert!(
         resolved
+            .inspection
             .skill_diagnostics
             .iter()
             .any(|fact| matches!(fact, crate::skills::SkillDiagnostic::PackageInvalid { .. }))
@@ -2911,7 +2928,8 @@ async fn cfg280_an_unselected_skill_source_is_inert_at_startup_and_reload() {
     }
     fn names(launch: &ResolvedLaunch) -> Vec<String> {
         launch
-            .skill_provenance
+            .inspection
+            .skills
             .iter()
             .map(|entry| entry.name.clone())
             .collect()
@@ -2962,7 +2980,7 @@ async fn cfg280_an_unselected_skill_source_is_inert_at_startup_and_reload() {
     product.runtime().shutdown().await.unwrap();
 
     // The control: the same redirected directory still fails a launch whose
-    // policy selects the workspace source, and `--no-skills` makes it inert
+    // policy selects the workspace source, and `--no-automatic-skills` makes it inert
     // again without touching the policy.
     let f = fixture(json!({"subagents": {}}));
     assert!(
@@ -2971,7 +2989,7 @@ async fn cfg280_an_unselected_skill_source_is_inert_at_startup_and_reload() {
             .contains("outside trusted workspace")
     );
     let mut request = f.request.clone();
-    request.no_skills = true;
+    request.no_automatic_skills = true;
     assert!(resolve(&request, &f.host).is_ok());
 
     // `sources = []`: the Skill subsystem is entirely inert. No root is
@@ -3006,6 +3024,7 @@ async fn cfg271_all_catalogs_publish_together_and_failed_candidates_publish_noth
         .await
         .unwrap();
     let before = product.runtime().runtime_resources();
+    let original_facts = serde_json::to_value(before.inspection()).unwrap();
     let workspace = &f.host.launch_directory;
     let agent = f.role(
         false,
@@ -3038,10 +3057,24 @@ async fn cfg271_all_catalogs_publish_together_and_failed_candidates_publish_noth
         &before,
         &product.runtime().runtime_resources()
     ));
+    assert_eq!(
+        serde_json::to_value(product.runtime().runtime_resources().inspection()).unwrap(),
+        original_facts
+    );
     gate.release();
     reload.await.unwrap().unwrap();
     drop(gate);
     let added = product.runtime().runtime_resources();
+    assert_eq!(added.inspection().agents.len(), 1);
+    assert_eq!(added.inspection().workflows.len(), 1);
+    assert_eq!(
+        serde_json::to_value(before.inspection()).unwrap(),
+        original_facts
+    );
+    assert_eq!(
+        *crate::runtime_client::projection::resources_view(&added).inspection,
+        *added.inspection()
+    );
     assert_eq!(before.subagents().len(), 0);
     assert!(before.managed_python_catalog().packages().is_empty());
     assert_eq!(added.subagents().len(), 1);
@@ -3069,6 +3102,18 @@ async fn cfg271_all_catalogs_publish_together_and_failed_candidates_publish_noth
     std::fs::write(&skill_markdown, "malformed: [").unwrap();
     product.runtime().reload_resources().await.unwrap();
     let excluded = product.runtime().runtime_resources();
+    assert_eq!(
+        excluded.inspection().skill_diagnostics,
+        excluded
+            .capability()
+            .skills()
+            .diagnostics()
+            .iter()
+            .map(crate::skills::SkillDiagnostic::redacted)
+            .collect::<Vec<_>>()
+    );
+    assert_ne!(excluded.inspection(), added.inspection());
+    assert_eq!(added.inspection().skills.len(), 1);
     assert!(!std::sync::Arc::ptr_eq(
         &added,
         &product.runtime().runtime_resources()
@@ -3230,4 +3275,368 @@ fn cfg274_obsolete_registration_and_manifest_fields_are_authoring_errors() {
         serde_yaml::from_str(&template_source("typed_agent")).unwrap();
     value["tools"] = json!([]);
     assert!(serde_json::from_value::<crate::runtime::workflow::WorkflowDefinition>(value).is_err());
+}
+
+#[test]
+fn cfg275_offline_generation_projects_native_facts_once_without_effects_or_secrets() {
+    use crate::runtime::agent_profile::AgentProfileDiagnostic;
+    use crate::runtime::capability_inspection::{SourceInspection, WorkflowInspection};
+    use crate::skills::{SkillDiagnostic, SkillSource};
+    let f = Fixture::new();
+    f.project(json!({
+        "agent": {"tools": {"builtin": ["read"], "sources": {"optional": ["inspect"]}}, "disabled_skills": ["absent"], "workflows": ["example"]},
+        "mcp_servers": {"optional": {"enabled": true, "command": "must-never-spawn", "env": {"TOKEN": "SECRET_SOURCE_ENV"}}}
+    }));
+    f.role(false, "reviewer", json!({"description":"Review", "tools":{"builtin":["read"],"sources":{"absent":["inspect"]}}, "skills":["review"]}), "SECRET_AGENT_BODY");
+    for root in [&f.host.home_directory, &f.host.launch_directory] {
+        let path = root.join(".agents/skills/review");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(
+            path.join("SKILL.md"),
+            "---\nname: review\ndescription: Review\n---\nSECRET_SKILL_BODY",
+        )
+        .unwrap();
+    }
+    let broken = f.host.launch_directory.join(".agents/skills/broken");
+    std::fs::create_dir_all(&broken).unwrap();
+    std::fs::write(
+        broken.join("SKILL.md"),
+        "---\nname: [SECRET_INVALID_VALUE]\ndescription: bad\n---\n",
+    )
+    .unwrap();
+    install_workflow(
+        &f,
+        "description: Missing tool\nblock:\n  input: {type: object}\n  output: {type: object, properties: {text: {type: string}}, required: [text], additionalProperties: false}\n  entry: inspect\n  nodes:\n    inspect:\n      type: tool\n      selector: {origin: source, source_id: optional, name: inspect}\n      arguments: {type: literal, value: {}}\n      result: {type: text, part: 0}\n    done:\n      type: return\n      output: {type: object, fields: {text: {type: reference, path: [inspect]}}}\n  edges: [{from: inspect, to: done}]\n",
+    );
+    let ((report, launch), effects) = super::static_effects::measure(|| {
+        super::diagnostics::inspect("config_show", &f.request, &f.host)
+    });
+    assert_eq!(effects, [0; 13]);
+    let launch = launch.unwrap_or_else(|| panic!("{}", report.render(true)));
+    let facts = &launch.inspection;
+    let root = facts.main.as_ref().unwrap();
+    assert_eq!(
+        root.tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["read"]
+    );
+    assert!(
+        root.diagnostics
+            .contains(&AgentProfileDiagnostic::DisabledSkillAbsent {
+                name: "absent".into()
+            })
+    );
+    assert!(matches!(
+        facts.sources[&ToolSourceId::Mcp(crate::runtime::identity::McpServerId::new("optional"))],
+        SourceInspection::Unprepared
+    ));
+    assert_eq!(root.skills[0].source, SkillSource::Workspace);
+    assert_eq!(root.skills[0].shadowed[0].source, SkillSource::Global);
+    assert!(
+        facts
+            .skill_diagnostics
+            .iter()
+            .any(|fact| matches!(fact, SkillDiagnostic::PackageInvalid { .. }))
+    );
+    assert!(
+        facts
+            .skill_diagnostics
+            .iter()
+            .any(|fact| matches!(fact, SkillDiagnostic::Shadowed { .. }))
+    );
+    assert!(matches!(
+        facts.workflows.values().next().unwrap(),
+        WorkflowInspection::Disabled(_)
+    ));
+    let named = facts.agents.values().next().unwrap();
+    assert_eq!(named.tools[0].name, "read");
+    assert_eq!(named.skills[0].source, SkillSource::Workspace);
+    assert_eq!(named.diagnostics.len(), 1);
+    let expected = serde_json::to_value(facts).unwrap();
+    for _ in 0..3 {
+        let ((again, candidate), effects) = super::static_effects::measure(|| {
+            super::diagnostics::inspect("config_show", &f.request, &f.host)
+        });
+        assert_eq!(effects, [0; 13]);
+        assert_eq!(
+            serde_json::to_value(candidate.unwrap().inspection).unwrap(),
+            expected
+        );
+        assert_eq!(again.render(true), report.render(true));
+    }
+    for secret in [
+        "SECRET_SOURCE_ENV",
+        "SECRET_AGENT_BODY",
+        "SECRET_SKILL_BODY",
+        "SECRET_INVALID_VALUE",
+    ] {
+        assert!(!report.render(true).contains(secret), "{secret}");
+        assert!(!report.render(false).contains(secret), "{secret}");
+    }
+}
+
+#[test]
+fn cfg275_committed_end_to_end_example_uses_final_authoring_and_offline_admission() {
+    let f = Fixture::new();
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/cfg2");
+    for file in [
+        "rustx.toml",
+        ".agents/agents/reviewer.toml",
+        ".agents/skills/rust-review/SKILL.md",
+        ".agents/tools/echo/server.py",
+        ".agents/tools/echo/requirements.txt",
+        ".agents/workflows/review.yaml",
+        ".agents/workflows/unavailable.yaml",
+    ] {
+        let target = f.host.launch_directory.join(file);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::copy(example.join(file), target).unwrap();
+    }
+    let ((report, launch), effects) = super::static_effects::measure(|| {
+        super::diagnostics::inspect("config_show", &f.request, &f.host)
+    });
+    assert_eq!(effects, [0; 13]);
+    let launch = launch.unwrap_or_else(|| panic!("{}", report.render(true)));
+    assert_eq!(
+        launch.config.initial_model().request_params["chat_template_kwargs"]["enable_thinking"],
+        true
+    );
+    let main = launch.inspection.main.as_ref().unwrap();
+    assert_eq!(
+        main.tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["read"]
+    );
+    assert_eq!(launch.inspection.workflows.len(), 2);
+    assert!(
+        launch
+            .inspection
+            .workflows
+            .values()
+            .all(|admission| matches!(
+                admission,
+                crate::runtime::capability_inspection::WorkflowInspection::Disabled(_)
+            ))
+    );
+    assert_eq!(
+        launch
+            .inspection
+            .agents
+            .values()
+            .next()
+            .unwrap()
+            .diagnostics
+            .len(),
+        3
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cfg275_child_inspection_and_execution_share_frozen_r1_after_parent_reload() {
+    use crate::runtime::identity::{AgentId, ConversationId, SubagentId};
+    use crate::runtime::subagent::ipc::{
+        ChildTerminalMode, SUBAGENT_IPC_VERSION, SubagentChildSpec,
+    };
+    use crate::runtime::subagent::resolver::{InvokingAgentAuthority, SubagentResolution};
+    use crate::runtime::subagent::{SubagentName, SubagentResolver};
+    let f = Fixture::new();
+    f.project(json!({"agent":{"tools":{"builtin":["read"]},"agents":["reviewer"],"disabled_skills":["rust-review"]}}));
+    for name in ["rust-review", "root-visible"] {
+        let root = f
+            .host
+            .launch_directory
+            .join(format!(".agents/skills/{name}"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: frozen metadata\n---\nSECRET_SKILL_BODY\n"),
+        )
+        .unwrap();
+    }
+    f.role(false, "reviewer", json!({"description":"Review", "tools":{"builtin":["read","grep"],"sources":{"optional":"all"}}, "skills":["rust-review"], "extensions":{"todo":{"enabled":false},"agent_status":{"enabled":true}}}), "SECRET_R1_INSTRUCTIONS");
+    let launch = f.resolve();
+    let models = crate::model::invocation::ModelBindingRegistry::new(
+        launch.models.resolve(&f.credentials).unwrap(),
+    )
+    .unwrap();
+    let parent = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+        .await
+        .unwrap();
+    let r1 = parent.runtime().runtime_resources();
+    let name = SubagentName::parse("reviewer").unwrap();
+    let resolved = SubagentResolver::resolve(&SubagentResolution {
+        resources: &r1,
+        agent: &name,
+        attempt_model: &parent.runtime().model_config(),
+        models: &models,
+        invocation: None,
+        invoking: &InvokingAgentAuthority::none(),
+    })
+    .unwrap();
+    assert_eq!(
+        r1.inspection()
+            .main
+            .as_ref()
+            .unwrap()
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["read"]
+    );
+    assert_eq!(
+        resolved.selection.tools,
+        r1.resolved_agent(&name).unwrap().tool_selection
+    );
+    assert_eq!(
+        r1.inspection().main.as_ref().unwrap().disabled_skills,
+        ["rust-review"]
+    );
+    let expected = r1.inspection().agents[&name].clone();
+    let private = resolved
+        .tools
+        .iter()
+        .find(|tool| tool.name() == "grep")
+        .unwrap();
+    assert!(matches!(
+        r1.capability()
+            .tool_registry()
+            .preflight(&crate::tools::types::ToolCall {
+                id: crate::runtime::identity::ToolCallId::new("root-cannot-call-child-private"),
+                tool_id: private.definition().id.clone(),
+                name: "grep".into(),
+                arguments: json!({}),
+            }),
+        Err(crate::tools::executor::ToolPreflightError::UnknownTool { .. })
+    ));
+
+    let mut resolved = resolved;
+    let mut transferred = Vec::new();
+    resolved.model.export_process_credentials(&mut transferred);
+    let child_dependencies = LocalRuntimeDependencies {
+        credentials: Some(std::sync::Arc::new(
+            crate::credentials::CredentialSnapshot::new(transferred),
+        )),
+        ..Default::default()
+    };
+    let resolved = serde_json::from_slice(&serde_json::to_vec(&resolved).unwrap()).unwrap();
+    f.role(false, "reviewer", json!({"description":"R2", "tools":{"builtin":["bash"]},"skills":["root-visible"],"extensions":{"todo":{"enabled":true},"agent_status":{"enabled":false}}}), "R2 instructions");
+    parent.runtime().reload_resources().await.unwrap();
+    let r2 = parent.runtime().runtime_resources();
+    assert_ne!(r2.inspection().agents[&name], expected);
+    // Stage the normal child root; neither this path nor the child receives R2.
+    let child = SubagentChildSpec {
+        protocol_version: SUBAGENT_IPC_VERSION,
+        product_root: launch.runtime_root.clone(),
+        subagent_id: SubagentId::new("conv-parent-subagent-1"),
+        child_conversation_id: ConversationId::new("conv-parent-subagent-1"),
+        child_agent_id: AgentId::new("child"),
+        parent_agent_id: AgentId::new("parent"),
+        resolved,
+        approval_mode: crate::runtime::ApprovalMode::Policy,
+        model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+        tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
+        context: crate::context::SessionContextPolicy {
+            reserve_tokens: 0,
+            keep_recent_tokens: 0,
+            summary_output_cap: None,
+        },
+        workspace_snapshot: crate::runtime::workspace::WorkspaceSnapshot::shared(
+            f.host.launch_directory.clone(),
+        ),
+        incarnation: "incarnation-r1".into(),
+        terminal: ChildTerminalMode::Normal,
+    };
+    std::fs::create_dir_all(
+        crate::runtime::subagent::child_conversation_store_path(
+            &child.product_root,
+            &child.child_conversation_id,
+        )
+        .parent()
+        .unwrap()
+        .join(&child.incarnation),
+    )
+    .unwrap();
+    let core = super::composition::LocalConversationCore::compose_subagent_child(
+        &child,
+        &child_dependencies,
+        &super::composition::ChildPreparation::detached(),
+    )
+    .await
+    .unwrap();
+    let resources = core.runtime().runtime_resources();
+    let wire = crate::runtime_client::projection::resources_view(&resources);
+    let actual = resources.inspection().main.as_ref().unwrap();
+    assert_eq!(*wire.inspection, *resources.inspection());
+    assert_eq!(actual.tools, expected.tools);
+    assert_eq!(actual.tool_selection, expected.tool_selection);
+    assert_eq!(actual.diagnostics, expected.diagnostics);
+    assert!(
+        !actual.diagnostics.is_empty(),
+        "frozen suppression survives too"
+    );
+    assert!(std::sync::Arc::ptr_eq(
+        resources.capability(),
+        &core.capability().current_snapshot()
+    ));
+    assert_eq!(actual.extensions, expected.extensions);
+    assert_eq!(actual.disabled_skills, expected.disabled_skills);
+    assert!(
+        actual.disabled_skills.is_empty(),
+        "root deny-list never leaks into the named child"
+    );
+    assert_eq!(actual.skills.len(), 1);
+    assert_eq!(actual.skills[0].name, "rust-review");
+    assert_eq!(actual.skills[0].source, expected.skills[0].source);
+    assert_eq!(actual.skills[0].shadowed, expected.skills[0].shadowed);
+    assert!(
+        std::path::Path::new(&actual.skills[0].location).starts_with(child.runtime_root().unwrap())
+    );
+    assert_eq!(
+        resources.capability().skills().bindings(),
+        &[child.resolved.skills[0].binding.clone()]
+    );
+    assert_eq!(
+        resources.capability().model_skill_entries()[0].location,
+        actual.skills[0].location
+    );
+    assert_eq!(
+        resources.capability().tool_registry().definitions(),
+        child
+            .resolved
+            .tools
+            .iter()
+            .map(|tool| tool.definition().clone())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        core.runtime().native_extensions(),
+        child.resolved.extensions
+    );
+    assert_eq!(
+        resources.root_profile().unwrap(),
+        &child.resolved.child_profile()
+    );
+    assert!(
+        resources
+            .agent_profile()
+            .unwrap()
+            .contains("SECRET_R1_INSTRUCTIONS")
+    );
+    let encoded = serde_json::to_string(resources.inspection()).unwrap();
+    assert!(!encoded.contains("SECRET_"));
+    assert!(!encoded.contains("root-visible"));
+    // A second real publication cannot mutate the child or the retained R1.
+    parent.runtime().reload_resources().await.unwrap();
+    assert_eq!(
+        serde_json::to_string(core.runtime().runtime_resources().inspection()).unwrap(),
+        encoded
+    );
+    assert_eq!(r1.inspection().agents[&name], expected);
+    drop(core); // composed child has not been activated or started execution
+    parent.runtime().shutdown().await.unwrap();
 }

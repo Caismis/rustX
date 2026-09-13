@@ -116,7 +116,9 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 33. Version 32 freezes Issue #258’s durable
+The current SQLite development schema is defined by `SQLITE_SCHEMA_VERSION`.
+Version 34 adds native revisioned Goal state and atomic Goal/inbound accounting.
+Version 32 freezes Issue #258’s durable
 `profile_digest` for the effective admitted child execution profile. Version 33 establishes
 non-creating rollback-journal management reads and separated workspace storage.
 Version 31 froze Issue
@@ -1269,7 +1271,7 @@ second, independent plane:
 ```
 
 `capabilities::select_tools` takes the two sets separately, so neither filters
-the other: `--no-tools` leaves an enabled Todo's Tool in place, and no
+the other: `--no-direct-tools` leaves an enabled Todo's Tool in place, and no
 selection surface can name an extension Tool at all — `todo` is refused with a
 diagnostic naming the extension, in root configuration, in the CLI activation
 policy, in a role's `tools.builtin`, and in a Workflow's admitted capability
@@ -5259,7 +5261,8 @@ is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
-The current Runtime Client protocol is version 24, adding the typed question
+The current Runtime Client protocol is defined by `RUNTIME_CLIENT_PROTOCOL_VERSION`.
+Version 24 added the typed question
 vocabulary, its canonical scalar domains — a finite-binary64 `Number` carried
 as canonical binary64 text and an `Integer` carried as canonical decimal text,
 neither of them as a JSON number a JavaScript client would re-spell — and
@@ -6478,8 +6481,10 @@ available definitions
   -> immutable active ToolRegistry
 ```
 
-`--no-builtin-tools` removes built-ins from default eligibility;
-`--no-tools` selects zero ordinary main-model Tools. Read has no exception.
+`--no-builtin-tools` removes ordinary built-ins from direct selection;
+`--no-direct-tools` selects zero ordinary direct Tools. Read has no exception.
+Agent delegation and Workflow invocation remain independently selected by
+`agent.agents` and `agent.workflows`; Extension Tools remain composition-owned.
 `--tools` is exact and exclusions subtract last. Invalid or ambiguous
 explicit names fail deterministically. Execution ownership, approval,
 concurrency, source activation and model selection remain separate authorities.

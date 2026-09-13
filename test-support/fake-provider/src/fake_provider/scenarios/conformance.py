@@ -469,7 +469,7 @@ def _compaction(name: str, summary_model: str) -> Scenario:
                 # A summary invocation is structurally distinct: no tools, no
                 # Agent Status, no Skill catalog, and the runtime's own
                 # deterministic instruction.
-                no_tools=True,
+                no_direct_tools=True,
                 body_contains=(SUMMARY_INSTRUCTION, COMPACTION_MARKER),
             ),
             Stream(Text(SUMMARY_TEXT), Finish("stop")),
@@ -522,7 +522,7 @@ def _compaction_twice(name: str, summary_model: str) -> Scenario:
             Expect(
                 protocol=OPENAI_CHAT_COMPLETIONS,
                 model=summary_model,
-                no_tools=True,
+                no_direct_tools=True,
                 body_contains=(SUMMARY_INSTRUCTION, FILLER_ONE_MARKER),
                 body_excludes=(FILLER_TWO_MARKER,),
             ),
@@ -543,7 +543,7 @@ def _compaction_twice(name: str, summary_model: str) -> Scenario:
             Expect(
                 protocol=OPENAI_CHAT_COMPLETIONS,
                 model=summary_model,
-                no_tools=True,
+                no_direct_tools=True,
                 # The second compaction's span is the already-compacted
                 # surface: the first summary and the second filler, never
                 # the first filler's retired bytes.

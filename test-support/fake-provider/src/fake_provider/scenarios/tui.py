@@ -208,7 +208,7 @@ def tui_compaction() -> Scenario:
             Expect(
                 protocol=OPENAI_CHAT_COMPLETIONS,
                 model=INTEGRATION_MODEL,
-                no_tools=True,
+                no_direct_tools=True,
                 body_contains=(SUMMARY_INSTRUCTION, FILLER_ONE_MARKER),
                 body_excludes=(FILLER_TWO_MARKER,),
             ),
@@ -227,7 +227,7 @@ def tui_compaction() -> Scenario:
             Expect(
                 protocol=OPENAI_CHAT_COMPLETIONS,
                 model=INTEGRATION_MODEL,
-                no_tools=True,
+                no_direct_tools=True,
                 body_contains=(SUMMARY_INSTRUCTION, SUMMARY_ONE_TEXT, FILLER_TWO_MARKER),
                 body_excludes=(FILLER_ONE_MARKER,),
             ),

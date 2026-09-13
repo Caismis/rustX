@@ -47,7 +47,9 @@ pub struct SkillCatalogEntry {
 
 /// The immutable Skill snapshot of one capability set.
 ///
-/// The snapshot holds the accepted Skill packages, the deterministically
+/// A discovery snapshot holds accepted packages; a one-shot child installs
+/// only its already-frozen metadata and proven bindings, with no discoverable
+/// package authority. Both forms hold the deterministically
 /// ordered catalog metadata entries after Skill-level invocation filtering,
 /// the deterministic `SkillId` + `SkillVersionId` bindings, the effective
 /// source provenance of each identity, and the generation-scoped discovery
@@ -69,6 +71,24 @@ pub struct SkillSnapshot {
 }
 
 impl SkillSnapshot {
+    /// Install the selected metadata and proven bindings of a one-shot child.
+    /// Packages were validated by the parent and physically verified by the
+    /// materializer. No discovery, parsing, or body loading occurs here.
+    pub(crate) fn from_frozen(
+        mut entries: Vec<(SkillCatalogEntry, SkillBinding, SkillProvenance)>,
+    ) -> Self {
+        entries.sort_by(|left, right| left.0.name.cmp(&right.0.name));
+        let bindings: Vec<_> = entries.iter().map(|entry| entry.1.clone()).collect();
+        Self {
+            packages: Vec::new(), // children cannot delegate or rediscover packages
+            catalog: entries.iter().map(|entry| entry.0.clone()).collect(),
+            visible_bindings: bindings.clone(),
+            bindings,
+            provenance: entries.into_iter().map(|entry| entry.2).collect(),
+            diagnostics: Vec::new(),
+        }
+    }
+
     /// Freezes one complete discovery outcome, including its provenance and
     /// its typed generation-scoped diagnostics.
     #[must_use]
@@ -153,7 +173,8 @@ impl SkillSnapshot {
         }
     }
 
-    /// The accepted packages, deterministically ordered by Skill name.
+    /// The accepted discovery packages, deterministically ordered by Skill name.
+    /// Empty for a one-shot child, whose metadata and bindings are frozen directly.
     #[must_use]
     pub fn packages(&self) -> &[Arc<SkillPackage>] {
         &self.packages
@@ -186,9 +207,9 @@ impl SkillSnapshot {
     /// `disable-model-invocation: true`.
     #[must_use]
     pub fn locations(&self) -> Vec<&str> {
-        self.packages
+        self.provenance
             .iter()
-            .map(|package| package.location())
+            .map(|entry| entry.location.as_str())
             .collect()
     }
 

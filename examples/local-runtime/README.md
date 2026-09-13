@@ -248,30 +248,33 @@ questionnaire interaction through the runtime-owned `InteractionCoordinator`.
 The client always offers bounded custom text; the model does not send
 `allow_free_text` or author an `Other` option. A decline is a successful tool
 result, while attempt cancellation and provider unavailability remain distinct.
-The local process speaks Runtime Client protocol version 10, and its SQLite
-conversation store accepts development schema version 18 only. Runtime Client
-protocol versions superseded by the current one and development schemas before
-version 18 are explicitly rejected rather than migrated.
+The local process speaks the current Runtime Client protocol defined by
+`RUNTIME_CLIENT_PROTOCOL_VERSION`. Its SQLite conversation store accepts only
+the current development schema defined by `SQLITE_SCHEMA_VERSION`. Superseded
+development protocol versions and incompatible store schemas are explicitly
+rejected rather than migrated.
 
 The harmless `RUSTX_EXAMPLE_MODE` entry demonstrates the authorized runtime
 environment. Keep provider credentials in `models.toml`'s `api_key` reference,
 not in this table.
 
 `agent.tools.builtin` selects ordinary built-ins; Read is default-enabled.
-`agent.tools.builtin: []` selects no ordinary built-ins, while explicitly admitted
-main Workflows remain default-eligible. `--no-builtin-tools` removes all
-built-ins, including generated dispatchers, from default selection.
-`--tools a,b` is an exact allowlist; `--exclude-tools a,b` subtracts last.
-`--no-tools` exposes zero ordinary main-model tools, including Read,
-Subagent and Workflow tools. It conflicts with the other three selection
+`agent.tools.builtin = []` selects no ordinary built-ins, while explicitly admitted
+main Workflows remain independently selected. `--no-builtin-tools` removes
+ordinary builtin Tools from direct selection.
+`--tools a,b` is an exact direct Tool allowlist; `--exclude-tools a,b` subtracts last.
+`--no-direct-tools` removes ordinary direct Tool exposure, including Read.
+Agent delegation (`agent.agents`) and Workflow invocation (`agent.workflows`)
+remain independently selected. It conflicts with the other three selection
 flags; `--tools` also conflicts with `--no-builtin-tools`.
 
 Every control in this paragraph addresses the *ordinary* capability plane.
 A Tool contributed by a Native Agent Extension — `todo` — is composed under
 `extensions` and is unnameable here: listing it in `agent.tools.builtin`, `--tools`
-or `--exclude-tools` is a validation error, and `--no-tools` does not remove
-it. A model request with no Tools at all therefore needs `--no-tools` *and*
-`"extensions": { "todo": { "enabled": false } }`.
+or `--exclude-tools` is a validation error, and `--no-direct-tools` does not remove
+it. A model request with no Tools at all needs zero direct Tools, empty
+`agent.agents` and `agent.workflows`, and no Tool-providing Extensions
+(for example, `enabled = false` under `[agent.extensions.todo]`).
 Allowlist plus exclusions and default selection plus exclusions are supported.
 Explicit lists reject empty entries/lists, duplicates, unknown/unavailable
 names and ambiguous origins. Exclusions must resolve against applicable
@@ -429,7 +432,7 @@ interpret, or configure MCP independently.
 ## Custom Python tool
 
 The `echo` package is discovered inertly from its canonical folder. It remains
-unmaterialized: discovery does not authorize preparation, even with `--no-tools`
+unmaterialized: discovery does not authorize preparation, even with `--no-direct-tools`
 absent. Demand-driven source preparation belongs to the subsequent CFG2-03 step.
 
 ```text
@@ -658,3 +661,7 @@ Supplemental `AGENTS.md` files remain explicit project guidance. See the
 [authoring contract](../../docs/subagent-resources.md) and generated
 [Agent TOML schema](../../schemas/agent.schema.json). All fixed reference
 Workflows retain these canonical role identities.
+
+Direct Tool restrictions leave separately selected Agent/Workflow dispatch intact.
+A model request with no Tool surfaces also needs empty Agent/Workflow selections
+and no Tool-providing Native Extensions.

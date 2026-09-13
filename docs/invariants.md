@@ -147,8 +147,9 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses rollback journaling (`DELETE`), `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 33 is the only accepted schema; version 32 and every older
-development schema fail explicitly at open and are not migrated. Version 32
+schema `SQLITE_SCHEMA_VERSION` is the only accepted schema; incompatible
+development schemas fail explicitly at open and are not migrated. Version 34
+adds native revisioned Goal state and atomic Goal/inbound accounting. Version 32
 freezes Issue #258’s effective child `profile_digest`; version 33 establishes
 Issue #254’s rollback-journal management and local storage contract. Version 31
 freezes the Issue #242 typed Questionnaire interaction audit — canonical
@@ -1481,9 +1482,9 @@ The explicit lower-priority root product profile enables it; complete-profile
 omission composes none; `agent.tools.builtin`, `--tools`, `--exclude-tools`, a role's
 `tools.builtin`, and a Workflow's admitted capability set all reject the name
 `todo` outright, because they address the ordinary capability plane and Todo is
-not in it. `--no-tools` therefore leaves an enabled Todo's Tool in place: a
-Tool-free model request needs no ordinary Tools **and** no Tool-providing
-extension.
+not in it. `--no-direct-tools` therefore leaves an enabled Todo's Tool in place: a
+Tool-free model request needs zero direct Tools, empty Agent/Workflow
+selections, and no Tool-providing Extensions.
 
 The coherence is **structural, not conventional**. One frozen
 `NativeAgentExtensions` is stored by the `ConversationToolRuntime` that
@@ -3483,8 +3484,7 @@ the launch-boundary policy inheritance.
   receives only the two canonical automatic sources — `global`
   (`<home>/.agents/skills`) and `workspace` (`<workspace>/.agents/skills`),
   selected by the launch-scoped `[skills].sources` policy — plus the explicit
-  `--skill` launch authority. `~/.config/rustx/skills` is not a source, alias,
-  fallback, or migration path. The runtime root is disjoint from the workspace and
+  `--skill` launch authority. The runtime root is disjoint from the workspace and
   remains runtime-owned/generated state and is not a Workflow, Subagent, or
   general project-resource fallback.
 - **Persistent workspace identity has an explicit Unix byte contract.** On
@@ -3739,8 +3739,8 @@ the launch-boundary policy inheritance.
   `ToolRegistry`. Inactive definitions remain available for truthful
   inspection but their schemas never enter provider requests.
 - **Startup Tool selection is deterministic.** The base selection applies
-  `agent.tools.builtin` to built-ins, `--no-builtin-tools` removes all built-ins,
-  `--no-tools` selects zero ordinary Tools, `--tools` selects exactly its
+  `agent.tools.builtin` to built-ins, `--no-builtin-tools` removes ordinary builtin Tools from direct selection,
+  `--no-direct-tools` selects zero ordinary Tools, `--tools` selects exactly its
   names, and exclusions subtract last. Read has no activation exception.
   Empty, unknown/ineligible, ambiguous or duplicate explicit CLI entries fail.
   Complete-profile empty dimensions are valid, and unavailable selections warn

@@ -19,7 +19,6 @@ use crate::context::ContextAssembly;
 use crate::runtime::identity::{CapabilityRevision, RuntimeResourceRevision};
 use crate::runtime::subagent::catalog::{AgentCatalog, SubagentName};
 use crate::runtime::workflow::WorkflowCatalog;
-use crate::skills::SkillCatalogEntry;
 
 const PROJECT_CONTEXT_FILENAMES: [&str; 5] = [
     "AGENTS.override.md",
@@ -71,6 +70,7 @@ impl ManagedPythonCatalog {
 #[derive(Clone)]
 pub struct RuntimeResourceSnapshot {
     revision: RuntimeResourceRevision,
+    inspection: Arc<crate::runtime::capability_inspection::CapabilityInspection>,
     project_context_files: Arc<[ProjectContextFile]>,
     project_instructions: Option<Arc<str>>,
     skill_catalog: Option<Arc<str>>,
@@ -148,6 +148,7 @@ impl RuntimeResourceSnapshot {
                 .clone()
                 .with_resolved_profile(Some(Arc::new(resolved))),
         );
+        self.refresh_inspection();
         self
     }
 
@@ -175,7 +176,34 @@ impl RuntimeResourceSnapshot {
                 )
             })
             .collect();
+        self.refresh_inspection();
     }
+    fn refresh_inspection(&mut self) {
+        self.inspection = Arc::new(
+            crate::runtime::capability_inspection::CapabilityInspection::collect(
+                self.root_profile(),
+                self.resolved_agents.iter().map(|(name, profile)| {
+                    (
+                        name,
+                        profile.as_ref(),
+                        self.subagents
+                            .get(name)
+                            .expect("resolved definition")
+                            .instructions_source(),
+                    )
+                }),
+                &self.workflows,
+                &self.capability_availability,
+                self.capability.skills(),
+            ),
+        );
+    }
+    /// Read the frozen generation facts without resolution or execution.
+    #[must_use]
+    pub fn inspection(&self) -> &crate::runtime::capability_inspection::CapabilityInspection {
+        &self.inspection
+    }
+
     pub fn resolved_agent(
         &self,
         name: &SubagentName,
@@ -221,8 +249,16 @@ impl RuntimeResourceSnapshot {
             .into_iter()
             .map(PathBuf::from)
             .collect::<Vec<_>>();
+        let inspection = crate::runtime::capability_inspection::CapabilityInspection::collect(
+            capability.resolved_profile(),
+            std::iter::empty(),
+            &WorkflowCatalog::empty(),
+            &CapabilityAvailability::new(),
+            capability.skills(),
+        );
         Self {
             revision,
+            inspection: Arc::new(inspection),
             project_context_files: project_context_files.into(),
             project_instructions,
             skill_catalog,
@@ -276,28 +312,6 @@ impl RuntimeResourceSnapshot {
         self
     }
 
-    /// Replaces the generation's model-visible Skill catalog with an exact
-    /// frozen entry set.
-    ///
-    /// This is the subagent child composition path: a child's Skill catalog
-    /// is the parent-resolved allowlist, handed over by value. The child
-    /// therefore renders exactly the entries its invoking generation
-    /// authorized and rediscovers nothing. Progressive disclosure is
-    /// untouched: only catalog metadata is frozen, never a `SKILL.md` body.
-    #[must_use]
-    pub fn with_frozen_skill_catalog(mut self, entries: &[SkillCatalogEntry]) -> Self {
-        let visible =
-            crate::skills::admitted_skill_entries(entries, self.capability.tool_registry());
-        self.skill_catalog = (!visible.is_empty())
-            .then(|| Arc::<str>::from(crate::skills::render_skill_catalog(visible)));
-        self.skill_sources = entries
-            .iter()
-            .map(|entry| PathBuf::from(&entry.location))
-            .collect::<Vec<_>>()
-            .into();
-        self
-    }
-
     /// Completes a fully prepared generation after its compatible capability
     /// candidate has committed.
     #[must_use]
@@ -306,17 +320,20 @@ impl RuntimeResourceSnapshot {
         prepared: PreparedRuntimeResourceData,
         capability: Arc<CapabilitySnapshot>,
     ) -> Self {
-        Self::new(
+        let mut snapshot = Self::new(
             revision,
             prepared.project_context_files,
             prepared.agent_profile,
             prepared.context_assembly,
             capability,
-        )
-        .with_subagent_catalog(prepared.subagents)
-        .with_workflow_catalog(prepared.workflows)
-        .with_managed_python_catalog(prepared.managed_python)
-        .with_capability_availability(prepared.capability_availability)
+        );
+        snapshot.subagents = Arc::new(prepared.subagents);
+        snapshot.workflows = Arc::new(prepared.workflows);
+        snapshot.managed_python = prepared.managed_python;
+        snapshot.capability_availability = prepared.capability_availability;
+        snapshot.resolved_agents = prepared.resolved_agents;
+        snapshot.inspection = prepared.inspection;
+        snapshot
     }
 
     /// The process-local generation identity.
@@ -420,6 +437,11 @@ pub struct PreparedRuntimeResources {
 /// The non-capability half of a prepared resource candidate after the
 /// capability candidate has been moved into its commit boundary.
 pub(crate) struct PreparedRuntimeResourceData {
+    inspection: Arc<crate::runtime::capability_inspection::CapabilityInspection>,
+    resolved_agents: std::collections::BTreeMap<
+        SubagentName,
+        Arc<crate::runtime::agent_profile::ResolvedAgentProfile>,
+    >,
     project_context_files: Vec<ProjectContextFile>,
     agent_profile: Option<String>,
     context_assembly: ContextAssembly,
@@ -509,9 +531,51 @@ impl PreparedRuntimeResources {
             capability,
         } = self;
         let capability_availability = capability.availability().clone();
+        // Finalize all generation facts before capability commit. Publication
+        // moves these values unchanged; no resolver runs after the commit.
+        let names = subagents.names().into_iter().cloned().collect();
+        let enabled = workflows.enabled_ids();
+        let authority = crate::runtime::agent_profile::AgentProfileAuthority {
+            tools: capability.available_tools(),
+            availability: &capability_availability,
+            skills: capability.skills(),
+            agents: &names,
+            workflows: &enabled,
+            scope: crate::runtime::agent_profile::AgentScope::OneShotChild,
+        };
+        let resolved_agents: std::collections::BTreeMap<_, _> = subagents
+            .definitions()
+            .map(|definition| {
+                (
+                    definition.name().clone(),
+                    Arc::new(crate::runtime::agent_profile::resolve_agent_profile(
+                        definition.profile(),
+                        &authority,
+                    )),
+                )
+            })
+            .collect();
+        let inspection = crate::runtime::capability_inspection::CapabilityInspection::collect(
+            capability.resolved_profile(),
+            resolved_agents.iter().map(|(name, profile)| {
+                (
+                    name,
+                    profile.as_ref(),
+                    subagents
+                        .get(name)
+                        .expect("resolved definition")
+                        .instructions_source(),
+                )
+            }),
+            &workflows,
+            &capability_availability,
+            capability.skills(),
+        );
         (
             capability,
             PreparedRuntimeResourceData {
+                inspection: Arc::new(inspection),
+                resolved_agents,
                 project_context_files,
                 agent_profile,
                 context_assembly,
