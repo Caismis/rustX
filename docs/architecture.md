@@ -1455,7 +1455,7 @@ materialized and proved coherent at construction
 (`NativeAgentExtensions::from_materialized`), so the projected
 value and the executed value are the same value by construction — there is no
 second stored field that could drift, and no path from the projection to a
-configuration document, a `ProspectiveLaunch`, a `RuntimeResourceSnapshot`, an
+configuration document, a `ProspectiveSessionConfig`, a `RuntimeResourceSnapshot`, an
 Agent Status observation, a context message, or the Event Journal.
 `RuntimeClientHost::construct` installs it once, from the runtime it binds, for
 a root host and a subagent-child host alike; there is no later mutation seam.
@@ -6388,7 +6388,7 @@ CLI intent + captured host environment + user-owned project trust
         |
 bounded launch resolution: explicit layers -> domain defaults -> validation
         |
-ResolvedLaunch (frozen catalog/config, locations, identity, provenance)
+AdmittedSessionConfig (frozen catalog/config, locations, identity, provenance)
         |
 ModelCatalog + CurrentRuntimeConfig + selected SessionPersistentState
         |

@@ -147,7 +147,8 @@ use crate::tools::runtime::ConversationToolRuntime;
 use crate::tools::types::ToolDefinition;
 
 use super::config::{CurrentRuntimeConfig, CurrentRuntimeConfigError};
-use super::launch::{LaunchLocations, ResolvedLaunch};
+use super::configuration::{AdmittedSessionConfig, SessionLocations};
+
 use super::session::{
     SessionCatalog, SessionError, SessionId, SessionNodeId, SessionNodeOrigin,
     SessionPersistentState,
@@ -190,13 +191,17 @@ pub enum StartupSession {
     },
 }
 
-/// The injectable non-model dependencies of composition.
+/// Host controls and injectable non-model dependencies of composition.
 ///
 /// Model bindings are deliberately not injectable: production constructs the
 /// supported adapters directly from the validated catalog binding. Tests that
 /// need provider synchronization use an explicit catalog endpoint aimed at a
 /// local HTTP fixture.
 pub struct LocalRuntimeDependencies {
+    /// Local product Session selection; never part of effective configuration.
+    pub startup_session: StartupSession,
+    /// Optional startup metadata operation, independent of configuration resolution.
+    pub session_name: Option<String>,
     /// Optional test/embedding provider environment. Production uses the
     /// resolver's captured host snapshot, never a second launch-time read.
     pub credentials: Option<Arc<dyn CredentialEnvironment>>,
@@ -212,6 +217,8 @@ pub struct LocalRuntimeDependencies {
 impl Default for LocalRuntimeDependencies {
     fn default() -> Self {
         Self {
+            startup_session: StartupSession::Empty,
+            session_name: None,
             credentials: None,
             estimator: Arc::new(DefaultTokenEstimator),
             child_program: None,
@@ -230,18 +237,18 @@ impl std::fmt::Debug for LocalRuntimeDependencies {
 /// inputs are immutable; pinned user/project document slots and resources are read only
 /// when this loader is explicitly invoked by the runtime reload boundary.
 struct LocalRuntimeResourceLoader {
-    paths: ResolvedLaunch,
+    paths: AdmittedSessionConfig,
     native_resources: NativeToolResources,
     workflow_runtime: WorkflowRuntime,
-    /// The launch-scoped model authority. Reload re-reads pinned settings but
+    /// The Session-composition model authority. Reload re-reads pinned settings but
     /// not `models.toml`, so an agent's explicit model reference is
-    /// validated against exactly the catalog this process was launched with.
+    /// validated against exactly the catalog captured for this Session composition.
     models: ModelBindingRegistry,
 }
 
 impl LocalRuntimeResourceLoader {
     fn new(
-        paths: ResolvedLaunch,
+        paths: AdmittedSessionConfig,
         native_resources: NativeToolResources,
         models: ModelBindingRegistry,
         workflow_runtime: WorkflowRuntime,
@@ -899,7 +906,7 @@ fn admitted_source_demand(
 pub(crate) fn mcp_bindings_with_authority(
     config: &CurrentRuntimeConfig,
     workspace: &Path,
-    provenance: &std::collections::BTreeMap<String, super::launch::Origin>,
+    provenance: &std::collections::BTreeMap<String, super::configuration::Origin>,
     credentials: &crate::credentials::CredentialSnapshot,
 ) -> Result<crate::tools::mcp::McpServerBindings, CurrentRuntimeConfigError> {
     let mut bindings = config.mcp_bindings()?;
@@ -907,7 +914,7 @@ pub(crate) fn mcp_bindings_with_authority(
         binding.credentials.capture(credentials.clone());
         if matches!(
             provenance.get(&format!("mcp_servers.{name}")),
-            Some(super::launch::Origin::Project { .. })
+            Some(super::configuration::Origin::Project { .. })
         ) {
             binding.resource_workspace = Some(workspace.into());
         }
@@ -1006,7 +1013,7 @@ impl LocalConversationCore {
     /// Returns the first composition failure. Every failure happens before
     /// any protocol output exists.
     pub async fn compose(
-        paths: &ResolvedLaunch,
+        paths: &AdmittedSessionConfig,
         dependencies: &LocalRuntimeDependencies,
     ) -> Result<Self, LocalRuntimeError> {
         // This low-level path has no SessionCatalog control surface. It uses
@@ -1040,7 +1047,7 @@ impl LocalConversationCore {
     /// This method never reads or writes `SessionCatalog` state.
     #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     pub(crate) async fn compose_from_config(
-        paths: &ResolvedLaunch,
+        paths: &AdmittedSessionConfig,
         dependencies: &LocalRuntimeDependencies,
         registry: ModelBindingRegistry,
         runtime_config: CurrentRuntimeConfig,
@@ -1059,12 +1066,7 @@ impl LocalConversationCore {
             paths
                 .validate_resource_authority()
                 .map_err(|detail| LocalRuntimeError::Capability { detail })?;
-            let project_context_files =
-                load_project_context_files(&paths.workspace).map_err(|error| {
-                    LocalRuntimeError::Capability {
-                        detail: error.to_string(),
-                    }
-                })?;
+            let project_context_files = paths.project_context_files.clone();
             SessionModelState::new(registry.clone(), runtime_config.initial_model().clone())?;
             let model = SessionModelState::new(registry.clone(), session_state.model.clone())?;
 
@@ -1246,12 +1248,7 @@ impl LocalConversationCore {
                     profile: runtime_config.agent.clone(),
                     admitted_agents: subagent_catalog.names().into_iter().cloned().collect(),
                     admitted_workflows: workflows.enabled_ids().clone(),
-                    project_files: super::agent_resources::load_profile_files(
-                        &runtime_config.agent.agents_md.files,
-                    )
-                    .map_err(|error| LocalRuntimeError::Capability {
-                        detail: error.to_string(),
-                    })?,
+                    project_files: paths.root_agent_project_files.clone(),
                     no_builtin_tools: paths.no_builtin_tools,
                     no_direct_tools: paths.no_direct_tools,
                     tools: paths.tools.clone(),
@@ -1281,11 +1278,12 @@ impl LocalConversationCore {
             // servers, including managed Python packages) remain typed
             // availability state inside `prepare_candidate` (Issue #81); base
             // capability failures remain fatal.
-            let mut candidate = capability.prepare_candidate().await.map_err(|error| {
-                LocalRuntimeError::Capability {
+            let mut candidate = capability
+                .prepare_captured_candidate(paths.skill_discovery.clone())
+                .await
+                .map_err(|error| LocalRuntimeError::Capability {
                     detail: format!("{error:?}"),
-                }
-            })?;
+                })?;
             validate_workflow_tool_name_collisions(&candidate, &workflows).map_err(|error| {
                 LocalRuntimeError::Capability {
                     detail: error.to_string(),
@@ -1889,7 +1887,7 @@ impl LocalSessionProduct {
     /// activates the runtime before serving protocol input.
     ///
     /// The startup Session is an empty one unless
-    /// [`LaunchLocations::startup_session`] asks for the catalog's
+    /// [`LocalRuntimeDependencies::startup_session`] asks for the catalog's
     /// published active selection or names a persisted Session. Whichever
     /// it is, the catalog transition is planned first and committed once,
     /// after composition and host binding have succeeded, so a launch that
@@ -1904,7 +1902,7 @@ impl LocalSessionProduct {
     /// loading, capability composition, runtime recovery, or host binding
     /// fails.
     pub async fn compose(
-        paths: &ResolvedLaunch,
+        paths: &AdmittedSessionConfig,
         dependencies: &LocalRuntimeDependencies,
     ) -> Result<Self, LocalRuntimeError> {
         // The current runtime/project configuration and current ModelCatalog
@@ -1969,7 +1967,7 @@ impl LocalSessionProduct {
         // is not a published fact: a seeded conversation the catalog does
         // not name is unreachable — neither selectable nor resumable — so
         // an abandoned plan leaves an inert orphan and nothing else.
-        let planned = match &paths.startup_session {
+        let planned = match &dependencies.startup_session {
             StartupSession::Empty => {
                 if catalog.active_is_unused()? {
                     catalog.plan_unchanged()
@@ -1993,7 +1991,7 @@ impl LocalSessionProduct {
         // Session it also asked to continue therefore renames that Session,
         // exactly as typing `/name` in it would — and, like the selection
         // itself, only if the launch actually starts.
-        let planned = match &paths.session_name {
+        let planned = match &dependencies.session_name {
             Some(name) => planned
                 .with_name(name)
                 .map_err(LocalRuntimeError::SessionCatalog)?,
@@ -2106,7 +2104,7 @@ impl LocalConversationRuntime {
     /// Returns the first composition failure. Every failure happens before
     /// any protocol output exists.
     pub async fn compose(
-        paths: &ResolvedLaunch,
+        paths: &AdmittedSessionConfig,
         dependencies: &LocalRuntimeDependencies,
     ) -> Result<Self, LocalRuntimeError> {
         LocalConversationCore::compose(paths, dependencies)
@@ -2214,7 +2212,7 @@ impl LocalConversationInspection {
     /// [`LocalRuntimeError::DurableConversation`] when that store cannot be
     /// opened.
     pub async fn compose(
-        paths: &LaunchLocations,
+        paths: &SessionLocations,
         conversation_id: &ConversationId,
     ) -> Result<Self, LocalRuntimeError> {
         let lifecycle = Arc::new(
@@ -2417,7 +2415,7 @@ impl HeadlessConversationRuntime {
     /// Returns the first composition failure. Every failure happens before
     /// any protocol output exists.
     pub async fn compose(
-        paths: &ResolvedLaunch,
+        paths: &AdmittedSessionConfig,
         dependencies: &LocalRuntimeDependencies,
     ) -> Result<Self, LocalRuntimeError> {
         Ok(LocalConversationCore::compose(paths, dependencies)
@@ -2449,7 +2447,7 @@ impl HeadlessConversationRuntime {
 /// `SessionCatalog` concern: callers can validate the current runtime default
 /// before publishing a first durable Session.
 fn load_model_registry(
-    paths: &ResolvedLaunch,
+    paths: &AdmittedSessionConfig,
     dependencies: &LocalRuntimeDependencies,
 ) -> Result<ModelBindingRegistry, LocalRuntimeError> {
     let resolved = paths.models.resolve(
@@ -4202,7 +4200,7 @@ enabled = true
 
 #[cfg(test)]
 mod conversation_inspection_tests {
-    use super::{LaunchLocations, LocalConversationInspection, StartupSession};
+    use super::{LocalConversationInspection, SessionLocations};
     use crate::durable::{ConversationStore, SqliteConversationStore};
     use crate::local_runtime::live_inspection::LiveConversationInspectionLease;
     use crate::message::content::TextBlock;
@@ -4237,13 +4235,11 @@ mod conversation_inspection_tests {
             })])
             .expect("child history");
 
-        let paths = LaunchLocations {
+        let paths = SessionLocations {
             skill_paths: Vec::new(),
             no_automatic_skills: true,
             no_builtin_tools: false,
             no_direct_tools: false,
-            startup_session: StartupSession::Empty,
-            session_name: None,
             tools: None,
             exclude_tools: Vec::new(),
             workspace,
@@ -4301,15 +4297,11 @@ mod conversation_inspection_tests {
         store.initialize(&[]).expect("child history");
         let lease = LiveConversationInspectionLease::acquire(&runtime_root, &conversation_id)
             .expect("the running child owns its transient liveness lease");
-        let paths = LaunchLocations {
+        let paths = SessionLocations {
             skill_paths: Vec::new(),
             no_automatic_skills: true,
             no_builtin_tools: false,
             no_direct_tools: false,
-            startup_session: StartupSession::InspectConversation {
-                conversation_id: conversation_id.clone(),
-            },
-            session_name: None,
             tools: None,
             exclude_tools: Vec::new(),
             workspace,

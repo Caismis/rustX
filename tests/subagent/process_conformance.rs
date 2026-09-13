@@ -10,14 +10,13 @@
 //! resolved from the invoking resource snapshot and selects both a frozen
 //! Builtin and a Skill, so the child crosses the current #144 resolver and
 //! #145 child-owned Skill materialization boundary before it reaches the
-//! Agent Loop. The deterministic gate is reached by every child provider
-//! request and is never released; the child's very small finite timeout
-//! policy (300ms response-start) is the only trigger. Retry ordinals,
-//! backoff, and terminal publication are the child's ordinary Issue #134
-//! semantics — the four child provider requests (R0 + 3 retries) and the
-//! single parent `Failed` notice are the observable proof. No race or
-//! precedence correctness lives here; those are proven by the deterministic
-//! in-process suites.
+//! Agent Loop. A fully observed child request reaches a never-released header
+//! gate; the inherited 300ms deadline must settle the child before the outer
+//! guard, which is below the default 30s response-start timeout. HTTP bodies
+//! are transport evidence, not retry cardinality: cancellation may interrupt
+//! body transfer. Exact timeout retries belong to the manual-clock test
+//! `repeated_runtime_timeouts_use_the_bounded_generic_retry_budget_without_cancellation`.
+//! Parent history and subagent state prove terminal uniqueness here.
 
 use std::process::Stdio;
 use std::sync::Arc;
@@ -239,8 +238,8 @@ fn route(body: &str, gate: &Arc<crate::common::HeaderGate>) -> crate::common::Fi
 }
 
 /// The child inherits the frozen timeout policy, times out on the gated
-/// provider response, retries through its ordinary generic budget (R0 + 3
-/// retries = 4 provider requests), and fails bounded. The parent receives
+/// provider response, and fails within a bound impossible with default policy.
+/// The deterministic Agent Loop suite owns exact retry cardinality. The parent receives
 /// exactly one Runtime-authored failure notice with a timeout diagnostic
 /// and consumes it in an ordinary continuation turn. Nothing about the
 /// retries — ordinals, delays, a "retrying" state — is parent-visible.
@@ -405,56 +404,36 @@ async fn run_real_child_inherits_the_frozen_timeout_policy_and_retries_locally()
         "no child publication content crosses: {notice_json}"
     );
 
-    // The child really exercised its ordinary generic retry: exactly four
-    // provider requests carry the delegated task (R0 plus three transient
-    // retries), and the parent never reissued the delegation. Six requests
-    // provably completed their send before the snapshot above could settle
-    // (parent delegate, 4 gated child attempts, parent continuation — the
-    // "Hello world" cut requires it); the parent's post-notice turn may or
-    // may not have reached the server yet, so the total is not asserted.
-    // Collect one consistent locked snapshot of the observed bodies instead
-    // of indexing by the connection counter, which also counts
-    // accepted-but-abandoned connections (a client deadline firing
-    // mid-connect) and must not panic this proof.
-    let mut bodies = server.request_bodies();
-    for _ in 0..8_000 {
-        if bodies.len() >= 6 {
-            break;
-        }
-        tokio::task::yield_now().await;
-        bodies = server.request_bodies();
-    }
-    assert!(
-        bodies.len() >= 6,
-        "all six settled provider requests were observed: {bodies:?}"
-    );
-    let child_requests = bodies
-        .iter()
-        .filter(|body| {
-            body.contains("count the workspace files") && !body.contains("please delegate")
-        })
-        .count();
-    assert_eq!(
-        child_requests, 4,
-        "R0 + 3 ordinary retries inside the child: {bodies:?}"
-    );
+    // HeaderGate is entered only after one complete child body is recorded.
+    // That body proves a genuine provider invocation with child materialization,
+    // not how many Agent Loop attempts occurred. Deadlines may abort other
+    // connections before the fixture records their complete bodies.
+    let bodies = server.request_bodies();
     let first_child_request = bodies
         .iter()
-        .find(|body| body.contains("count the workspace files"))
+        .find(|body| {
+            body.contains("count the workspace files") && !body.contains("please delegate")
+        })
         .expect("the child request body");
     assert!(
         first_child_request.contains("skills/conformance/SKILL.md"),
         "the named child request uses the child-owned materialized Skill path: {first_child_request}"
     );
-    let parent_delegations = bodies
-        .iter()
-        .filter(|body| {
-            body.contains("please delegate")
-                && !body.contains("\"role\":\"tool\"")
-                && !body.contains("\\\"role\\\":\\\"tool\\\"")
-        })
-        .count();
-    assert_eq!(parent_delegations, 1, "the parent never retries the child");
+    // Count committed delegation proposals, not HTTP sends that a deadline
+    // could interrupt. Together with the single owned child this proves the
+    // parent never reissues/relaunches the delegated work.
+    let parent_delegations = snapshot.messages.iter().filter_map(|message| match message {
+        rustx::message::types::MessageBlock::Assistant(assistant) => Some(&assistant.content),
+        _ => None,
+    }).flatten().filter(|block| matches!(block,
+        rustx::message::types::AssistantContentBlock::ToolCall(call) if call.name == "subagent"
+    )).count();
+    assert_eq!(parent_delegations, 1, "one authoritative parent delegation");
+    assert!(
+        !serde_json::to_string(&snapshot.messages)
+            .unwrap()
+            .contains("CHILD-ANSWER")
+    );
 
     // Release the gate so the fixture server's held handlers can finish,
     // then shut the parent down cleanly.

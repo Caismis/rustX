@@ -10,12 +10,12 @@ use std::collections::BTreeMap;
 /// Only if an authoritative schema implementation produces non-serializable data.
 #[must_use]
 pub fn generate() -> BTreeMap<&'static str, Value> {
-    let settings = super::launch::authoring_schema();
+    let settings = super::configuration::authoring_schema();
     let mut project = settings.clone();
     if let Some(properties) = project.get_mut("properties").and_then(Value::as_object_mut) {
-        for &field in super::launch::USER_PATH_FIELDS
+        for &field in super::configuration::USER_PATH_FIELDS
             .iter()
-            .chain(super::launch::HOST_POLICY_FIELDS)
+            .chain(super::configuration::HOST_POLICY_FIELDS)
         {
             properties.remove(field);
         }
@@ -24,7 +24,7 @@ pub fn generate() -> BTreeMap<&'static str, Value> {
         .pointer_mut("/$defs/McpAuthoring/properties")
         .and_then(Value::as_object_mut)
     {
-        for &field in super::launch::MCP_SECRET_FIELDS {
+        for &field in super::configuration::MCP_SECRET_FIELDS {
             properties.remove(field);
         }
     }

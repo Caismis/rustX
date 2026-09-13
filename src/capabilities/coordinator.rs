@@ -882,6 +882,22 @@ impl CapabilityCoordinator {
     pub async fn prepare_candidate(
         &self,
     ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
+        self.prepare_current_candidate(None).await
+    }
+
+    /// Initial composition consumes the statically validated discovery snapshot.
+    /// Reload still discovers through the same candidate owner.
+    pub(crate) async fn prepare_captured_candidate(
+        &self,
+        discovered: crate::skills::SkillDiscoveryOutcome,
+    ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
+        self.prepare_current_candidate(Some(discovered)).await
+    }
+
+    async fn prepare_current_candidate(
+        &self,
+        discovered: Option<crate::skills::SkillDiscoveryOutcome>,
+    ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
         // Match publication's lock order: activation inputs and their base
         // revision are one admission cut. A stale worker cannot attach old
         // enabled inputs to a newly published disabled revision.
@@ -905,7 +921,7 @@ impl CapabilityCoordinator {
         if let Some(pause) = pause {
             pause.park().await;
         }
-        self.prepare_candidate_from_inputs(inputs, false, base_revision)
+        self.prepare_candidate_from_inputs(inputs, false, base_revision, discovered)
             .await
     }
 
@@ -920,7 +936,7 @@ impl CapabilityCoordinator {
             .lock()
             .expect("capability state lock poisoned")
             .revision;
-        self.prepare_candidate_from_inputs(inputs, true, base_revision)
+        self.prepare_candidate_from_inputs(inputs, true, base_revision, None)
             .await
     }
 
@@ -930,6 +946,7 @@ impl CapabilityCoordinator {
         inputs: CapabilityResourceInputs,
         force_publish: bool,
         base_revision: CapabilityRevision,
+        discovered: Option<crate::skills::SkillDiscoveryOutcome>,
     ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
         // Shared EnvironmentStore work is not cancelled by one conversation,
         // but a claimed conversation still counts the preparation owner
@@ -953,13 +970,17 @@ impl CapabilityCoordinator {
         } else {
             None
         };
-        // Discovery, per-candidate validation, same-scope conflict
-        // elimination, and the `explicit > workspace > global` merge all
-        // happen here, inside candidate construction. Filesystem enumeration
-        // never becomes published capability state directly.
-        let discovered =
-            SkillDiscovery::with_config(&self.inner.workspace, inputs.skill_discovery.clone())
-                .discover()?;
+        // Initial composition supplies statically captured discovery; reload
+        // discovers current inputs. Both use the same Skill discovery owner
+        // and this preparation/publication path. Filesystem enumeration never
+        // becomes published capability state directly.
+        let discovered = match discovered {
+            Some(discovered) => discovered,
+            None => {
+                SkillDiscovery::with_config(&self.inner.workspace, inputs.skill_discovery.clone())
+                    .discover()?
+            }
+        };
         let merged = merge_dependency_manifests(&discovered.packages)?;
         let python = self
             .inner

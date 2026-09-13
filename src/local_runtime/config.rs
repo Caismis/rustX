@@ -43,8 +43,11 @@ pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 8;
 ///
 /// No field in this type is persisted by [`SessionCatalog`](super::session::SessionCatalog).
 /// The selected Session contributes its separate [`SessionModelConfig`] state
-/// during composition; every other field here remains current launch-scoped
-/// runtime state.
+/// during composition. This is materialized current source/default content,
+/// frozen per Session composition, not process configuration or live state.
+/// Source bindings and explicit input presence live in `configuration` owners;
+/// no complete effective value is durable Session configuration authority.
+/// See docs/launch-configuration.md for the exhaustive field ownership table.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]

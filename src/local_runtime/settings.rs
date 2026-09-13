@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use toml_edit::{DocumentMut, Item, TableLike};
 
-use super::launch::ResolvedLaunch;
+use super::configuration::AdmittedSessionConfig;
 use crate::runtime_client::settings::{
     DefaultDocument, DefaultScope, DefaultSettingsStore, DefaultValue, ModelDefault,
     SaveDefaultResult, SettingsBoundary, SettingsFuture,
@@ -21,6 +21,7 @@ use crate::runtime_client::types::RuntimeClientError;
 #[derive(Clone)]
 pub(crate) struct UserDefaults {
     directory: PathBuf,
+    settings_source: PathBuf,
     models: crate::model::catalog::ModelCatalog,
 }
 
@@ -179,20 +180,26 @@ enum Frontier {
 }
 
 impl UserDefaults {
-    pub(crate) fn new(paths: &ResolvedLaunch) -> Self {
+    pub(crate) fn new(paths: &AdmittedSessionConfig) -> Self {
         Self {
-            directory: paths.host.config_directory.clone(),
+            directory: paths
+                .sources
+                .settings
+                .parent()
+                .expect("absolute settings source has parent")
+                .to_path_buf(),
+            settings_source: paths.sources.settings.clone(),
             models: paths.models.clone(),
         }
     }
     fn target(&self) -> PathBuf {
-        self.directory.join("settings.toml")
+        self.settings_source.clone()
     }
     fn read_sync(&self, scope: DefaultScope) -> Result<DefaultDocument, RuntimeClientError> {
         let path = self.target();
         let bytes = read_document(&path)?;
         let layer: super::authoring::RuntimeLayer = if let Some(bytes) = &bytes {
-            super::launch::parse_layer(&path, bytes, false).map_err(invalid)?
+            super::configuration::parse_layer(&path, bytes, false).map_err(invalid)?
         } else {
             super::authoring::RuntimeLayer::default()
         };
@@ -254,9 +261,10 @@ impl UserDefaults {
         let bytes = crate::bounded_file::read_bounded(staged.path()).map_err(io_failure)?;
         // Reuse the canonical user-layer schema/ownership parser. This validates
         // the document, not readiness of any mutable project or resource files.
-        let layer = super::launch::parse_layer(&target, &bytes, false).map_err(invalid)?;
+        let layer = super::configuration::parse_layer(&target, &bytes, false).map_err(invalid)?;
         if matches!(value, DefaultValue::ModelSelection { .. }) {
-            let (config, context) = super::launch::user_model_sections(layer).map_err(invalid)?;
+            let (config, context) =
+                super::configuration::user_model_sections(layer).map_err(invalid)?;
             let (primary, summary) =
                 crate::model::session::analyze_session_model_config(&self.models, &config)
                     .map_err(invalid)?;

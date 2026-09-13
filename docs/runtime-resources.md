@@ -884,3 +884,12 @@ no longer exists.
 Direct Tool restrictions leave separately selected Agent/Workflow dispatch intact.
 A model request with no Tool surfaces also needs empty Agent/Workflow selections
 and no Tool-providing Native Extensions.
+
+
+Fresh Session resolution uses `UserConfigManager` with explicit cwd. Its captured
+AGENTS content, root explicit `agent.agents_md.files`, and Skill discovery feed initial preparation; a later source edit
+cannot replace those values between resolution and composition. The existing
+resource reload owner may explicitly discover a new candidate and publish it
+atomically. It keeps the admitted model catalog, Skill source policy, cwd and
+native Extension composition frozen. Attempts, Tools, children and Workflows
+retain their admitted generation. See [configuration lifetime ownership](launch-configuration.md#configuration-lifetime-ownership).

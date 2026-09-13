@@ -3680,7 +3680,7 @@ the launch-boundary policy inheritance.
   off the extension owners that composition materialized. The projected value
   and the executed value are therefore the same value by construction — no
   second stored field can drift — and the projection path reaches no
-  configuration document, `ProspectiveLaunch`, `RuntimeResourceSnapshot`, Agent
+  configuration document, `ProspectiveSessionConfig`, `RuntimeResourceSnapshot`, Agent
   Status observation, context message, or Event Journal entry. A root host
   projects the value frozen at `LocalConversationCore::compose`
   (`launch_capture`); a child host projects the value its invoking generation

@@ -6,7 +6,8 @@ use std::path::PathBuf;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::launch::{HostEnvironment, LaunchRequest, Origin, ProspectiveLaunch};
+use super::configuration::{Origin, ProspectiveSessionConfig};
+use super::launch::{HostEnvironment, LaunchRequest};
 
 pub(super) const OUTPUT_LIMIT: usize = 256 * 1024;
 
@@ -180,7 +181,7 @@ pub struct PartialProjection {
 
 impl PartialProjection {
     pub(super) fn new(
-        locations: &super::launch::LaunchLocations,
+        locations: &super::configuration::SessionLocations,
         trusted: bool,
         mut configuration: Value,
     ) -> Self {
@@ -392,7 +393,7 @@ pub(super) fn inspect(
     operation: &'static str,
     request: &LaunchRequest,
     host: &HostEnvironment,
-) -> (Report, Option<ProspectiveLaunch>) {
+) -> (Report, Option<ProspectiveSessionConfig>) {
     match super::launch::analyze(request, host) {
         Ok(launch) => (project(operation, &launch), Some(launch)),
         Err(mut failure) => {
@@ -415,7 +416,7 @@ pub(super) fn inspect(
 }
 
 #[allow(clippy::too_many_lines)] // One redacted projection, no alternate resolution.
-fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
+fn project(operation: &'static str, launch: &ProspectiveSessionConfig) -> Report {
     let mut report = Report::new(operation);
     report.capabilities = Some(launch.inspection.clone());
     report.diagnostics.push(Diagnostic {
@@ -469,7 +470,7 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
                 Origin::User { .. } => ("user", "user declaration overrides builtin; no admitted higher-precedence declaration"),
                 Origin::Project { .. } if launch.trusted => ("trusted_project", "project declaration overrides user/builtin within project-owned fields"),
                 Origin::Project { .. } => ("untrusted_project", "prospective project declaration; runtime admission is withheld"),
-                Origin::Cli { .. } => ("cli", "explicit launch intent has highest precedence"),
+                Origin::Explicit { .. } => ("explicit", "explicit host/Session intent has highest precedence"),
             };
             (field.clone(), ProvenanceProjection { origin: origin.clone(), authority, reason })
         }).collect(),

@@ -1449,7 +1449,7 @@ registry, `CapabilityCoordinator` (prepared and committed before serving),
   semantic conversation coordinator), and one `RuntimeClientHost`
   projection/control adapter over it — and serves its endpoint over the
   Issue #38 stdio/JSONL transport with a protocol-only stdout.
-CFG-01 (#232) now supplies one validated `ResolvedLaunch` from bounded discovery,
+CFG-01 (#232) now supplies one validated `AdmittedSessionConfig` from bounded discovery,
 explicit-presence layering, host-owned trust and domain defaults before composition.
 
 Further M10 work productizes that established seam. Beyond CFG-01's bounded

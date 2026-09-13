@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use super::launch::ProspectiveLaunch;
+use super::configuration::ProspectiveSessionConfig;
 use crate::capabilities::activation::{SourceActivation, SourceEnablement};
 use crate::runtime::CancellationSignal;
 use crate::runtime::identity::McpServerId;
@@ -113,7 +113,7 @@ pub(super) fn render_results(results: &[ProbeResult], json: bool) -> String {
     output
 }
 
-pub(super) fn plan(launch: &ProspectiveLaunch, prepare: bool) -> ProbePlan {
+pub(super) fn plan(launch: &ProspectiveSessionConfig, prepare: bool) -> ProbePlan {
     let mut targets = vec![ProbeTarget {
         target: launch.config.initial_model().model.to_string(),
         kind: "provider",
@@ -175,7 +175,7 @@ pub(super) fn plan(launch: &ProspectiveLaunch, prepare: bool) -> ProbePlan {
 
 #[allow(clippy::too_many_lines)] // one finite source plan, with explicit settlement on every branch
 pub(super) async fn execute(
-    launch: &ProspectiveLaunch,
+    launch: &ProspectiveSessionConfig,
     plan: &ProbePlan,
     cancellation: CancellationSignal,
 ) -> Vec<ProbeResult> {

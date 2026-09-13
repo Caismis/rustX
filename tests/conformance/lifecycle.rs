@@ -428,7 +428,6 @@ async fn interactive_production_turn_still_builds_over_the_same_composition() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn active_session_a_executes_while_historical_b_preflight_retains_authority() {
     use rustx::durable::{ConversationStore, SqliteConversationStore};
-    use rustx::local_runtime::composition::LocalSessionProduct;
     use rustx::runtime_client::session_deletion::RuntimeClientSessionDeletionResult as SessionDeleteResult;
     use rustx::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClientResult};
     let Some(emulator) = ProviderEmulator::start("openai_chat_streamed_turn").await else {
@@ -442,9 +441,7 @@ async fn active_session_a_executes_while_historical_b_preflight_retains_authorit
     );
     std::fs::create_dir_all(root.path().join("canonical-product")).unwrap();
     std::os::unix::fs::symlink(root.path().join("canonical-product"), &paths.runtime_root).unwrap();
-    let historical = LocalSessionProduct::compose(&paths.clone().resolve(), &dependencies())
-        .await
-        .unwrap();
+    let historical = paths.clone().compose(&dependencies()).await.unwrap();
     let b = historical.supervisor().current().await.unwrap();
     let database = paths
         .runtime_root
@@ -468,9 +465,7 @@ async fn active_session_a_executes_while_historical_b_preflight_retains_authorit
     drop(store);
     historical.runtime().shutdown().await.unwrap();
     drop(historical);
-    let product = LocalSessionProduct::compose(&paths.clone().resolve(), &dependencies())
-        .await
-        .unwrap();
+    let product = paths.clone().compose(&dependencies()).await.unwrap();
     let a = product.supervisor().current().await.unwrap();
     assert_ne!(a.id, b.id);
     let endpoint = product.endpoint();

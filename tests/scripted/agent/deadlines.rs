@@ -992,6 +992,9 @@ async fn cancellation_wins_same_cut_and_retains_cancellation_provenance() {
     );
 }
 
+// Exact attempt cardinality belongs here: manual clock advances follow
+// loop-owned stream/backoff frontiers. A real HTTP fixture's recorded bodies
+// cannot count retries when client deadlines may interrupt body transfer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn repeated_runtime_timeouts_use_the_bounded_generic_retry_budget_without_cancellation() {
     use crate::agent::execution::test_sync::RetryBackoffPause;
@@ -1078,14 +1081,28 @@ async fn repeated_runtime_timeouts_use_the_bounded_generic_retry_budget_without_
     );
     assert_eq!(model.requests().len(), 4);
     assert_eq!(timeout_failures(&audit).len(), 4);
-    assert_eq!(
-        audit
-            .event_history
-            .iter()
-            .filter(|event| matches!(event, RuntimeEvent::ModelRetryScheduled { .. }))
-            .count(),
-        3
-    );
+    for event in &audit.event_history {
+        if let RuntimeEvent::ModelRequestFailed { error, .. } = event {
+            assert_eq!(error.kind, rustx::model::ModelErrorKind::Timeout);
+            assert_eq!(
+                error.timeout_phase,
+                Some(rustx::model::ModelTimeoutPhase::ResponseStart)
+            );
+            assert_eq!(
+                error.retry_disposition,
+                rustx::model::ModelRetryDisposition::Transient
+            );
+        }
+    }
+    let retries: Vec<_> = audit
+        .event_history
+        .iter()
+        .filter_map(|event| match event {
+            RuntimeEvent::ModelRetryScheduled { retry_number, .. } => Some(*retry_number),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(retries, vec![1, 2, 3]);
     assert!(matches!(
         audit.outcome,
         AttemptOutcome::Failed {
