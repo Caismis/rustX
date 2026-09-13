@@ -1682,7 +1682,7 @@ async function deletionAppHarness(overlapInitial = false) {
   const lists: Array<[string | undefined, number | undefined]> = [];
   const executes: string[][] = [], recovers: string[] = [], responses: unknown[] = [];
   let cancelled = 0;
-  let rows: SessionSummaryView[] = [{ id: "old", name: "historical-target", updated_at: "today", active_node: "node-2", active: false }];
+  let rows: SessionSummaryView[] = [{ id: "old", name: "historical-target", updated_at: "today", active_node: "node-2", }];
   let listResponse: ((query?: string, offset?: number) => Promise<{ sessions: SessionSummaryView[]; nextOffset?: number }>) | undefined;
   session.listSessions = async (query, offset = 0) => {
     lists.push([query, offset]);
@@ -1905,7 +1905,7 @@ it("a delayed initial resume response cannot resurrect a row after deletion reco
     await waitForApplicationContinuation();
     const reconciled = h.surface();
     assert.doesNotMatch(h.text(), /historical-target/);
-    h.lateList.resolve({ sessions: [{ id: "old", name: "historical-target", updated_at: "today", active_node: "node-2", active: false }] });
+    h.lateList.resolve({ sessions: [{ id: "old", name: "historical-target", updated_at: "today", active_node: "node-2", }] });
     await waitForApplicationContinuation();
     assert.equal(h.surface(), reconciled, "pre-mutation initial query cannot reopen a stale selector");
     assert.doesNotMatch(h.text(), /historical-target/);
@@ -1963,7 +1963,7 @@ it("failed reconciliation cannot revive a pre-mutation initial response after a 
     h.setList(async () => ({ sessions: [{ id: "A", name: "fresh-A", updated_at: "today", active_node: "A", active: false }] }));
     await h.input("/resume\r"); await h.input("\x1b[27u");
     const fresh = h.surface(); assert.match(h.text(), /fresh-A/);
-    h.lateList.resolve({ sessions: [{ id: "old", name: "historical-target", updated_at: "today", active_node: "old", active: false }] });
+    h.lateList.resolve({ sessions: [{ id: "old", name: "historical-target", updated_at: "today", active_node: "old", }] });
     await waitForApplicationContinuation();
     assert.equal(h.surface(), fresh); assert.match(h.text(), /fresh-A/);
     assert.doesNotMatch(h.text(), /historical-target/); assert.equal(h.executes.length, 1);
@@ -1972,7 +1972,7 @@ it("failed reconciliation cannot revive a pre-mutation initial response after a 
 
 it("reopening resume retains the current query while recovery retains the original target", async () => {
   const h = await deletionAppHarness();
-  const row = (id: string): SessionSummaryView => ({ id, name: id, active_node: id, active: false, updated_at: "today" });
+  const row = (id: string): SessionSummaryView => ({ id, name: id, active_node: id, updated_at: "today" });
   try {
     await h.input("\x1b[27u"); await h.input("old"); await h.input("\x04");
     await h.resolvePreview(); await h.input("\t\r");

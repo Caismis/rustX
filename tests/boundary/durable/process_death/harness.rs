@@ -332,13 +332,9 @@ impl Lab {
         self.catalog().names_conversation(conversation)
     }
 
-    /// The catalog's currently active `(Session, node)` pair.
-    pub(crate) fn active_lineage(&self) -> (SessionId, SessionNode) {
-        let (session_id, node, _) = self
-            .catalog()
-            .active_lineage()
-            .expect("the catalog names an active lineage");
-        (session_id, node)
+    /// Resolve the default node of an explicitly identified durable Session.
+    pub(crate) fn session_node(&self, id: &SessionId) -> (SessionId, SessionNode) {
+        (id.clone(), self.catalog().lineage(id, None).unwrap().0)
     }
 }
 

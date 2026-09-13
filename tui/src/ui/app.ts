@@ -158,7 +158,7 @@ export interface RustxTuiAppOptions {
    */
   workspace?: string;
   /** Re-spawns and re-attaches after Rust publishes a lineage switch. */
-  restartRuntime?: () => Promise<RuntimeAttachmentHandle>;
+  restartRuntime?: (target?: SessionView) => Promise<RuntimeAttachmentHandle>;
   /** Opens a known conversation identity in a fresh ordinary attachment. */
   openConversation?: (conversationId: string) => Promise<RuntimeAttachmentHandle>;
   /** How long the child gets to exit after the shutdown sequence. */
@@ -201,7 +201,7 @@ export class RustxTuiApp {
   #connection: RuntimeClientConnection;
   #child: ChildRuntimeProcess;
   readonly #dispatcher: CommandDispatcher;
-  readonly #restartRuntime: (() => Promise<RuntimeAttachmentHandle>) | undefined;
+  readonly #restartRuntime: ((target?: SessionView) => Promise<RuntimeAttachmentHandle>) | undefined;
   readonly #openConversation: ((conversationId: string) => Promise<RuntimeAttachmentHandle>) | undefined;
   readonly #openSessionSelectorAtStartup: boolean;
   readonly #workspace: string | undefined;
@@ -1355,14 +1355,14 @@ export class RustxTuiApp {
     let transitionSession = oldSession;
     let refreshLease: PresentationLease | undefined;
     try {
-      // Rust has already reached its semantic quiescence point before it
-      // returned this result. Closing here only releases the old process
-      // attachment; it is never the cancellation operation.
+      // This local CLI adapter owns its subprocess lifetime. The catalog
+      // did not quiesce or replace it; the next subprocess receives an explicit
+      // routing identity. Shared-process residency belongs to #287/#288.
       await this.#detachOldAttachment(oldSession, oldConnection);
       oldChild.closeStdin();
       await oldChild.waitOrTerminate(this.#terminationGraceMs);
 
-      const next = await restart();
+      const next = await restart(change.session);
       this.#bindRuntime(next.session, next.connection, next.child);
       transitionSession = next.session;
       refreshLease = this.#presentationLease();
@@ -1443,7 +1443,7 @@ export class RustxTuiApp {
       oldChild.closeStdin();
       await oldChild.waitOrTerminate(this.#terminationGraceMs);
 
-      const next = await restart();
+      const next = await restart(oldSession.sessionInfo);
       this.#bindRuntime(next.session, next.connection, next.child);
       transitionSession = next.session;
       refreshLease = this.#presentationLease();

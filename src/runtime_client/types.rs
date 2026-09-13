@@ -144,8 +144,6 @@ pub struct SessionSummaryView {
     pub updated_at: chrono::DateTime<chrono::Utc>,
     /// Active node identity.
     pub active_node: String,
-    /// Whether this is the currently active Session.
-    pub active: bool,
 }
 
 /// One historical user-message boundary exposed by `/fork` and `/tree`.
@@ -158,7 +156,7 @@ pub struct SessionUserMessageBoundaryView {
 }
 
 /// Native Session control intent carried from the Runtime Client boundary to
-/// the Rust-owned `LocalSessionSupervisor`.
+/// the Rust-owned `LocalSessionAttachment`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeClientSessionRequest {
     /// Finite native deletion preview.

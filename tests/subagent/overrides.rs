@@ -25,7 +25,7 @@ use crate::launch_fixture::LaunchFixture;
 use std::sync::Arc;
 
 use rustx::extensions::{NativeAgentExtensionSelection, NativeAgentExtensions};
-use rustx::local_runtime::composition::{LocalRuntimeDependencies, LocalSessionProduct};
+use rustx::local_runtime::composition::{LocalRuntimeDependencies, LocalSessionClient};
 use rustx::model::catalog::{MapCredentialEnvironment, ModelCatalog, ModelRef};
 use rustx::model::invocation::ModelBindingRegistry;
 use rustx::model::session::SessionModelConfig;
@@ -262,7 +262,7 @@ impl Lab {
         }
     }
 
-    async fn compose(&self) -> LocalSessionProduct {
+    async fn compose(&self) -> LocalSessionClient {
         (self.paths())
             .compose(&dependencies())
             .await

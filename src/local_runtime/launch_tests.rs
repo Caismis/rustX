@@ -2,7 +2,7 @@
 #![allow(clippy::needless_pass_by_value, clippy::too_many_lines)] // linear fixture scenarios
 use super::configuration::*;
 use super::launch::*;
-use super::{LocalRuntimeDependencies, LocalSessionProduct};
+use super::{LocalRuntimeDependencies, LocalSessionClient};
 use crate::capabilities::{CapabilitySourceState, ToolSourceId};
 use crate::model::ModelCatalog;
 use serde_json::json;
@@ -497,7 +497,7 @@ async fn cfg236_gated_role_reload_cancels_or_publishes_one_complete_generation()
         "R1 body",
     );
     f.project(json!({"subagents": {}, "agent": {"agents": ["role"]}}));
-    let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&f.resolve(), &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     let r1 = product.runtime().runtime_resources();
@@ -1506,13 +1506,13 @@ async fn cfg233_provider_binding_uses_launch_snapshot_and_ignores_unused_missing
     )]);
     let launch = f.resolve();
     f.credentials = crate::credentials::CredentialSnapshot::default();
-    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     assert!(!format!("{launch:?}").contains("CFG233_PROVIDER_SENTINEL"));
     product.runtime().shutdown().await.unwrap();
     assert!(
-        LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+        LocalSessionClient::compose(&f.resolve(), &LocalRuntimeDependencies::default())
             .await
             .unwrap_err()
             .to_string()
@@ -1528,7 +1528,7 @@ async fn cfg233_enabled_missing_credentials_and_connection_failures_are_source_l
         "connection":{"enabled":true,"command":"/does/not/exist"},
         "disabled":{"enabled":false,"command":"/does/not/exist","sensitive_env":{"TOKEN":"$IGNORED_KEY"}}
     }, "agent": {"model": {"model":"host/one"}, "tools": {"sources":{"credential":"all","connection":"all","disabled":"all"}}}}));
-    let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&f.resolve(), &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     let sources = product.runtime().capability().availability();
@@ -1561,7 +1561,7 @@ async fn cfg271_missing_empty_and_unprepared_python_allow_native_startup() {
             }
         }
         let product =
-            LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+            LocalSessionClient::compose(&f.resolve(), &LocalRuntimeDependencies::default())
                 .await
                 .unwrap();
         assert_eq!(
@@ -1603,7 +1603,7 @@ async fn cfg233_native_composition_keeps_disabled_and_discovered_resources_inert
         "offline":{"enabled":false,"url":"http://127.0.0.1:1/mcp","sensitive_headers":{"Authorization":"$UNSET"}}
     }, "agent": {"model": {"model":"host/one"}}}));
     let launch = f.resolve();
-    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     assert!(
@@ -1692,7 +1692,7 @@ async fn cfg233_http_credential_failure_redacts_peer_echo_and_configuration() {
     });
     f.user(json!({"mcp_servers": {"authenticated":{"enabled":true,"url":format!("http://{endpoint}/mcp"),"sensitive_headers":{"Authorization":"$AUTH"}}}, "agent": {"model": {"model":"host/one"}, "tools": {"sources":{"authenticated":"all"}}}}));
     let launch = f.resolve();
-    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     peer.await.unwrap();
@@ -2061,7 +2061,7 @@ async fn minimal_native_composition_and_frozen_launch_ignore_later_config_edits(
     let launch = f.resolve();
     f.user(json!({"agent_id": "edited", "agent": {"model": {"model":"host/two"}}}));
     f.project(json!({"agent": {"model": {"model":"missing/model"}}}));
-    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     assert!(
@@ -2087,7 +2087,7 @@ async fn minimal_native_composition_and_frozen_launch_ignore_later_config_edits(
 async fn resolution_and_composition_failures_preserve_published_session_selection() {
     let f = Fixture::new();
     let launch = f.resolve();
-    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     product.runtime().shutdown().await.unwrap();
@@ -2522,7 +2522,7 @@ async fn project_resource_authority_rejects_every_declared_escape_but_preserves_
         f.resolve().provenance["skills"],
         Origin::Explicit { .. }
     ));
-    let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&f.resolve(), &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     let resources = product.runtime().runtime_resources();
@@ -2653,7 +2653,7 @@ async fn cfg280_launch_resolves_the_canonical_skill_sources_and_explicit_authori
 
     // The committed generation carries exactly those effective identities.
     f.request.skill_paths = vec![explicit];
-    let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&f.resolve(), &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     let resources = product.runtime().runtime_resources();
@@ -2687,7 +2687,7 @@ async fn project_symlink_escape_is_rechecked_before_composition_and_reload() {
             .contains("outside trusted workspace")
     );
     assert!(
-        LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+        LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
             .await
             .unwrap_err()
             .to_string()
@@ -2695,7 +2695,7 @@ async fn project_symlink_escape_is_rechecked_before_composition_and_reload() {
     );
     std::fs::remove_file(&source).unwrap();
     f.role(false, "x", json!({"description":"x"}), "trusted A");
-    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     let before = product.runtime().runtime_resources();
@@ -2804,7 +2804,7 @@ fn project_directory_symlinks_cannot_authorize_builtin_or_declared_resources() {
 async fn workspace_workflow_symlink_rejects_reload_without_reading_external_yaml() {
     let f = Fixture::new();
     let launch = f.resolve();
-    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     let before = product.runtime().runtime_resources();
@@ -3044,7 +3044,7 @@ async fn cfg280_an_unselected_skill_source_is_inert_at_startup_and_reload() {
         "{:?}",
         launch.skill_diagnostics()
     );
-    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     for stage in ["startup", "reload"] {
@@ -3093,7 +3093,7 @@ async fn cfg280_an_unselected_skill_source_is_inert_at_startup_and_reload() {
         "{:?}",
         launch.skill_diagnostics()
     );
-    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     for stage in ["startup", "reload"] {
@@ -3111,7 +3111,7 @@ async fn cfg280_an_unselected_skill_source_is_inert_at_startup_and_reload() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cfg271_all_catalogs_publish_together_and_failed_candidates_publish_nothing() {
     let f = Fixture::new();
-    let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&f.resolve(), &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     let before = product.runtime().runtime_resources();
@@ -3296,7 +3296,7 @@ async fn cfg274_skill_recovery_and_loss_publish_workflow_and_root_exposure_atomi
     f.role(false, "reviewer", json!({"description":"Review","skills":["review"],"tools":{"builtin":[]},"worktree":{"enabled":false}}), "Review");
     install_workflow(&f, &template_source("typed_agent"));
     f.project(json!({"agent":{"workflows":["example"],"tools":{"builtin":[]}}}));
-    let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&f.resolve(), &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     let id = WorkflowId::parse("example").unwrap();
@@ -3554,7 +3554,7 @@ async fn cfg275_child_inspection_and_execution_share_frozen_r1_after_parent_relo
         launch.models.resolve(&f.credentials).unwrap(),
     )
     .unwrap();
-    let parent = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+    let parent = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     let r1 = parent.runtime().runtime_resources();
@@ -3735,6 +3735,55 @@ async fn cfg275_child_inspection_and_execution_share_frozen_r1_after_parent_relo
 /// Shared source-owner regressions. CLI fixtures only author isolated inputs;
 /// every assertion below resolves through the same long-lived manager.
 mod session_resolution {
+    #[tokio::test]
+    async fn durable_omission_uses_current_sources_and_removed_explicit_model_fails_closed() {
+        let f = super::Fixture::new();
+        let (manager, input) = f.request.session_input(&f.host).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let catalog =
+            crate::local_runtime::session_controller::SessionController::open(root.path()).unwrap();
+        let omitted = crate::local_runtime::session::SessionPersistentState::from_input(&input);
+        let a = catalog.create_session(omitted).await.unwrap().session;
+        let mut explicit =
+            crate::local_runtime::session::SessionPersistentState::from_input(&input);
+        explicit.model = Some(crate::model::session::SessionModelConfig::of(
+            crate::model::catalog::ModelRef::parse("host/one").unwrap(),
+        ));
+        let b = catalog.create_session(explicit).await.unwrap().session;
+        drop(catalog);
+        let catalog =
+            crate::local_runtime::session_controller::SessionController::open(root.path()).unwrap();
+        let a = catalog.read_settings(&a.id).await.unwrap().1;
+        let b = catalog.read_settings(&b.id).await.unwrap().1;
+        f.user(serde_json::json!({"agent":{"model":{"model":"host/two"}}}));
+        assert_eq!(
+            manager
+                .resolve_session(&a.input())
+                .unwrap()
+                .config()
+                .initial_model()
+                .model
+                .to_string(),
+            "host/two"
+        );
+        assert_eq!(
+            manager
+                .resolve_session(&b.input())
+                .unwrap()
+                .config()
+                .initial_model()
+                .model
+                .to_string(),
+            "host/one"
+        );
+        let path = f.host.config_directory.join("models.toml");
+        let bytes = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(path, bytes.replace("one", "removed")).unwrap();
+        let ((), effects) = crate::local_runtime::static_effects::measure(|| {
+            assert!(manager.resolve_session(&b.input()).is_err());
+        });
+        assert_eq!(effects, [0; 13]);
+    }
     use super::*;
     use crate::model::{catalog::ModelRef, session::SessionModelConfig};
 
@@ -3941,7 +3990,7 @@ mod session_resolution {
         assert_eq!(a.project_context_files[0].content, "Captured guidance");
         assert_eq!(b.project_context_files[0].content, "Later guidance");
         let admitted = a.admit(|| f.credentials.clone()).unwrap();
-        let product = LocalSessionProduct::compose(&admitted, &LocalRuntimeDependencies::default())
+        let product = LocalSessionClient::compose(&admitted, &LocalRuntimeDependencies::default())
             .await
             .unwrap();
         let resources = product.runtime().runtime_resources();
@@ -4025,7 +4074,7 @@ mod session_resolution {
         std::fs::remove_file(&file).unwrap();
         let admitted_a = a.admit(|| f.credentials.clone()).unwrap();
         let product_a =
-            LocalSessionProduct::compose(&admitted_a, &LocalRuntimeDependencies::default())
+            LocalSessionClient::compose(&admitted_a, &LocalRuntimeDependencies::default())
                 .await
                 .unwrap();
         let resources_a = product_a.runtime().runtime_resources();
@@ -4050,7 +4099,7 @@ mod session_resolution {
         let inspection_b = b.inspection.clone();
         let admitted_b = b.admit(|| f.credentials.clone()).unwrap();
         let product_b =
-            LocalSessionProduct::compose(&admitted_b, &LocalRuntimeDependencies::default())
+            LocalSessionClient::compose(&admitted_b, &LocalRuntimeDependencies::default())
                 .await
                 .unwrap();
         let resources_b = product_b.runtime().runtime_resources();

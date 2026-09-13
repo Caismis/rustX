@@ -18,7 +18,16 @@ struct Fixture {
 impl Fixture {
     fn create(root: &std::path::Path, borrowers: u64) -> Self {
         let catalog = SessionCatalog::create(root, &state()).unwrap();
-        let (session, node, _) = catalog.active_lineage().unwrap();
+        let (session, node, _) = catalog
+            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+            .map(|(node, state)| {
+                (
+                    crate::local_runtime::SessionId::new("session-1"),
+                    node,
+                    state,
+                )
+            })
+            .unwrap();
         let database = catalog.database_path(&session, &node.conversation_id);
         let parent = store_for(&catalog, &session, &node.conversation_id);
         let run = WorkflowRunId {
@@ -172,7 +181,16 @@ fn deletion_borrowed_workspace_crash_before_child_terminal_disposes_only_workflo
     process.kill().unwrap();
     process.wait().unwrap();
     let catalog = reopen_catalog(root.path());
-    let (session, node, _) = catalog.active_lineage().unwrap();
+    let (session, node, _) = catalog
+        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+        .map(|(node, state)| {
+            (
+                crate::local_runtime::SessionId::new("session-1"),
+                node,
+                state,
+            )
+        })
+        .unwrap();
     let parent = store_for(&catalog, &session, &node.conversation_id);
     let events = parent.read_events(None, 100).unwrap().events;
     assert_eq!(

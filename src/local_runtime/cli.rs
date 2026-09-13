@@ -7,30 +7,16 @@
 //! rustx [--models <path>] [--config <path>] [--workspace <dir>] [--runtime-root <dir>]
 //!       [--model <provider/model>] [--trust grant|revoke]
 //!       [--inspect-conversation <conversation-id>]
-//!       [--continue | --session <session-id> [--node <node-id>]] [--name <text>]
+//!       [--session <session-id> [--node <node-id>]] [--name <text>]
 //! ```
 //!
 //! Startup does not resume by itself: without a Session request the process
 //! begins on an empty Session and the catalog's previous Sessions stay
-//! reachable through `/resume`. There are exactly two ways to ask for a
-//! persisted one, and both are explicit:
-//!
-//! - `--continue` binds the catalog's published active Session/node, which is
-//!   also how a client completes a Session switch that required a process
-//!   replacement;
-//! - `--session <session-id>` (optionally `--node <node-id>`) names a
-//!   persisted Session and makes that selection active — the same catalog
-//!   transition `/resume` commits. The selection is planned before the
-//!   runtime is composed and published together with it, in one catalog
-//!   transaction, so a launch that cannot compose the Session it named
-//!   leaves the active selection untouched.
-//!
-//! The two are mutually exclusive: a launch either continues whatever was
-//! last active or names its destination, never both. Choosing a Session
-//! interactively is a client concern — the picker lives in the terminal
-//! client, which turns a choice into `--session`/`/resume` — so this process
-//! has no `--resume` flag of its own.
-//!
+//! reachable through `/resume`. `--session <session-id>` with optional
+//! `--node <node-id>` names the persisted attachment explicitly. There is no
+//! catalog-global focus and `--continue` is rejected. Choosing an identity
+//! interactively belongs to the terminal client, so the native binary has no
+//! `--resume` flag of its own.
 //! `--inspect-conversation` is a read-only generic conversation attachment.
 //! It resolves the supplied identity to a running child's live Runtime Client
 //! projection when available, otherwise to its durable authorities. It does
@@ -308,7 +294,7 @@ pub const USAGE: &str = "usage: rustx [--models <models.toml>] [--config <rustx.
                          [--workspace <dir>] [--runtime-root <dir>] \
                          [--model <provider/model>] [--trust grant|revoke] \
                          [--inspect-conversation <conversation-id>] \
-                         [--continue | --session <session-id> [--node <node-id>]] \
+                         [--session <session-id> [--node <node-id>]] \
                          [--name <text>] [--skill <path>] [--no-automatic-skills] \
                          [--no-direct-tools | --tools <a,b> | --no-builtin-tools] \
                          [--exclude-tools <a,b>]\n\
@@ -515,7 +501,10 @@ fn startup_session(
         });
     }
     if continue_active_session {
-        Ok(StartupSession::ContinueActive)
+        Err(ArgumentError::Dependent {
+            flag: "--continue",
+            requires: "--session",
+        })
     } else {
         Ok(StartupSession::Empty)
     }
@@ -831,11 +820,9 @@ mod tests {
         ));
     }
 
-    /// A launch does not resume by itself. The flag that asks for the
-    /// catalog's published active Session is explicit, off by default, and
-    /// rejected when it is repeated.
+    /// A launch creates a Session by default; obsolete implicit resume is rejected.
     #[test]
-    fn continuing_the_active_session_is_an_explicit_startup_request() {
+    fn implicit_resume_is_rejected_without_a_session_identity() {
         let default = parse_arguments(args(&[
             "--models",
             "m",
@@ -860,8 +847,8 @@ mod tests {
             "p",
             "--continue",
         ]))
-        .expect("continue");
-        assert_eq!(continued.startup_session, StartupSession::ContinueActive);
+        .expect_err("implicit global resume is removed");
+        assert!(matches!(continued, ArgumentError::Dependent { .. }));
 
         assert!(matches!(
             parse_arguments(args(&["--continue", "--continue"])).expect_err("repeated"),
@@ -871,8 +858,7 @@ mod tests {
 
     /// A launch can also name where it starts. The named Session — and,
     /// when given, the named lineage node — is carried through as an
-    /// explicit selection request, and it cannot be combined with the
-    /// request to continue whatever was last active.
+    /// explicit attachment request. The obsolete implicit-resume flag is rejected.
     #[test]
     fn naming_a_startup_session_is_exclusive_and_carries_its_optional_node() {
         let base = args(&[
@@ -956,10 +942,9 @@ mod tests {
         assert_eq!(empty.session_name.as_deref(), Some("auth refactor"));
         assert_eq!(empty.startup_session, StartupSession::Empty);
 
-        let continued =
-            parse_arguments(with(&["--continue", "--name", "auth refactor"])).expect("name");
-        assert_eq!(continued.session_name.as_deref(), Some("auth refactor"));
-        assert_eq!(continued.startup_session, StartupSession::ContinueActive);
+        let continued = parse_arguments(with(&["--continue", "--name", "auth refactor"]))
+            .expect_err("explicit identity required");
+        assert!(matches!(continued, ArgumentError::Dependent { .. }));
 
         let selected =
             parse_arguments(with(&["--session", "session-3", "--name", "auth refactor"]))

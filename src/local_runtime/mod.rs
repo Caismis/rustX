@@ -49,6 +49,7 @@ mod resource_directory;
 pub mod schemas;
 pub mod serve;
 pub mod session;
+pub mod session_controller;
 pub mod settings;
 #[cfg(test)]
 pub(crate) mod static_effects;
@@ -60,7 +61,7 @@ pub(crate) mod workflow_resources;
 pub use cli::{ArgumentError, USAGE, parse_arguments};
 pub use composition::{
     HeadlessConversationRuntime, LocalConversationCore, LocalConversationInspection,
-    LocalConversationRuntime, LocalRuntimeDependencies, LocalRuntimeError, LocalSessionProduct,
+    LocalConversationRuntime, LocalRuntimeDependencies, LocalRuntimeError, LocalSessionClient,
     StartupSession,
 };
 pub use config::{
@@ -77,7 +78,7 @@ pub use session::{
     SessionUserMessageBoundaryPage,
 };
 pub use supervisor::{
-    LocalSessionSupervisor, SessionSupervisorError, SessionSwitchResult, SessionTreeResult,
+    LocalSessionAttachment, SessionAttachmentError, SessionTransitionResult, SessionTreeResult,
 };
 
 #[cfg(test)]

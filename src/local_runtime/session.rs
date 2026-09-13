@@ -25,37 +25,10 @@
 //! A failed preparation or catalog write cannot leave a visible catalog entry
 //! pointing at an unusable conversation.
 //!
-//! # Session lifecycle: internal shell vs. resume-visible history
-//!
-//! A published Session is durable immediately, but it is not automatically
-//! *history*. The one lifecycle predicate `SessionCatalog::is_unused`
-//! classifies every persisted Session, and startup, `/new`, and `/resume` all
-//! derive their behavior from it:
-//!
-//! ```text
-//! Session shell created/published
-//!     |
-//!     | metadata only (name, Session-local model choice)
-//!     v
-//! unused internal shell -- hidden from `/resume`, reused by startup and `/new`
-//!     |
-//!     | durable Pending Inbound acceptance of user work
-//!     v
-//! used Session -- immediately resume-visible
-//! ```
-//!
-//! The transition point is durable acceptance of user work into Pending
-//! Inbound, never canonical adoption, model invocation, or assistant output:
-//! an accepted-but-unadopted prompt is work the Session already owns, and
-//! recovery is what adopts it. The transition is monotonic — once used, a
-//! Session never classifies as unused again — because the classifier reads
-//! the conversation store's monotonic acceptance watermark
-//! (`ConversationStore::has_accepted_inbound`) rather than combining the
-//! independently changing Surface and Pending-Inbox projections, whose
-//! interleaved reads could otherwise hide already-accepted work while the
-//! Agent Loop adopts it. Session-local metadata alone never crosses the
-//! line, so naming or configuring an otherwise untouched shell does not make
-//! it history.
+//! A Session-local current node is graph state, never process-global focus.
+//! All catalog operations address identities. The accepted-inbound watermark
+//! remains a monotonic usage classifier; unused Sessions are still listed and
+//! are never implicitly reused. See docs/durable-sessions.md for ownership.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
@@ -102,9 +75,12 @@ use crate::runtime::identity::{ConversationId, MessageId, ToolCallId};
 /// the promise is refused rather than silently reinterpreted. Because a
 /// version-3 destination's real provenance was discarded at seed time, no
 /// migration can reconstruct it, and none is attempted.
+/// Version 8 removes global focus and persists only explicit Session inputs, with
+/// per-Session settings revisions. Schema 7 materialized model defaults cannot be
+/// distinguished from user choices; older development schemas are refused.
 /// Version 7 co-locates live Sessions and pending-only frozen cleanup authority,
 /// with generation-checked publication. Older development schemas are rejected.
-pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 7;
+pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 8;
 
 /// The largest display name a Session may carry.
 pub const SESSION_NAME_LIMIT: usize = 120;
@@ -228,9 +204,8 @@ pub struct SessionSnapshot {
 
 /// A bounded page of resume-visible Session summaries.
 ///
-/// The page is a view over Sessions that own durable user work (see
-/// `SessionCatalog::is_unused`); untouched empty internal shells are
-/// persisted but never listed.
+/// The page includes every durable Session, including untouched ones. Usage and
+/// client focus do not determine catalog visibility.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionListPage {
     /// Rows in deterministic Session-id order.
@@ -273,8 +248,6 @@ pub struct SessionSummary {
     pub updated_at: DateTime<Utc>,
     /// Active node in the session.
     pub active_node: SessionNodeId,
-    /// Whether this is the currently selected Session.
-    pub active: bool,
 }
 
 /// One user-message boundary the native product exposes for `/fork` and
@@ -350,15 +323,60 @@ pub(crate) struct PreparedLineage {
     pub(crate) database_path: PathBuf,
 }
 
-/// The intentionally small durable state owned by one Session.
-///
-/// Runtime/project configuration is never copied here. The selected model is
-/// the one Session-local user choice that survives restart and resume; all
-/// other execution settings are supplied by the current runtime composition.
+/// Explicit Session context/selections, never materialized effective configuration.
+/// Cwd, explicit project document, model and narrowing Skill/Tool selections
+/// survive cold load. User bindings, source defaults/policy and live resources do
+/// not. `None` is deliberately distinct from `Some(vec![])` for exact Tools.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) struct SessionPersistentState {
-    pub(crate) model: SessionModelConfig,
+#[serde(deny_unknown_fields)]
+pub struct SessionPersistentState {
+    pub cwd: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<SessionModelConfig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skill_paths: Vec<PathBuf>,
+    #[serde(default)]
+    pub no_automatic_skills: bool,
+    #[serde(default)]
+    pub no_builtin_tools: bool,
+    #[serde(default)]
+    pub no_direct_tools: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude_tools: Option<Vec<String>>,
+}
+impl SessionPersistentState {
+    #[must_use]
+    pub fn from_input(input: &super::configuration::SessionConfigInput) -> Self {
+        Self {
+            cwd: input.cwd.clone(),
+            config: input.config.clone(),
+            model: input.model.clone(),
+            skill_paths: input.skill_paths.clone(),
+            no_automatic_skills: input.no_automatic_skills,
+            no_builtin_tools: input.no_builtin_tools,
+            no_direct_tools: input.no_direct_tools,
+            tools: input.tools.clone(),
+            exclude_tools: input.exclude_tools.clone(),
+        }
+    }
+    #[must_use]
+    pub fn input(&self) -> super::configuration::SessionConfigInput {
+        super::configuration::SessionConfigInput {
+            cwd: self.cwd.clone(),
+            config: self.config.clone(),
+            model: self.model.clone(),
+            skill_paths: self.skill_paths.clone(),
+            no_automatic_skills: self.no_automatic_skills,
+            no_builtin_tools: self.no_builtin_tools,
+            no_direct_tools: self.no_direct_tools,
+            tools: self.tools.clone(),
+            exclude_tools: self.exclude_tools.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -367,7 +385,6 @@ struct CatalogDocument {
     generation: u64,
     deletions: BTreeMap<SessionId, deletion::DeletionRecord>,
     schema_version: u32,
-    active_session: SessionId,
     next_session_ordinal: u64,
     next_node_ordinal: u64,
     sessions: BTreeMap<SessionId, PersistedSession>,
@@ -386,27 +403,16 @@ struct PersistedSession {
     nodes: BTreeMap<SessionNodeId, SessionNode>,
     /// Only intentionally Session-local choices are persisted here.
     state: SessionPersistentState,
+    settings_revision: u64,
 }
 
-/// One complete catalog document a caller intends to commit, held before
-/// anything durable has changed.
-///
-/// Startup is the reason this type exists. A launch decides where it begins
-/// — continue the active Session, start an empty one, bind a named one —
-/// and then has to compose a runtime for that destination, which is the
-/// step that can still fail: a Session whose recorded model no longer
-/// exists in `models.toml`, a database that will not open, a capability
-/// composition that cannot be built. Publishing the decision first and
-/// composing afterwards leaves a process that failed to start having
-/// silently moved the active selection, so the next launch begins somewhere
-/// the user never asked for.
-///
-/// Holding the decision here inverts that: every fallible step runs against
-/// the planned destination, and the catalog changes once, at the end, in a
-/// single transaction. A failure before that transaction leaves the catalog
-/// byte-for-byte as it was.
+/// A call-site-local startup destination and a generation-checked publication plan.
+/// The target is never serialized. Composing a new CLI attachment may fail before
+/// publication; its private seed must not create visible catalog membership.
+/// Opening an existing default node produces an unchanged plan and writes nothing.
 #[derive(Debug, Clone)]
 pub(crate) struct PlannedCatalog {
+    target: SessionId,
     /// The complete document to persist.
     document: CatalogDocument,
     /// Whether the plan differs from the catalog it was planned against.
@@ -415,24 +421,27 @@ pub(crate) struct PlannedCatalog {
 }
 
 impl PlannedCatalog {
-    /// The Session node this plan makes active, and its Session-local state.
+    pub(crate) fn settings_revision(&self) -> u64 {
+        self.document.sessions[&self.target].settings_revision
+    }
+    /// The explicit destination node of this startup plan, and its Session-local state.
     ///
     /// Read from the planned document, not from the catalog on disk: this is
     /// the destination the caller must compose for.
-    pub(crate) fn active_lineage(
+    pub(crate) fn destination_lineage(
         &self,
     ) -> Result<(SessionId, SessionNode, SessionPersistentState), SessionError> {
-        active_lineage_of(&self.document)
+        lineage_of(&self.document, &self.target)
     }
 
-    /// Names the Session this plan makes active.
+    /// Names only this plan's explicit Session destination.
     ///
     /// Naming is metadata and can only follow the decision about where the
     /// launch starts, so it applies to the plan rather than to the catalog:
     /// a launch that fails to compose renames nothing.
     pub(crate) fn with_name(mut self, name: &str) -> Result<Self, SessionError> {
         let name = normalize_name(name)?;
-        let active = self.document.active_session.clone();
+        let active = self.target.clone();
         let session = self
             .document
             .sessions
@@ -445,16 +454,18 @@ impl PlannedCatalog {
     }
 }
 
-/// The active lineage of one catalog document.
-fn active_lineage_of(
+/// Resolve the current graph node of an explicitly addressed Session.
+fn lineage_of(
     document: &CatalogDocument,
+    session_id: &SessionId,
 ) -> Result<(SessionId, SessionNode, SessionPersistentState), SessionError> {
-    let session = document
-        .sessions
-        .get(&document.active_session)
-        .ok_or_else(|| SessionError::UnknownSession {
-            session_id: document.active_session.clone(),
-        })?;
+    let session =
+        document
+            .sessions
+            .get(session_id)
+            .ok_or_else(|| SessionError::UnknownSession {
+                session_id: session_id.clone(),
+            })?;
     let node =
         session
             .nodes
@@ -466,7 +477,7 @@ fn active_lineage_of(
     Ok((session.id.clone(), node.clone(), session.state.clone()))
 }
 
-pub(crate) mod deletion;
+pub mod deletion;
 
 /// The native durable `SessionCatalog` and graph authority.
 #[derive(Debug, Clone)]
@@ -494,6 +505,76 @@ pub struct SessionCatalog {
 }
 
 impl SessionCatalog {
+    pub(crate) fn is_published(&self) -> bool {
+        self.published
+    }
+    pub(crate) fn empty(
+        controller: &crate::runtime::local_storage::ProductController,
+    ) -> Result<Self, SessionError> {
+        let root = controller.root().join("sessions");
+        fs::create_dir_all(&root).map_err(|e| SessionError::Catalog {
+            detail: e.to_string(),
+        })?;
+        let mut catalog = Self {
+            product: (**controller).clone(),
+            path: root.join("catalog.json"),
+            root,
+            document: CatalogDocument {
+                generation: 0,
+                deletions: BTreeMap::new(),
+                schema_version: SESSION_CATALOG_SCHEMA_VERSION,
+                next_session_ordinal: 1,
+                next_node_ordinal: 1,
+                sessions: BTreeMap::new(),
+            },
+            published: false,
+            lifecycle: None,
+            #[cfg(test)]
+            write_fault: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            classification_gate: None,
+        };
+        catalog.commit(catalog.document.clone())?;
+        Ok(catalog)
+    }
+    pub(crate) fn controller(
+        &self,
+    ) -> Result<std::sync::Arc<crate::runtime::local_storage::ProductController>, SessionError>
+    {
+        self.lifecycle.clone().ok_or_else(|| SessionError::Catalog {
+            detail: "storage recovery requires ProductController".into(),
+        })
+    }
+    pub(crate) fn acquire_session(
+        &self,
+        id: &SessionId,
+        node: Option<&SessionNodeId>,
+    ) -> Result<super::session_controller::SessionAccess, SessionError> {
+        let (node, settings) = self.lineage(id, node)?;
+        let path = self.database_path(id, &node.conversation_id);
+        let controller = self
+            .lifecycle
+            .clone()
+            .ok_or_else(|| SessionError::Catalog {
+                detail: "allocation admission requires retained ProductController".into(),
+            })?;
+        let allocation =
+            crate::runtime::local_storage::ConversationAccess::existing_for_controller(
+                controller,
+                path.parent().expect("allocation"),
+            )
+            .map_err(|e| SessionError::Catalog {
+                detail: e.to_string(),
+            })?;
+        Ok(super::session_controller::SessionAccess {
+            session: self.snapshot(id)?,
+            settings_revision: self.settings_revision(id)?,
+            database_path: path,
+            node,
+            settings,
+            allocation: std::sync::Arc::new(allocation),
+        })
+    }
     pub(crate) fn deletion_preflight(
         &self,
         id: &SessionId,
@@ -519,14 +600,19 @@ impl SessionCatalog {
 
     /// Recover graph-owned stores before startup performs read-only selection.
     /// Child references come only from existing typed durable ownership commits.
-    pub(crate) fn recover_storage(
+    pub(crate) fn recover_session_storage(
         &self,
+        session_id: &SessionId,
         guard: &std::sync::Arc<crate::runtime::local_storage::ProductController>,
     ) -> Result<(), SessionError> {
-        let mut pending: Vec<_> = self
-            .document
-            .sessions
-            .iter()
+        let record =
+            self.document
+                .sessions
+                .get(session_id)
+                .ok_or_else(|| SessionError::UnknownSession {
+                    session_id: session_id.clone(),
+                })?;
+        let mut pending: Vec<_> = std::iter::once((session_id, record))
             .flat_map(|(session, record)| {
                 record.nodes.values().map(|node| {
                     (
@@ -628,6 +714,17 @@ impl SessionCatalog {
             path: path.clone(),
             detail: error.to_string(),
         })?;
+        let envelope: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|error| SessionError::Catalog {
+                detail: error.to_string(),
+            })?;
+        if envelope
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64)
+            != Some(u64::from(SESSION_CATALOG_SCHEMA_VERSION))
+        {
+            return Err(SessionError::Catalog { detail: "unsupported session catalog schema; schema 8 requires explicit Session inputs and has no global focus; old development schemas are refused".into() });
+        }
         let document: CatalogDocument =
             serde_json::from_slice(&bytes).map_err(|error| SessionError::Catalog {
                 detail: format!("cannot decode {}: {error}", path.display()),
@@ -671,7 +768,7 @@ impl SessionCatalog {
         state: &SessionPersistentState,
     ) -> Result<Self, SessionError> {
         let mut catalog = Self::create_unpublished(runtime_root, state)?;
-        let planned = catalog.plan_unchanged();
+        let planned = catalog.plan_unchanged(&SessionId::new("session-1"));
         catalog.commit_planned(planned)?;
         Ok(catalog)
     }
@@ -761,12 +858,12 @@ impl SessionCatalog {
                 active_node: node_id,
                 nodes,
                 state: state.clone(),
+                settings_revision: 0,
             },
         );
         let document = CatalogDocument {
             deletions: BTreeMap::new(),
             schema_version: SESSION_CATALOG_SCHEMA_VERSION,
-            active_session: session_id,
             generation: 0,
             next_session_ordinal: 2,
             next_node_ordinal: 2,
@@ -805,15 +902,8 @@ impl SessionCatalog {
             .expect("catalog write fault lock poisoned") = Some(CatalogWriteFault::AfterRename);
     }
 
-    /// Returns one bounded, searchable page of **resume-visible** Sessions.
-    ///
-    /// Visibility is a Session lifecycle fact, not a presentation rule: a
-    /// persisted Session that is still an untouched empty shell (see
-    /// `Self::is_unused`) is internal durable state, not historical user
-    /// work, and never appears here. Classification happens before search and
-    /// pagination, so the offset and `next_offset` continuation describe the
-    /// visible matching set alone — hidden shells can never open a hole in a
-    /// page, shift an offset, or duplicate a row across continuations.
+    /// Returns one bounded, searchable page of all durable Sessions.
+    /// Usage classification does not filter visibility or manufacture client focus.
     ///
     /// Ordering is ascending Session identity. The offset is a domain-specific
     /// continuation: there is no global maximum number of Sessions, and
@@ -836,9 +926,6 @@ impl SessionCatalog {
         let mut page = Vec::with_capacity(limit);
         let mut has_more = false;
         for session in self.document.sessions.values() {
-            if self.is_unused(session)? {
-                continue;
-            }
             // A row is searched by what it shows. An unnamed Session shows
             // its first user message, so matching only identity and name
             // would hide exactly the rows a user has to recognize by their
@@ -871,7 +958,6 @@ impl SessionCatalog {
                 preview,
                 updated_at: session.updated_at,
                 active_node: session.active_node.clone(),
-                active: session.id == self.document.active_session,
             });
             matching += 1;
         }
@@ -882,60 +968,28 @@ impl SessionCatalog {
         })
     }
 
-    /// Returns every persisted Session identity in deterministic catalog
-    /// order, including unused internal shells that [`Self::list_page`] does
-    /// not list.
-    ///
-    /// This is the raw reachability view of the catalog, for callers that
-    /// audit durable publication itself rather than resume-visible history —
-    /// crash/recovery diagnostics and lifecycle tests. Product surfaces that
-    /// show Sessions to a user use [`Self::list_page`].
+    /// All persisted identities in deterministic order, including unused Sessions.
     #[must_use]
     pub fn persisted_session_ids(&self) -> Vec<SessionId> {
         self.document.sessions.keys().cloned().collect()
     }
 
-    /// Returns the active Session snapshot.
-    ///
+    /// Classifies usage by explicit identity; this never chooses a Session.
     /// # Errors
-    ///
-    /// Returns [`SessionError::UnknownSession`] when the catalog's active
-    /// identity is not present.
-    pub fn active_snapshot(&self) -> Result<SessionSnapshot, SessionError> {
-        self.snapshot(&self.document.active_session)
-    }
-
-    /// Whether the active Session has never been used.
-    ///
-    /// This is [`Self::is_unused`] over the active selection — the one
-    /// Session lifecycle predicate, applied to the Session a launch or a
-    /// `/new` would otherwise have to replace. Startup reuses an unused
-    /// active Session instead of publishing another empty shell, and `/new`
-    /// over one is a semantic no-op, so neither path can accumulate empty
-    /// internal shells beside it.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SessionError`] when the active identity is not persisted or
-    /// its durable conversation cannot be read.
-    pub(crate) fn active_is_unused(&self) -> Result<bool, SessionError> {
-        let session = self
-            .document
-            .sessions
-            .get(&self.document.active_session)
-            .ok_or_else(|| SessionError::UnknownSession {
-                session_id: self.document.active_session.clone(),
-            })?;
+    /// Invalid identities, revisions or storage are returned explicitly.
+    pub fn is_session_unused(&self, id: &SessionId) -> Result<bool, SessionError> {
+        let session =
+            self.document
+                .sessions
+                .get(id)
+                .ok_or_else(|| SessionError::UnknownSession {
+                    session_id: id.clone(),
+                })?;
         self.is_unused(session)
     }
 
     /// Whether one persisted Session is an untouched empty shell.
-    ///
-    /// This is the single Session-used predicate of the product. Startup,
-    /// `/new`, and `/resume` all derive from it: an unused Session is an
-    /// internal durable shell that exists for crash-safe composition, never
-    /// historical user work, so `/resume` does not list it and startup/`/new`
-    /// reuse it rather than manufacturing another one beside it.
+    /// This monotonic usage fact does not control catalog visibility or allocation.
     ///
     /// The classification is deliberately narrow. A Session is unused only
     /// when *all* of the following hold:
@@ -1015,6 +1069,12 @@ impl SessionCatalog {
     ///
     /// Returns [`SessionError::UnknownSession`] when `id` is not persisted.
     pub fn snapshot(&self, id: &SessionId) -> Result<SessionSnapshot, SessionError> {
+        if self.document.deletions.contains_key(id) {
+            return Err(SessionError::DeletingSession {
+                session_id: id.clone(),
+            });
+        }
+
         let session =
             self.document
                 .sessions
@@ -1052,20 +1112,20 @@ impl SessionCatalog {
         Ok(SessionNodePage { nodes, next_offset })
     }
 
-    /// Returns the active Session node and its intentionally Session-local
-    /// state. Current runtime configuration is not part of this durable view.
-    pub(crate) fn active_lineage(
-        &self,
-    ) -> Result<(SessionId, SessionNode, SessionPersistentState), SessionError> {
-        active_lineage_of(&self.document)
-    }
-
     /// Returns one named lineage and its Session-local state.
-    pub(crate) fn lineage(
+    /// # Errors
+    /// Invalid identities, revisions or storage are returned explicitly.
+    pub fn lineage(
         &self,
         session_id: &SessionId,
         node_id: Option<&SessionNodeId>,
     ) -> Result<(SessionNode, SessionPersistentState), SessionError> {
+        if self.document.deletions.contains_key(session_id) {
+            return Err(SessionError::DeletingSession {
+                session_id: session_id.clone(),
+            });
+        }
+
         let session =
             self.document
                 .sessions
@@ -1080,6 +1140,26 @@ impl SessionCatalog {
             .ok_or_else(|| SessionError::UnknownNode {
                 session_id: session_id.clone(),
                 node_id: node_id.clone(),
+            })?;
+        Ok((node.clone(), session.state.clone()))
+    }
+
+    /// Resolve an attached Conversation without consulting the graph's default node.
+    pub(crate) fn conversation_lineage(
+        &self,
+        session_id: &SessionId,
+        conversation_id: &ConversationId,
+    ) -> Result<(SessionNode, SessionPersistentState), SessionError> {
+        self.snapshot(session_id)?;
+        let session = &self.document.sessions[session_id];
+        let node = session
+            .nodes
+            .values()
+            .find(|node| node.conversation_id == *conversation_id)
+            .ok_or_else(|| SessionError::Catalog {
+                detail: format!(
+                    "Conversation {conversation_id} does not belong to Session {session_id}"
+                ),
             })?;
         Ok((node.clone(), session.state.clone()))
     }
@@ -1174,43 +1254,77 @@ impl SessionCatalog {
     /// Persists the accepted live model configuration for the active
     /// Session. The `ConversationRuntime` remains the live authority; this
     /// record is used when that runtime is replaced and recovered later.
-    pub(crate) fn persist_active_model(
+    #[cfg(test)]
+    pub(crate) fn persist_model(
         &mut self,
+        session_id: &SessionId,
         model: crate::model::session::SessionModelConfig,
     ) -> Result<(), SessionError> {
+        let revision = self.settings_revision(session_id)?;
+        let (_, mut settings) = self.lineage(session_id, None)?;
+        settings.model = Some(model);
+        self.replace_settings(session_id, revision, settings)
+            .map(|_| ())
+    }
+    /// Revision of explicit Session selections, independent of graph/name edits.
+    /// # Errors
+    /// Invalid identities, revisions or storage are returned explicitly.
+    pub fn settings_revision(&self, id: &SessionId) -> Result<u64, SessionError> {
+        self.document
+            .sessions
+            .get(id)
+            .map(|s| s.settings_revision)
+            .ok_or_else(|| SessionError::UnknownSession {
+                session_id: id.clone(),
+            })
+    }
+    /// Compare-and-swap at catalog rename visibility. A failed durability barrier
+    /// still consumes the revision; retry must reread the authoritative state.
+    /// # Errors
+    /// Invalid identities, revisions or storage are returned explicitly.
+    pub(crate) fn replace_settings(
+        &mut self,
+        id: &SessionId,
+        expected: u64,
+        settings: SessionPersistentState,
+    ) -> Result<u64, SessionError> {
         let mut next = self.document.clone();
-        let active_session = next.active_session.clone();
-        let session =
-            next.sessions
-                .get_mut(&active_session)
-                .ok_or(SessionError::UnknownSession {
-                    session_id: active_session,
-                })?;
-        session.state.model = model;
+        let session = next
+            .sessions
+            .get_mut(id)
+            .ok_or_else(|| SessionError::UnknownSession {
+                session_id: id.clone(),
+            })?;
+        if session.settings_revision != expected {
+            return Err(SessionError::StaleSettings {
+                expected,
+                actual: session.settings_revision,
+            });
+        }
+        let revision = expected
+            .checked_add(1)
+            .ok_or_else(|| SessionError::Catalog {
+                detail: "Session settings revision exhausted".into(),
+            })?;
+        session.settings_revision = revision;
+        session.state = settings;
         session.updated_at = Utc::now();
-        self.commit(next)
+        self.commit(next)?;
+        Ok(revision)
     }
 
-    /// Atomically selects an existing Session/node after the caller has
-    /// reached native runtime quiescence.
-    pub(crate) fn select(
+    /// Atomically changes only the addressed Session graph's default node.
+    /// Existing runtime attachments retain their own Conversation identity.
+    /// # Errors
+    /// Invalid identities, revisions or storage are returned explicitly.
+    pub(crate) fn set_current_node(
         &mut self,
         session_id: &SessionId,
         node_id: Option<&SessionNodeId>,
     ) -> Result<SessionSnapshot, SessionError> {
-        let next = self.build_select_document(session_id, node_id)?;
+        let next = self.build_current_node_document(session_id, node_id)?;
         self.commit(next)?;
         self.snapshot(session_id)
-    }
-
-    /// Validates the catalog publication for a selected Session/node before
-    /// the current runtime is quiesced.
-    pub(crate) fn preflight_select(
-        &self,
-        session_id: &SessionId,
-        node_id: Option<&SessionNodeId>,
-    ) -> Result<(), SessionError> {
-        validate_document(&self.build_select_document(session_id, node_id)?)
     }
 
     /// Prepares a new independent Session with a fresh `ConversationId`.
@@ -1376,15 +1490,6 @@ impl SessionCatalog {
         self.snapshot(&session_id)
     }
 
-    /// Validates a prepared Session publication before runtime quiescence.
-    pub(crate) fn preflight_publish_session(
-        &self,
-        prepared: &PreparedLineage,
-        origin: SessionNodeOrigin,
-    ) -> Result<(), SessionError> {
-        validate_document(&self.build_session_document(prepared, origin)?)
-    }
-
     /// Publishes a prepared branch node inside an existing Session and makes
     /// it the active node.
     ///
@@ -1405,32 +1510,6 @@ impl SessionCatalog {
         self.commit(next)?;
         crate::runtime::process_death::reach("after:publish_node");
         self.snapshot(session_id)
-    }
-
-    /// Validates a prepared branch-node publication before runtime quiescence.
-    pub(crate) fn preflight_publish_node(
-        &self,
-        session_id: &SessionId,
-        prepared: &PreparedLineage,
-        parent: SessionNodeId,
-        origin: SessionNodeOrigin,
-    ) -> Result<(), SessionError> {
-        validate_document(&self.build_node_document(session_id, prepared, parent, origin)?)
-    }
-
-    /// Validates that a selected node still has a coherent durable store.
-    /// This is performed before active-selection publication.
-    pub(crate) fn validate_storage(
-        &self,
-        session_id: &SessionId,
-        node_id: Option<&SessionNodeId>,
-    ) -> Result<(), SessionError> {
-        let (node, _) = self.lineage(session_id, node_id)?;
-        let path = self.database_path(session_id, &node.conversation_id);
-        let store = self
-            .inspect_store(node.conversation_id, &path)
-            .map_err(SessionError::Store)?;
-        store.load_head().map_err(SessionError::Store).map(|_| ())
     }
 
     fn validate_new_session_identity(
@@ -1493,26 +1572,30 @@ impl SessionCatalog {
     /// its "unchanged" plan commits the document it was built with. Every
     /// other catalog commits nothing.
     #[must_use]
-    pub(crate) fn plan_unchanged(&self) -> PlannedCatalog {
+    pub(crate) fn plan_unchanged(&self, target: &SessionId) -> PlannedCatalog {
         PlannedCatalog {
+            target: target.clone(),
             document: self.document.clone(),
             changed: !self.published,
         }
     }
 
-    /// Plans the active selection of an existing Session/node without
-    /// publishing it.
-    ///
-    /// This is [`Self::select`] with the commit removed: the same
-    /// validation, the same resulting document, no durable write.
-    pub(crate) fn plan_select(
+    /// Plan one explicit CLI attachment. Reading its default node writes nothing;
+    /// an explicitly requested graph-node change remains scoped to that Session.
+    pub(crate) fn plan_attachment(
         &self,
         session_id: &SessionId,
         node_id: Option<&SessionNodeId>,
     ) -> Result<PlannedCatalog, SessionError> {
         Ok(PlannedCatalog {
-            document: self.build_select_document(session_id, node_id)?,
-            changed: true,
+            target: session_id.clone(),
+            document: if node_id.is_some() {
+                self.build_current_node_document(session_id, node_id)?
+            } else {
+                self.lineage(session_id, None)?;
+                self.document.clone()
+            },
+            changed: node_id.is_some(),
         })
     }
 
@@ -1524,6 +1607,7 @@ impl SessionCatalog {
         origin: SessionNodeOrigin,
     ) -> Result<PlannedCatalog, SessionError> {
         Ok(PlannedCatalog {
+            target: prepared.session_id.clone(),
             document: self.build_session_document(prepared, origin)?,
             changed: true,
         })
@@ -1540,7 +1624,7 @@ impl SessionCatalog {
         self.commit(planned.document)
     }
 
-    fn build_select_document(
+    fn build_current_node_document(
         &self,
         session_id: &SessionId,
         node_id: Option<&SessionNodeId>,
@@ -1564,7 +1648,6 @@ impl SessionCatalog {
         }
         session.active_node = selected_node;
         session.updated_at = Utc::now();
-        next.active_session = session_id.clone();
         Ok(next)
     }
 
@@ -1620,9 +1703,9 @@ impl SessionCatalog {
                 active_node: prepared.node_id.clone(),
                 nodes,
                 state: prepared.state.clone(),
+                settings_revision: 0,
             },
         );
-        next.active_session = prepared.session_id.clone();
         next.next_session_ordinal = native_successor(prepared.session_id.as_str(), "session-")?;
         next.next_node_ordinal = native_successor(prepared.node_id.as_str(), "node-")?;
         Ok(next)
@@ -1675,7 +1758,6 @@ impl SessionCatalog {
         session.nodes.insert(prepared.node_id.clone(), node);
         session.active_node = prepared.node_id.clone();
         session.updated_at = Utc::now();
-        next.active_session = session_id.clone();
         next.next_node_ordinal = native_successor(prepared.node_id.as_str(), "node-")?;
         Ok(next)
     }
@@ -2126,15 +2208,22 @@ fn validate_document(document: &CatalogDocument) -> Result<(), SessionError> {
             ),
         });
     }
-    if document.sessions.is_empty() {
-        return Err(SessionError::Catalog {
-            detail: "session catalog must contain at least one session".to_owned(),
-        });
-    }
     deletion::validate_records(document)?;
     let mut conversation_ids = BTreeSet::new();
     let mut node_ids = BTreeSet::new();
     for (session_id, session) in &document.sessions {
+        if !session.state.cwd.is_absolute()
+            || session
+                .state
+                .config
+                .iter()
+                .chain(session.state.skill_paths.iter())
+                .any(|path| !path.is_absolute())
+        {
+            return Err(SessionError::Catalog {
+                detail: "durable Session context paths must be absolute".into(),
+            });
+        }
         validate_id(session_id.as_str(), "session")?;
         if session.id != *session_id {
             return Err(SessionError::Catalog {
@@ -2191,11 +2280,6 @@ fn validate_document(document: &CatalogDocument) -> Result<(), SessionError> {
                     .and_then(|parent| parent.parent.clone());
             }
         }
-    }
-    if !document.sessions.contains_key(&document.active_session) {
-        return Err(SessionError::Catalog {
-            detail: format!("active session {} is missing", document.active_session),
-        });
     }
     Ok(())
 }
@@ -2451,6 +2535,10 @@ fn take_write_fault(fault: &Arc<Mutex<Option<CatalogWriteFault>>>) -> Option<Cat
 /// A native Session-domain failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionError {
+    /// The Session was logically deleted and cleanup is still pending.
+    DeletingSession { session_id: SessionId },
+    /// A concurrent settings publication won the compare-and-swap.
+    StaleSettings { expected: u64, actual: u64 },
     /// A storage operation failed.
     Io { path: PathBuf, detail: String },
     /// The catalog publication outcome is explicit: either visibility was not
@@ -2479,6 +2567,10 @@ pub enum SessionError {
 impl core::fmt::Display for SessionError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::StaleSettings { expected, actual } => write!(
+                f,
+                "stale Session settings revision {expected}; current is {actual}"
+            ),
             Self::Io { path, detail } => write!(f, "session storage {}: {detail}", path.display()),
             Self::CatalogCommit { error } => match error {
                 CatalogCommitError::NotCommitted { path, detail } => write!(
@@ -2495,6 +2587,9 @@ impl core::fmt::Display for SessionError {
             Self::Catalog { detail } => write!(f, "session catalog: {detail}"),
             Self::Store(error) => write!(f, "conversation seed: {error}"),
             Self::Seed { detail } => write!(f, "conversation seed: {detail}"),
+            Self::DeletingSession { session_id } => {
+                write!(f, "Session {session_id} is deleted with cleanup pending")
+            }
             Self::UnknownSession { session_id } => write!(f, "unknown Session {session_id}"),
             Self::UnknownNode {
                 session_id,
@@ -2587,7 +2682,10 @@ model = "provider/model"
 
     fn state() -> SessionPersistentState {
         SessionPersistentState {
-            model: config().initial_model().clone(),
+            model: Some(config().initial_model().clone()),
+            ..SessionPersistentState::from_input(&crate::local_runtime::SessionConfigInput::new(
+                std::path::PathBuf::from("/"),
+            ))
         }
     }
 
@@ -2739,7 +2837,16 @@ model = "provider/model"
         crate::local_runtime::SessionId,
         crate::local_runtime::SessionNodeId,
     ) {
-        let (session_id, node, _) = catalog.active_lineage().expect("root lineage");
+        let (session_id, node, _) = catalog
+            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+            .map(|(node, state)| {
+                (
+                    crate::local_runtime::SessionId::new("session-1"),
+                    node,
+                    state,
+                )
+            })
+            .expect("root lineage");
         let path = catalog.database_path(&session_id, &node.conversation_id);
         let store =
             SqliteConversationStore::open(node.conversation_id.clone(), &path).expect("root store");
@@ -2791,6 +2898,7 @@ model = "provider/model"
     /// prompt that was never adopted, a branch node, or clone/fork
     /// provenance — even when the node's own conversation seed is empty.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn only_an_untouched_root_session_counts_as_unused() {
         let (directory, mut catalog, _config) = open_catalog();
         let visible = |catalog: &SessionCatalog| {
@@ -2802,25 +2910,45 @@ model = "provider/model"
                 .map(|summary| summary.id)
                 .collect::<Vec<_>>()
         };
-        assert!(catalog.active_is_unused().expect("fresh catalog"));
         assert!(
-            visible(&catalog).is_empty(),
-            "a fresh catalog has zero resume-visible Sessions"
+            catalog
+                .is_session_unused(&crate::local_runtime::SessionId::new("session-1"))
+                .expect("fresh catalog")
+        );
+        assert!(
+            visible(&catalog).len() == 1,
+            "a created Session is visible even before user work"
         );
 
         // A Session-local model choice is metadata, not use.
         catalog
-            .persist_active_model(config().initial_model().clone())
+            .persist_model(
+                &crate::local_runtime::SessionId::new("session-1"),
+                config().initial_model().clone(),
+            )
             .expect("persist Session model");
-        assert!(catalog.active_is_unused().expect("model choice only"));
         assert!(
-            visible(&catalog).is_empty(),
-            "Session-local metadata alone never becomes resume-visible"
+            catalog
+                .is_session_unused(&crate::local_runtime::SessionId::new("session-1"))
+                .expect("model choice only")
+        );
+        assert!(
+            visible(&catalog).len() == 1,
+            "metadata does not change usage classification"
         );
 
         // A message that was accepted durably but never adopted is already
         // this Session's work, however empty the canonical history still is.
-        let (session_id, node, _) = catalog.active_lineage().expect("root lineage");
+        let (session_id, node, _) = catalog
+            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+            .map(|(node, state)| {
+                (
+                    crate::local_runtime::SessionId::new("session-1"),
+                    node,
+                    state,
+                )
+            })
+            .expect("root lineage");
         let pending_store = store_for(&catalog, &session_id, &node.conversation_id);
         pending_store
             .accept_inbound(crate::durable::InboundDraft {
@@ -2832,7 +2960,11 @@ model = "provider/model"
                 correlation: None,
             })
             .expect("accept pending inbound");
-        assert!(!catalog.active_is_unused().expect("pending inbound"));
+        assert!(
+            !catalog
+                .is_session_unused(&crate::local_runtime::SessionId::new("session-1"))
+                .expect("pending inbound")
+        );
         assert_eq!(
             visible(&catalog),
             vec![session_id.clone()],
@@ -2846,7 +2978,7 @@ model = "provider/model"
         let reopened = reopen_catalog(directory.path());
         assert!(
             !reopened
-                .active_is_unused()
+                .is_session_unused(&crate::local_runtime::SessionId::new("session-1"))
                 .expect("reopened pending inbound")
         );
         assert_eq!(visible(&reopened), vec![session_id.clone()]);
@@ -2854,7 +2986,11 @@ model = "provider/model"
 
         let history = source_history();
         let (source_conversation, source_session, source_node) = append_history(&catalog, &history);
-        assert!(!catalog.active_is_unused().expect("used root"));
+        assert!(
+            !catalog
+                .is_session_unused(&crate::local_runtime::SessionId::new("session-1"))
+                .expect("used root")
+        );
 
         // Branching at the first user message leaves the active node's own
         // conversation empty, while the Session itself is anything but.
@@ -2877,7 +3013,11 @@ model = "provider/model"
                 SessionNodeOrigin::New,
             )
             .expect("publish branch node");
-        assert!(!catalog.active_is_unused().expect("branched session"));
+        assert!(
+            !catalog
+                .is_session_unused(&crate::local_runtime::SessionId::new("session-1"))
+                .expect("branched session")
+        );
 
         // A newly published Session is unused again: an internal durable
         // shell beside the used one, persisted but not resume-visible.
@@ -2887,11 +3027,15 @@ model = "provider/model"
         catalog
             .publish_session(&prepared, SessionNodeOrigin::New)
             .expect("publish new session");
-        assert!(catalog.active_is_unused().expect("new session"));
+        assert!(
+            catalog
+                .is_session_unused(&prepared.session_id)
+                .expect("new session")
+        );
         assert_eq!(
             visible(&catalog),
-            vec![source_session.clone()],
-            "the new empty shell is hidden; the used Session stays listed"
+            vec![source_session.clone(), prepared.session_id.clone()],
+            "both independent Sessions are visible"
         );
         assert_eq!(
             catalog.persisted_session_ids().len(),
@@ -2901,8 +3045,15 @@ model = "provider/model"
 
         // A restart preserves the used/unused classification exactly.
         let reopened = reopen_catalog(directory.path());
-        assert!(reopened.active_is_unused().expect("reopened new session"));
-        assert_eq!(visible(&reopened), vec![source_session]);
+        assert!(
+            reopened
+                .is_session_unused(&prepared.session_id)
+                .expect("reopened new session")
+        );
+        assert_eq!(
+            visible(&reopened),
+            vec![source_session, prepared.session_id]
+        );
     }
 
     /// The Issue #167 race regression. The classification used to combine
@@ -2917,7 +3068,16 @@ model = "provider/model"
     #[test]
     fn adoption_racing_classification_cannot_hide_accepted_work() {
         let (directory, mut catalog, _config) = open_catalog();
-        let (session_id, node, _) = catalog.active_lineage().expect("root lineage");
+        let (session_id, node, _) = catalog
+            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+            .map(|(node, state)| {
+                (
+                    crate::local_runtime::SessionId::new("session-1"),
+                    node,
+                    state,
+                )
+            })
+            .expect("root lineage");
         let store = store_for(&catalog, &session_id, &node.conversation_id);
 
         // Durable acceptance of user work, not yet adopted: the state the
@@ -2943,7 +3103,9 @@ model = "provider/model"
         let gate = catalog.arm_classification_gate();
         let classifying = {
             let catalog = catalog.clone();
-            std::thread::spawn(move || catalog.active_is_unused())
+            std::thread::spawn(move || {
+                catalog.is_session_unused(&crate::local_runtime::SessionId::new("session-1"))
+            })
         };
         gate.wait_entered();
 
@@ -2980,9 +3142,17 @@ model = "provider/model"
 
         // The classification stays used after the adoption and across a
         // restart.
-        assert!(!catalog.active_is_unused().expect("post-adoption"));
+        assert!(
+            !catalog
+                .is_session_unused(&crate::local_runtime::SessionId::new("session-1"))
+                .expect("post-adoption")
+        );
         let reopened = reopen_catalog(directory.path());
-        assert!(!reopened.active_is_unused().expect("reopened"));
+        assert!(
+            !reopened
+                .is_session_unused(&crate::local_runtime::SessionId::new("session-1"))
+                .expect("reopened")
+        );
     }
 
     /// Provenance is user work even when the destination conversation is
@@ -3002,7 +3172,16 @@ model = "provider/model"
 
         // Clone the still-unused root lineage: an empty copy of an empty
         // conversation, but an explicit user lineage operation.
-        let (root_session, root_node, _) = catalog.active_lineage().expect("root lineage");
+        let (root_session, root_node, _) = catalog
+            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+            .map(|(node, state)| {
+                (
+                    crate::local_runtime::SessionId::new("session-1"),
+                    node,
+                    state,
+                )
+            })
+            .expect("root lineage");
         let root_store = store_for(&catalog, &root_session, &root_node.conversation_id);
         let root_revision = root_store.load_head().expect("root head").revision;
         let source = lineage_at(&root_store, &root_node.conversation_id, root_revision);
@@ -3021,22 +3200,27 @@ model = "provider/model"
             )
             .expect("publish empty clone");
         assert!(
-            !catalog.active_is_unused().expect("empty clone"),
+            !catalog.is_session_unused(&clone_id).expect("empty clone"),
             "an empty clone destination is used by provenance"
         );
         let page = visible(&catalog);
-        assert_eq!(page.len(), 1, "the unused root shell stays hidden");
-        assert_eq!(page[0].id, clone_id);
+        assert_eq!(page.len(), 2, "both Sessions are visible");
+        assert_eq!(page[1].id, clone_id);
         assert_eq!(
-            page[0].preview, None,
+            page[1].preview, None,
             "an empty destination has no first-message line, yet the row exists"
         );
 
         // Fork the clone at its very first user message: the destination
         // seed is the empty prefix before that boundary.
-        let (clone_session, clone_node, _) = catalog.active_lineage().expect("clone lineage");
-        append_history(&catalog, &[user("only-prompt", "the first prompt")]);
+        let (clone_session, clone_node, _) = catalog
+            .lineage(&clone_id, None)
+            .map(|(node, state)| (clone_id.clone(), node, state))
+            .expect("clone lineage");
         let clone_store = store_for(&catalog, &clone_session, &clone_node.conversation_id);
+        clone_store
+            .append_canonical(&user("only-prompt", "the first prompt"))
+            .unwrap();
         let revision = clone_store.load_head().expect("clone head").revision;
         let source = lineage_at(&clone_store, &clone_node.conversation_id, revision);
         let (fork, _editor) = catalog
@@ -3070,7 +3254,7 @@ model = "provider/model"
             SurfaceRevision::INITIAL
         );
         assert!(
-            !catalog.active_is_unused().expect("empty fork"),
+            !catalog.is_session_unused(&fork_id).expect("empty fork"),
             "an empty fork destination is used by provenance"
         );
         let ids = visible(&catalog)
@@ -3079,7 +3263,7 @@ model = "provider/model"
             .collect::<Vec<_>>();
         assert_eq!(
             ids,
-            vec![clone_id, fork_id],
+            vec![SessionId::new("session-1"), clone_id, fork_id],
             "empty clone and empty fork are both resume-visible; the root shell is not"
         );
     }
@@ -3116,8 +3300,8 @@ model = "provider/model"
                 .expect("list page")
                 .sessions
                 .len(),
-            1,
-            "the used source is the only resume-visible Session"
+            2,
+            "both independent Sessions are visible"
         );
         assert_eq!(
             catalog.persisted_session_ids().len(),
@@ -3186,7 +3370,8 @@ model = "provider/model"
                 .list_page(None, 0, super::SESSION_LIST_PAGE_LIMIT)
                 .expect("session page")
                 .sessions
-                .is_empty(),
+                .len()
+                == 1,
             "a Session that was never used is an internal shell, not a `/resume` row"
         );
 
@@ -3213,7 +3398,10 @@ model = "provider/model"
             "an unnamed row is searchable by the line it shows"
         );
 
-        let session_id = catalog.active_snapshot().expect("active snapshot").id;
+        let session_id = catalog
+            .snapshot(&crate::local_runtime::SessionId::new("session-1"))
+            .expect("active snapshot")
+            .id;
         catalog
             .rename(&session_id, "Refactor auth module")
             .expect("name the Session");
@@ -3294,14 +3482,14 @@ model = "provider/model"
                     .expect("publish paged session");
             }
             if index % 2 == 0 {
-                append_history(
-                    &catalog,
-                    &[user(
+                let id = SessionId::new(format!("session-{}", index + 1));
+                let (node, _) = catalog.lineage(&id, None).unwrap();
+                store_for(&catalog, &id, &node.conversation_id)
+                    .append_canonical(&user(
                         &format!("paged-user-{index}"),
                         &format!("paged session {index}"),
-                    )],
-                );
-                let id = catalog.active_snapshot().expect("active snapshot").id;
+                    ))
+                    .unwrap();
                 catalog
                     .rename(&id, &format!("paged session {index}"))
                     .expect("name paged session");
@@ -3320,19 +3508,25 @@ model = "provider/model"
         let second = catalog
             .list_page(None, first.next_offset.expect("continuation"), 2)
             .expect("second bounded Session page");
-        assert_eq!(second.sessions.len(), 1);
-        assert_eq!(second.next_offset, None);
+        assert_eq!(second.sessions.len(), 2);
+        assert_eq!(second.next_offset, Some(4));
+        let third = catalog.list_page(None, 4, 2).unwrap();
+        assert_eq!(third.sessions.len(), 1);
+        assert_eq!(third.next_offset, None);
         let ids = first
             .sessions
             .into_iter()
             .chain(second.sessions)
+            .chain(third.sessions)
             .map(|summary| summary.id)
             .collect::<Vec<_>>();
         assert_eq!(
             ids,
             vec![
                 SessionId::new("session-1"),
+                SessionId::new("session-2"),
                 SessionId::new("session-3"),
+                SessionId::new("session-4"),
                 SessionId::new("session-5")
             ],
             "offsets and next_offset describe the visible set: no holes, no duplicates"
@@ -3354,7 +3548,8 @@ model = "provider/model"
                 .list_page(Some("hidden shell"), 0, 2)
                 .expect("hidden search page")
                 .sessions
-                .is_empty(),
+                .len()
+                == 1,
             "search never reaches into hidden internal shells"
         );
 
@@ -3449,12 +3644,24 @@ model = "provider/model"
         model.model = serde_json::from_value(serde_json::json!("provider/next-model"))
             .expect("model reference");
         catalog
-            .persist_active_model(model.clone())
+            .persist_model(
+                &crate::local_runtime::SessionId::new("session-1"),
+                model.clone(),
+            )
             .expect("persist model metadata");
 
         let reopened = reopen_catalog(directory.path());
-        let (_, _, reopened_state) = reopened.active_lineage().expect("active lineage");
-        assert_eq!(reopened_state.model, model);
+        let (_, _, reopened_state) = reopened
+            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+            .map(|(node, state)| {
+                (
+                    crate::local_runtime::SessionId::new("session-1"),
+                    node,
+                    state,
+                )
+            })
+            .expect("active lineage");
+        assert_eq!(reopened_state.model, Some(model));
     }
 
     #[test]
@@ -3471,27 +3678,54 @@ model = "provider/model"
         let mut catalog = SessionCatalog::create(
             directory.path(),
             &SessionPersistentState {
-                model: first.clone(),
+                model: Some(first.clone()),
+                ..SessionPersistentState::from_input(
+                    &crate::local_runtime::SessionConfigInput::new(std::path::PathBuf::from("/")),
+                )
             },
         )
         .expect("catalog");
         catalog
-            .persist_active_model(explicit.clone())
+            .persist_model(
+                &crate::local_runtime::SessionId::new("session-1"),
+                explicit.clone(),
+            )
             .expect("persist explicit Session model");
         let reopened = reopen_catalog(directory.path());
-        let (_, _, resumed) = reopened.active_lineage().expect("resumed lineage");
-        assert_eq!(resumed.model, explicit);
+        let (_, _, resumed) = reopened
+            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+            .map(|(node, state)| {
+                (
+                    crate::local_runtime::SessionId::new("session-1"),
+                    node,
+                    state,
+                )
+            })
+            .expect("resumed lineage");
+        assert_eq!(resumed.model, Some(explicit));
 
         let new_directory = tempfile::tempdir().expect("new Session root");
         let fresh = SessionCatalog::create(
             new_directory.path(),
             &SessionPersistentState {
-                model: current.clone(),
+                model: Some(current.clone()),
+                ..SessionPersistentState::from_input(
+                    &crate::local_runtime::SessionConfigInput::new(std::path::PathBuf::from("/")),
+                )
             },
         )
         .expect("new catalog");
-        let (_, _, fresh_state) = fresh.active_lineage().expect("fresh lineage");
-        assert_eq!(fresh_state.model, current);
+        let (_, _, fresh_state) = fresh
+            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+            .map(|(node, state)| {
+                (
+                    crate::local_runtime::SessionId::new("session-1"),
+                    node,
+                    state,
+                )
+            })
+            .expect("fresh lineage");
+        assert_eq!(fresh_state.model, Some(current));
     }
 
     /// The lineage provenance promise moved, so the persisted version that
@@ -3574,7 +3808,6 @@ model = "provider/model"
             "approval_mode",
             "approvalMode",
             "environment",
-            "skills",
             "agent.tools",
         ] {
             assert!(
@@ -3590,14 +3823,25 @@ model = "provider/model"
         let state = state();
         let catalog = SessionCatalog::create(directory.path(), &state).expect("catalog");
 
-        let (_, _, persisted) = catalog.active_lineage().expect("active lineage");
+        let (_, _, persisted) = catalog
+            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+            .map(|(node, state)| {
+                (
+                    crate::local_runtime::SessionId::new("session-1"),
+                    node,
+                    state,
+                )
+            })
+            .expect("active lineage");
         assert_eq!(persisted, state);
     }
 
     #[test]
     fn catalog_fault_before_rename_keeps_memory_and_file_on_old_document() {
         let (directory, mut catalog, _config) = open_catalog();
-        let before = catalog.active_snapshot().expect("initial snapshot");
+        let before = catalog
+            .snapshot(&crate::local_runtime::SessionId::new("session-1"))
+            .expect("initial snapshot");
 
         catalog.arm_write_fault_before_rename();
         let error = catalog
@@ -3610,13 +3854,17 @@ model = "provider/model"
             }
         ));
         assert_eq!(
-            catalog.active_snapshot().expect("in-memory snapshot"),
+            catalog
+                .snapshot(&crate::local_runtime::SessionId::new("session-1"))
+                .expect("in-memory snapshot"),
             before,
             "a pre-commit failure leaves the in-process document unchanged"
         );
         let reopened = reopen_catalog(directory.path());
         assert_eq!(
-            reopened.active_snapshot().expect("reopened snapshot"),
+            reopened
+                .snapshot(&crate::local_runtime::SessionId::new("session-1"))
+                .expect("reopened snapshot"),
             before
         );
 
@@ -3631,7 +3879,9 @@ model = "provider/model"
     #[test]
     fn catalog_fault_after_rename_keeps_memory_coherent_and_reports_uncertain_durability() {
         let (directory, mut catalog, _config) = open_catalog();
-        let before = catalog.active_snapshot().expect("initial snapshot");
+        let before = catalog
+            .snapshot(&crate::local_runtime::SessionId::new("session-1"))
+            .expect("initial snapshot");
 
         catalog.arm_write_fault_after_rename();
         let error = catalog
@@ -3644,13 +3894,13 @@ model = "provider/model"
             }
         ));
         let in_memory = catalog
-            .active_snapshot()
+            .snapshot(&crate::local_runtime::SessionId::new("session-1"))
             .expect("committed in-memory snapshot");
         assert_eq!(in_memory.name.as_deref(), Some("visible but uncertain"));
         let reopened = reopen_catalog(directory.path());
         assert_eq!(
             reopened
-                .active_snapshot()
+                .snapshot(&crate::local_runtime::SessionId::new("session-1"))
                 .expect("reopened snapshot")
                 .name
                 .as_deref(),
@@ -3890,7 +4140,7 @@ model = "provider/model"
         ));
         assert_eq!(
             catalog
-                .active_snapshot()
+                .snapshot(&crate::local_runtime::SessionId::new("session-1"))
                 .expect("source remains active")
                 .node_count,
             1,
@@ -4483,7 +4733,16 @@ model = "provider/model"
         let (source_store, source_conversation, clone_store, clone, expected) =
             compacted_source_and_its_clone(&catalog);
 
-        let (source_session, _, _) = catalog.active_lineage().expect("source lineage");
+        let (source_session, _, _) = catalog
+            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+            .map(|(node, state)| {
+                (
+                    crate::local_runtime::SessionId::new("session-1"),
+                    node,
+                    state,
+                )
+            })
+            .expect("source lineage");
         catalog
             .publish_session(&clone, SessionNodeOrigin::New)
             .expect("publish independent clone before branching");
@@ -4557,7 +4816,7 @@ model = "provider/model"
         let source = lineage_at(&source_store, &source_conversation, revision);
 
         let mut current_session_intent = state();
-        current_session_intent.model.model =
+        current_session_intent.model.as_mut().unwrap().model =
             serde_json::from_value(serde_json::json!("provider/current-session-intent"))
                 .expect("current model");
         let (prepared, editor_content) = catalog
@@ -4635,8 +4894,9 @@ model = "provider/model"
         }));
     }
 
-    #[test]
-    fn tree_branch_is_a_distinct_linear_node_and_failed_publication_is_invisible() {
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn tree_branch_is_a_distinct_linear_node_and_failed_publication_is_invisible() {
         let (_directory, mut catalog, _config) = open_catalog();
         let history = source_history();
         let (source_conversation, source_session, source_node) = append_history(&catalog, &history);
@@ -4684,6 +4944,27 @@ model = "provider/model"
             .expect("publish tree node");
         assert_eq!(snapshot.node_count, 2);
         assert_eq!(snapshot.active_conversation_id, branch_conversation);
+        let (attached_node, _) = catalog
+            .conversation_lineage(&source_session, &source_conversation)
+            .expect("attached source survives a different default node");
+        assert_eq!(attached_node.conversation_id, source_conversation);
+        assert_ne!(attached_node.id, snapshot.active_node);
+        let attachment = super::super::supervisor::LocalSessionAttachment::new(
+            catalog.clone(),
+            source_session.clone(),
+            state(),
+            0,
+        );
+        let selected = attachment
+            .select(source_session.clone(), Some(attached_node.id.clone()))
+            .await
+            .expect("client-local historical node routing");
+        assert_eq!(selected.session.active_node, attached_node.id);
+        assert_eq!(
+            attachment.current().await.unwrap().active_node,
+            snapshot.active_node
+        );
+
         let nodes = catalog
             .node_page(&source_session, 0, super::SESSION_TREE_PAGE_LIMIT)
             .expect("tree node page")
@@ -4722,8 +5003,8 @@ model = "provider/model"
                 .expect("list page")
                 .sessions
                 .len(),
-            1,
-            "the new Session is an unused internal shell: persisted, not listed"
+            2,
+            "the new Session is independently visible"
         );
         assert_eq!(
             catalog.persisted_session_ids().len(),
@@ -4803,15 +5084,15 @@ model = "provider/model"
             .expect("mutate branch B");
 
         let selected_a = catalog
-            .select(&source_session, Some(&branch_a.id))
+            .set_current_node(&source_session, Some(&branch_a.id))
             .expect("select branch A");
         assert_eq!(selected_a.active_conversation_id, branch_a.conversation_id);
         let selected_b = catalog
-            .select(&source_session, Some(&branch_b.id))
+            .set_current_node(&source_session, Some(&branch_b.id))
             .expect("select branch B");
         assert_eq!(selected_b.active_conversation_id, branch_b.conversation_id);
         let selected_a_again = catalog
-            .select(&source_session, Some(&branch_a.id))
+            .set_current_node(&source_session, Some(&branch_a.id))
             .expect("select branch A again");
         assert_eq!(
             selected_a_again.active_conversation_id,

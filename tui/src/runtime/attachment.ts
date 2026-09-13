@@ -712,11 +712,13 @@ export class RuntimeClientAttachment {
     if (result.type !== "session_changed") {
       throw new Error(`${method} returned ${result.type}`);
     }
+    const routeChanged = this.#sessionInfo?.id !== result.session.id ||
+      this.#sessionInfo?.active_node !== result.session.active_node;
     this.#sessionInfo = result.session;
     return {
       session: result.session,
       editorContent: result.editor_content,
-      restartRequired: result.restart_required,
+      restartRequired: routeChanged,
     };
   }
 

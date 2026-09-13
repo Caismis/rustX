@@ -172,7 +172,16 @@ fn deletion_tree_membership_excludes_independent_fork_clone_and_shared_resources
 #[test]
 fn deletion_nested_durable_children_restart_and_workspace_blocker() {
     let (directory, catalog, _) = open_catalog();
-    let (session, node, _) = catalog.active_lineage().unwrap();
+    let (session, node, _) = catalog
+        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+        .map(|(node, state)| {
+            (
+                crate::local_runtime::SessionId::new("session-1"),
+                node,
+                state,
+            )
+        })
+        .unwrap();
     let parent = store_for(&catalog, &session, &node.conversation_id);
     let child_id = child(directory.path(), &parent, 1, true);
     let child_store = SqliteConversationStore::open(
@@ -232,7 +241,16 @@ fn deletion_unknown_and_missing_lookup_never_creates_state() {
     );
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
     let catalog = SessionCatalog::create(directory.path(), &state()).unwrap();
-    let (session, node, _) = catalog.active_lineage().unwrap();
+    let (session, node, _) = catalog
+        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+        .map(|(node, state)| {
+            (
+                crate::local_runtime::SessionId::new("session-1"),
+                node,
+                state,
+            )
+        })
+        .unwrap();
     let database = catalog.database_path(&session, &node.conversation_id);
     std::fs::remove_dir_all(database.parent().unwrap()).unwrap();
     let before = std::fs::read(directory.path().join("sessions/catalog.json")).unwrap();
@@ -255,7 +273,16 @@ fn deletion_unknown_and_missing_lookup_never_creates_state() {
 #[test]
 fn deletion_tampered_catalog_and_symlink_escape_fail_closed() {
     let (directory, catalog, _) = open_catalog();
-    let (session, node, _) = catalog.active_lineage().unwrap();
+    let (session, node, _) = catalog
+        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+        .map(|(node, state)| {
+            (
+                crate::local_runtime::SessionId::new("session-1"),
+                node,
+                state,
+            )
+        })
+        .unwrap();
     let database = catalog.database_path(&session, &node.conversation_id);
     let outside = tempfile::tempdir().unwrap();
     std::fs::rename(database.parent().unwrap(), outside.path().join("lineage")).unwrap();
@@ -276,7 +303,16 @@ fn deletion_tampered_catalog_and_symlink_escape_fail_closed() {
 #[test]
 fn deletion_live_inspection_blocks_and_stale_marker_is_reusable() {
     let (directory, catalog, _) = open_catalog();
-    let (session, node, _) = catalog.active_lineage().unwrap();
+    let (session, node, _) = catalog
+        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+        .map(|(node, state)| {
+            (
+                crate::local_runtime::SessionId::new("session-1"),
+                node,
+                state,
+            )
+        })
+        .unwrap();
     let parent = store_for(&catalog, &session, &node.conversation_id);
     let id = child(directory.path(), &parent, 1, false);
     let path = crate::runtime::subagent::child_conversation_inspection_liveness_path(
@@ -316,7 +352,16 @@ fn deletion_process_writer_gate() {
     let root = std::path::Path::new(&root);
     let _authority = crate::runtime::local_storage::ProductController::acquire(root).unwrap();
     let catalog = SessionCatalog::create(root, &state()).unwrap();
-    let (session, node, _) = catalog.active_lineage().unwrap();
+    let (session, node, _) = catalog
+        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+        .map(|(node, state)| {
+            (
+                crate::local_runtime::SessionId::new("session-1"),
+                node,
+                state,
+            )
+        })
+        .unwrap();
     let store = store_for(&catalog, &session, &node.conversation_id);
     let identity = crate::runtime::local_storage::ProductRoot::existing(root).unwrap();
     let _access = crate::runtime::local_storage::ConversationAccess::existing(
@@ -390,7 +435,16 @@ fn deletion_cross_process_parent_death_preserves_nested_ownership() {
 #[test]
 fn deletion_duplicate_and_cyclic_child_identity_fail_closed() {
     let (root, catalog, _) = open_catalog();
-    let (session, node, _) = catalog.active_lineage().unwrap();
+    let (session, node, _) = catalog
+        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+        .map(|(node, state)| {
+            (
+                crate::local_runtime::SessionId::new("session-1"),
+                node,
+                state,
+            )
+        })
+        .unwrap();
     let parent = store_for(&catalog, &session, &node.conversation_id);
     let id = child(root.path(), &parent, 1, false);
     let child_store = SqliteConversationStore::open(
@@ -482,7 +536,9 @@ fn deletion_hot_journal_reads_are_nonmutating_and_startup_recovers_owned_stores(
         crate::runtime::local_storage::ProductController::acquire(root.path()).unwrap(),
     );
     let catalog = SessionCatalog::open_existing(root.path()).unwrap().unwrap();
-    catalog.recover_storage(&writer).unwrap();
+    catalog
+        .recover_session_storage(&SessionId::new("session-1"), &writer)
+        .unwrap();
     drop((catalog, writer));
     let preflight =
         SessionDeletionPreflight::acquire(root.path(), &SessionId::new("session-1")).unwrap();
@@ -492,7 +548,16 @@ fn deletion_hot_journal_reads_are_nonmutating_and_startup_recovers_owned_stores(
 #[test]
 fn deletion_wal_metadata_is_rejected_before_sqlite_can_create_sidecars() {
     let (root, catalog, _) = open_catalog();
-    let (session, node, _) = catalog.active_lineage().unwrap();
+    let (session, node, _) = catalog
+        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+        .map(|(node, state)| {
+            (
+                crate::local_runtime::SessionId::new("session-1"),
+                node,
+                state,
+            )
+        })
+        .unwrap();
     let database = catalog.database_path(&session, &node.conversation_id);
     let connection = rusqlite::Connection::open(&database).unwrap();
     connection
@@ -601,7 +666,7 @@ fn deletion_revision_ignores_unrelated_metadata_and_irrelevant_execution_history
         expected,
         "unrelated presentation metadata is not target ownership"
     );
-    catalog.select(&target, Some(&node)).unwrap();
+    catalog.set_current_node(&target, Some(&node)).unwrap();
     assert_eq!(
         revision(root.path(), &target),
         expected,
@@ -671,7 +736,16 @@ fn deletion_revision_changes_for_target_nodes_children_and_nested_children() {
 fn deletion_revision_tracks_retained_and_partial_and_complete_disposal() {
     use crate::events::types::SubagentWorkspaceDisposalSettlement;
     let (root, catalog, _) = open_catalog();
-    let (session, node, _) = catalog.active_lineage().unwrap();
+    let (session, node, _) = catalog
+        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+        .map(|(node, state)| {
+            (
+                crate::local_runtime::SessionId::new("session-1"),
+                node,
+                state,
+            )
+        })
+        .unwrap();
     let parent = store_for(&catalog, &session, &node.conversation_id);
     let initial = revision(root.path(), &session);
     child(root.path(), &parent, 1, true);
@@ -875,7 +949,16 @@ fn deletion_cross_session_child_claim_is_ambiguous_not_a_revision_change() {
 fn deletion_detached_private_stores_and_writers_retain_target_access() {
     use crate::runtime::local_storage::{ConversationAccess, ProductRoot};
     let (root, catalog, _) = open_catalog();
-    let (session, node, _) = catalog.active_lineage().unwrap();
+    let (session, node, _) = catalog
+        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+        .map(|(node, state)| {
+            (
+                crate::local_runtime::SessionId::new("session-1"),
+                node,
+                state,
+            )
+        })
+        .unwrap();
     let allocation = catalog
         .database_path(&session, &node.conversation_id)
         .parent()
@@ -1016,7 +1099,16 @@ fn deletion_alias_startup_authors_one_canonical_session_allocation() {
     );
     let catalog = SessionCatalog::create(&alias, &state()).unwrap();
     assert_eq!(catalog.root, identity.root().join("sessions"));
-    let (session, node, _) = catalog.active_lineage().unwrap();
+    let (session, node, _) = catalog
+        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+        .map(|(node, state)| {
+            (
+                crate::local_runtime::SessionId::new("session-1"),
+                node,
+                state,
+            )
+        })
+        .unwrap();
     let database = catalog.database_path(&session, &node.conversation_id);
     assert!(database.starts_with(identity.root()));
     let access = ConversationAccess::existing(&identity, database.parent().unwrap()).unwrap();

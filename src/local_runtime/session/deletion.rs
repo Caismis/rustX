@@ -18,7 +18,7 @@ use std::sync::Arc;
 /// Semantic allocation identity; paths are derived from the trusted product root.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum DeletionScope {
+pub enum DeletionScope {
     /// One catalog node's private Conversation allocation.
     Node {
         node_id: SessionNodeId,
@@ -63,7 +63,7 @@ impl DeletionScope {
 /// Finite presentation snapshot. Contains no guards or caller-authored paths.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct SessionDeletePreview {
+pub struct SessionDeletePreview {
     pub session_id: SessionId,
     pub name: Option<String>,
     pub target_revision: String,
@@ -72,8 +72,7 @@ pub(crate) struct SessionDeletePreview {
 /// Pre-commit safety rejection. No force path exists.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum DeletionBlocker {
-    CurrentSession,
+pub enum DeletionBlocker {
     InUse,
     Workspace { resources: Vec<String> },
     InvalidOwnership { detail: String },
@@ -82,7 +81,7 @@ pub(crate) enum DeletionBlocker {
 /// The frozen deletion workset is recovery authority, not public control-plane data.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum SessionDeleteResult {
+pub enum SessionDeleteResult {
     Preview {
         preview: SessionDeletePreview,
     },
@@ -113,7 +112,7 @@ pub(crate) enum SessionDeleteResult {
 /// removes this record; allocation high-water marks reserve native identities.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct DeletionRecord {
+pub struct DeletionRecord {
     pub session_id: SessionId,
     pub target_revision: String,
     pub scopes: Vec<DeletionScope>,
@@ -217,9 +216,6 @@ impl SessionCatalog {
             return Err(SessionDeleteResult::NotFound {
                 session_id: id.clone(),
             });
-        }
-        if self.document.active_session == *id {
-            return Err(blocked(DeletionBlocker::CurrentSession));
         }
         let preflight = self.deletion_preflight(id).map_err(|e| {
             blocked(if e.kind() == std::io::ErrorKind::WouldBlock {

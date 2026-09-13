@@ -96,7 +96,7 @@ impl LaunchFixture {
     pub async fn compose(
         &self,
         dependencies: &rustx::local_runtime::LocalRuntimeDependencies,
-    ) -> Result<rustx::local_runtime::LocalSessionProduct, rustx::local_runtime::LocalRuntimeError>
+    ) -> Result<rustx::local_runtime::LocalSessionClient, rustx::local_runtime::LocalRuntimeError>
     {
         let dependencies = rustx::local_runtime::LocalRuntimeDependencies {
             startup_session: self.startup_session.clone(),
@@ -105,7 +105,7 @@ impl LaunchFixture {
             estimator: dependencies.estimator.clone(),
             child_program: dependencies.child_program.clone(),
         };
-        rustx::local_runtime::LocalSessionProduct::compose(&self.resolve(), &dependencies).await
+        rustx::local_runtime::LocalSessionClient::compose(&self.resolve(), &dependencies).await
     }
 
     pub fn request(&self) -> LaunchRequest {
@@ -127,10 +127,15 @@ impl LaunchFixture {
     }
 
     pub fn try_resolve(&self) -> Result<AdmittedSessionConfig, String> {
-        let host = tempfile::tempdir().expect("isolated host");
+        let host = self
+            .config
+            .parent()
+            .expect("fixture configuration parent")
+            .join(".test-host");
+        std::fs::create_dir_all(&host).expect("isolated host");
         let mut environment = HostEnvironment::from_paths(
             std::env::current_dir().unwrap(),
-            host.path().into(),
+            host.clone(),
             None,
             None,
         )?;

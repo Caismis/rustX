@@ -152,7 +152,10 @@ enabled = false
         registry,
         launch.config().clone(),
         super::session::SessionPersistentState {
-            model: launch.config().initial_model().clone().clone(),
+            model: Some(launch.config().initial_model().clone().clone()),
+            ..crate::local_runtime::session::SessionPersistentState::from_input(
+                &crate::local_runtime::SessionConfigInput::new(std::path::PathBuf::from("/")),
+            )
         },
         crate::runtime::identity::ConversationId::new("cfg238"),
         controller.root().join("artifacts"),
@@ -613,7 +616,7 @@ enabled = false
             .reasoning_profile,
         b.reasoning_profile
     );
-    let fresh = super::LocalSessionProduct::compose(
+    let fresh = super::LocalSessionClient::compose(
         &next_launch,
         &super::LocalRuntimeDependencies::default(),
     )

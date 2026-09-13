@@ -72,13 +72,13 @@ describe("native Session selectors", () => {
           preview: "restore the auth module",
           updated_at: "2026-08-19T00:00:00Z",
           active_node: "node-3",
-          active: false,
+
         },
         {
           id: "session-4",
           updated_at: "2026-08-18T00:00:00Z",
           active_node: "node-4",
-          active: false,
+
         },
       ],
     });

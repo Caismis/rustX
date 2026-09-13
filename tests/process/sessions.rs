@@ -17,10 +17,6 @@ use rustx::message::types::{
 };
 use rustx::model::catalog::MapCredentialEnvironment;
 use rustx::runtime::identity::MessageId;
-use rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION;
-use rustx::runtime_client::types::{
-    RequestId, RuntimeClientError, RuntimeClientRequest, RuntimeClientResult,
-};
 
 const MODELS: &str = r#"[providers.local]
 base_url = "http://127.0.0.1:9/v1"
@@ -90,15 +86,6 @@ fn paths(root: &std::path::Path) -> LaunchFixture {
     }
 }
 
-/// The same startup arguments a client repeats when it replaces the process
-/// to complete a Session switch it has already published.
-fn continuing(paths: &LaunchFixture) -> LaunchFixture {
-    LaunchFixture {
-        startup_session: StartupSession::ContinueActive,
-        ..paths.clone()
-    }
-}
-
 fn dependencies() -> LocalRuntimeDependencies {
     LocalRuntimeDependencies {
         credentials: Some(Arc::new(MapCredentialEnvironment::new([(
@@ -107,10 +94,6 @@ fn dependencies() -> LocalRuntimeDependencies {
         )]))),
         ..LocalRuntimeDependencies::default()
     }
-}
-
-fn request_id(value: u64) -> RequestId {
-    RequestId::new(value)
 }
 
 fn workspace_snapshot(root: &std::path::Path) -> BTreeMap<String, Vec<u8>> {
@@ -142,857 +125,162 @@ fn workspace_snapshot(root: &std::path::Path) -> BTreeMap<String, Vec<u8>> {
     snapshot
 }
 
-async fn session_request(
-    endpoint: &rustx::runtime_client::RuntimeClientEndpoint,
-    request: RuntimeClientRequest,
-) -> rustx::runtime_client::types::RuntimeClientResponse {
-    endpoint.handle_request_async(request).await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[allow(clippy::too_many_lines)]
-async fn native_new_resume_name_and_quiescence_are_product_operations() {
-    let root = tempfile::tempdir().expect("temp root");
+#[tokio::test]
+async fn native_create_name_and_read_leave_the_client_attachment_unchanged() {
+    let root = tempfile::tempdir().unwrap();
     let paths = paths(root.path());
-    let workspace = paths.workspace.clone();
-    std::fs::write(workspace.join("workspace-owned.txt"), b"do not branch me")
-        .expect("workspace marker");
-    let workspace_before = workspace_snapshot(&workspace);
-    let dependencies = dependencies();
-
-    let product = (paths)
-        .compose(&dependencies)
+    let product = paths.compose(&dependencies()).await.unwrap();
+    let before = product.supervisor().current().await.unwrap();
+    let workspace_before = workspace_snapshot(&paths.workspace);
+    let created = product.supervisor().new_session().await.unwrap().session;
+    assert_ne!(created.id, before.id);
+    assert_eq!(product.supervisor().current().await.unwrap(), before);
+    assert_eq!(
+        product.runtime().conversation_id(),
+        &before.active_conversation_id
+    );
+    product.supervisor().rename("named A".into()).await.unwrap();
+    let catalog = SessionCatalog::open_existing(&paths.runtime_root)
+        .unwrap()
+        .unwrap();
+    assert_eq!(catalog.snapshot(&created.id).unwrap(), created);
+    assert_eq!(catalog.list_page(None, 0, 32).unwrap().sessions.len(), 2);
+    assert_eq!(workspace_snapshot(&paths.workspace), workspace_before);
+}
+#[tokio::test]
+async fn startup_creates_independent_sessions_unless_an_identity_is_supplied() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = paths(root.path());
+    let first = paths.compose(&dependencies()).await.unwrap();
+    let a = first.supervisor().current().await.unwrap();
+    drop(first);
+    let second = paths.compose(&dependencies()).await.unwrap();
+    let b = second.supervisor().current().await.unwrap();
+    drop(second);
+    assert_ne!(a.id, b.id);
+    let before = std::fs::read(paths.runtime_root.join("sessions/catalog.json")).unwrap();
+    let resumed = selecting(&paths, &a.id, None)
+        .compose(&dependencies())
         .await
-        .expect("compose root product");
-    let endpoint = product.endpoint();
-    let initialized = endpoint.handle_request(RuntimeClientRequest::Initialize {
-        id: request_id(1),
-        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
-    });
-    let Some(RuntimeClientResult::Initialized { .. }) = initialized.result else {
-        panic!("initialize must succeed: {initialized:?}");
-    };
-
-    let current = session_request(
-        &endpoint,
-        RuntimeClientRequest::SessionGet { id: request_id(2) },
-    )
-    .await;
-    let Some(RuntimeClientResult::Session { session: root_view }) = current.result else {
-        panic!("session_get must return native metadata: {current:?}");
-    };
-    let root_session = root_view.id.clone();
-    let root_conversation = root_view.active_conversation_id.clone();
-
-    let renamed = session_request(
-        &endpoint,
-        RuntimeClientRequest::SessionName {
-            id: request_id(3),
-            name: "root transcript".to_owned(),
-        },
-    )
-    .await;
-    let Some(RuntimeClientResult::SessionChanged { session, .. }) = renamed.result else {
-        panic!("session_name must return metadata: {renamed:?}");
-    };
-    assert_eq!(session.name.as_deref(), Some("root transcript"));
-
-    let model_set = endpoint.handle_request(RuntimeClientRequest::ModelSet {
-        id: request_id(31),
-        config: Box::new(rustx::model::session::SessionModelConfig::of(
-            serde_json::from_value(serde_json::json!("local/second-model"))
-                .expect("second model reference"),
-        )),
-    });
-    let Some(RuntimeClientResult::ModelSet { model }) = model_set.result else {
-        panic!("model_set must update the active Session model: {model_set:?}");
-    };
-    assert_eq!(model.configured.model.to_string(), "local/second-model");
-
-    let catalog = SessionCatalog::open_existing(root.path().join("runtime").as_path())
-        .expect("open catalog")
-        .expect("read catalog");
-    assert!(
-        catalog
-            .list_page(None, 0, rustx::local_runtime::SESSION_LIST_PAGE_LIMIT)
-            .expect("list page")
-            .sessions
-            .is_empty(),
-        "a named, model-configured but otherwise untouched Session is an internal shell, not history"
-    );
-    assert_eq!(catalog.persisted_session_ids().len(), 1);
-    let catalog_path = root
-        .path()
-        .join("runtime")
-        .join("sessions")
-        .join("catalog.json");
-    let catalog_bytes_before = std::fs::read(&catalog_path).expect("catalog bytes before /new");
-    let root_id = root_session.clone();
-    let root_store_path = root
-        .path()
-        .join("runtime")
-        .join("sessions")
-        .join(&root_id)
-        .join("conversations")
-        .join(root_conversation.as_str())
-        .join("conversation.sqlite");
-    let root_store =
-        rustx::durable::SqliteConversationStore::open(root_conversation.clone(), &root_store_path)
-            .expect("root store");
-
-    // `/new` over the still-unused active Session is a semantic no-op: it
-    // reuses the empty shell instead of manufacturing another one.
-    let noop = session_request(
-        &endpoint,
-        RuntimeClientRequest::SessionNew { id: request_id(4) },
-    )
-    .await;
-    let Some(RuntimeClientResult::SessionChanged {
-        session: noop_view,
-        restart_required,
-        ..
-    }) = noop.result
-    else {
-        panic!("session_new over an unused Session must succeed: {noop:?}");
-    };
-    assert!(!restart_required, "no runtime replacement for the no-op");
-    assert_eq!(noop_view.id, root_session, "no new SessionId");
+        .unwrap();
+    assert_eq!(resumed.supervisor().current().await.unwrap(), a);
     assert_eq!(
-        noop_view.active_conversation_id, root_conversation,
-        "no new ConversationId"
+        std::fs::read(paths.runtime_root.join("sessions/catalog.json")).unwrap(),
+        before
     );
     assert_eq!(
-        std::fs::read(&catalog_path).expect("catalog bytes after /new"),
-        catalog_bytes_before,
-        "the no-op publishes no catalog row and allocates no new node"
-    );
-    // The runtime was never quiesced: a repeated `/new` no-ops again instead
-    // of hitting the absorbing replacement fence.
-    let repeated = session_request(
-        &endpoint,
-        RuntimeClientRequest::SessionNew { id: request_id(40) },
-    )
-    .await;
-    assert!(
-        matches!(
-            repeated.result,
-            Some(RuntimeClientResult::SessionChanged {
-                restart_required: false,
-                ..
-            })
-        ),
-        "a repeated /new over the still-unused Session no-ops: {repeated:?}"
-    );
-
-    // Durable user work is what makes the Session used: the input is
-    // accepted into Pending Inbound synchronously, and the Session becomes
-    // resume-visible immediately. The attempt against the unreachable
-    // provider then fails and settles on its own.
-    let submitted = session_request(
-        &endpoint,
-        RuntimeClientRequest::SubmitInbound {
-            id: request_id(41),
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: "root work".to_owned(),
-            })],
-        },
-    )
-    .await;
-    assert!(
-        matches!(
-            submitted.result,
-            Some(RuntimeClientResult::InboundAccepted { .. })
-        ),
-        "the same live runtime accepts the first real work: {submitted:?}"
-    );
-    assert_eq!(
-        SessionCatalog::open_existing(root.path().join("runtime").as_path())
-            .expect("open catalog after submit")
-            .expect("read catalog after submit")
-            .list_page(None, 0, rustx::local_runtime::SESSION_LIST_PAGE_LIMIT)
-            .expect("list page after submit")
-            .sessions
-            .len(),
-        1,
-        "durable acceptance is immediately resume-visible"
-    );
-
-    let created = session_request(
-        &endpoint,
-        RuntimeClientRequest::SessionNew { id: request_id(42) },
-    )
-    .await;
-    let Some(RuntimeClientResult::SessionChanged {
-        session: new_view,
-        restart_required,
-        ..
-    }) = created.result
-    else {
-        panic!("session_new must return a replacement: {created:?}");
-    };
-    assert!(restart_required);
-    assert_ne!(new_view.id, root_session);
-    assert_ne!(new_view.active_conversation_id, root_conversation);
-
-    // CFG238: disk saves use the same absorbing Session replacement fence.
-    let refused_save = session_request(
-        &endpoint,
-        RuntimeClientRequest::DefaultSave {
-            id: request_id(238),
-            scope: rustx::runtime_client::settings::DefaultScope::User,
-            expected_revision: "missing".into(),
-            target: rustx::runtime_client::settings::DefaultTarget::ModelSelection,
-        },
-    )
-    .await;
-    assert!(matches!(
-        refused_save.error,
-        Some(RuntimeClientError::SessionRestartRequired { .. })
-    ));
-
-    // A duplicate command cannot publish a second transition after the
-    // first command has released the only active runtime.
-    let duplicate = session_request(
-        &endpoint,
-        RuntimeClientRequest::SessionNew { id: request_id(5) },
-    )
-    .await;
-    assert!(matches!(
-        duplicate.error,
-        Some(RuntimeClientError::SessionRestartRequired { .. })
-    ));
-    // `ConversationRuntime::shutdown` is the quiescence point of the
-    // switch, so by the time `/new` returned the failed attempt had settled
-    // and the adopted lineage is final.
-    let canonical_after = root_store
-        .load_canonical()
-        .expect("root canonical after new");
-    assert!(
-        canonical_after.iter().any(|message| {
-            matches!(message, MessageBlock::User(user) if user.content.iter().any(|content| {
-                matches!(content, UserContentBlock::Text(text) if text.text == "root work")
-            }))
-        }),
-        "new never rewinds the previous lineage"
-    );
-    let catalog_after_new = SessionCatalog::open_existing(root.path().join("runtime").as_path())
-        .expect("open catalog after new")
-        .expect("reopen catalog after new");
-    assert_eq!(
-        catalog_after_new
-            .list_page(None, 0, rustx::local_runtime::SESSION_LIST_PAGE_LIMIT)
-            .expect("list page")
-            .sessions
-            .len(),
-        1,
-        "only the used root Session is resume-visible"
-    );
-    assert_eq!(
-        catalog_after_new.persisted_session_ids().len(),
-        2,
-        "the new empty shell is durable catalog state, hidden from /resume"
-    );
-
-    drop(endpoint);
-    drop(product);
-
-    // Recomposition resolves the catalog's published active node and runs
-    // ordinary ConversationRuntime recovery for that independent lineage.
-    let resumed = (continuing(&paths))
-        .compose(&dependencies)
-        .await
-        .expect("compose selected new session");
-    assert_eq!(
-        resumed.runtime().conversation_id().as_str(),
-        new_view.active_conversation_id.as_str()
-    );
-    let resumed_endpoint = resumed.endpoint();
-    let initialized = resumed_endpoint.handle_request(RuntimeClientRequest::Initialize {
-        id: request_id(6),
-        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
-    });
-    let Some(RuntimeClientResult::Initialized { snapshot, .. }) = initialized.result else {
-        panic!("resumed runtime must initialize: {initialized:?}");
-    };
-    assert_eq!(
-        snapshot
-            .model
-            .as_ref()
+        SessionCatalog::open_existing(&paths.runtime_root)
             .unwrap()
-            .configured
-            .model
-            .to_string(),
-        "local/test-model",
-        "a new Session uses the current runtime default, not the previous Session choice"
-    );
-
-    // `/resume` selects the old persisted Session through the native owner;
-    // it does not swap a transcript in the current client.
-    let selected = session_request(
-        &resumed_endpoint,
-        RuntimeClientRequest::SessionSelect {
-            id: request_id(7),
-            session_id: root_session.clone(),
-            node_id: None,
-        },
-    )
-    .await;
-    let Some(RuntimeClientResult::SessionChanged {
-        session: selected_view,
-        restart_required,
-        ..
-    }) = selected.result
-    else {
-        panic!("session_select must return a replacement: {selected:?}");
-    };
-    assert!(restart_required);
-    assert_eq!(selected_view.id, root_session);
-    drop(resumed_endpoint);
-    drop(resumed);
-
-    let restored = (continuing(&paths))
-        .compose(&dependencies)
-        .await
-        .expect("compose resumed root session");
-    assert_eq!(
-        restored.runtime().conversation_id().as_str(),
-        root_conversation.as_str()
-    );
-    let restored_endpoint = restored.endpoint();
-    let restored_initialized = restored_endpoint.handle_request(RuntimeClientRequest::Initialize {
-        id: request_id(8),
-        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
-    });
-    let Some(RuntimeClientResult::Initialized { snapshot, .. }) = restored_initialized.result
-    else {
-        panic!("restored runtime must initialize");
-    };
-    assert!(snapshot.attempt.is_none());
-    assert!(snapshot.background.is_empty());
-    assert_eq!(
-        workspace_snapshot(&workspace),
-        workspace_before,
-        "Session branching and replacement never mutate workspace state"
+            .unwrap()
+            .snapshot(&b.id)
+            .unwrap(),
+        b
     );
 }
-
-/// A launch is not a resume.
-///
-/// Startup begins on an empty Session and leaves an already-used Session as
-/// history reachable through `/resume`; an active Session that was never used
-/// is reused, so repeated launches cannot accumulate empty rows; and
-/// `--continue` is the one way to bind the catalog's published active
-/// selection again.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn startup_begins_on_an_empty_session_unless_continue_is_requested() {
-    let root = tempfile::tempdir().expect("temp root");
+#[tokio::test]
+async fn restart_lists_unused_sessions_without_manufacturing_focus() {
+    let root = tempfile::tempdir().unwrap();
     let paths = paths(root.path());
-    let dependencies = dependencies();
-    let runtime_root = root.path().join("runtime");
-
-    let first = (paths).compose(&dependencies).await.expect("first launch");
-    let first_conversation = first.runtime().conversation_id().clone();
-    drop(first);
-
-    // The first launch left its Session unused, so the second launch is that
-    // same empty Session rather than another one beside it.
-    let second = (paths).compose(&dependencies).await.expect("second launch");
-    assert_eq!(second.runtime().conversation_id(), &first_conversation);
-    drop(second);
-    assert_eq!(
-        persisted_ids(&runtime_root).len(),
-        1,
-        "repeated launches reuse the unused shell instead of accumulating Sessions"
-    );
-    assert!(
-        visible_session_ids(&runtime_root).is_empty(),
-        "an unused shell is never resume-visible"
-    );
-
-    // One canonical user message is the whole difference: the Session has
-    // been used, so the next launch must not open it.
-    let used_session = active_session_id(&runtime_root);
-    use_session(
-        &runtime_root,
-        &used_session,
-        &first_conversation,
-        "issue88-startup-user",
-    );
-
-    let third = (paths).compose(&dependencies).await.expect("third launch");
-    let fresh_conversation = third.runtime().conversation_id().clone();
-    assert_ne!(
-        fresh_conversation, first_conversation,
-        "a launch never opens a Session that already has history"
-    );
-    drop(third);
-
-    // The used Session was not rewritten, replaced, or hidden: it is durable
-    // history the selector still lists, while the fresh active shell is
-    // persisted but not resume-visible.
-    let listed = visible_session_ids(&runtime_root);
-    assert_eq!(listed, vec![used_session.clone()]);
-    assert_eq!(persisted_ids(&runtime_root).len(), 2);
-
-    // Selecting the used Session publishes it as the active one, and the
-    // process replacement that completes the switch asks for it explicitly.
-    let switching = (continuing(&paths))
-        .compose(&dependencies)
-        .await
-        .expect("continue the active Session");
-    let endpoint = switching.endpoint();
-    let initialized = endpoint.handle_request(RuntimeClientRequest::Initialize {
-        id: request_id(1),
-        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
-    });
-    assert!(matches!(
-        initialized.result,
-        Some(RuntimeClientResult::Initialized { .. })
-    ));
-    let selected = session_request(
-        &endpoint,
-        RuntimeClientRequest::SessionSelect {
-            id: request_id(2),
-            session_id: used_session.to_string(),
-            node_id: None,
-        },
-    )
-    .await;
-    assert!(matches!(
-        selected.result,
-        Some(RuntimeClientResult::SessionChanged {
-            restart_required: true,
-            ..
-        })
-    ));
-    drop(endpoint);
-    drop(switching);
-
-    let continued = (continuing(&paths))
-        .compose(&dependencies)
-        .await
-        .expect("compose the selected Session");
-    assert_eq!(
-        continued.runtime().conversation_id(),
-        &first_conversation,
-        "--continue binds the published active selection"
-    );
-    drop(continued);
-
-    // The next ordinary launch leaves that selection as history again.
-    let relaunched = (paths)
-        .compose(&dependencies)
-        .await
-        .expect("ordinary relaunch");
-    assert_ne!(relaunched.runtime().conversation_id(), &first_conversation);
-}
-
-/// `/resume` visibility is a durable lifecycle classification: a restart
-/// preserves it exactly, and a Session crosses it at durable acceptance of
-/// user work — never at launch, naming, or model choice.
-#[test]
-#[allow(clippy::too_many_lines)]
-fn restart_preserves_resume_visibility_until_a_shell_owns_work() {
-    fn launch_executor() -> tokio::runtime::Runtime {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(4)
-            .enable_all()
-            .build()
-            .expect("launch executor")
-    }
-
-    // Semantic shutdown can wake its caller before the completing task drops its
-    // last storage-owner Arc. A restart must also destroy the old executor: its
-    // drop joins task teardown before the next launch acquires the controller lock.
-    let executor = launch_executor();
-    let root = tempfile::tempdir().expect("temp root");
-    let paths = paths(root.path());
-    let dependencies = dependencies();
-    let runtime_root = root.path().join("runtime");
-
-    // A first launch with no user work publishes the internal root shell and
-    // lists nothing.
-    let first = executor
-        .block_on((paths).compose(&dependencies))
-        .expect("first launch");
-    let first_conversation = first.runtime().conversation_id().clone();
-    let first_endpoint = first.endpoint();
-    let initialized = first_endpoint.handle_request(RuntimeClientRequest::Initialize {
-        id: request_id(1),
-        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
-    });
-    assert!(matches!(
-        initialized.result,
-        Some(RuntimeClientResult::Initialized { .. })
-    ));
-    assert!(visible_session_ids(&runtime_root).is_empty());
-
-    // Durable acceptance of user work makes the Session used: resume-visible
-    // from that transaction on, not from model start or assistant output.
-    let submitted = executor.block_on(session_request(
-        &first_endpoint,
-        RuntimeClientRequest::SubmitInbound {
-            id: request_id(2),
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: "first session work".to_owned(),
-            })],
-        },
-    ));
-    assert!(matches!(
-        submitted.result,
-        Some(RuntimeClientResult::InboundAccepted { .. })
-    ));
-    let first_session = active_session_id(&runtime_root);
-    assert_eq!(
-        visible_session_ids(&runtime_root),
-        vec![first_session.clone()]
-    );
-    executor.block_on(first.runtime().shutdown()).unwrap();
-    drop(first_endpoint);
-    drop(first);
-    drop(executor);
-    let executor = launch_executor();
-
-    // An ordinary relaunch begins on a new internal shell: the used Session
-    // stays the only resume-visible row, and restart changed nothing.
-    let second = executor
-        .block_on((paths).compose(&dependencies))
-        .expect("ordinary relaunch");
-    let shell_conversation = second.runtime().conversation_id().clone();
-    assert_ne!(shell_conversation, first_conversation);
-    assert_eq!(
-        visible_session_ids(&runtime_root),
-        vec![first_session.clone()]
-    );
-    assert_eq!(persisted_ids(&runtime_root).len(), 2);
-
-    // `/new` over that still-unused active shell is a no-op, in-process.
-    let second_endpoint = second.endpoint();
-    let initialized = second_endpoint.handle_request(RuntimeClientRequest::Initialize {
-        id: request_id(30),
-        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
-    });
-    assert!(matches!(
-        initialized.result,
-        Some(RuntimeClientResult::Initialized { .. })
-    ));
-    let noop = executor.block_on(session_request(
-        &second_endpoint,
-        RuntimeClientRequest::SessionNew { id: request_id(3) },
-    ));
-    assert!(
-        matches!(
-            noop.result,
-            Some(RuntimeClientResult::SessionChanged {
-                restart_required: false,
-                ..
-            })
-        ),
-        "/new over the unused shell reuses it: {noop:?}"
-    );
-    assert_eq!(persisted_ids(&runtime_root).len(), 2);
-
-    // Once the shell durably accepts work, both Sessions are resume-visible.
-    let submitted = executor.block_on(session_request(
-        &second_endpoint,
-        RuntimeClientRequest::SubmitInbound {
-            id: request_id(4),
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: "second session work".to_owned(),
-            })],
-        },
-    ));
-    assert!(matches!(
-        submitted.result,
-        Some(RuntimeClientResult::InboundAccepted { .. })
-    ));
-    let second_session = active_session_id(&runtime_root);
-    assert_ne!(second_session, first_session);
-    assert_eq!(
-        visible_session_ids(&runtime_root),
-        vec![first_session.clone(), second_session.clone()]
-    );
-    executor.block_on(second.runtime().shutdown()).unwrap();
-    drop(second_endpoint);
-    drop(second);
-    drop(executor);
-    let executor = launch_executor();
-
-    // One more ordinary restart: both used Sessions remain visible, the new
-    // active shell is hidden, and nothing about the classification moved.
-    let third = executor
-        .block_on((paths).compose(&dependencies))
-        .expect("second relaunch");
-    assert_ne!(third.runtime().conversation_id(), &shell_conversation);
-    assert_eq!(
-        visible_session_ids(&runtime_root),
-        vec![first_session, second_session],
-        "restart preserves the resume-visible classification"
-    );
-    assert_eq!(persisted_ids(&runtime_root).len(), 3);
-    drop(third);
-    drop(executor);
-}
-
-/// `SubmitInbound` reports success strictly after the durable acceptance
-/// commit, so a `/new` issued immediately afterwards must classify the
-/// Session as used in *every* adoption interleaving — the acceptance
-/// watermark is committed before the client can even issue the command —
-/// and take the real switch path rather than the unused no-op.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn new_after_accepted_submission_never_takes_the_unused_noop() {
-    let root = tempfile::tempdir().expect("temp root");
-    let paths = paths(root.path());
-    let dependencies = dependencies();
-    let runtime_root = root.path().join("runtime");
-
-    let product = (paths)
-        .compose(&dependencies)
-        .await
-        .expect("compose root product");
-    let endpoint = product.endpoint();
-    let initialized = endpoint.handle_request(RuntimeClientRequest::Initialize {
-        id: request_id(1),
-        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
-    });
-    assert!(matches!(
-        initialized.result,
-        Some(RuntimeClientResult::Initialized { .. })
-    ));
-    let current = session_request(
-        &endpoint,
-        RuntimeClientRequest::SessionGet { id: request_id(2) },
-    )
-    .await;
-    let Some(RuntimeClientResult::Session { session: root_view }) = current.result else {
-        panic!("session_get must return native metadata: {current:?}");
-    };
-
-    // The response linearizes after the durable acceptance commit; the
-    // attempt's adoption of that prompt races the classification below on
-    // purpose and must not matter.
-    let submitted = session_request(
-        &endpoint,
-        RuntimeClientRequest::SubmitInbound {
-            id: request_id(3),
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: "accepted work".to_owned(),
-            })],
-        },
-    )
-    .await;
-    assert!(matches!(
-        submitted.result,
-        Some(RuntimeClientResult::InboundAccepted { .. })
-    ));
-
-    let created = session_request(
-        &endpoint,
-        RuntimeClientRequest::SessionNew { id: request_id(4) },
-    )
-    .await;
-    let Some(RuntimeClientResult::SessionChanged {
-        session: new_view,
-        restart_required,
-        ..
-    }) = created.result
-    else {
-        panic!("session_new after acceptance must be a real switch: {created:?}");
-    };
-    assert!(restart_required);
-    assert_ne!(
-        new_view.id, root_view.id,
-        "a Session with durably accepted work never takes the unused no-op"
-    );
-    assert_eq!(
-        visible_session_ids(&runtime_root),
-        vec![rustx::local_runtime::SessionId::new(root_view.id)],
-        "the used Session is resume-visible; the new shell is not"
-    );
-    assert_eq!(persisted_ids(&runtime_root).len(), 2);
-    drop(endpoint);
+    let product = paths.compose(&dependencies()).await.unwrap();
+    let a = product.supervisor().current().await.unwrap();
+    let b = product.supervisor().new_session().await.unwrap().session;
     drop(product);
+    let controller =
+        rustx::local_runtime::session_controller::SessionController::open(&paths.runtime_root)
+            .unwrap();
+    let page = controller.list_sessions(None, 0, 32).await.unwrap();
+    assert_eq!(
+        page.sessions.iter().map(|s| &s.id).collect::<Vec<_>>(),
+        vec![&a.id, &b.id]
+    );
+    let json: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(paths.runtime_root.join("sessions/catalog.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(json.get("active_session").is_none());
 }
-
-/// Naming a Session at launch binds it and publishes that selection.
-///
-/// This is the startup form of `/resume`: the destination is committed to the
-/// catalog before the first runtime is composed, so the replacement spawn
-/// that continues the active selection lands on the same lineage without
-/// naming it, and an identity that does not exist fails the launch rather
-/// than opening something else.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn naming_a_startup_session_binds_it_and_publishes_the_selection() {
-    let root = tempfile::tempdir().expect("temp root");
+#[tokio::test]
+async fn new_after_accepted_work_does_not_replace_the_source() {
+    let root = tempfile::tempdir().unwrap();
     let paths = paths(root.path());
-    let dependencies = dependencies();
-    let runtime_root = root.path().join("runtime");
-
-    // One used Session, then an ordinary relaunch that leaves it as history.
-    let first = (paths).compose(&dependencies).await.expect("first launch");
-    let historical_conversation = first.runtime().conversation_id().clone();
+    let first = paths.compose(&dependencies()).await.unwrap();
+    let a = first.supervisor().current().await.unwrap();
     drop(first);
-    let historical = active_session_id(&runtime_root);
-    let historical_node = active_node_id(&runtime_root);
     use_session(
-        &runtime_root,
-        &historical,
-        &historical_conversation,
-        "issue88-named-user",
+        &paths.runtime_root,
+        &a.id,
+        &a.active_conversation_id,
+        "accepted",
     );
-
-    let relaunched = (paths)
-        .compose(&dependencies)
+    let resumed = selecting(&paths, &a.id, None)
+        .compose(&dependencies())
         .await
-        .expect("ordinary relaunch");
-    let fresh_conversation = relaunched.runtime().conversation_id().clone();
-    drop(relaunched);
-    assert_ne!(fresh_conversation, historical_conversation);
-    assert_ne!(active_session_id(&runtime_root), historical);
-
-    // The named Session is bound directly — no empty Session is published
-    // beside it, and the catalog now publishes it as the active selection.
-    let named = (selecting(&paths, &historical, None))
-        .compose(&dependencies)
-        .await
-        .expect("launch on the named Session");
-    assert_eq!(named.runtime().conversation_id(), &historical_conversation);
-    drop(named);
-    assert_eq!(active_session_id(&runtime_root), historical);
+        .unwrap();
+    let b = resumed.supervisor().new_session().await.unwrap().session;
+    assert_ne!(a.id, b.id);
     assert_eq!(
-        persisted_ids(&runtime_root).len(),
-        2,
-        "naming a Session publishes no Session of its own"
+        resumed.runtime().conversation_id(),
+        &a.active_conversation_id
     );
-
-    // A replacement spawn completing a switch never names its destination;
-    // the selection a named launch published is what it continues.
-    let continued = (continuing(&paths))
-        .compose(&dependencies)
-        .await
-        .expect("replacement spawn");
-    assert_eq!(
-        continued.runtime().conversation_id(),
-        &historical_conversation
-    );
-    drop(continued);
-
-    // The named node is part of the selection, and both identities are
-    // checked against the catalog before anything is composed.
-    let node = (selecting(&paths, &historical, Some(&historical_node)))
-        .compose(&dependencies)
-        .await
-        .expect("launch on the named node");
-    assert_eq!(node.runtime().conversation_id(), &historical_conversation);
-    drop(node);
-
-    let unknown_session = rustx::local_runtime::SessionId::new("session-absent");
-    assert!(
-        (selecting(&paths, &unknown_session, None))
-            .compose(&dependencies)
-            .await
-            .is_err(),
-        "an unknown Session identity fails the launch"
-    );
-    let unknown_node = rustx::local_runtime::SessionNodeId::new("node-absent");
-    assert!(
-        (selecting(&paths, &historical, Some(&unknown_node)))
-            .compose(&dependencies)
-            .await
-            .is_err(),
-        "an unknown node identity fails the launch"
-    );
-    assert_eq!(
-        active_session_id(&runtime_root),
-        historical,
-        "a rejected launch changes no published selection"
-    );
+    assert_eq!(resumed.supervisor().current().await.unwrap(), a);
 }
-
-/// A launch name labels the Session the launch bound; it never chooses one.
-///
-/// This is `/name` moved to the command line, and the distinction it keeps is
-/// the one the whole naming model rests on: a Session is *identified* by the
-/// identity the catalog published and *recognized* by the label a user gave
-/// it. So a name follows the Session that was bound rather than selecting a
-/// Session, a later launch's empty Session inherits nothing, and no identity
-/// is ever resolved from a name.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_launch_name_labels_the_bound_session_and_never_selects_one() {
-    let root = tempfile::tempdir().expect("temp root");
+#[tokio::test]
+async fn named_cold_resume_only_renames_the_explicit_identity() {
+    let root = tempfile::tempdir().unwrap();
     let paths = paths(root.path());
-    let dependencies = dependencies();
-    let runtime_root = root.path().join("runtime");
-
-    let first = (named(&paths, "auth refactor"))
-        .compose(&dependencies)
-        .await
-        .expect("named launch");
-    let first_conversation = first.runtime().conversation_id().clone();
+    let first = paths.compose(&dependencies()).await.unwrap();
+    let a = first.supervisor().current().await.unwrap();
+    let b = first.supervisor().new_session().await.unwrap().session;
     drop(first);
-    let first_session = active_session_id(&runtime_root);
-    assert_eq!(
-        session_name(&runtime_root, &first_session).as_deref(),
-        Some("auth refactor"),
-        "--name names the Session this launch bound"
-    );
-    assert!(
-        visible_session_ids(&runtime_root).is_empty(),
-        "a named but otherwise untouched Session stays an internal shell"
-    );
-
-    // The next ordinary launch starts on a Session of its own, and a name is
-    // no more inheritable than the conversation it labelled.
-    use_session(
-        &runtime_root,
-        &first_session,
-        &first_conversation,
-        "issue88-named-launch",
-    );
-    let relaunched = (paths)
-        .compose(&dependencies)
+    let resumed = named(&selecting(&paths, &a.id, None), "A")
+        .compose(&dependencies())
         .await
-        .expect("ordinary relaunch");
-    drop(relaunched);
-    assert_eq!(persisted_ids(&runtime_root).len(), 2);
-    let rows = session_rows(&runtime_root);
-    assert_eq!(rows.len(), 1, "only the used Session is resume-visible");
+        .unwrap();
     assert_eq!(
-        rows[0].name.as_deref(),
-        Some("auth refactor"),
-        "the name stayed with the Session it was given to"
+        resumed
+            .supervisor()
+            .current()
+            .await
+            .unwrap()
+            .name
+            .as_deref(),
+        Some("A")
     );
-
-    // Naming a launch that continues renames exactly that Session, which is
-    // what typing `/name` in it would have done.
-    let continued = (named(&continuing(&paths), "session picker"))
-        .compose(&dependencies)
-        .await
-        .expect("named continuation");
-    drop(continued);
-    let active = active_session_id(&runtime_root);
-    assert_ne!(active, first_session);
     assert_eq!(
-        session_name(&runtime_root, &active).as_deref(),
-        Some("session picker"),
-        "naming a continued launch renames exactly that Session"
-    );
-
-    // A name is not an identity, and nothing resolves one.
-    assert!(
-        (selecting(
-            &paths,
-            &rustx::local_runtime::SessionId::new("auth refactor"),
-            None
-        ))
-        .compose(&dependencies)
-        .await
-        .is_err(),
-        "a display name never names a Session to open"
+        SessionCatalog::open_existing(&paths.runtime_root)
+            .unwrap()
+            .unwrap()
+            .snapshot(&b.id)
+            .unwrap(),
+        b
     );
 }
-
-/// The startup arguments of a launch that names the Session it binds.
+#[tokio::test]
+async fn a_launch_name_labels_only_the_new_session() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = paths(root.path());
+    let first = named(&paths, "first")
+        .compose(&dependencies())
+        .await
+        .unwrap();
+    let a = first.supervisor().current().await.unwrap();
+    drop(first);
+    let second = named(&paths, "second")
+        .compose(&dependencies())
+        .await
+        .unwrap();
+    let b = second.supervisor().current().await.unwrap();
+    assert_ne!(a.id, b.id);
+    assert_eq!(b.name.as_deref(), Some("second"));
+    assert_eq!(
+        SessionCatalog::open_existing(&paths.runtime_root)
+            .unwrap()
+            .unwrap()
+            .snapshot(&a.id)
+            .unwrap(),
+        a
+    );
+}
 fn named(paths: &LaunchFixture, name: &str) -> LaunchFixture {
     LaunchFixture {
         session_name: Some(name.to_owned()),
@@ -1007,29 +295,6 @@ fn persisted_ids(runtime_root: &std::path::Path) -> Vec<rustx::local_runtime::Se
         .expect("open catalog")
         .expect("catalog exists")
         .persisted_session_ids()
-}
-
-/// The persisted display name of one Session, visible or not.
-fn session_name(
-    runtime_root: &std::path::Path,
-    session: &rustx::local_runtime::SessionId,
-) -> Option<String> {
-    SessionCatalog::open_existing(runtime_root)
-        .expect("open catalog")
-        .expect("catalog exists")
-        .snapshot(session)
-        .expect("session snapshot")
-        .name
-}
-
-/// The `/resume` rows of the persisted catalog.
-fn session_rows(runtime_root: &std::path::Path) -> Vec<rustx::local_runtime::SessionSummary> {
-    SessionCatalog::open_existing(runtime_root)
-        .expect("open catalog")
-        .expect("catalog exists")
-        .list_page(None, 0, rustx::local_runtime::SESSION_LIST_PAGE_LIMIT)
-        .expect("list page")
-        .sessions
 }
 
 /// The startup arguments of a launch that names where it starts.
@@ -1099,7 +364,7 @@ async fn a_failed_launch_leaves_the_catalog_and_the_active_selection_untouched()
     let first = (paths).compose(&dependencies).await.expect("first launch");
     let doomed_conversation = first.runtime().conversation_id().clone();
     drop(first);
-    let doomed_session = active_session_id(&runtime_root);
+    let doomed_session = rustx::local_runtime::SessionId::new("session-1");
     use_session(
         &runtime_root,
         &doomed_session,
@@ -1110,7 +375,7 @@ async fn a_failed_launch_leaves_the_catalog_and_the_active_selection_untouched()
     // A second Session becomes the active one; the first is history.
     let second = (paths).compose(&dependencies).await.expect("second launch");
     drop(second);
-    let active_before = active_session_id(&runtime_root);
+    let active_before = rustx::local_runtime::SessionId::new("session-2");
     assert_ne!(active_before, doomed_session);
 
     // The history Session records a model that `models.toml` no longer
@@ -1119,6 +384,8 @@ async fn a_failed_launch_leaves_the_catalog_and_the_active_selection_untouched()
     let mut document: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&catalog_path).expect("read catalog"))
             .expect("catalog json");
+    document["sessions"][doomed_session.as_str()]["state"]["model"] =
+        serde_json::to_value(paths.resolve().config().initial_model()).unwrap();
     document["sessions"][doomed_session.as_str()]["state"]["model"]["model"] =
         serde_json::Value::String("local/retired-model".to_owned());
     std::fs::write(
@@ -1149,7 +416,12 @@ async fn a_failed_launch_leaves_the_catalog_and_the_active_selection_untouched()
         "a failed launch rewrote the catalog"
     );
     assert_eq!(
-        active_session_id(&runtime_root),
+        SessionCatalog::open_existing(&runtime_root)
+            .unwrap()
+            .unwrap()
+            .snapshot(&active_before)
+            .unwrap()
+            .id,
         active_before,
         "a failed launch moved the active selection"
     );
@@ -1166,11 +438,19 @@ async fn a_failed_launch_leaves_the_catalog_and_the_active_selection_untouched()
 
     // The launch the user can still make is unaffected: the catalog is
     // exactly what it was, so continuing works.
-    let recovered = (continuing(&paths))
+    let recovered = (selecting(&paths, &active_before, None))
         .compose(&dependencies)
         .await
         .expect("the untouched active selection still composes");
-    assert_eq!(active_session_id(&runtime_root), active_before);
+    assert_eq!(
+        SessionCatalog::open_existing(&runtime_root)
+            .unwrap()
+            .unwrap()
+            .snapshot(&active_before)
+            .unwrap()
+            .id,
+        active_before
+    );
     drop(recovered);
 }
 
@@ -1187,7 +467,7 @@ async fn a_failed_empty_launch_publishes_no_session() {
     let first = (paths).compose(&dependencies).await.expect("first launch");
     let used_conversation = first.runtime().conversation_id().clone();
     drop(first);
-    let used_session = active_session_id(&runtime_root);
+    let used_session = rustx::local_runtime::SessionId::new("session-1");
     use_session(
         &runtime_root,
         &used_session,
@@ -1282,41 +562,8 @@ async fn a_failed_first_launch_publishes_no_catalog() {
         "the successful launch published exactly one Session"
     );
     assert!(
-        visible_session_ids(&runtime_root).is_empty(),
+        persisted_ids(&runtime_root).len() == 1,
         "the published root shell is durable, not resume history"
     );
     drop(recovered);
-}
-
-/// The active node of the catalog's published active Session.
-fn active_node_id(runtime_root: &std::path::Path) -> rustx::local_runtime::SessionNodeId {
-    SessionCatalog::open_existing(runtime_root)
-        .expect("open catalog")
-        .expect("catalog exists")
-        .active_snapshot()
-        .expect("active snapshot")
-        .active_node
-}
-
-/// The resume-visible Session identities, in catalog order.
-fn visible_session_ids(runtime_root: &std::path::Path) -> Vec<rustx::local_runtime::SessionId> {
-    SessionCatalog::open_existing(runtime_root)
-        .expect("open catalog")
-        .expect("catalog exists")
-        .list_page(None, 0, rustx::local_runtime::SESSION_LIST_PAGE_LIMIT)
-        .expect("list page")
-        .sessions
-        .into_iter()
-        .map(|summary| summary.id)
-        .collect()
-}
-
-/// The catalog's published active Session identity.
-fn active_session_id(runtime_root: &std::path::Path) -> rustx::local_runtime::SessionId {
-    SessionCatalog::open_existing(runtime_root)
-        .expect("open catalog")
-        .expect("catalog exists")
-        .active_snapshot()
-        .expect("active snapshot")
-        .id
 }

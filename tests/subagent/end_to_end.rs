@@ -1096,7 +1096,7 @@ async fn subagent_process_stack(alias_root: bool) {
         let session = SessionCatalog::open_existing(&alias)
             .unwrap()
             .unwrap()
-            .active_snapshot()
+            .snapshot(&rustx::local_runtime::SessionId::new("session-1"))
             .unwrap()
             .id;
         let preflight = SessionDeletionPreflight::acquire(&alias, &session).unwrap();

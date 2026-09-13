@@ -859,7 +859,6 @@ export interface SessionSummaryView {
   preview?: string;
   updated_at: string;
   active_node: SessionNodeId;
-  active: boolean;
 }
 
 export interface SessionUserMessageBoundaryView {

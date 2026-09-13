@@ -6,7 +6,7 @@ Session control, never durable inbound, an Agent Tool, or canonical input.
 
 ## Authoritative state
 
-Catalog schema **7** contains live `sessions`, pending `deletions`, a publication
+Catalog schema **8** contains live `sessions`, pending `deletions`, a publication
 `generation`, and the existing Session/node allocation high-water marks. There is
 one document and one publication boundary. Previous development schemas are
 rejected; there is no migration or compatibility reader.
@@ -38,7 +38,7 @@ persisted phases. A crash selects one complete catalog document atomically.
 
 Preview acquires a finite #254 snapshot and releases every guard before returning.
 Execute acquires a fresh preflight and compares the native `target_revision`.
-Changed semantic ownership is `Stale`; current-Session, access and workspace
+Changed semantic ownership is `Stale`; allocation access and workspace
 collisions remain typed pre-commit blockers. An existing pending record returns
 pending state without a second discovery or snapshot.
 
@@ -117,7 +117,7 @@ source of truth and grant no identity. Projects, workspaces, environments, cache
 configuration and credentials are outside cleanup. Retained worktrees require
 explicit disposal and continue to block preflight.
 
-`LocalSessionProduct::compose` recovers pending records after controller admission
+`LocalSessionClient::compose` recovers pending records after controller admission
 and before ordinary live-store recovery or runtime composition.
 `session_delete_recover` is the explicit asynchronous retry boundary. Neither
 recovery path activates a deleted Conversation, processes Pending Inbound, restores

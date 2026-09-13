@@ -218,7 +218,7 @@ block:
     await child.waitOrTerminate(10_000);
     const reopened = spawnTrusted({ binary: BINARY,
       paths: { models: fixture.path("models.toml"), config: fixture.path("rustx.toml"), workspace, runtimeRoot: fixture.path("private") },
-      startup: { continueActiveSession: true, skillPaths: [], noAutomaticSkills: false, noBuiltinTools: false, noDirectTools: false },
+      startup: { continueActiveSession: false, session: "session-1", skillPaths: [], noAutomaticSkills: false, noBuiltinTools: false, noDirectTools: false },
       env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE },
     });
     const reopenedConnection = new RuntimeClientConnection({ input: reopened.stdout, output: reopened.stdin });
@@ -1125,9 +1125,9 @@ it("Session deletion: real resume UI → attachment → native preview/block/del
   await session.submitInbound([{ type: "text", text: "hello from the tui" }]);
   await until(() => session.state?.attempt?.phase.type === "settled", "fixture history committed");
   const historical = await session.refreshSession();
-  await session.cloneSession();
+  const clone = await session.cloneSession();
   child.closeStdin(); await child.waitOrTerminate();
-  options.startup = { continueActiveSession: true, skillPaths: [], noAutomaticSkills: false, noBuiltinTools: false, noDirectTools: false };
+  options.startup = { continueActiveSession: false, session: clone.session.id, skillPaths: [], noAutomaticSkills: false, noBuiltinTools: false, noDirectTools: false };
   child = spawnTrusted(options); session = await attach();
   const active = await session.refreshSession();
   const before = structuredClone(session.state), beforeModel = await session.modelGet(), beforeProvider = await provider.requests();
@@ -1135,7 +1135,7 @@ it("Session deletion: real resume UI → attachment → native preview/block/del
   const page = await session.listSessions();
   const view = new ResumeSelector({ initialPage: page, client: session, workflow: new SessionDeletionWorkflow(session, () => true, (text) => feedback.push(text)), alive: () => true, feedback: (text) => feedback.push(text) });
   view.selector.selectIdentity(active.id); view.handleInput("\x04");
-  await until(() => view.render(100).map(plainText).join(" ").includes("/new"), "native current Session blocker");
+  await until(() => view.render(100).map(plainText).join(" ").includes("currently in use"), "native allocation blocker");
   view.handleInput("\x1b");
   view.selector.selectIdentity(historical.id); view.handleInput("\x04");
   await until(() => view.render(100).map(plainText).join(" ").includes("❯ Cancel"), "native historical preview");
