@@ -29,7 +29,13 @@ Client focus is routing/UI state. `LocalSessionClient` and
 `LocalSessionAttachment` are the existing CLI's single-runtime composition and
 protocol adapter. Their attached identity is local and is never serialized.
 Their catalog commands cannot shut down another runtime. An ordinary open is a
-metadata read; it does not publish focus. CLI cold resume requires `--session`
+metadata read; it does not publish focus. A startup plan carries a routing node
+separately from its optional durable document mutation. An explicit `--node`
+(including the existing default) never changes catalog bytes, generation, timestamps,
+or the Session graph default. Only an explicit graph operation such as
+`set_current_node` changes that default. `SessionRoute` preserves the durable
+snapshot and identifies the client node separately; the legacy wire translation
+stays inside the local adapter until #288. CLI cold resume requires `--session`
 (and optionally `--node`); implicit `--continue` is refused. The existing wire
 transition vocabulary is temporarily retained until #288; ordinary transitions
 return `restart_required: false`. The wire's committed-durability result still
@@ -58,7 +64,12 @@ catalogs remain current source content. Registries, connections, credentials,
 resource generations, provenance, prospective/admitted effective configuration,
 and execution state are never persisted as Session authority.
 
-Cold load reconstructs `SessionConfigInput` and uses #285's
+Cold load acquires the native `ProductController` before opening the authoritative
+catalog and reading persisted settings. That owner remains retained through
+resolution, admission and composition, excluding competing settings publishers.
+The complete settings value and revision come from this one catalog snapshot;
+no catalog mutex spans resolution or runtime composition. Cold load reconstructs
+`SessionConfigInput` and uses #285's
 `UserConfigManager::resolve_session` and admission. No second resolver exists.
 Current authorization and availability are checked again. Missing explicit
 models/resources and invalid selections fail through existing typed resolution
@@ -99,6 +110,12 @@ delete reports in-use; if deletion commits first, allocation admission rejects
 removed membership even when files remain. Recursive cleanup runs outside the
 catalog mutex and outside root ownership exclusion, using the frozen pending
 record. Recovery never rediscovers a new deletion workset.
+
+Deletion preview, execution, and recovery on `SessionController` remain
+crate-private. `DeletionScope`, `DeletionRecord`, previews, blockers, and internal
+results are not public native DTOs: their frozen scopes are cleanup authority.
+#288 will define bounded public control-plane projections. Compile-fail API
+regressions enforce this boundary.
 
 ## Schema
 

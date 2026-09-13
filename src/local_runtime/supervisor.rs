@@ -7,7 +7,6 @@ use super::session::{
 };
 use super::session_controller::SessionController;
 use crate::conversation::SurfaceRevision;
-use crate::message::types::UserContentBlock;
 use crate::model::session::SessionModelConfig;
 use crate::runtime::conversation_runtime::ConversationRuntime;
 use crate::runtime::identity::MessageId;
@@ -26,6 +25,12 @@ pub struct SessionTreeResult {
     pub next_node_offset: Option<usize>,
     pub branchable_messages: Vec<SessionUserMessageBoundary>,
     pub next_history_offset: Option<usize>,
+}
+/// Client routing projection. The durable Session snapshot keeps its graph default.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionRoute {
+    pub session: SessionSnapshot,
+    pub node: super::session::SessionNode,
 }
 /// Call-site-local attachment for the existing Runtime Client protocol (#288).
 /// Opening another Session returns its identity; it never shuts down this runtime.
@@ -66,7 +71,7 @@ impl LocalSessionAttachment {
         &self,
         id: &SessionId,
     ) -> super::session::deletion::SessionDeleteResult {
-        self.controller.catalog.lock().await.delete_preview(id)
+        self.controller.delete_preview(id).await
     }
     pub(crate) async fn delete_session(
         &self,
@@ -79,11 +84,7 @@ impl LocalSessionAttachment {
         &self,
         id: &SessionId,
     ) -> super::session::deletion::SessionDeleteResult {
-        let work = match self.controller.catalog.lock().await.recover_delete(id) {
-            Ok(work) => work,
-            Err(result) => return result,
-        };
-        self.controller.clean_deletion(work).await
+        self.controller.recover_deletion(id).await
     }
     pub(crate) async fn commit_startup(
         &self,
@@ -113,17 +114,11 @@ impl LocalSessionAttachment {
         &self,
         runtime: ConversationRuntime,
     ) -> Result<(), SessionAttachmentError> {
-        let (node, _) = self
-            .controller
+        self.controller
             .catalog
             .lock()
             .await
-            .lineage(&self.session_id, None)?;
-        if node.conversation_id != *runtime.conversation_id() {
-            return Err(SessionAttachmentError::Session(SessionError::Catalog {
-                detail: "attachment Conversation mismatch".into(),
-            }));
-        }
+            .conversation_lineage(&self.session_id, runtime.conversation_id())?;
         self.runtime.set(runtime).map_err(|_| {
             SessionAttachmentError::Session(SessionError::Catalog {
                 detail: "attachment already installed".into(),
@@ -170,15 +165,30 @@ impl LocalSessionAttachment {
         &self,
         session_id: SessionId,
         node_id: Option<SessionNodeId>,
-    ) -> Result<SessionTransitionResult, SessionAttachmentError> {
+    ) -> Result<SessionRoute, SessionAttachmentError> {
         let catalog = self.controller.catalog.lock().await;
         let (node, _) = catalog.lineage(&session_id, node_id.as_ref())?;
-        let mut session = catalog.snapshot(&session_id)?;
-        // The legacy wire carries the client routing node in this projection.
-        // It is not a write to the Session graph's default node.
-        session.active_node = node.id;
-        session.active_conversation_id = node.conversation_id;
-        Ok(change(session, None))
+        Ok(SessionRoute {
+            session: catalog.snapshot(&session_id)?,
+            node,
+        })
+    }
+    // The existing wire spells a route as active_node. Keep that translation
+    // at the client adapter, never by rewriting a durable SessionSnapshot.
+    async fn attachment_view(
+        &self,
+        session: SessionSnapshot,
+    ) -> Result<SessionView, SessionAttachmentError> {
+        let runtime = self.runtime.get().ok_or_else(|| SessionError::Catalog {
+            detail: "client attachment is not installed".into(),
+        })?;
+        let (node, _) = self
+            .controller
+            .catalog
+            .lock()
+            .await
+            .conversation_lineage(&self.session_id, runtime.conversation_id())?;
+        Ok(route_view(SessionRoute { session, node }))
     }
     fn source(
         &self,
@@ -337,16 +347,6 @@ impl LocalSessionAttachment {
         })
     }
 }
-fn change(
-    session: SessionSnapshot,
-    editor_content: Option<Vec<UserContentBlock>>,
-) -> SessionTransitionResult {
-    SessionTransitionResult {
-        session,
-        editor_content,
-        durability_diagnostic: None,
-    }
-}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionAttachmentError {
     Session(SessionError),
@@ -421,12 +421,15 @@ impl RuntimeClientSessionControl for LocalSessionAttachment {
                     }
                 }
                 RuntimeClientSessionRequest::Get => RuntimeClientResult::Session {
-                    session: session_view(
-                        supervisor
-                            .current()
-                            .await
-                            .map_err(|error| session_error(&error))?,
-                    ),
+                    session: supervisor
+                        .attachment_view(
+                            supervisor
+                                .current()
+                                .await
+                                .map_err(|error| session_error(&error))?,
+                        )
+                        .await
+                        .map_err(|error| session_error(&error))?,
                 },
                 RuntimeClientSessionRequest::Tree {
                     node_offset,
@@ -438,7 +441,10 @@ impl RuntimeClientSessionControl for LocalSessionAttachment {
                         .await
                         .map_err(|error| session_error(&error))?;
                     RuntimeClientResult::SessionTree {
-                        session: session_view(tree.session),
+                        session: supervisor
+                            .attachment_view(tree.session)
+                            .await
+                            .map_err(|error| session_error(&error))?,
                         nodes: tree.nodes.into_iter().map(session_node_view).collect(),
                         next_node_offset: tree.next_node_offset,
                         branchable_messages: tree
@@ -453,12 +459,15 @@ impl RuntimeClientSessionControl for LocalSessionAttachment {
                     }
                 }
                 RuntimeClientSessionRequest::Name(name) => RuntimeClientResult::SessionChanged {
-                    session: session_view(
-                        supervisor
-                            .rename(name)
-                            .await
-                            .map_err(|error| session_error(&error))?,
-                    ),
+                    session: supervisor
+                        .attachment_view(
+                            supervisor
+                                .rename(name)
+                                .await
+                                .map_err(|error| session_error(&error))?,
+                        )
+                        .await
+                        .map_err(|error| session_error(&error))?,
                     editor_content: None,
                     restart_required: false,
                 },
@@ -471,12 +480,17 @@ impl RuntimeClientSessionControl for LocalSessionAttachment {
                 RuntimeClientSessionRequest::Select {
                     session_id,
                     node_id,
-                } => changed_view(
-                    supervisor
+                } => {
+                    let route = supervisor
                         .select(SessionId::new(session_id), node_id.map(SessionNodeId::new))
                         .await
-                        .map_err(|error| session_error(&error))?,
-                ),
+                        .map_err(|error| session_error(&error))?;
+                    RuntimeClientResult::SessionChanged {
+                        session: route_view(route),
+                        editor_content: None,
+                        restart_required: false,
+                    }
+                }
                 RuntimeClientSessionRequest::Clone => changed_view(
                     supervisor
                         .clone_attached()
@@ -577,6 +591,13 @@ fn session_summary_view(summary: SessionSummary) -> SessionSummaryView {
         updated_at: summary.updated_at,
         active_node: summary.active_node.as_str().to_owned(),
     }
+}
+
+fn route_view(route: SessionRoute) -> SessionView {
+    let mut view = session_view(route.session);
+    route.node.id.as_str().clone_into(&mut view.active_node);
+    view.active_conversation_id = route.node.conversation_id;
+    view
 }
 
 fn session_view(snapshot: SessionSnapshot) -> SessionView {

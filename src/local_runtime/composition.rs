@@ -1896,15 +1896,28 @@ impl LocalSessionClient {
         // /new uses this client's explicit launch inputs, not settings copied
         // from the Session that a cold resume is about to resolve.
         let new_session_settings = SessionPersistentState::from_input(&paths.input);
+        // Admit the one native catalog owner before reading any persisted input.
+        // Retain it through resolution/composition, without a catalog mutex.
+        let lifecycle = Arc::new(
+            crate::runtime::local_storage::ProductController::acquire(&paths.runtime_root)
+                .map_err(|e| LocalRuntimeError::ToolRuntime {
+                    detail: e.to_string(),
+                })?,
+        );
+        let existing_catalog = SessionCatalog::open_existing(lifecycle.root())?;
+
         let resumed;
         let paths = if let StartupSession::Select { session, node } = &dependencies.startup_session
         {
-            let catalog = SessionCatalog::open_existing(&paths.runtime_root)?.ok_or_else(|| {
+            let catalog = existing_catalog.as_ref().ok_or_else(|| {
                 LocalRuntimeError::SessionCatalog(SessionError::UnknownSession {
                     session_id: session.clone(),
                 })
             })?;
             let (_, settings) = catalog.lineage(session, node.as_ref())?;
+            #[cfg(test)]
+            cold_resume_test_support::park(lifecycle.root()).await;
+
             let manager = super::configuration::UserConfigManager::new(paths.sources.clone())
                 .map_err(|detail| LocalRuntimeError::Capability { detail })?;
             resumed = manager
@@ -1934,16 +1947,9 @@ impl LocalSessionClient {
         // runtime root with no catalog at all. The seeded conversation
         // database it leaves behind is not published state: nothing names
         // it, so it is neither selectable nor resumable.
-        let lifecycle = Arc::new(
-            crate::runtime::local_storage::ProductController::acquire(&paths.runtime_root)
-                .map_err(|e| LocalRuntimeError::ToolRuntime {
-                    detail: e.to_string(),
-                })?,
-        );
-        let mut catalog = if let Some(catalog) = SessionCatalog::open_existing(lifecycle.root())? {
-            catalog
-        } else {
-            SessionCatalog::create_unpublished(lifecycle.root(), &state)?
+        let mut catalog = match existing_catalog {
+            Some(catalog) => catalog,
+            None => SessionCatalog::create_unpublished(lifecycle.root(), &state)?,
         };
         catalog.retain_lifecycle(lifecycle.clone());
         for id in catalog.pending_deletion_ids() {
@@ -2028,16 +2034,15 @@ impl LocalSessionClient {
 
         // The one catalog transaction of startup. Before this line the
         // catalog is byte-for-byte what the launch found; after it, the
-        // published selection and the composed runtime describe the same
-        // lineage.
+        // intentional metadata change is visible. Routing alone writes nothing.
         supervisor
             .commit_startup(planned)
             .await
             .map_err(LocalRuntimeError::SessionCatalog)?;
 
         // Past the commit, nothing may fail on its own terms: the lineage
-        // check below compares the committed selection with the runtime
-        // composed from that same plan, and activation is infallible.
+        // check below verifies graph membership of the explicitly routed
+        // Conversation, and activation is infallible.
         supervisor
             .install_runtime(runtime.runtime().clone())
             .await
@@ -4892,5 +4897,52 @@ mod source_demand_tests {
         let second = admitted_source_demand(&config, &agents, &WorkflowCatalog::empty(), empty());
         assert_eq!(first.sources, [shared].into());
         assert_eq!(first.sources, second.sources);
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod cold_resume_test_support {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex, Weak};
+    use tokio::sync::watch;
+
+    pub(crate) struct Gate {
+        entered: watch::Sender<bool>,
+        release: watch::Sender<bool>,
+    }
+    static GATES: Mutex<Vec<(PathBuf, Weak<Gate>)>> = Mutex::new(Vec::new());
+    pub(crate) fn arm(runtime_root: &Path) -> Arc<Gate> {
+        let gate = Arc::new(Gate {
+            entered: watch::channel(false).0,
+            release: watch::channel(false).0,
+        });
+        let mut gates = GATES.lock().unwrap();
+        gates.retain(|(path, weak)| path != runtime_root && weak.strong_count() > 0);
+        gates.push((runtime_root.into(), Arc::downgrade(&gate)));
+        gate
+    }
+    impl Gate {
+        pub(crate) async fn entered(&self) {
+            self.entered
+                .subscribe()
+                .wait_for(|entered| *entered)
+                .await
+                .unwrap();
+        }
+        pub(crate) fn release(&self) {
+            self.release.send_replace(true);
+        }
+    }
+    pub(crate) async fn park(runtime_root: &Path) {
+        let gate = GATES
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|(path, weak)| (path == runtime_root).then(|| weak.upgrade()).flatten());
+        if let Some(gate) = gate {
+            let mut release = gate.release.subscribe();
+            gate.entered.send_replace(true);
+            release.wait_for(|released| *released).await.unwrap();
+        }
     }
 }

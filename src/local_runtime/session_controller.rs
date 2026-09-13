@@ -30,6 +30,30 @@ pub struct SessionAccess {
     pub allocation: Arc<ConversationAccess>,
 }
 
+/// Durable native metadata/allocation access. Deletion execution and frozen
+/// cleanup authority are crate-private until #288 defines bounded protocol DTOs.
+///
+/// ```compile_fail
+/// use rustx::local_runtime::session::deletion::DeletionRecord;
+/// ```
+/// ```compile_fail
+/// use rustx::local_runtime::{session_controller::SessionController, SessionId};
+/// fn preview(controller: &SessionController, id: &SessionId) {
+///     let _ = controller.delete_preview(id);
+/// }
+/// ```
+/// ```compile_fail
+/// use rustx::local_runtime::{session_controller::SessionController, SessionId};
+/// fn delete(controller: &SessionController, id: &SessionId) {
+///     let _ = controller.delete_session(id, "revision");
+/// }
+/// ```
+/// ```compile_fail
+/// use rustx::local_runtime::{session_controller::SessionController, SessionId};
+/// fn recover(controller: &SessionController, id: &SessionId) {
+///     let _ = controller.recover_deletion(id);
+/// }
+/// ```
 #[derive(Clone, Debug)]
 pub struct SessionController {
     pub(crate) catalog: Arc<tokio::sync::Mutex<SessionCatalog>>,
@@ -349,7 +373,7 @@ impl SessionController {
             .replace_settings(id, expected, settings)
     }
     /// Finite destructive preview. Every guard is released before returning.
-    pub async fn delete_preview(
+    pub(crate) async fn delete_preview(
         &self,
         id: &SessionId,
     ) -> super::session::deletion::SessionDeleteResult {
@@ -358,7 +382,7 @@ impl SessionController {
     }
     /// # Errors
     /// A pre-visibility catalog error leaves the Session live.
-    pub async fn delete_session(
+    pub(crate) async fn delete_session(
         &self,
         id: &SessionId,
         revision: &str,
@@ -370,7 +394,7 @@ impl SessionController {
         Ok(self.clean_deletion(work).await)
     }
     /// Retry only the existing frozen cleanup record, outside the metadata mutex.
-    pub async fn recover_deletion(
+    pub(crate) async fn recover_deletion(
         &self,
         id: &SessionId,
     ) -> super::session::deletion::SessionDeleteResult {

@@ -409,10 +409,11 @@ struct PersistedSession {
 /// A call-site-local startup destination and a generation-checked publication plan.
 /// The target is never serialized. Composing a new CLI attachment may fail before
 /// publication; its private seed must not create visible catalog membership.
-/// Opening an existing default node produces an unchanged plan and writes nothing.
+/// Opening any existing node produces an unchanged plan and writes nothing.
 #[derive(Debug, Clone)]
 pub(crate) struct PlannedCatalog {
     target: SessionId,
+    target_node: SessionNodeId,
     /// The complete document to persist.
     document: CatalogDocument,
     /// Whether the plan differs from the catalog it was planned against.
@@ -431,7 +432,7 @@ impl PlannedCatalog {
     pub(crate) fn destination_lineage(
         &self,
     ) -> Result<(SessionId, SessionNode, SessionPersistentState), SessionError> {
-        lineage_of(&self.document, &self.target)
+        lineage_of(&self.document, &self.target, &self.target_node)
     }
 
     /// Names only this plan's explicit Session destination.
@@ -454,10 +455,11 @@ impl PlannedCatalog {
     }
 }
 
-/// Resolve the current graph node of an explicitly addressed Session.
+/// Resolve an explicit routing node without consulting the graph default.
 fn lineage_of(
     document: &CatalogDocument,
     session_id: &SessionId,
+    node_id: &SessionNodeId,
 ) -> Result<(SessionId, SessionNode, SessionPersistentState), SessionError> {
     let session =
         document
@@ -466,18 +468,17 @@ fn lineage_of(
             .ok_or_else(|| SessionError::UnknownSession {
                 session_id: session_id.clone(),
             })?;
-    let node =
-        session
-            .nodes
-            .get(&session.active_node)
-            .ok_or_else(|| SessionError::UnknownNode {
-                session_id: session.id.clone(),
-                node_id: session.active_node.clone(),
-            })?;
+    let node = session
+        .nodes
+        .get(node_id)
+        .ok_or_else(|| SessionError::UnknownNode {
+            session_id: session.id.clone(),
+            node_id: node_id.clone(),
+        })?;
     Ok((session.id.clone(), node.clone(), session.state.clone()))
 }
 
-pub mod deletion;
+pub(crate) mod deletion;
 
 /// The native durable `SessionCatalog` and graph authority.
 #[derive(Debug, Clone)]
@@ -1575,27 +1576,25 @@ impl SessionCatalog {
     pub(crate) fn plan_unchanged(&self, target: &SessionId) -> PlannedCatalog {
         PlannedCatalog {
             target: target.clone(),
+            target_node: self.document.sessions[target].active_node.clone(),
             document: self.document.clone(),
             changed: !self.published,
         }
     }
 
-    /// Plan one explicit CLI attachment. Reading its default node writes nothing;
-    /// an explicitly requested graph-node change remains scoped to that Session.
+    /// Plan a client routing target independently of the durable graph default.
+    /// Neither an explicit historical node nor the default node causes publication.
     pub(crate) fn plan_attachment(
         &self,
         session_id: &SessionId,
         node_id: Option<&SessionNodeId>,
     ) -> Result<PlannedCatalog, SessionError> {
+        let (node, _) = self.lineage(session_id, node_id)?;
         Ok(PlannedCatalog {
             target: session_id.clone(),
-            document: if node_id.is_some() {
-                self.build_current_node_document(session_id, node_id)?
-            } else {
-                self.lineage(session_id, None)?;
-                self.document.clone()
-            },
-            changed: node_id.is_some(),
+            target_node: node.id,
+            document: self.document.clone(),
+            changed: false,
         })
     }
 
@@ -1608,6 +1607,7 @@ impl SessionCatalog {
     ) -> Result<PlannedCatalog, SessionError> {
         Ok(PlannedCatalog {
             target: prepared.session_id.clone(),
+            target_node: prepared.node_id.clone(),
             document: self.build_session_document(prepared, origin)?,
             changed: true,
         })
@@ -4959,7 +4959,8 @@ model = "provider/model"
             .select(source_session.clone(), Some(attached_node.id.clone()))
             .await
             .expect("client-local historical node routing");
-        assert_eq!(selected.session.active_node, attached_node.id);
+        assert_eq!(selected.node.id, attached_node.id);
+        assert_eq!(selected.session.active_node, snapshot.active_node);
         assert_eq!(
             attachment.current().await.unwrap().active_node,
             snapshot.active_node
