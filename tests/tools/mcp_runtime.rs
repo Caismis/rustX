@@ -1127,10 +1127,7 @@ chat_reasoning_replay = "omit"
                 base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
                 extension_tools: rustx::extensions::ExtensionToolPlane::none(),
                 agent_activation: rustx::capabilities::AgentActivation {profile: rustx::local_runtime::config::AgentProfileDocument { tools: rustx::capabilities::selection::ToolSelectionDocument { builtin: rustx::capabilities::AgentActivation::default().profile.tools.builtin, sources: [(rustx::capabilities::ToolSourceId::Mcp(server_id.clone()), rustx::capabilities::selection::SourceToolSelection::All)].into() }, ..rustx::capabilities::AgentActivation::default().profile }, ..Default::default()},
-                skill_discovery: rustx::skills::SkillDiscoveryConfig {
-                    automatic_roots: vec![workspace_dir.path().join(".agents/skills")],
-                    explicit_paths: Vec::new(),
-                },
+                skill_discovery: rustx::skills::SkillDiscoveryConfig::workspace_root(workspace_dir.path().join(".agents/skills")),
                 mcp_servers: BTreeMap::from([(
                     server_id.clone(),
                     raw_fixture_binding(

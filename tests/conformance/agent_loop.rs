@@ -364,7 +364,9 @@ fn session_json(setup: &Setup) -> String {
     }
     toml::to_string_pretty(&serde_json::json!({
         "agent_id": "agent-issue47",
-        "agent": {"model": model, "skills": [SKILL_NAME]},
+        // The root Agent needs no positive Skill list (#280): it sees every
+        // eligible Skill in the effective catalog automatically.
+        "agent": {"model": model},
         "context": {
             "reserve_tokens": setup.reserve_tokens,
             "keep_recent_tokens": setup.keep_recent_tokens,

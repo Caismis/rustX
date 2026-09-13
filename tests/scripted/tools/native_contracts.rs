@@ -587,7 +587,7 @@ fn selection_registry(fixture: &common::NativeFixture) -> rustx::tools::executor
             model: None,
             execution_deadline: None,
             tools: vec![],
-            skills: vec![],
+            skills: rustx::runtime::agent_profile::AgentSkillSelection::default(),
             project_instructions: rustx::runtime::agent_profile::AgentProjectInstructionPolicy {
                 inherit: false,
                 files: vec![],
@@ -665,7 +665,6 @@ async fn selected_capabilities(
     rustx::capabilities::CapabilityCoordinator,
     rustx::capabilities::CapabilityPreparationError,
 > {
-    policy.profile.skills = vec!["lazy".into()];
     let registry = selection_registry(fixture);
     for definition in registry.definitions() {
         if let Some(source) = definition.origin.source() {
@@ -685,10 +684,9 @@ async fn selected_capabilities(
             base_tool_registry: Arc::new(registry),
             extension_tools: fixture.runtime.extension_tool_plane(),
             agent_activation: policy,
-            skill_discovery: rustx::skills::SkillDiscoveryConfig {
-                automatic_roots: vec![fixture.runtime.workspace().root().join(".agents/skills")],
-                explicit_paths: vec![],
-            },
+            skill_discovery: rustx::skills::SkillDiscoveryConfig::workspace_root(
+                fixture.runtime.workspace().root().join(".agents/skills"),
+            ),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: fixture.runtime.environment().clone(),
             environment_store_root: fixture.dir().path().join("environments"),

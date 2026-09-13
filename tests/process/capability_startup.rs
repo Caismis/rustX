@@ -409,19 +409,53 @@ async fn core_and_base_plane_failures_remain_fatal() {
             .contains("unknown catalog model")
     );
 
-    // A malformed Skill is a base capability-plane failure (the Skill plane
-    // is Workspace content the runtime validated), not an optional external
-    // source: fatal.
+    // A malformed Skill package is *not* a base capability-plane failure
+    // (Issue #280): it is excluded from the effective catalog with a typed
+    // generation diagnostic while every unrelated valid package publishes.
+    // One malformed Skill must never make the runtime unlaunchable.
     let root = tempfile::tempdir().expect("temp root");
     let (_canonical, paths) = startup(&root, SESSION_TOML);
-    let skill = paths.workspace.join(".agents/skills/broken");
-    std::fs::create_dir_all(&skill).expect("skill directory");
-    std::fs::write(skill.join("SKILL.md"), "not valid frontmatter at all").expect("SKILL.md");
+    let skills = paths.workspace.join(".agents/skills");
+    let broken = skills.join("broken");
+    std::fs::create_dir_all(&broken).expect("skill directory");
+    std::fs::write(broken.join("SKILL.md"), "not valid frontmatter at all").expect("SKILL.md");
+    let valid = skills.join("intact");
+    std::fs::create_dir_all(&valid).expect("skill directory");
+    std::fs::write(
+        valid.join("SKILL.md"),
+        "---\nname: intact\ndescription: Intact guidance.\n---\nbody\n",
+    )
+    .expect("SKILL.md");
+    let resolved = paths
+        .try_resolve()
+        .expect("a malformed Skill package never blocks the launch");
+    assert_eq!(
+        resolved
+            .skill_provenance()
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        ["intact"]
+    );
+    assert!(
+        resolved
+            .skill_diagnostics()
+            .iter()
+            .any(|fact| matches!(fact, rustx::skills::SkillDiagnostic::PackageInvalid { .. })),
+        "{:?}",
+        resolved.skill_diagnostics()
+    );
+
+    // An *explicit* Skill launch path that does not exist stays fatal: it is
+    // authored launch intent, not discovered content.
+    let root = tempfile::tempdir().expect("temp root");
+    let (_canonical, mut paths) = startup(&root, SESSION_TOML);
+    paths.skill_paths = vec![root.path().join("absent-skill")];
     assert!(
         paths
             .try_resolve()
-            .expect_err("a malformed Skill fails shared static analysis")
-            .contains("malformed frontmatter")
+            .expect_err("a missing explicit Skill path is a launch error")
+            .contains("does not exist")
     );
 }
 

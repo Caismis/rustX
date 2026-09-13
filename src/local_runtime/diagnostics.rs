@@ -173,7 +173,24 @@ pub struct LaunchProjection {
     pub tool_selection: Value,
     pub discovered_workflows: Vec<String>,
     pub local_skills: Vec<String>,
+    /// The effective source provenance of every admitted Skill identity,
+    /// including what each one shadowed (Issue #280).
+    pub skill_provenance: Vec<crate::skills::SkillProvenance>,
+    /// The typed generation-scoped Skill discovery facts of this launch.
+    /// They are already canonically ordered; this projection only reports
+    /// them, and #275 owns their final presentation.
+    pub skill_diagnostics: Vec<SkillDiagnosticProjection>,
     pub provider: Value,
+}
+
+/// One typed Skill diagnostic with its severity and rendered explanation.
+#[derive(Debug, Serialize)]
+pub struct SkillDiagnosticProjection {
+    pub severity: crate::skills::SkillDiagnosticSeverity,
+    pub source: Option<crate::skills::SkillSource>,
+    #[serde(flatten)]
+    pub fact: crate::skills::SkillDiagnostic,
+    pub explanation: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -519,7 +536,22 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
     redact(&mut configuration);
     report.launch = Some(LaunchProjection {
         roles: launch.role_sources.clone(),
-        local_skills: launch.skill_names.clone(),
+        local_skills: launch
+            .skill_provenance
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect(),
+        skill_provenance: launch.skill_provenance.clone(),
+        skill_diagnostics: launch
+            .skill_diagnostics
+            .iter()
+            .map(|fact| SkillDiagnosticProjection {
+                severity: fact.severity(),
+                source: fact.source(),
+                explanation: fact.to_string(),
+                fact: fact.clone(),
+            })
+            .collect(),
         provider: launch.models.providers().find(|provider| &provider.id == launch.config.initial_model().model.provider()).map_or(Value::Null, |provider| json!({"id":provider.id, "endpoint":provider.base_url, "credential":provider.api_key.view(), "verification":"deferred; no credential value or connectivity was checked"})),
         workspace: launch.workspace.clone(),
         runtime_root: launch.runtime_root.clone(),

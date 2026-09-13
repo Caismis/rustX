@@ -681,10 +681,9 @@ async fn a_server_failing_at_startup_is_isolated_and_diagnosed() {
                 ..Default::default()
             },
             // Keep this fixture independent of the developer's HOME.
-            skill_discovery: rustx::skills::SkillDiscoveryConfig {
-                automatic_roots: vec![workspace_root.join(".agents/skills")],
-                explicit_paths: Vec::new(),
-            },
+            skill_discovery: rustx::skills::SkillDiscoveryConfig::workspace_root(
+                workspace_root.join(".agents/skills"),
+            ),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: rustx::tools::environment::ToolEnvironment::new(),
             environment_store_root: directory.path().join("skill-env"),
@@ -849,10 +848,9 @@ def add(a: int, b: int) -> str:
                 ..Default::default()
             },
             // Keep this fixture independent of the developer's HOME.
-            skill_discovery: rustx::skills::SkillDiscoveryConfig {
-                automatic_roots: vec![workspace_root.join(".agents/skills")],
-                explicit_paths: Vec::new(),
-            },
+            skill_discovery: rustx::skills::SkillDiscoveryConfig::workspace_root(
+                workspace_root.join(".agents/skills"),
+            ),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: rustx::tools::environment::ToolEnvironment::new(),
             environment_store_root: directory.path().join("skill-env"),
@@ -1177,10 +1175,9 @@ def ping() -> str:
                 ..Default::default()
             },
             // Keep this fixture independent of the developer's HOME.
-            skill_discovery: rustx::skills::SkillDiscoveryConfig {
-                automatic_roots: vec![workspace_root.join(".agents/skills")],
-                explicit_paths: Vec::new(),
-            },
+            skill_discovery: rustx::skills::SkillDiscoveryConfig::workspace_root(
+                workspace_root.join(".agents/skills"),
+            ),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: rustx::tools::environment::ToolEnvironment::new(),
             environment_store_root: directory.path().join("skill-env"),

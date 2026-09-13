@@ -68,12 +68,14 @@ partial!(RuntimeLayer {
     mcp_servers: BTreeMap<crate::runtime::identity::McpServerId, McpAuthoring>,
     mcp_tool_policies: BTreeMap<crate::runtime::identity::McpServerId, InvocationPolicyDocument>,
     native_tools: NativeToolsLayer, environment: BTreeMap<String,String>,
-    subagents: SubagentsLayer
+    subagents: SubagentsLayer, skills: SkillsLayer
 });
+partial!(SkillsLayer { sources: Vec<crate::skills::AutomaticSkillSource> });
 partial!(AgentProfileLayer {
     description: String, instructions: String, model: ModelLayer, timeout_ms: u64,
     tools: crate::capabilities::selection::ToolSelectionDocument,
-    skills: Vec<String>, extensions: crate::extensions::NativeAgentExtensionsDocument,
+    skills: Vec<String>, disabled_skills: Vec<String>,
+    extensions: crate::extensions::NativeAgentExtensionsDocument,
     agents: Vec<crate::runtime::subagent::SubagentName>,
     workflows: Vec<crate::runtime::workflow::WorkflowId>,
     agents_md: super::config::AgentProjectInstructionsDocument,
@@ -267,7 +269,8 @@ merge_record!(
         model_timeout_policy,
         tool_deadline_policy,
         subagents,
-        native_tools
+        native_tools,
+        skills
     ],
     [mcp_servers, mcp_tool_policies, environment]
 );
@@ -302,6 +305,7 @@ merge_record!(
     []
 );
 merge_record!(SubagentsLayer, [max_concurrent, workflow], [], []);
+merge_record!(SkillsLayer, [sources], [], []);
 merge_record!(
     AgentProfileLayer,
     [
@@ -310,6 +314,7 @@ merge_record!(
         timeout_ms,
         tools,
         skills,
+        disabled_skills,
         extensions,
         agents,
         workflows,
@@ -438,6 +443,8 @@ impl RuntimeLayer {
             "approval_mode",
             "agent.tools",
             "agent.skills",
+            "agent.disabled_skills",
+            "skills.sources",
             "agent.model.model",
             "agent.model.reasoning_profile",
             "agent.model.request_params",
@@ -515,13 +522,22 @@ impl RuntimeLayer {
                 description,
                 instructions,
                 tools,
-                skills,
                 extensions,
                 agents,
                 workflows,
                 agents_md,
                 worktree
             );
+            // The Skill selection fields are presence-preserving all the way
+            // through layering: a layer that authors `skills = []` must reach
+            // the document as an authored empty list, because the Agent kind
+            // rejects the field on presence rather than on emptiness.
+            if let Some(skills) = layer.skills {
+                profile.skills = Some(skills);
+            }
+            if let Some(disabled_skills) = layer.disabled_skills {
+                profile.disabled_skills = Some(disabled_skills);
+            }
             if let Some(model) = layer.model {
                 profile.model = Some(model.resolve()?);
             }
@@ -554,6 +570,11 @@ impl RuntimeLayer {
             apply!(layer, subagents, max_concurrent, workflow);
             config.subagents = subagents;
         }
+        if let Some(layer) = self.skills {
+            let mut skills = config.skills;
+            apply!(layer, skills, sources);
+            config.skills = skills;
+        }
         if let Some(layer) = self.native_tools {
             let mut policies = config.native_tools;
             apply!(layer, policies, read, write, edit, glob, grep, bash);
@@ -577,6 +598,10 @@ impl RuntimeLayer {
             agent.extensions = None;
         }
         self.approval_mode = None;
+        // The Skill *source policy* is launch-scoped: a reload rescans the
+        // roots this launch resolved, it never installs or removes a source
+        // authority under a running composition.
+        self.skills = None;
 
         self.context = None;
         self.model_timeout_policy = None;

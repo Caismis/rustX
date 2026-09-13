@@ -147,7 +147,11 @@ The TUI may also forward the runtime's bounded startup controls:
 `--skill <path>` (repeatable), `--no-skills`, `--no-builtin-tools`,
 `--no-tools`, `--tools <a,b,c>`, and `--exclude-tools <a,b,c>`. It preserves
 their supplied values and order; Rust owns discovery, validation, activation,
-and all semantic errors. `--no-tools` means zero ordinary main-model tools,
+and all semantic errors. `--skill` is the explicit Skill launch authority and
+`--no-skills` disables automatic discovery; the automatic sources themselves
+are `global` (`~/.agents/skills`) and `workspace`
+(`<workspace>/.agents/skills`), selected by the runtime's `[skills].sources`
+policy, with `workspace` shadowing `global` and explicit paths shadowing both. `--no-tools` means zero ordinary main-model tools,
 including Read and generated dispatchers; `--tools` is exact and exclusions
 subtract last. `--no-tools` conflicts with the other three Tool flags, and
 `--tools` conflicts with `--no-builtin-tools`. Lists reject empty entries,
@@ -348,7 +352,9 @@ does not implement a parallel Session system.
   current model view, or select a model directly.
 - `/tools` — show the runtime-published Active Tools and the Available but
   inactive Tools separately.
-- `/skills` — show the active Skill catalog.
+- `/skills` — show the active Skill catalog: the effective identities the
+  attached Agent can lazily load, which for the root Agent is every eligible
+  catalog Skill minus `agent.disabled_skills`.
 - `/todos` — print the complete task list the agent is tracking, grouped by
   status. The panel above the editor shows the same list, bounded. When the
   attached runtime composes no Todo Agent Extension, it says so rather than

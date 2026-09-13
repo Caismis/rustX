@@ -27,6 +27,14 @@
             "string"
           ]
         },
+        "disabled_skills": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array"
+          ]
+        },
         "extensions": {
           "anyOf": [
             {
@@ -181,6 +189,21 @@
         {
           "const": "always",
           "description": "Require an approval interaction before execution.",
+          "type": "string"
+        }
+      ]
+    },
+    "AutomaticSkillSource": {
+      "description": "The only source identities `[skills].sources` may name.\n\n`explicit` is deliberately absent: explicit Skill paths are a launch\nauthority (`--skill`), not a scannable automatic root, so naming one here\nwould be a second way to spell the same thing.",
+      "oneOf": [
+        {
+          "const": "global",
+          "description": "`<home>/.agents/skills`.",
+          "type": "string"
+        },
+        {
+          "const": "workspace",
+          "description": "`<workspace>/.agents/skills`.",
           "type": "string"
         }
       ]
@@ -673,6 +696,20 @@
       "description": "Opaque provider-native structured TOML. Strings, integers, finite floats, booleans, arrays and tables only; no dates, times, datetimes, non-finite floats or explicit null. Protected wire keys are checked during model resolution.",
       "type": "object"
     },
+    "SkillsLayer": {
+      "additionalProperties": false,
+      "properties": {
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/AutomaticSkillSource"
+          },
+          "type": [
+            "array"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "SourceToolSelection": {
       "anyOf": [
         {
@@ -980,6 +1017,13 @@
       "minimum": 0,
       "type": [
         "integer"
+      ]
+    },
+    "skills": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SkillsLayer"
+        }
       ]
     },
     "subagents": {

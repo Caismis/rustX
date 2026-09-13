@@ -313,6 +313,11 @@ impl NamedAgentDefinition {
     /// deduplicated here, so two configurations that differ only in listing
     /// order produce the same definition and the same digest.
     ///
+    /// This is also the admission boundary for the named-Agent Skill
+    /// invariant: every `NamedAgentDefinition` contains
+    /// [`AgentSkillSelection::Exact`](crate::runtime::agent_profile::AgentSkillSelection::Exact),
+    /// because the eligible-catalog-except polarity is root-only semantics.
+    ///
     /// # Errors
     ///
     /// Returns the first bounded validation failure of the definition
@@ -364,10 +369,29 @@ impl NamedAgentDefinition {
         let mut tools = tools;
         tools.sort();
         tools.dedup();
+        // The named-definition domain admits exactly one Skill-selection
+        // polarity. Authoring already refuses `disabled_skills` on a named
+        // Agent, but authoring is not the only way to reach this constructor:
+        // an `AgentProfile` is a plain public struct, so this is the boundary
+        // that turns the rule into a semantic invariant of every existing
+        // `NamedAgentDefinition` rather than a property of one input syntax.
+        //
+        // The test is polarity, never contents. `EligibleExcept([])` is the
+        // whole eligible catalog, so an empty deny-list is the *widest*
+        // selection there is, and admitting it would let a named Agent grow a
+        // capability envelope whenever an unrelated Skill entered a later
+        // catalog generation.
+        match &skills {
+            crate::runtime::agent_profile::AgentSkillSelection::Exact(_) => {}
+            crate::runtime::agent_profile::AgentSkillSelection::EligibleExcept(_) => {
+                return Err(NamedAgentDefinitionError::RootOnlySkillSelection { agent: name });
+            }
+        }
         let mut skills = skills;
-        skills.sort();
-        skills.dedup();
-        if let Some(empty) = skills.iter().find(|skill| skill.trim().is_empty()) {
+        let selectors = skills.names_mut();
+        selectors.sort();
+        selectors.dedup();
+        if let Some(empty) = selectors.iter().find(|skill| skill.trim().is_empty()) {
             let _ = empty;
             return Err(NamedAgentDefinitionError::EmptySkillSelector { agent: name });
         }
@@ -449,9 +473,14 @@ impl NamedAgentDefinition {
     }
 
     /// The canonically ordered exact Skill allowlist.
+    ///
+    /// Reading the identities without their polarity is sound here because
+    /// [`NamedAgentDefinition::new`] admits only
+    /// [`AgentSkillSelection::Exact`](crate::runtime::agent_profile::AgentSkillSelection::Exact),
+    /// so a named definition's selection is exact by construction.
     #[must_use]
     pub fn skills(&self) -> &[String] {
-        &self.profile.skills
+        self.profile.skills.names()
     }
 
     /// The project-instruction inheritance policy and explicit resources.
@@ -539,6 +568,17 @@ pub enum NamedAgentDefinitionError {
         /// The offending agent.
         agent: SubagentName,
     },
+    /// The profile carries root-only Skill selection semantics.
+    ///
+    /// A named Agent selects exact Skill identities
+    /// ([`AgentSkillSelection::Exact`](crate::runtime::agent_profile::AgentSkillSelection::Exact)).
+    /// [`EligibleExcept`](crate::runtime::agent_profile::AgentSkillSelection::EligibleExcept)
+    /// is the root Agent's automatic catalog selection and can never enter a
+    /// named definition, whatever it lists.
+    RootOnlySkillSelection {
+        /// The offending agent.
+        agent: SubagentName,
+    },
     /// The catalog exceeds [`MAX_SUBAGENT_DEFINITIONS`].
     TooManyDefinitions {
         /// The offending count.
@@ -579,6 +619,12 @@ impl core::fmt::Display for NamedAgentDefinitionError {
             Self::EmptySkillSelector { agent } => {
                 write!(formatter, "subagent {agent:?} names an empty Skill")
             }
+            Self::RootOnlySkillSelection { agent } => write!(
+                formatter,
+                "subagent {agent:?} carries root-only Skill selection: a named Agent selects \
+                 exact Skill identities, and the eligible-catalog-except polarity is root-only \
+                 because it would widen the Agent as the catalog grows"
+            ),
             Self::TooManyDefinitions { count } => write!(
                 formatter,
                 "{count} subagent definitions exceed the {MAX_SUBAGENT_DEFINITIONS} bound"
@@ -731,7 +777,7 @@ fn compute_digest(
     model: Option<&SessionModelConfig>,
     execution_deadline: Option<SubagentExecutionDeadline>,
     tools: &[AgentToolSelection],
-    skills: &[String],
+    skills: &crate::runtime::agent_profile::AgentSkillSelection,
     project_instructions: &crate::runtime::agent_profile::AgentProjectInstructionPolicy,
     workspace_policy: crate::runtime::workspace::WorkspacePolicy,
     extensions: &crate::extensions::NativeAgentExtensions,
@@ -779,8 +825,12 @@ fn compute_digest(
             &serde_json::to_string(selector).expect("typed Tool selector serializes"),
         );
     }
-    count(&mut hasher, "skills", skills.len());
-    for skill in skills {
+    // The selection polarity is part of the identity: "exactly these" and
+    // "everything eligible except these" are different definitions even when
+    // they name the same identities.
+    field(&mut hasher, "skill_selection", skills.polarity());
+    count(&mut hasher, "skills", skills.names().len());
+    for skill in skills.names() {
         field(&mut hasher, "skill", skill);
     }
     field(
@@ -870,7 +920,7 @@ mod tests {
                 model: None,
                 execution_deadline: None,
                 tools,
-                skills,
+                skills: crate::runtime::agent_profile::AgentSkillSelection::Exact(skills),
                 project_instructions: policy(),
                 workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
@@ -879,6 +929,76 @@ mod tests {
             },
             std::path::PathBuf::from("/w/.agents/subagents/explore.md"),
         )
+    }
+
+    /// Builds a named definition directly from a selection, bypassing TOML
+    /// authoring entirely, so the invariant is proved where runtime code can
+    /// actually reach it.
+    fn definition_with_selection(
+        skills: crate::runtime::agent_profile::AgentSkillSelection,
+    ) -> Result<NamedAgentDefinition, NamedAgentDefinitionError> {
+        NamedAgentDefinition::new(
+            SubagentName::parse("reviewer").expect("canonical name"),
+            crate::runtime::agent_profile::AgentProfile {
+                description: "a description".to_owned(),
+                instructions: "instructions".to_owned(),
+                model: None,
+                execution_deadline: None,
+                tools: Vec::new(),
+                skills,
+                project_instructions: policy(),
+                workspace_policy: WorkspacePolicy::SharedWorkspace,
+                extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+                agents: std::collections::BTreeSet::default(),
+                workflows: std::collections::BTreeSet::default(),
+            },
+            std::path::PathBuf::from("/w/.agents/subagents/reviewer.md"),
+        )
+    }
+
+    /// Issue #280: the named-Agent domain admits exactly one Skill-selection
+    /// polarity, and the authoring boundary is not the only way in.
+    ///
+    /// A named Agent's capability envelope must be a function of what it
+    /// selected, never of what a later catalog generation happens to contain,
+    /// so `EligibleExcept` — whose empty form is the *widest* selection
+    /// there is — is rejected on polarity alone.
+    #[test]
+    fn cfg280_named_definitions_admit_exact_skill_selection_only() {
+        use crate::runtime::agent_profile::AgentSkillSelection;
+
+        // Positive control: both exact shapes are valid named selections, and
+        // the identities survive construction.
+        let empty = definition_with_selection(AgentSkillSelection::Exact(Vec::new()))
+            .expect("an exact empty selection is a valid named Agent");
+        assert!(empty.skills().is_empty());
+        let named = definition_with_selection(AgentSkillSelection::Exact(vec!["foo".to_owned()]))
+            .expect("an exact named selection is a valid named Agent");
+        assert_eq!(named.skills(), ["foo".to_owned()]);
+
+        // Both deny-list shapes are the *same* invalid polarity: emptiness is
+        // not the test, and neither is list content.
+        let expected = NamedAgentDefinitionError::RootOnlySkillSelection {
+            agent: SubagentName::parse("reviewer").expect("canonical name"),
+        };
+        assert_eq!(
+            definition_with_selection(AgentSkillSelection::EligibleExcept(Vec::new())),
+            Err(expected.clone()),
+            "an empty deny-list is the whole eligible catalog, not an empty selection"
+        );
+        assert_eq!(
+            definition_with_selection(AgentSkillSelection::EligibleExcept(vec!["foo".to_owned()])),
+            Err(expected.clone()),
+            "a populated deny-list is rejected identically: the rule is polarity, not contents"
+        );
+
+        // The message names the rule rather than the offending entry, because
+        // no entry is the defect.
+        let message = expected.to_string();
+        assert!(
+            message.contains("root-only") && message.contains("exact Skill identities"),
+            "the error explains the polarity rule: {message}"
+        );
     }
 
     #[test]
@@ -1049,7 +1169,7 @@ mod tests {
                 model: None,
                 execution_deadline: None,
                 tools: Vec::new(),
-                skills: Vec::new(),
+                skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 project_instructions:
                     crate::runtime::agent_profile::AgentProjectInstructionPolicy {
                         inherit: false,
@@ -1071,7 +1191,7 @@ mod tests {
                 model: None,
                 execution_deadline: None,
                 tools: Vec::new(),
-                skills: Vec::new(),
+                skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 project_instructions:
                     crate::runtime::agent_profile::AgentProjectInstructionPolicy {
                         inherit: true,
@@ -1098,7 +1218,7 @@ mod tests {
                 model: None,
                 execution_deadline: None,
                 tools: Vec::new(),
-                skills: Vec::new(),
+                skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 project_instructions:
                     crate::runtime::agent_profile::AgentProjectInstructionPolicy {
                         inherit: true,
@@ -1125,7 +1245,7 @@ mod tests {
                 model: None,
                 execution_deadline: None,
                 tools: Vec::new(),
-                skills: Vec::new(),
+                skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 project_instructions: policy(),
                 workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
@@ -1135,7 +1255,7 @@ mod tests {
             std::path::PathBuf::from("/w/.agents/subagents/explore.md"),
         )
         .expect("definition");
-        let isolated = NamedAgentDefinition::new(SubagentName::parse("explore").expect("name"), crate::runtime::agent_profile::AgentProfile { description: "a description".to_owned(), instructions: "instructions".to_owned(), model: None, execution_deadline: None, tools: Vec::new(), skills: Vec::new(), project_instructions: policy(), workspace_policy: // The default isolated definition (Issue #188) is strict.
+        let isolated = NamedAgentDefinition::new(SubagentName::parse("explore").expect("name"), crate::runtime::agent_profile::AgentProfile { description: "a description".to_owned(), instructions: "instructions".to_owned(), model: None, execution_deadline: None, tools: Vec::new(), skills: crate::runtime::agent_profile::AgentSkillSelection::default(), project_instructions: policy(), workspace_policy: // The default isolated definition (Issue #188) is strict.
             WorkspacePolicy::GitWorktree {
                 require_clean_parent: true,
             }, extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(), agents: std::collections::BTreeSet::default(), workflows: std::collections::BTreeSet::default() }, std::path::PathBuf::from("/w/.agents/subagents/explore.md"))
@@ -1163,7 +1283,7 @@ mod tests {
                 model: None,
                 execution_deadline: None,
                 tools: Vec::new(),
-                skills: Vec::new(),
+                skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 project_instructions: policy(),
                 workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
@@ -1181,7 +1301,7 @@ mod tests {
                 model: None,
                 execution_deadline: None,
                 tools: Vec::new(),
-                skills: Vec::new(),
+                skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 project_instructions: policy(),
                 workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
@@ -1227,7 +1347,7 @@ mod tests {
                 model: None,
                 execution_deadline: Some(deadline),
                 tools: Vec::new(),
-                skills: Vec::new(),
+                skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 project_instructions: policy(),
                 workspace_policy: WorkspacePolicy::SharedWorkspace,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),

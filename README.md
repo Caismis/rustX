@@ -101,9 +101,14 @@ Skills and Python tools retain their discovery semantics, while Subagents and
 native Workflows are admitted explicitly by `rustx.toml`. The configured
 runtime root is runtime-owned/generated state outside the workspace and
 is not a project-resource fallback. `.agents/skills/` is the canonical project
-layout; automatic Skill roots are the host configuration directory's `skills/`
-and `<workspace>/.agents/skills/`. Explicit settings and CLI paths are resolved
-by the [launch resolver](docs/launch-configuration.md).
+layout; the two automatic Skill sources are `global` (`~/.agents/skills`) and
+`workspace` (`<workspace>/.agents/skills`), selected by `[skills].sources`,
+with `workspace` shadowing `global` for the same Skill identity. Explicit
+`--skill` paths are a separate launch authority and take precedence over both.
+The root Agent automatically sees every eligible Skill in that catalog minus
+`agent.disabled_skills`; named Agents select identities explicitly, and every
+Agent loads a Skill's contents lazily. Paths are resolved by the
+[launch resolver](docs/launch-configuration.md).
 
 For those native file tools, relative paths resolve from the execution cwd and
 absolute paths are valid host filesystem paths. `.` and `..` are resolved

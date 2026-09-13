@@ -324,7 +324,6 @@ fn format_size(bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
-    use std::sync::Arc;
 
     use super::{NAME, ReadTool, document, testdata};
     use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
@@ -384,16 +383,13 @@ mod tests {
         )
         .expect("SKILL.md");
         std::fs::write(skill.join("assets/checklist.md"), "procedure\n").expect("asset");
-        let packages = SkillDiscovery::with_config(
+        let discovered = SkillDiscovery::with_config(
             &workspace,
-            SkillDiscoveryConfig {
-                automatic_roots: Vec::new(),
-                explicit_paths: vec![skill_root],
-            },
+            SkillDiscoveryConfig::explicit(vec![skill_root]),
         )
         .discover()
         .expect("Skill discovery");
-        let snapshot = SkillSnapshot::new(packages.into_iter().map(Arc::new).collect());
+        let snapshot = SkillSnapshot::from_discovery(discovered);
         let location = snapshot.catalog_entries()[0].location.clone();
         let frozen_catalog = crate::skills::render_skill_catalog(snapshot.catalog_entries());
         assert_eq!(
@@ -523,18 +519,19 @@ mod tests {
         std::os::unix::fs::symlink(&outside, skill.join("references.md"))
             .expect("resource symlink");
 
-        let error = SkillDiscovery::with_config(
+        let outcome = SkillDiscovery::with_config(
             &workspace,
-            SkillDiscoveryConfig {
-                automatic_roots: Vec::new(),
-                explicit_paths: vec![skill_root],
-            },
+            SkillDiscoveryConfig::explicit(vec![skill_root]),
         )
         .discover()
-        .expect_err("Skill discovery must reject an escaping resource symlink");
+        .expect("an explicit path that exists is not a launch failure");
+        assert!(outcome.packages.is_empty());
         assert!(matches!(
-            error,
-            SkillPackageError::UnsupportedSymlink { .. }
+            outcome.diagnostics.as_slice(),
+            [crate::skills::SkillDiagnostic::PackageInvalid {
+                cause: SkillPackageError::UnsupportedSymlink { .. },
+                ..
+            }]
         ));
     }
 

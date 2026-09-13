@@ -1,7 +1,7 @@
 //! Capability preparation and commit errors (M6).
 
 use crate::runtime::identity::CapabilityRevision;
-use crate::skills::{DependencyConflict, EnvironmentPreparationError, SkillPackageError};
+use crate::skills::{DependencyConflict, EnvironmentPreparationError, SkillDiscoveryError};
 
 /// A candidate capability preparation failure.
 ///
@@ -9,9 +9,12 @@ use crate::skills::{DependencyConflict, EnvironmentPreparationError, SkillPackag
 /// current active revision remains authoritative.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CapabilityPreparationError {
-    /// Skill discovery/parsing/validation failed (one malformed Skill
-    /// fails the whole candidate transaction).
-    SkillDiscovery(SkillPackageError),
+    /// The **explicit** Skill launch authority is unusable (Issue #280): a
+    /// `--skill` path that does not exist, or more explicit paths than the
+    /// bound allows. A malformed *discovered* package is never this error:
+    /// it is excluded with a typed generation diagnostic while every
+    /// unrelated valid package still publishes.
+    SkillDiscovery(SkillDiscoveryError),
     /// The merged dependency declarations conflict across active Skills.
     DependencyConflict(DependencyConflict),
     /// The environment store is not disjoint from the model Workspace.
@@ -66,8 +69,8 @@ impl core::fmt::Display for CapabilityPreparationError {
 
 impl std::error::Error for CapabilityPreparationError {}
 
-impl From<SkillPackageError> for CapabilityPreparationError {
-    fn from(error: SkillPackageError) -> Self {
+impl From<SkillDiscoveryError> for CapabilityPreparationError {
+    fn from(error: SkillDiscoveryError) -> Self {
         Self::SkillDiscovery(error)
     }
 }

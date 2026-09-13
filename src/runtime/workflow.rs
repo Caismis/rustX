@@ -3341,7 +3341,7 @@ chat_reasoning_replay = "omit"
                 model: Some(SessionModelConfig::of(model.clone())),
                 execution_deadline: None,
                 tools: Vec::new(),
-                skills: Vec::new(),
+                skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 project_instructions:
                     crate::runtime::agent_profile::AgentProjectInstructionPolicy {
                         inherit: false,

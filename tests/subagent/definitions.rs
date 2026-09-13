@@ -209,7 +209,7 @@ impl Lab {
         }
         let root_agents = subagents.as_object_mut().unwrap().remove("agents").unwrap();
         crate::launch_fixture::write_roles(&self.workspace(), &mut subagents);
-        let document = serde_json::json!({"schema_version": 8, "agent_id": "agent-issue144", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "subagents": subagents, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": builtin_tools}, "skills": ["alpha", "beta"], "agents": root_agents}});
+        let document = serde_json::json!({"schema_version": 8, "agent_id": "agent-issue144", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "subagents": subagents, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": builtin_tools}, "agents": root_agents}});
         std::fs::write(
             self.root().join("rustx.toml"),
             toml::to_string_pretty(&document).expect("config document"),

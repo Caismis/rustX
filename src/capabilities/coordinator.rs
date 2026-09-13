@@ -863,10 +863,14 @@ impl CapabilityCoordinator {
         } else {
             None
         };
-        let packages =
+        // Discovery, per-candidate validation, same-scope conflict
+        // elimination, and the `explicit > workspace > global` merge all
+        // happen here, inside candidate construction. Filesystem enumeration
+        // never becomes published capability state directly.
+        let discovered =
             SkillDiscovery::with_config(&self.inner.workspace, inputs.skill_discovery.clone())
                 .discover()?;
-        let merged = merge_dependency_manifests(&packages)?;
+        let merged = merge_dependency_manifests(&discovered.packages)?;
         let python = self
             .inner
             .environment_store
@@ -885,9 +889,7 @@ impl CapabilityCoordinator {
             overlay = overlay.merge(ToolEnvironmentOverlay::node(&node.root));
         }
         let effective_environment = inputs.base_environment.with_overlay(&overlay);
-        let skills = Arc::new(SkillSnapshot::new(
-            packages.into_iter().map(Arc::new).collect(),
-        ));
+        let skills = Arc::new(SkillSnapshot::from_discovery(discovered));
         // ---- Optional capability sources (Issue #81) ----
         //
         // Each optional source is prepared in isolation: its failure is
@@ -2389,12 +2391,19 @@ fn paths_overlap(left: &Path, right: &Path) -> bool {
 /// model-facing `tools/list` catalog is byte-identical: after a successful
 /// commit, newly admitted executions must use the new executable
 /// generation, never the old one.
+///
+/// The Skill half is compared with
+/// [`SkillSnapshot::publication_equivalent`], not with the narrower
+/// execution-semantic comparison: a generation also publishes Skill
+/// provenance and typed Skill diagnostics, so a rediscovery that changes
+/// only those is still a real publication. See that method for the two
+/// cases (diagnostics-only and provenance-only) this distinction exists for.
 fn candidate_is_noop(
     candidate: &PreparedCapabilityCandidate,
     current: &CapabilitySnapshot,
 ) -> bool {
     !candidate.force_publish
-        && candidate.skills.semantically_equivalent(current.skills())
+        && candidate.skills.publication_equivalent(current.skills())
         && candidate.candidate_registry.definitions() == current.tool_registry().definitions()
         && candidate.available_tools.as_ref() == current.available_tools()
         && candidate.python.as_ref().map(|env| env.digest.clone())
@@ -2563,10 +2572,9 @@ body
             agent_activation: crate::capabilities::AgentActivation::default(),
             // Keep this unit fixture independent of the developer's HOME:
             // the relocation proof owns both current roots explicitly.
-            skill_discovery: crate::skills::SkillDiscoveryConfig {
-                automatic_roots: vec![workspace.root().join(".agents/skills")],
-                explicit_paths: Vec::new(),
-            },
+            skill_discovery: crate::skills::SkillDiscoveryConfig::workspace_root(
+                workspace.root().join(".agents/skills"),
+            ),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: dir.path().join("skill-env"),
@@ -2598,10 +2606,7 @@ body
             .resource_inputs
             .get_mut()
             .expect("resource inputs")
-            .skill_discovery = crate::skills::SkillDiscoveryConfig {
-            automatic_roots: vec![root_b.clone()],
-            explicit_paths: Vec::new(),
-        };
+            .skill_discovery = crate::skills::SkillDiscoveryConfig::workspace_root(root_b.clone());
         let candidate = prepare(&coordinator).await;
         let second = coordinator.commit(candidate).expect("relocated commit");
         assert_eq!(first.revision(), CapabilityRevision::new(1));

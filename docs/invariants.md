@@ -3480,9 +3480,11 @@ the launch-boundary policy inheritance.
 - **Project Agent resources have one ownership namespace.** Project-authored
   Skills, Python tools, Subagent files, and native Workflow files use the
   workspace-owned `.agents/` tree as their canonical layout. Skill discovery
-  receives only the launch-resolved host configuration `skills/` and
-  `<workspace>/.agents/skills/` automatic roots, plus explicit layered paths.
-  The runtime root is disjoint from the workspace and
+  receives only the two canonical automatic sources — `global`
+  (`<home>/.agents/skills`) and `workspace` (`<workspace>/.agents/skills`),
+  selected by the launch-scoped `[skills].sources` policy — plus the explicit
+  `--skill` launch authority. `~/.config/rustx/skills` is not a source, alias,
+  fallback, or migration path. The runtime root is disjoint from the workspace and
   remains runtime-owned/generated state and is not a Workflow, Subagent, or
   general project-resource fallback.
 - **Persistent workspace identity has an explicit Unix byte contract.** On
@@ -3509,7 +3511,38 @@ the launch-boundary policy inheritance.
 - **Canonical discovery establishes existence.** Bounded `.agents/agents/*.toml`,
   `.agents/skills/*/SKILL.md`, `.agents/tools/*/` and `.agents/workflows/*.yaml`
   produce deterministic generation-scoped catalogs. Settings never repeat their
-  existence. Invalid canonical Agent, Skill or Workflow content rejects the candidate.
+  existence. Invalid canonical Agent or Workflow content rejects the candidate.
+  A malformed *Skill package* is the one deliberate exception: it is excluded
+  with a typed generation-scoped diagnostic while every unrelated valid package
+  still publishes, because one malformed Skill must never suppress the catalog.
+- **Skill sources decide discovery; Agent Profiles decide selection; loading
+  stays lazy.** `[skills].sources` selects which automatic roots are scanned and
+  nothing else: it names no individual Skill and preloads no content. Its array
+  order is never precedence — precedence is the architectural rule
+  `explicit --skill > workspace > global`. A source the launch did not select is
+  completely inert: its root is never validated, scanned, or diagnosed, so an
+  invalid `<workspace>/.agents/skills` cannot fail a `sources = ["global"]`
+  launch or its reloads. Resource bounding is per logical source, cumulative
+  across every root that source aggregates, never per root. Validation and
+  same-scope logical conflict elimination run before cross-source winner
+  selection, so an invalid or conflicting candidate never wins by living in the
+  higher-precedence source; a same-scope conflict excludes every definition
+  rather than choosing by filesystem enumeration order. A shadowed valid package
+  is retained as generation provenance, never as model input. The root Agent has
+  no positive Skill list: its visible set is the effective eligible catalog minus
+  `agent.disabled_skills`, which is root-only *visibility* and never deletes a
+  Skill from the generation catalog or constrains a named Agent. A field illegal
+  for an Agent kind is rejected on authored *presence*, never on emptiness, so
+  root `skills = []` and named `disabled_skills = []` are both hard authoring
+  errors rather than silently inverted intent. A rediscovery is a publication
+  no-op only when the complete generation is unchanged: executable Skill
+  semantics *plus* effective provenance *plus* typed diagnostics, so a
+  diagnostics-only or provenance-only change still publishes a new generation. A
+  package declaring `disable-model-invocation` is not widened by automatic root
+  selection. Selecting a Skill — for the root, a named Agent, or a Workflow
+  child — publishes compact metadata (name, description, host location) and
+  frozen identity/version bindings only; a `SKILL.md` body reaches a model
+  solely through the existing lazy Read path.
 - **Discovery and admission are independent.** Whole project Agents replace user
   Agents without merging instructions or capabilities. `agent.agents` and
   `agent.workflows` select delegation and Workflow invocation capabilities from

@@ -293,7 +293,14 @@ Tool selection: defaults include Read. --tools is exact; exclusions subtract las
 and --no-builtin-tools. --tools conflicts with --no-builtin-tools.\n\
 Explicit lists must be non-empty, unique, known and unambiguous.\n\
 Tool exposure does not disable source preparation; use source enabled:false.\n\
-Lazy Skills are advertised only when this domain admits native Read.";
+Skills: automatic sources are global (~/.agents/skills) and workspace\n\
+(<workspace>/.agents/skills), selected by [skills].sources. Precedence is\n\
+explicit --skill > workspace > global; array order is never precedence.\n\
+--no-skills disables automatic discovery. A malformed package is excluded with\n\
+a diagnostic, never failing the rest of the catalog. The root Agent sees every\n\
+eligible catalog Skill minus agent.disabled_skills; named Agents select\n\
+identities explicitly. Lazy Skills are advertised only when this domain admits\n\
+native Read; a catalog entry is metadata, never a loaded SKILL.md body.";
 
 /// Parses the bounded startup arguments.
 ///

@@ -130,6 +130,7 @@ impl RuntimeResourceSnapshot {
                 agents: agents.into_iter().collect(),
                 ..crate::local_runtime::config::builtin_root_profile()
             },
+            crate::runtime::agent_profile::AgentProfileKind::Root,
             Vec::new(),
         )
         .unwrap();

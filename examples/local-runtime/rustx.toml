@@ -23,9 +23,20 @@ workflow = ["reviewer", "planner", "implementer"]
 [environment]
 RUSTX_EXAMPLE_MODE = "local-runtime"
 
+# Where Skill packages may be discovered. This is the default, spelled out:
+# "global" is ~/.agents/skills and "workspace" is <workspace>/.agents/skills.
+# Array order is not precedence; workspace always shadows global.
+[skills]
+sources = ["global", "workspace"]
+
 # One Agent Profile selects from admitted resources. It does not create them.
+# The root Agent needs no positive Skill list: it automatically sees every
+# eligible Skill in the effective catalog. `disabled_skills` would subtract
+# one from root visibility only, leaving it available to named Agents.
+# Authoring `skills` here is an error even as `skills = []`: the root is
+# rejected on presence, because an empty list would state the opposite of
+# what root selection does.
 [agent]
-skills = ["review-guidance"]
 agents = ["navigator"]
 workflows = ["parallel_review", "implement_and_review"]
 

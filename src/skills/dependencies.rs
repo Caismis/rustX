@@ -624,13 +624,12 @@ mod tests {
         let workspace = crate::tools::workspace::Workspace::new(dir.path()).expect("workspace");
         let mut discovered = crate::skills::package::SkillDiscovery::with_config(
             &workspace,
-            crate::skills::package::SkillDiscoveryConfig {
-                automatic_roots: vec![dir.path().join(".agents/skills")],
-                explicit_paths: Vec::new(),
-            },
+            crate::skills::package::SkillDiscoveryConfig::workspace_root(
+                dir.path().join(".agents/skills"),
+            ),
         )
         .discover()
         .expect("discover");
-        discovered.remove(0)
+        discovered.packages.remove(0)
     }
 }

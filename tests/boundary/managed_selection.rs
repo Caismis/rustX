@@ -72,10 +72,7 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
             ),
             base_tool_registry: Arc::new(fixture.registry.clone()),
             agent_activation: selection.clone(),
-            skill_discovery: rustx::skills::SkillDiscoveryConfig {
-                automatic_roots: vec![],
-                explicit_paths: vec![],
-            },
+            skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: fixture.runtime.environment().clone(),
         };

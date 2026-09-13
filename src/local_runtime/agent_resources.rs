@@ -21,7 +21,11 @@ pub(crate) fn parse(text: &str) -> Result<AgentProfileDocument, String> {
         return Err("Agent resource exceeds 1 MiB".into());
     }
     let document: AgentProfileDocument = crate::toml_authoring::parse(text.as_bytes())?;
-    crate::runtime::agent_profile::AgentProfile::from_document(&document, Vec::new())?;
+    crate::runtime::agent_profile::AgentProfile::from_document(
+        &document,
+        crate::runtime::agent_profile::AgentProfileKind::Named,
+        Vec::new(),
+    )?;
     document.execution_deadline()?;
     Ok(document)
 }
@@ -121,8 +125,12 @@ pub(crate) fn load(
                 content,
             });
         }
-        let profile = crate::runtime::agent_profile::AgentProfile::from_document(&agent, files)
-            .map_err(error)?;
+        let profile = crate::runtime::agent_profile::AgentProfile::from_document(
+            &agent,
+            crate::runtime::agent_profile::AgentProfileKind::Named,
+            files,
+        )
+        .map_err(error)?;
         definitions.push(
             NamedAgentDefinition::new(name.clone(), profile, path.clone())
                 .map_err(|e| error(e.to_string()))?,

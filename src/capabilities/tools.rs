@@ -414,7 +414,11 @@ fn resolve_profile(
             }
         }
     }
-    let profile = AgentProfile::from_document(&document, policy.project_files.clone())?;
+    let profile = AgentProfile::from_document(
+        &document,
+        crate::runtime::agent_profile::AgentProfileKind::Root,
+        policy.project_files.clone(),
+    )?;
     Ok(resolve_agent_profile(
         &profile,
         &AgentProfileAuthority {

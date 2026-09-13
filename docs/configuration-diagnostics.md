@@ -34,7 +34,13 @@ SELECTION := [--models PATH] [--config PATH] [--workspace DIRECTORY]
   [--exclude-tools NAME,...]
 ```
 
-Switches cannot repeat; `--skill` is repeatable. Tool conflicts and exact-name
+Switches cannot repeat; `--skill` is repeatable. `--skill` is the explicit
+Skill launch authority: it is validated exactly like a discovered package and
+takes precedence over both automatic sources, while `--no-skills` disables
+automatic discovery. The JSON launch projection reports the effective Skill
+provenance (`skillProvenance`, including what each identity shadowed) and the
+typed generation-scoped discovery facts (`skillDiagnostics`, each with its
+severity, source, and rendered explanation). Tool conflicts and exact-name
 selection are the ordinary launch contract: `--no-tools` also conflicts with
 `--exclude-tools`. Diagnostic commands reject trust changes, Session selection,
 conversation inspection, and Session names. Ordinary startup remains

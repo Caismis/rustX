@@ -429,6 +429,15 @@
       "description": "The bounded model-facing routing description.",
       "type": "string"
     },
+    "disabled_skills": {
+      "description": "The root Agent's Skill deny-list over the effective catalog.\n\n**Root only.** Authoring it on a named Agent is an error even when the\nlist is empty; a named Agent selects Skill identities explicitly with\n`skills`. This is capability *visibility*, not catalog membership: a\ndisabled Skill stays in the generation's catalog and a named Agent that\nselects it explicitly still gets it.",
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "array"
+      ]
+    },
     "extensions": {
       "$ref": "#/$defs/NativeAgentExtensionsDocument",
       "default": {
@@ -464,12 +473,13 @@
       "description": "The explicit model this agent runs on. Omit to inherit the invoking\nattempt's frozen effective model configuration."
     },
     "skills": {
-      "default": [],
-      "description": "The exact Skill allowlist over the admitted Skill catalog.",
+      "description": "The exact Skill allowlist over the admitted Skill catalog.\n\n**Named Agents only.** Authoring it on the root Agent is an error even\nwhen the list is empty: the root sees every eligible catalog Skill and\nsubtracts `disabled_skills`, so `skills = []` would state the opposite\nof what the runtime does.",
       "items": {
         "type": "string"
       },
-      "type": "array"
+      "type": [
+        "array"
+      ]
     },
     "timeout_ms": {
       "description": "The optional maximum wall-clock duration of the complete child\nlifecycle, in milliseconds. The model cannot override or extend it.",
