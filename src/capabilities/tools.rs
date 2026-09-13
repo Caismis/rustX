@@ -6,23 +6,25 @@
 //! prevents a discovery source or client projection from becoming a second
 //! capability authority.
 //!
-//! # This layer owns the ordinary capability plane only
+//! # Direct Tool selection, dispatch, and Extensions are independent
 //!
 //! Everything here — `agent.tools.builtin`, `--tools`, `--exclude-tools`,
-//! `--no-direct-tools`, `--no-builtin-tools` — addresses *ordinary execution
+//! `--no-direct-tools`, `--no-builtin-tools` — addresses *ordinary direct execution
 //! capabilities*. A Native Agent Extension may also contribute a model-facing
 //! Tool, and that Tool belongs to the extension's composition, not to this
 //! selection:
 //!
 //! ```text
-//! active model Tool set = selected ordinary capabilities
+//! active model Tool set = selected ordinary direct capabilities
+//!                       + selected Agent delegation dispatch
+//!                       + selected Workflow invocation dispatch
 //!                       + extension-provided Tool surfaces
 //! ```
 //!
-//! [`select_tools`] therefore takes the two sets separately and never lets one
-//! decide the other. Selection cannot remove an extension Tool (so `--no-direct-tools`
+//! [`select_tools`] keeps direct selection and dispatch independent and accepts
+//! extension registrations separately. Selection cannot remove an extension Tool (so `--no-direct-tools`
 //! plus an enabled Todo still exposes `todo`, and a truly Tool-free request
-//! needs both zero ordinary Tools and no Tool-providing extension), and it
+//! needs zero direct Tools, no Agent/Workflow dispatch, and no Tool-providing extension), and it
 //! cannot add one either: an extension's Tool name is not an ordinary
 //! identity, so naming it in an allowlist, an exclusion, or `agent.tools.builtin` is
 //! rejected by [`AgentActivation::validate`] rather than silently
@@ -50,7 +52,7 @@ pub struct AgentActivation {
     pub project_files: Vec<crate::runtime::resources::ProjectContextFile>,
     /// Remove ordinary built-ins from direct selection; dispatch remains independent.
     pub no_builtin_tools: bool,
-    /// Expose and authorize zero ordinary main-model Tools.
+    /// Remove ordinary direct Tools; Agent/Workflow dispatch and Extensions stay independent.
     pub no_direct_tools: bool,
     /// Exact model-facing allowlist across applicable origins.
     pub tools: Option<Vec<String>>,
@@ -586,6 +588,96 @@ mod tests {
                 ..crate::local_runtime::config::builtin_root_profile()
             },
             ..AgentActivation::default()
+        }
+    }
+
+    #[test]
+    fn cfg275_direct_restrictions_preserve_selected_dispatch_without_private_authority() {
+        use crate::runtime::subagent::SubagentName;
+        use crate::runtime::workflow::WorkflowId;
+        let agent = SubagentName::parse("reviewer").unwrap();
+        let workflow = WorkflowId::parse("review").unwrap();
+        let mut subagent = definition("subagent", ToolOrigin::Builtin);
+        subagent.id = crate::tools::native::subagent_tool_id();
+        let mut dispatch = definition("review", ToolOrigin::Builtin);
+        dispatch.id = crate::tools::native::workflow_tool_id(&workflow);
+        let read = definition("read", ToolOrigin::Builtin);
+        let private = definition("private", ToolOrigin::Builtin);
+        let mut all = ToolRegistry::new();
+        for tool in [&read, &private, &subagent, &dispatch] {
+            all.register(tool.clone(), Arc::new(NoopTool)).unwrap();
+        }
+        let mut extension = ToolRegistry::new();
+        extension
+            .register(
+                crate::tools::native::todo_tool_definition(),
+                Arc::new(NoopTool),
+            )
+            .unwrap();
+        for (label, restriction, read_active) in [
+            ("none", AgentActivation::default(), true),
+            (
+                "no direct",
+                AgentActivation {
+                    no_direct_tools: true,
+                    ..Default::default()
+                },
+                false,
+            ),
+            (
+                "no builtin",
+                AgentActivation {
+                    no_builtin_tools: true,
+                    ..Default::default()
+                },
+                false,
+            ),
+            (
+                "allow read",
+                AgentActivation {
+                    tools: Some(vec!["read".into()]),
+                    ..Default::default()
+                },
+                true,
+            ),
+            (
+                "exclude read",
+                AgentActivation {
+                    exclude_tools: vec!["read".into()],
+                    ..Default::default()
+                },
+                false,
+            ),
+        ] {
+            let mut activation = restriction;
+            activation.profile.tools.builtin = vec!["read".into()];
+            activation.profile.agents = vec![agent.clone()];
+            activation.profile.workflows = vec![workflow.clone()];
+            activation.admitted_agents.insert(agent.clone());
+            activation.admitted_workflows.insert(workflow.clone());
+            let (_, active) = select_tools(
+                &all.registrations(),
+                &extension.registrations(),
+                &activation,
+            )
+            .unwrap();
+            let names = names(&active);
+            assert_eq!(names.contains(&"read".into()), read_active, "{label}");
+            for name in ["subagent", "review", "todo"] {
+                assert!(names.contains(&name.to_owned()), "{label}: {name}");
+            }
+            assert!(
+                matches!(
+                    active.preflight(&crate::tools::types::ToolCall {
+                        id: crate::runtime::identity::ToolCallId::new("private-call"),
+                        tool_id: private.id.clone(),
+                        name: private.name.clone(),
+                        arguments: serde_json::json!({}),
+                    }),
+                    Err(crate::tools::executor::ToolPreflightError::UnknownTool { .. })
+                ),
+                "dispatch never grants the child/Workflow private Tool: {label}"
+            );
         }
     }
 

@@ -258,20 +258,22 @@ environment. Keep provider credentials in `models.toml`'s `api_key` reference,
 not in this table.
 
 `agent.tools.builtin` selects ordinary built-ins; Read is default-enabled.
-`agent.tools.builtin: []` selects no ordinary built-ins, while explicitly admitted
-main Workflows remain default-eligible. `--no-builtin-tools` removes all
-built-ins, including generated dispatchers, from default selection.
-`--tools a,b` is an exact allowlist; `--exclude-tools a,b` subtracts last.
-`--no-direct-tools` exposes zero ordinary main-model tools, including Read,
-Subagent and Workflow tools. It conflicts with the other three selection
+`agent.tools.builtin = []` selects no ordinary built-ins, while explicitly admitted
+main Workflows remain independently selected. `--no-builtin-tools` removes
+ordinary builtin Tools from direct selection.
+`--tools a,b` is an exact direct Tool allowlist; `--exclude-tools a,b` subtracts last.
+`--no-direct-tools` removes ordinary direct Tool exposure, including Read.
+Agent delegation (`agent.agents`) and Workflow invocation (`agent.workflows`)
+remain independently selected. It conflicts with the other three selection
 flags; `--tools` also conflicts with `--no-builtin-tools`.
 
 Every control in this paragraph addresses the *ordinary* capability plane.
 A Tool contributed by a Native Agent Extension — `todo` — is composed under
 `extensions` and is unnameable here: listing it in `agent.tools.builtin`, `--tools`
 or `--exclude-tools` is a validation error, and `--no-direct-tools` does not remove
-it. A model request with no Tools at all therefore needs `--no-direct-tools` *and*
-`"extensions": { "todo": { "enabled": false } }`.
+it. A model request with no Tools at all needs zero direct Tools, empty
+`agent.agents` and `agent.workflows`, and no Tool-providing Extensions
+(for example, `enabled = false` under `[agent.extensions.todo]`).
 Allowlist plus exclusions and default selection plus exclusions are supported.
 Explicit lists reject empty entries/lists, duplicates, unknown/unavailable
 names and ambiguous origins. Exclusions must resolve against applicable

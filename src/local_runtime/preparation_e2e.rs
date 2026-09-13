@@ -197,6 +197,7 @@ impl Lab {
         .expect("the child plane implements read");
         SubagentStartSpec {
             resolved: ResolvedSubagentSpec {
+                selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
                 agent: crate::runtime::subagent::SubagentName::parse("explore").expect("name"),
                 definition_digest: serde_json::from_value(serde_json::json!(
                     "sha256:0000000000000000000000000000000000000000000000000000000000000000"

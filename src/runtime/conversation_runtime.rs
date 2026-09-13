@@ -6170,6 +6170,7 @@ mod tests {
     /// supplies its already-frozen result.
     fn test_resolved_subagent(agent: &str) -> crate::runtime::subagent::ResolvedSubagentSpec {
         crate::runtime::subagent::ResolvedSubagentSpec {
+            selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
             agent: crate::runtime::subagent::SubagentName::parse(agent).expect("canonical name"),
             definition_digest: serde_json::from_value(serde_json::json!(
                 "sha256:0000000000000000000000000000000000000000000000000000000000000000"

@@ -375,7 +375,7 @@ Neither plane filters the other:
   rather than every Tool that happens to be implemented in Rust. The
   classification is semantic, not incidental to where the code lives.
 
-A truly Tool-free model request therefore requires **both** no ordinary Tools
+A truly Tool-free model request therefore requires no Agent/Workflow dispatch, no ordinary direct Tools
 **and** no Tool-providing extension:
 
 ```toml

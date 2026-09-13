@@ -195,12 +195,18 @@ pub fn parse_command(
         let sources = remove_switch(&mut arguments, "--sources")?;
         if let Some(index) = arguments.iter().position(|value| value == "--agent") {
             arguments.remove(index);
-            if index == arguments.len() {
+            if index == arguments.len() || arguments[index].starts_with("--") {
                 return Err(ArgumentError::MissingValue {
                     flag: "--agent".into(),
                 });
             }
             agent = Some(arguments.remove(index));
+        }
+        if sources && agent.is_some() {
+            return Err(ArgumentError::Conflicting {
+                first: "--sources",
+                second: "--agent",
+            });
         }
         if !sources && agent.is_none() {
             return Err(ArgumentError::MissingValue {
@@ -673,6 +679,40 @@ mod tests {
         assert!(parse(&["workflow", "run", "typed_agent"]).is_err());
         assert!(parse(&["workflow", "check"]).is_err());
     }
+    #[test]
+    fn cfg275_show_requires_exactly_one_target() {
+        use super::{Command, parse_command};
+        let parse = |args: &[&str]| parse_command(args.iter().map(ToString::to_string));
+        for args in [
+            vec!["--sources"],
+            vec!["--agent", "main"],
+            vec!["--agent", "reviewer"],
+        ] {
+            assert!(matches!(
+                parse(&[vec!["config", "show"], args].concat()),
+                Ok(Command::Show { .. })
+            ));
+        }
+        for args in [
+            vec!["--sources", "--agent", "main"],
+            vec!["--agent", "main", "--sources"],
+        ] {
+            assert!(matches!(
+                parse(&[vec!["config", "show"], args].concat()),
+                Err(ArgumentError::Conflicting {
+                    first: "--sources",
+                    second: "--agent"
+                })
+            ));
+        }
+        for args in [vec![], vec!["--agent"], vec!["--agent", "--json"]] {
+            assert!(matches!(
+                parse(&[vec!["config", "show"], args].concat()),
+                Err(ArgumentError::MissingValue { .. })
+            ));
+        }
+    }
+
     #[test]
     fn cfg235_finite_command_grammar_and_switch_values() {
         use super::{Command, parse_command};

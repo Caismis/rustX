@@ -418,6 +418,19 @@ pub struct PreparedCapabilityCandidate {
 }
 
 impl PreparedCapabilityCandidate {
+    /// Attach the same frozen child semantics whose exact definitions the
+    /// selected-only materializer realized. No activation/discovery runs here.
+    pub(crate) fn with_frozen_child(
+        mut self,
+        spec: &crate::runtime::subagent::ResolvedSubagentSpec,
+        skills: SkillSnapshot,
+    ) -> Self {
+        self.resolved_profile = Some(Arc::new(spec.child_profile()));
+        self.skills = Arc::new(skills);
+        self.force_publish = true;
+        self
+    }
+
     pub(crate) fn skills(&self) -> &SkillSnapshot {
         &self.skills
     }

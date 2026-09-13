@@ -19,7 +19,6 @@ use crate::context::ContextAssembly;
 use crate::runtime::identity::{CapabilityRevision, RuntimeResourceRevision};
 use crate::runtime::subagent::catalog::{AgentCatalog, SubagentName};
 use crate::runtime::workflow::WorkflowCatalog;
-use crate::skills::SkillCatalogEntry;
 
 const PROJECT_CONTEXT_FILENAMES: [&str; 5] = [
     "AGENTS.override.md",
@@ -310,28 +309,6 @@ impl RuntimeResourceSnapshot {
     pub fn with_capability_availability(mut self, availability: CapabilityAvailability) -> Self {
         self.capability_availability = availability;
         self.resolve_profiles();
-        self
-    }
-
-    /// Replaces the generation's model-visible Skill catalog with an exact
-    /// frozen entry set.
-    ///
-    /// This is the subagent child composition path: a child's Skill catalog
-    /// is the parent-resolved allowlist, handed over by value. The child
-    /// therefore renders exactly the entries its invoking generation
-    /// authorized and rediscovers nothing. Progressive disclosure is
-    /// untouched: only catalog metadata is frozen, never a `SKILL.md` body.
-    #[must_use]
-    pub fn with_frozen_skill_catalog(mut self, entries: &[SkillCatalogEntry]) -> Self {
-        let visible =
-            crate::skills::admitted_skill_entries(entries, self.capability.tool_registry());
-        self.skill_catalog = (!visible.is_empty())
-            .then(|| Arc::<str>::from(crate::skills::render_skill_catalog(visible)));
-        self.skill_sources = entries
-            .iter()
-            .map(|entry| PathBuf::from(&entry.location))
-            .collect::<Vec<_>>()
-            .into();
         self
     }
 

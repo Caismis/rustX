@@ -297,6 +297,19 @@ fn cfg275_agent_inspection_and_removed_flags_are_offline() {
     let value = report(&result, 3);
     assert_eq!(value["agent"]["identity"]["kind"], "main");
     assert!(value["agent"]["diagnostics"].is_array());
+    for args in [
+        vec!["config", "show"],
+        vec!["config", "show", "--agent"],
+        vec!["config", "show", "--sources", "--agent", "main"],
+        vec!["config", "show", "--agent", "main", "--sources"],
+    ] {
+        let output = run(root.path(), &args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(
+            output.stdout.is_empty(),
+            "invalid modes produce no inspection"
+        );
+    }
     for flag in ["--no-tools", "--no-skills"] {
         assert_eq!(
             run(

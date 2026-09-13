@@ -1335,7 +1335,7 @@ export type SkillDiagnostic =
   | { kind: "shadowed"; name: string; effective_source: SkillSource; effective_location: string; shadowed_source: SkillSource; shadowed_location: string };
 export type WorkflowDependencyFailure =
   | { kind: "not_admitted" }
-  | { kind: "materialization"; detail: null }
+  | { kind: "materialization"; detail: Record<string, never> }
   | { kind: "agent"; detail: AgentProfileDiagnostic }
   | { kind: "tool"; detail: ToolSelectionError }
   | { kind: "ineligible_tool"; detail: { origin: "builtin"; name: string } | { origin: "source"; source_id: string; name: string } };

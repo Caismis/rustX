@@ -45,6 +45,7 @@ struct ScriptedChild {
 /// lifecycle, so resolution is already complete before it is involved.
 fn resolved(agent: &str) -> ResolvedSubagentSpec {
     ResolvedSubagentSpec {
+        selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
         agent: SubagentName::parse(agent).expect("canonical name"),
         definition_digest: serde_json::from_value(serde_json::json!(
             "sha256:0000000000000000000000000000000000000000000000000000000000000000"

@@ -9,6 +9,18 @@ reload gate/state lock and emits one `ResourceGenerationUpdated` observation.
 Failed candidates publish nothing. Retained attempts, children, Tool sets,
 Skill bindings and Workflow runs continue using their original generation.
 
+A child uses the exact `ResolvedSubagentSpec` frozen by its invoking generation.
+The selected-only materializer realizes its Tool definitions and verifies its
+Skill bindings. Before commit, `PreparedCapabilityCandidate::with_frozen_child`
+installs the native child profile and materialized Skill metadata/provenance.
+Execution, the child resource snapshot, and inspection consume that same
+capability snapshot. The child does not rediscover Skills or reread an Agent
+file. Source selection intent and suppression cross as frozen facts; they
+never authorize additional Tools. Child IPC version 24 carries these facts.
+
+`config show` requires exactly one of `--sources` or `--agent`; combining them
+or omitting the target is a typed CLI error.
+
 `RuntimeResourceSnapshot::inspection()` reads the frozen projection. Runtime
 Client protocol 33 copies it into `resources.inspection`; the TUI's effective
 settings view renders those facts. Neither client resolves capabilities.
@@ -51,7 +63,10 @@ Existing configuration redaction continues to protect config show output.
 
 `--no-direct-tools` removes ordinary direct Tool exposure from main, leaving
 independently selected Agent/Workflow dispatch and Extensions intact.
-`--no-builtin-tools` restricts only ordinary built-ins. `--no-automatic-skills`
+`--no-builtin-tools` restricts only ordinary built-ins. `--tools` is an exact
+allowlist within admitted direct Tools; `--exclude-tools` subtracts from that
+direct plane. Neither changes the independent `agent.agents`, `agent.workflows`,
+or native Extension composition. `--no-automatic-skills`
 disables automatic Skill roots while explicit `--skill` inputs retain their
 separate launch authority. There are no aliases for the obsolete flag names.
 

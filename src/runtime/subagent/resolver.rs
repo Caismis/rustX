@@ -209,6 +209,8 @@ impl ResolvedSubagentTool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResolvedSubagentSkill {
+    /// Frozen discovery provenance; materialization changes only the effective location.
+    pub provenance: crate::skills::SkillProvenance,
     /// The exact immutable `SkillId` + `SkillVersionId` the generation
     /// admitted.
     pub binding: SkillBinding,
@@ -277,6 +279,8 @@ impl ResolvedSubagentMaterialization {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResolvedSubagentSpec {
+    /// Owner-produced selection intent and diagnostics of this frozen child.
+    pub selection: crate::runtime::agent_profile::FrozenAgentSelection,
     /// The canonical agent name this child was started as.
     pub agent: SubagentName,
     /// The deterministic semantic identity of the definition at start.
@@ -500,6 +504,38 @@ impl core::fmt::Display for SubagentExecutionProfileDigest {
 }
 
 impl ResolvedSubagentSpec {
+    /// Reconstitute the native semantic profile from the already-admitted
+    /// execution contract. This copies frozen decisions; it resolves nothing.
+    pub(crate) fn child_profile(&self) -> crate::runtime::agent_profile::ResolvedAgentProfile {
+        crate::runtime::agent_profile::ResolvedAgentProfile {
+            description: String::new(),
+            instructions: self.instructions.clone(),
+            model: None, // the child's model authority is its FrozenModelSpec
+            execution_deadline: self.execution_deadline,
+            tools: self
+                .tools
+                .iter()
+                .map(|tool| tool.definition().clone())
+                .collect(),
+            tool_selection: self.selection.tools.clone(),
+            skills: self
+                .skills
+                .iter()
+                .map(|skill| skill.catalog_entry.name.clone())
+                .collect(),
+            disabled_skills: self.selection.disabled_skills.clone(),
+            extensions: self.extensions.clone(),
+            agents: BTreeSet::new(),
+            workflows: BTreeSet::new(),
+            project_instructions: crate::runtime::agent_profile::AgentProjectInstructionPolicy {
+                inherit: false,
+                files: self.project_instructions.clone(),
+            },
+            workspace_policy: self.workspace_policy,
+            diagnostics: self.selection.diagnostics.clone(),
+        }
+    }
+
     /// The canonical model-facing names of the frozen capability set.
     #[must_use]
     pub fn tool_names(&self) -> Vec<&str> {
@@ -537,6 +573,9 @@ impl ResolvedSubagentSpec {
         // field of the frozen contract cannot reach a child without a
         // deliberate decision about whether it identifies the child.
         let Self {
+            // Selection intent and suppression explain the frozen result;
+            // only the realized executable composition identifies execution.
+            selection: _,
             agent,
             // The one deliberate exclusion, and the whole point of the split:
             // source-definition provenance is not effective-execution
@@ -863,6 +902,7 @@ pub struct SubagentResolution<'a> {
 /// Capability selection has already resolved; only attempt model binding remains.
 #[derive(Debug, Clone)]
 pub(crate) struct FrozenAgentComposition {
+    selection: crate::runtime::agent_profile::FrozenAgentSelection,
     definition: NamedAgentDefinition,
     tools: Vec<ResolvedSubagentTool>,
     skills: Vec<ResolvedSubagentSkill>,
@@ -894,6 +934,7 @@ impl FrozenAgentComposition {
             })
             .collect::<Vec<_>>();
         Ok(Self {
+            selection: profile.frozen_selection(),
             definition: definition.clone(),
             skills: resolve_skills(&profile.skills, skills)?,
             extensions: profile.extensions.clone(),
@@ -910,6 +951,7 @@ impl FrozenAgentComposition {
     ) -> Result<ResolvedSubagentSpec, SubagentResolutionError> {
         let definition = &self.definition;
         Ok(ResolvedSubagentSpec {
+            selection: self.selection.clone(),
             agent: definition.name().clone(),
             definition_digest: definition.digest().clone(),
             execution_deadline: definition.execution_deadline(),
@@ -1387,6 +1429,12 @@ fn resolve_skills(
             });
         };
         resolved.push(ResolvedSubagentSkill {
+            provenance: skills
+                .provenance()
+                .iter()
+                .find(|entry| entry.name == *selected)
+                .expect("admitted Skill provenance")
+                .clone(),
             binding: SkillBinding {
                 skill_id: package.id().clone(),
                 version_id: package.version_id().clone(),
@@ -1608,6 +1656,8 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
         // Destructured for the same reason the Tool framing is: every frozen
         // field is classified, and adding one is a compile error.
         let ResolvedSubagentSkill {
+            // Inspection provenance does not affect execution identity.
+            provenance: _,
             binding,
             catalog_entry,
             // A materialization SOURCE, not an identity. The child copies
@@ -3005,6 +3055,7 @@ mod tests {
     fn frozen_spec() -> ResolvedSubagentSpec {
         let definition = role_with(Vec::new(), crate::extensions::NativeAgentExtensions::none());
         ResolvedSubagentSpec {
+            selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
             agent: definition.name().clone(),
             definition_digest: definition.digest().clone(),
             execution_deadline: None,
@@ -3703,6 +3754,12 @@ mod tests {
         let skill = |description: &str, source_root: &str, location: &str| {
             let mut spec = frozen_spec();
             spec.skills = vec![ResolvedSubagentSkill {
+                provenance: crate::skills::SkillProvenance {
+                    name: "code-review".into(),
+                    source: crate::skills::SkillSource::Workspace,
+                    location: location.to_owned(),
+                    shadowed: Vec::new(),
+                },
                 binding: crate::protocol::manifest::SkillBinding {
                     skill_id: SkillId::new("code-review"),
                     version_id: SkillVersionId::new("sha256:abc"),

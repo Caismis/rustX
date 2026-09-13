@@ -96,7 +96,9 @@ use crate::runtime::workspace::WorkspaceSnapshot;
 /// participation (Issue #254), alongside the version 20 extension composition.
 /// Version 22 removes the independent absolute child runtime path: the child
 /// derives its private allocation from product identity, `ConversationId` and incarnation.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 23;
+/// Version 24 carries frozen selection facts and Skill provenance, so child
+/// inspection describes the same composition that execution materializes.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 24;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -912,6 +914,7 @@ mod tests {
     /// (Issue #174).
     fn resolved_spec() -> ResolvedSubagentSpec {
         ResolvedSubagentSpec {
+            selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
             agent: SubagentName::parse("explore").expect("name"),
             definition_digest: serde_json::from_value(serde_json::json!("sha256:abc"))
                 .expect("digest"),
@@ -965,6 +968,12 @@ mod tests {
                 },
             ],
             skills: vec![crate::runtime::subagent::ResolvedSubagentSkill {
+                provenance: crate::skills::SkillProvenance {
+                    name: "repository-navigation".into(),
+                    source: crate::skills::SkillSource::Workspace,
+                    location: "/w/.agents/skills/nav/SKILL.md".to_owned(),
+                    shadowed: Vec::new(),
+                },
                 binding: crate::protocol::manifest::SkillBinding {
                     skill_id: crate::runtime::identity::SkillId::new("skill-repository-navigation"),
                     version_id: crate::runtime::identity::SkillVersionId::new("sha256:skill-v1"),

@@ -300,8 +300,7 @@ An untrusted project activates no project roles, Skills, Workflows or instructio
 Local launch's automatic Skill sources are `global` (the captured host home's
 `.agents/skills`) and `workspace` (`<workspace>/.agents/skills`), selected by
 the launch-scoped `[skills].sources` policy; `workspace` shadows `global` for
-the same logical identity. Neither reads `.rustx/skills` or
-`~/.config/rustx/skills`. Explicit `--skill` paths remain a separate launch
+the same logical identity. Explicit `--skill` paths remain a separate launch
 authority with the existing user/project/CLI ownership validation and win the
 merge against both automatic sources. No user files are deleted or migrated.
 

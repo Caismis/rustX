@@ -36,22 +36,24 @@ restrict model exposure; `--exclude-tools a,b` subtracts last. None activates a
 source or changes invocation policy. Profile capabilities unavailable in the
 current generation produce typed diagnostics and suppression.
 
-### Ordinary selection is one of two planes
+### Direct selection, dispatch, and Extensions are independent
 
 Every filter above addresses the **ordinary capability plane**. A Native Agent
 Extension may also contribute a model-facing Tool, and that Tool belongs to
 `extensions`, not to any selector here:
 
 ```text
-  ordinary selected Tool capabilities        every flag in this section
+  ordinary direct Tool capabilities          every flag in this section
++ selected Agent delegation                  agent.agents
++ selected Workflow invocation               agent.workflows
 + enabled extension-provided Tool surfaces   agent.extensions.<name>.enabled
 + already-admitted domain terminal protocols Workflow output, ...
 ```
 
-Neither plane filters the other. `--no-direct-tools` selects zero *ordinary*
+These authorities do not filter each other. `--no-direct-tools` selects zero *ordinary*
 capabilities and does not disable an independently composed extension, so a
-truly Tool-free model request needs no ordinary Tools **and** no Tool-providing
-extension. `--no-builtin-tools` removes ordinary built-ins, not every Tool that
+truly Tool-free model request needs zero direct Tools, empty `agent.agents`
+and `agent.workflows`, and no Tool-providing Extensions. `--no-builtin-tools` removes ordinary built-ins, not every Tool that
 happens to be implemented in Rust: the classification is semantic, not
 incidental to where the implementation lives.
 
@@ -111,9 +113,9 @@ published in the capability generation and pinned at attempt lease acquisition.
 Request compilation and call preflight use that same immutable registry;
 model capability flags never silently remove its definitions. Existing request
 validation rejects Tools for a model without Tool-call support; select
-`--no-direct-tools` **and** disable every Tool-providing extension
-(`"extensions": { "todo": { "enabled": false } }`) to use such a model with no
-Tools at all.
+`--no-direct-tools`, select no Agents or Workflows, and disable every
+Tool-providing Extension (for example `enabled = false` under
+`[agent.extensions.todo]`) to use such a model with no Tools at all.
 Preflight freezes mode, concurrency and approval in the prepared invocation.
 The approval rendezvous settles before the executor-start frontier. FullAccess
 bypasses only this Tool permission gate: it grants no tool, changes no
@@ -534,9 +536,8 @@ explicit --skill > workspace > global
 ```
 
 The global root is resolved from the launch owner's captured home directory.
-It is never a rustX configuration directory, never shell-expanded at a use
-site, and `~/.config/rustx/skills` is not a source, an alias, a fallback, or a
-migration path.
+It is never a rustX configuration directory or shell-expanded at a use site.
+Only the canonical roots below participate in automatic discovery.
 
 The session policy selects which automatic roots are scanned:
 

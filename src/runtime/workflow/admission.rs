@@ -169,9 +169,9 @@ fn admit_block(
                             Ok(frozen) => agent.resolved = Some(Arc::new(frozen)),
                             Err(error) => diagnostics.push(WorkflowAdmissionDiagnostic {
                                 path: path.clone(),
-                                reason: WorkflowDependencyFailure::Materialization(
-                                    bound_workflow_diagnostic(error.to_string()),
-                                ),
+                                reason: WorkflowDependencyFailure::Materialization {
+                                    detail: bound_workflow_diagnostic(error.to_string()),
+                                },
                             }),
                         }
                     }

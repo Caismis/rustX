@@ -723,7 +723,7 @@ async fn run_preparation_gate_if_armed(
 /// entries with their locations remapped onto the child's own copies.
 fn materialize_frozen_skills(
     spec: &crate::runtime::subagent::ipc::SubagentChildSpec,
-) -> Result<Vec<crate::skills::SkillCatalogEntry>, LocalRuntimeError> {
+) -> Result<crate::skills::SkillSnapshot, LocalRuntimeError> {
     let root = spec
         .runtime_root()
         .map_err(|e| LocalRuntimeError::ToolRuntime {
@@ -742,12 +742,18 @@ fn materialize_frozen_skills(
         .map_err(|error| LocalRuntimeError::Capability {
             detail: error.to_string(),
         })?;
-        entries.push(crate::skills::SkillCatalogEntry {
-            location,
-            ..skill.catalog_entry.clone()
-        });
+        let mut provenance = skill.provenance.clone();
+        provenance.location.clone_from(&location);
+        entries.push((
+            crate::skills::SkillCatalogEntry {
+                location,
+                ..skill.catalog_entry.clone()
+            },
+            skill.binding.clone(),
+            provenance,
+        ));
     }
-    Ok(entries)
+    Ok(crate::skills::SkillSnapshot::from_frozen(entries))
 }
 
 /// Projects the frozen specification into the child's selected-only
@@ -1582,11 +1588,12 @@ impl LocalConversationCore {
             // already gone, and every preparatory supervised unit observes the
             // one preparation cancellation authority.
             let candidate = if plan.is_empty() && !preparation_gate_armed(&runtime_root) {
-                capability.prepare_base_only_candidate().map_err(|error| {
-                    LocalRuntimeError::Capability {
+                capability
+                    .prepare_selected_candidate(&plan, &preparation.cancellation())
+                    .await
+                    .map_err(|error| LocalRuntimeError::Capability {
                         detail: format!("{error:?}"),
-                    }
-                })?
+                    })?
             } else {
                 let cancellation = preparation.cancellation();
                 let step = async {
@@ -1633,7 +1640,7 @@ impl LocalConversationCore {
                 }
             };
             capability
-                .commit(candidate)
+                .commit(candidate.with_frozen_child(&spec.resolved, skills))
                 .map_err(|error| LocalRuntimeError::Capability {
                     detail: format!("{error:?}"),
                 })?;
@@ -1654,7 +1661,7 @@ impl LocalConversationCore {
                     crate::context::ContextAssembly::new(),
                     capability.current_snapshot(),
                 )
-                .with_frozen_skill_catalog(&skills),
+                .with_capability_availability(capability.availability()),
             );
             let workflow_output_latch = match &spec.terminal {
                 crate::runtime::subagent::ipc::ChildTerminalMode::Normal => None,
@@ -2717,6 +2724,25 @@ chat_reasoning_replay = "omit"
             child_agent_id: AgentId::new("agent-child"),
             parent_agent_id: AgentId::new("agent-parent"),
             resolved: ResolvedSubagentSpec {
+                selection: crate::runtime::agent_profile::FrozenAgentSelection {
+                    tools: tools
+                        .iter()
+                        .map(|tool| match tool {
+                            ResolvedSubagentTool::Builtin { name, .. } => {
+                                crate::capabilities::selection::AgentToolSelection::Builtin {
+                                    name: name.clone(),
+                                }
+                            }
+                            ResolvedSubagentTool::Source {
+                                source_id, name, ..
+                            } => crate::capabilities::selection::AgentToolSelection::Source {
+                                source_id: source_id.clone(),
+                                name: name.clone(),
+                            },
+                        })
+                        .collect(),
+                    ..Default::default()
+                },
                 agent: SubagentName::parse("explore").expect("canonical name"),
                 definition_digest: serde_json::from_value(serde_json::json!("sha256:frozen"))
                     .expect("digest"),
@@ -3438,6 +3464,12 @@ enabled = true
             vec![builtin("read"), builtin("grep")],
             Vec::new(),
             vec![crate::runtime::subagent::ResolvedSubagentSkill {
+                provenance: crate::skills::SkillProvenance {
+                    name: "selected".into(),
+                    source: crate::skills::SkillSource::Workspace,
+                    location: source.join("SKILL.md").display().to_string(),
+                    shadowed: Vec::new(),
+                },
                 binding: crate::protocol::manifest::SkillBinding {
                     skill_id: crate::runtime::identity::SkillId::new("selected"),
                     version_id,
@@ -3556,6 +3588,12 @@ enabled = true
             vec![builtin("read")],
             Vec::new(),
             vec![crate::runtime::subagent::ResolvedSubagentSkill {
+                provenance: crate::skills::SkillProvenance {
+                    name: "selected".into(),
+                    source: crate::skills::SkillSource::Workspace,
+                    location: source.join("SKILL.md").display().to_string(),
+                    shadowed: Vec::new(),
+                },
                 binding: crate::protocol::manifest::SkillBinding {
                     skill_id: crate::runtime::identity::SkillId::new("selected"),
                     version_id,

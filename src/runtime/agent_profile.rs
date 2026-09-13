@@ -311,6 +311,30 @@ pub struct ResolvedAgentProfile {
     pub diagnostics: Vec<AgentProfileDiagnostic>,
 }
 
+/// Selection facts that cross a child boundary beside its executable composition.
+/// These retain authoring intent and suppression, never a second executable set.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenAgentSelection {
+    pub tools: Vec<AgentToolSelection>,
+    pub disabled_skills: Vec<String>,
+    pub diagnostics: Vec<AgentProfileDiagnostic>,
+}
+
+impl ResolvedAgentProfile {
+    pub(crate) fn frozen_selection(&self) -> FrozenAgentSelection {
+        FrozenAgentSelection {
+            tools: self.tool_selection.clone(),
+            disabled_skills: self.disabled_skills.clone(),
+            diagnostics: self
+                .diagnostics
+                .iter()
+                .map(AgentProfileDiagnostic::redacted)
+                .collect(),
+        }
+    }
+}
+
 pub(crate) fn is_dispatcher(definition: &ToolDefinition) -> bool {
     definition.origin == ToolOrigin::Builtin
         && (definition.id == crate::tools::native::subagent_tool_id()

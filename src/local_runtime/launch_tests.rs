@@ -3434,3 +3434,209 @@ fn cfg275_committed_end_to_end_example_uses_final_authoring_and_offline_admissio
         3
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cfg275_child_inspection_and_execution_share_frozen_r1_after_parent_reload() {
+    use crate::runtime::identity::{AgentId, ConversationId, SubagentId};
+    use crate::runtime::subagent::ipc::{
+        ChildTerminalMode, SUBAGENT_IPC_VERSION, SubagentChildSpec,
+    };
+    use crate::runtime::subagent::resolver::{InvokingAgentAuthority, SubagentResolution};
+    use crate::runtime::subagent::{SubagentName, SubagentResolver};
+    let f = Fixture::new();
+    f.project(json!({"agent":{"tools":{"builtin":["read"]},"agents":["reviewer"],"disabled_skills":["rust-review"]}}));
+    for name in ["rust-review", "root-visible"] {
+        let root = f
+            .host
+            .launch_directory
+            .join(format!(".agents/skills/{name}"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: frozen metadata\n---\nSECRET_SKILL_BODY\n"),
+        )
+        .unwrap();
+    }
+    f.role(false, "reviewer", json!({"description":"Review", "tools":{"builtin":["read","grep"],"sources":{"optional":"all"}}, "skills":["rust-review"], "extensions":{"todo":{"enabled":false},"agent_status":{"enabled":true}}}), "SECRET_R1_INSTRUCTIONS");
+    let launch = f.resolve();
+    let models = crate::model::invocation::ModelBindingRegistry::new(
+        launch.models.resolve(&f.credentials).unwrap(),
+    )
+    .unwrap();
+    let parent = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+        .await
+        .unwrap();
+    let r1 = parent.runtime().runtime_resources();
+    let name = SubagentName::parse("reviewer").unwrap();
+    let resolved = SubagentResolver::resolve(&SubagentResolution {
+        resources: &r1,
+        agent: &name,
+        attempt_model: &parent.runtime().model_config(),
+        models: &models,
+        invocation: None,
+        invoking: &InvokingAgentAuthority::none(),
+    })
+    .unwrap();
+    assert_eq!(
+        r1.inspection()
+            .main
+            .as_ref()
+            .unwrap()
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["read"]
+    );
+    assert_eq!(
+        resolved.selection.tools,
+        r1.resolved_agent(&name).unwrap().tool_selection
+    );
+    assert_eq!(
+        r1.inspection().main.as_ref().unwrap().disabled_skills,
+        ["rust-review"]
+    );
+    let expected = r1.inspection().agents[&name].clone();
+    let private = resolved
+        .tools
+        .iter()
+        .find(|tool| tool.name() == "grep")
+        .unwrap();
+    assert!(matches!(
+        r1.capability()
+            .tool_registry()
+            .preflight(&crate::tools::types::ToolCall {
+                id: crate::runtime::identity::ToolCallId::new("root-cannot-call-child-private"),
+                tool_id: private.definition().id.clone(),
+                name: "grep".into(),
+                arguments: json!({}),
+            }),
+        Err(crate::tools::executor::ToolPreflightError::UnknownTool { .. })
+    ));
+
+    let mut resolved = resolved;
+    let mut transferred = Vec::new();
+    resolved.model.export_process_credentials(&mut transferred);
+    let child_dependencies = LocalRuntimeDependencies {
+        credentials: Some(std::sync::Arc::new(
+            crate::credentials::CredentialSnapshot::new(transferred),
+        )),
+        ..Default::default()
+    };
+    let resolved = serde_json::from_slice(&serde_json::to_vec(&resolved).unwrap()).unwrap();
+    f.role(false, "reviewer", json!({"description":"R2", "tools":{"builtin":["bash"]},"skills":["root-visible"],"extensions":{"todo":{"enabled":true},"agent_status":{"enabled":false}}}), "R2 instructions");
+    parent.runtime().reload_resources().await.unwrap();
+    let r2 = parent.runtime().runtime_resources();
+    assert_ne!(r2.inspection().agents[&name], expected);
+    // Stage the normal child root; neither this path nor the child receives R2.
+    let child = SubagentChildSpec {
+        protocol_version: SUBAGENT_IPC_VERSION,
+        product_root: launch.runtime_root.clone(),
+        subagent_id: SubagentId::new("conv-parent-subagent-1"),
+        child_conversation_id: ConversationId::new("conv-parent-subagent-1"),
+        child_agent_id: AgentId::new("child"),
+        parent_agent_id: AgentId::new("parent"),
+        resolved,
+        approval_mode: crate::runtime::ApprovalMode::Policy,
+        model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+        tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
+        context: crate::context::SessionContextPolicy {
+            reserve_tokens: 0,
+            keep_recent_tokens: 0,
+            summary_output_cap: None,
+        },
+        workspace_snapshot: crate::runtime::workspace::WorkspaceSnapshot::shared(
+            f.host.launch_directory.clone(),
+        ),
+        incarnation: "incarnation-r1".into(),
+        terminal: ChildTerminalMode::Normal,
+    };
+    std::fs::create_dir_all(
+        crate::runtime::subagent::child_conversation_store_path(
+            &child.product_root,
+            &child.child_conversation_id,
+        )
+        .parent()
+        .unwrap()
+        .join(&child.incarnation),
+    )
+    .unwrap();
+    let core = super::composition::LocalConversationCore::compose_subagent_child(
+        &child,
+        &child_dependencies,
+        &super::composition::ChildPreparation::detached(),
+    )
+    .await
+    .unwrap();
+    let resources = core.runtime().runtime_resources();
+    let wire = crate::runtime_client::projection::resources_view(&resources);
+    let actual = resources.inspection().main.as_ref().unwrap();
+    assert_eq!(*wire.inspection, *resources.inspection());
+    assert_eq!(actual.tools, expected.tools);
+    assert_eq!(actual.tool_selection, expected.tool_selection);
+    assert_eq!(actual.diagnostics, expected.diagnostics);
+    assert!(
+        !actual.diagnostics.is_empty(),
+        "frozen suppression survives too"
+    );
+    assert!(std::sync::Arc::ptr_eq(
+        resources.capability(),
+        &core.capability().current_snapshot()
+    ));
+    assert_eq!(actual.extensions, expected.extensions);
+    assert_eq!(actual.disabled_skills, expected.disabled_skills);
+    assert!(
+        actual.disabled_skills.is_empty(),
+        "root deny-list never leaks into the named child"
+    );
+    assert_eq!(actual.skills.len(), 1);
+    assert_eq!(actual.skills[0].name, "rust-review");
+    assert_eq!(actual.skills[0].source, expected.skills[0].source);
+    assert_eq!(actual.skills[0].shadowed, expected.skills[0].shadowed);
+    assert!(
+        std::path::Path::new(&actual.skills[0].location).starts_with(child.runtime_root().unwrap())
+    );
+    assert_eq!(
+        resources.capability().skills().bindings(),
+        &[child.resolved.skills[0].binding.clone()]
+    );
+    assert_eq!(
+        resources.capability().model_skill_entries()[0].location,
+        actual.skills[0].location
+    );
+    assert_eq!(
+        resources.capability().tool_registry().definitions(),
+        child
+            .resolved
+            .tools
+            .iter()
+            .map(|tool| tool.definition().clone())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        core.runtime().native_extensions(),
+        child.resolved.extensions
+    );
+    assert_eq!(
+        resources.root_profile().unwrap(),
+        &child.resolved.child_profile()
+    );
+    assert!(
+        resources
+            .agent_profile()
+            .unwrap()
+            .contains("SECRET_R1_INSTRUCTIONS")
+    );
+    let encoded = serde_json::to_string(resources.inspection()).unwrap();
+    assert!(!encoded.contains("SECRET_"));
+    assert!(!encoded.contains("root-visible"));
+    // A second real publication cannot mutate the child or the retained R1.
+    parent.runtime().reload_resources().await.unwrap();
+    assert_eq!(
+        serde_json::to_string(core.runtime().runtime_resources().inspection()).unwrap(),
+        encoded
+    );
+    assert_eq!(r1.inspection().agents[&name], expected);
+    drop(core); // composed child has not been activated or started execution
+    parent.runtime().shutdown().await.unwrap();
+}

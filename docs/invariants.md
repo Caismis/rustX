@@ -1482,8 +1482,8 @@ omission composes none; `agent.tools.builtin`, `--tools`, `--exclude-tools`, a r
 `tools.builtin`, and a Workflow's admitted capability set all reject the name
 `todo` outright, because they address the ordinary capability plane and Todo is
 not in it. `--no-direct-tools` therefore leaves an enabled Todo's Tool in place: a
-Tool-free model request needs no ordinary Tools **and** no Tool-providing
-extension.
+Tool-free model request needs zero direct Tools, empty Agent/Workflow
+selections, and no Tool-providing Extensions.
 
 The coherence is **structural, not conventional**. One frozen
 `NativeAgentExtensions` is stored by the `ConversationToolRuntime` that
@@ -3483,8 +3483,7 @@ the launch-boundary policy inheritance.
   receives only the two canonical automatic sources — `global`
   (`<home>/.agents/skills`) and `workspace` (`<workspace>/.agents/skills`),
   selected by the launch-scoped `[skills].sources` policy — plus the explicit
-  `--skill` launch authority. `~/.config/rustx/skills` is not a source, alias,
-  fallback, or migration path. The runtime root is disjoint from the workspace and
+  `--skill` launch authority. The runtime root is disjoint from the workspace and
   remains runtime-owned/generated state and is not a Workflow, Subagent, or
   general project-resource fallback.
 - **Persistent workspace identity has an explicit Unix byte contract.** On
@@ -3739,7 +3738,7 @@ the launch-boundary policy inheritance.
   `ToolRegistry`. Inactive definitions remain available for truthful
   inspection but their schemas never enter provider requests.
 - **Startup Tool selection is deterministic.** The base selection applies
-  `agent.tools.builtin` to built-ins, `--no-builtin-tools` removes all built-ins,
+  `agent.tools.builtin` to built-ins, `--no-builtin-tools` removes ordinary builtin Tools from direct selection,
   `--no-direct-tools` selects zero ordinary Tools, `--tools` selects exactly its
   names, and exclusions subtract last. Read has no activation exception.
   Empty, unknown/ineligible, ambiguous or duplicate explicit CLI entries fail.

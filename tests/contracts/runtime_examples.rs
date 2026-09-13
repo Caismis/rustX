@@ -319,9 +319,16 @@ fn cfg275_current_product_surfaces_cannot_reintroduce_obsolete_authoring() {
         "--no-tools",
         "--no-skills",
         ".agents/subagents/",
+        "~/.config/rustx/skills",
     ];
     for path in [
         "README.md",
+        "docs/runtime-resources.md",
+        "docs/subagent-resources.md",
+        "docs/capability-inspection.md",
+        "docs/invariants.md",
+        "examples/local-runtime/README.md",
+        "tui/README.md",
         "src/local_runtime/cli.rs",
         "tui/src/cli.ts",
         "schemas/settings.schema.json",

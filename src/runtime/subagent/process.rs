@@ -2616,6 +2616,7 @@ mod tests {
             child_agent_id: crate::runtime::identity::AgentId::new("agent-child"),
             parent_agent_id: crate::runtime::identity::AgentId::new("agent-parent"),
             resolved: crate::runtime::subagent::ResolvedSubagentSpec {
+                selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
                 agent: crate::runtime::subagent::SubagentName::parse("explore").expect("name"),
                 definition_digest: serde_json::from_value(serde_json::json!("sha256:frozen"))
                     .expect("digest"),

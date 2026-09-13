@@ -753,7 +753,10 @@ pub struct WorkflowAdmissionDiagnostic {
 #[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
 pub enum WorkflowDependencyFailure {
     NotAdmitted,
-    Materialization(#[serde(skip)] String),
+    Materialization {
+        #[serde(skip)]
+        detail: String,
+    },
     Agent(crate::runtime::agent_profile::AgentProfileDiagnostic),
     Tool(crate::capabilities::selection::ToolSelectionError),
     IneligibleTool(crate::capabilities::selection::ExactToolSelector),
@@ -765,7 +768,7 @@ impl WorkflowAdmissionDiagnostic {
         match &mut fact.reason {
             WorkflowDependencyFailure::Agent(reason) => *reason = reason.redacted(),
             WorkflowDependencyFailure::Tool(reason) => *reason = reason.redacted(),
-            WorkflowDependencyFailure::Materialization(detail) => detail.clear(),
+            WorkflowDependencyFailure::Materialization { detail } => detail.clear(),
             _ => {}
         }
         fact

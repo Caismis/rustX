@@ -1,0 +1,125 @@
+{
+  "source": {
+    "kind": "unavailable",
+    "detail": {}
+  },
+  "workflow": {
+    "kind": "materialization",
+    "detail": {}
+  },
+  "skills": [
+    {
+      "kind": "source_root_invalid",
+      "source": "workspace",
+      "root": "/workspace/.agents/skills"
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "invalid_name",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "name_directory_mismatch",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "missing_skill_markdown",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "skill_markdown_not_regular_file",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "malformed_frontmatter",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "invalid_description",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "invalid_compatibility",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "malformed_metadata",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "invalid_dependency_declaration",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "unsupported_symlink",
+        "path": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "unrepresentable_root",
+        "path": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "io",
+        "path": "/workspace/.agents/skills/review"
+      }
+    }
+  ]
+}

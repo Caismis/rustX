@@ -151,8 +151,10 @@ and all semantic errors. `--skill` is the explicit Skill launch authority and
 `--no-automatic-skills` disables automatic discovery; the automatic sources themselves
 are `global` (`~/.agents/skills`) and `workspace`
 (`<workspace>/.agents/skills`), selected by the runtime's `[skills].sources`
-policy, with `workspace` shadowing `global` and explicit paths shadowing both. `--no-direct-tools` means zero ordinary main-model tools,
-including Read and generated dispatchers; `--tools` is exact and exclusions
+policy, with `workspace` shadowing `global` and explicit paths shadowing both. `--no-direct-tools` removes ordinary direct Tools,
+including Read. Agent/Workflow dispatch remains independently selected by
+`agent.agents` / `agent.workflows`, and Extensions keep their own composition.
+`--tools` selects exact direct Tools and exclusions
 subtract last. `--no-direct-tools` conflicts with the other three Tool flags, and
 `--tools` conflicts with `--no-builtin-tools`. Lists reject empty entries,
 duplicates and unknown/unavailable/ambiguous names.
@@ -161,8 +163,8 @@ All four flags address the *ordinary* capability plane only. A Tool contributed
 by a Native Agent Extension — `todo` — is composed under `extensions` in the
 launch configuration and cannot be named here: listing it is a validation
 error, and `--no-direct-tools` does not remove it. A model request with no Tools at
-all therefore needs `--no-direct-tools` **and** a composition with no Tool-providing
-extension. `/settings` shows which extensions the attached Agent is actually
+all therefore needs zero direct Tools, empty Agent/Workflow selections, and
+a composition with no Tool-providing Extensions. `/settings` shows which extensions the attached Agent is actually
 running with. `/tools` distinguishes
 model authority from available but inactive capabilities; exposure filtering
 does not disable source preparation. Lazy Skills require native Read in the

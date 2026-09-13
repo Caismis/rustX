@@ -28,9 +28,9 @@ pub struct LaunchLocations {
     pub skill_paths: Vec<PathBuf>,
     /// Disable automatic/default Skill roots while retaining explicit paths.
     pub no_automatic_skills: bool,
-    /// Remove built-ins, including Read and generated Tools, from default selection.
+    /// Remove ordinary builtin Tools from direct selection; delegation and Workflow dispatch stay independent.
     pub no_builtin_tools: bool,
-    /// Expose zero ordinary main-model Tools; source activation stays independent.
+    /// Remove ordinary direct Tool exposure; source activation and dispatch stay independent.
     pub no_direct_tools: bool,
     /// The Session this launch binds. Startup never resumes on its own;
     /// `--continue` is the explicit request behind

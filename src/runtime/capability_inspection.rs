@@ -220,6 +220,62 @@ mod tests {
     use crate::runtime::identity::McpServerId;
 
     #[test]
+    fn cfg275_redacted_native_variants_deserialize_to_neutral_private_fields() {
+        use crate::runtime::workflow::WorkflowDependencyFailure;
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/runtime-client/redacted-diagnostics-v33.json"
+        ))
+        .unwrap();
+        let source = SourceResolutionFailure::Unavailable {
+            reason: "SECRET_EXTERNAL_ERROR".into(),
+        };
+        assert_eq!(serde_json::to_value(&source).unwrap(), fixture["source"]);
+        let decoded: SourceResolutionFailure =
+            serde_json::from_value(fixture["source"].clone()).unwrap();
+        assert_eq!(
+            decoded,
+            SourceResolutionFailure::Unavailable {
+                reason: String::new()
+            }
+        );
+        let workflow = WorkflowDependencyFailure::Materialization {
+            detail: "SECRET_MATERIALIZATION".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&workflow).unwrap(),
+            fixture["workflow"]
+        );
+        let decoded: WorkflowDependencyFailure =
+            serde_json::from_value(fixture["workflow"].clone()).unwrap();
+        assert_eq!(
+            decoded,
+            WorkflowDependencyFailure::Materialization {
+                detail: String::new()
+            }
+        );
+        for value in fixture["skills"].as_array().unwrap() {
+            let mut tainted = value.clone();
+            let payload = if tainted["kind"] == "package_invalid" {
+                &mut tainted["cause"]
+            } else {
+                &mut tainted
+            };
+            payload["detail"] = "SECRET_PARSER_PAYLOAD".into();
+            if payload["cause"] == "invalid_name" || payload["cause"] == "name_directory_mismatch" {
+                payload["name"] = "SECRET_AUTHORED_VALUE".into();
+            }
+            let decoded: SkillDiagnostic = serde_json::from_value(tainted).unwrap();
+            assert_eq!(
+                decoded,
+                decoded.redacted(),
+                "skipped fields deserialize to neutral values"
+            );
+            assert_eq!(serde_json::to_value(&decoded).unwrap(), *value);
+            assert!(!format!("{decoded:?}").contains("SECRET_"));
+        }
+    }
+
+    #[test]
     fn cfg275_wire_fixture_preserves_native_tags_and_order() {
         let value: serde_json::Value = serde_json::from_str(include_str!(
             "../../tests/fixtures/runtime-client/capabilities-v33.json"

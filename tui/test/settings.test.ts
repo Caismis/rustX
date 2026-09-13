@@ -214,3 +214,137 @@ it("CFG275 renders the native generation fixture without resolving capability st
     assert.equal(JSON.stringify(state.resources.inspection), original);
   }
 });
+
+it("CFG275 redacted native causes match the TypeScript wire unions", () => {
+  const expected: {
+    source: import("../src/protocol/types.ts").SourceResolutionFailure;
+    workflow: import("../src/protocol/types.ts").WorkflowDependencyFailure;
+    skills: import("../src/protocol/types.ts").SkillDiagnostic[];
+  } = {
+  "source": {
+    "kind": "unavailable",
+    "detail": {}
+  },
+  "workflow": {
+    "kind": "materialization",
+    "detail": {}
+  },
+  "skills": [
+    {
+      "kind": "source_root_invalid",
+      "source": "workspace",
+      "root": "/workspace/.agents/skills"
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "invalid_name",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "name_directory_mismatch",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "missing_skill_markdown",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "skill_markdown_not_regular_file",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "malformed_frontmatter",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "invalid_description",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "invalid_compatibility",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "malformed_metadata",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "invalid_dependency_declaration",
+        "directory": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "unsupported_symlink",
+        "path": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "unrepresentable_root",
+        "path": "/workspace/.agents/skills/review"
+      }
+    },
+    {
+      "kind": "package_invalid",
+      "source": "workspace",
+      "package": "/workspace/.agents/skills/review",
+      "cause": {
+        "cause": "io",
+        "path": "/workspace/.agents/skills/review"
+      }
+    }
+  ]
+};
+  const fixture = JSON.parse(readFileSync(new URL("../../tests/fixtures/runtime-client/redacted-diagnostics-v33.json", import.meta.url), "utf8"));
+  assert.deepEqual(fixture, expected);
+});

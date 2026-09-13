@@ -331,6 +331,7 @@ fn test_spawn_plan(runtime_root: &std::path::Path) -> SubagentSpawnPlan {
 /// path.
 fn resolved_child_spec(agent: &str) -> ResolvedSubagentSpec {
     ResolvedSubagentSpec {
+        selection: crate::runtime::agent_profile::FrozenAgentSelection::default(),
         agent: SubagentName::parse(agent).expect("canonical subagent name"),
         definition_digest: serde_json::from_value(serde_json::json!(
             "sha256:0000000000000000000000000000000000000000000000000000000000000000"

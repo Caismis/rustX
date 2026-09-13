@@ -6478,8 +6478,10 @@ available definitions
   -> immutable active ToolRegistry
 ```
 
-`--no-builtin-tools` removes built-ins from default eligibility;
-`--no-direct-tools` selects zero ordinary main-model Tools. Read has no exception.
+`--no-builtin-tools` removes ordinary built-ins from direct selection;
+`--no-direct-tools` selects zero ordinary direct Tools. Read has no exception.
+Agent delegation and Workflow invocation remain independently selected by
+`agent.agents` and `agent.workflows`; Extension Tools remain composition-owned.
 `--tools` is exact and exclusions subtract last. Invalid or ambiguous
 explicit names fail deterministically. Execution ownership, approval,
 concurrency, source activation and model selection remain separate authorities.
