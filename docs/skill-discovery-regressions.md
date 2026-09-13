@@ -59,6 +59,7 @@ rather than inside it.
 | Illegal Agent fields are rejected on authored presence, not emptiness | authoring: `cfg280_skill_selection_polarity_is_owned_by_the_authoring_boundary` (all four presence cases plus the non-empty cases); launch: `optional_explicit_malformed_and_typed_rejections_are_distinct` (`skills = []` through the real launch resolver) |
 | One cumulative candidate budget per logical source | package: `cfg280_one_cumulative_candidate_budget_per_source` (exact at the limit, one over excludes only that source), `cfg280_explicit_collection_roots_share_one_cumulative_budget` (roots share the budget; enumeration order cannot change the result) |
 | Every admitted location is the canonical host path | package: `cfg280_admitted_locations_are_canonical_whatever_spelling_is_configured` (a symlinked ancestor publishes the identical generation — the platform-neutral statement of the macOS `/var` alias) |
+| A named definition can only ever contain exact Skill selection | catalog: `cfg280_named_definitions_admit_exact_skill_selection_only` (direct `AgentProfile` construction, bypassing TOML authoring: both `Exact` shapes are admitted, both `EligibleExcept` shapes are the same typed rejection) |
 
 ## Ownership summary
 
@@ -75,6 +76,8 @@ SkillSnapshot               capability candidate    frozen catalog/bindings/fact
                                                     true publication no-op
 AgentProfileDocument        authoring               authored field presence
 AgentProfile::from_document authoring               root vs named Skill polarity
+NamedAgentDefinition::new   named-definition        named domain is Exact-only
+                            admission
 resolve_agent_profile       generation resolution   selection over one catalog
 CapabilityCoordinator       commit                  atomic publication and freeze
 ```

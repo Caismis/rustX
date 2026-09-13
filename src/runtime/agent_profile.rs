@@ -59,6 +59,12 @@ pub enum AgentSkillSelection {
     /// "Eligible" is the catalog's own Skill-level model-invocation
     /// filtering: a package declaring `disable-model-invocation` is not
     /// widened by automatic root selection.
+    ///
+    /// Root-only, and enforced as such:
+    /// [`NamedAgentDefinition::new`](crate::runtime::subagent::NamedAgentDefinition::new)
+    /// rejects a profile carrying this polarity whatever it lists, so a named
+    /// Agent can never acquire a Skill merely because a later catalog
+    /// generation grew one.
     EligibleExcept(Vec<String>),
 }
 
