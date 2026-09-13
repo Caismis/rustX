@@ -87,7 +87,8 @@
 // Version 31: Goal joins coherent projection bootstrap and the bounded
 // `goal_changed` stream. Activation-only changes advance the client cursor
 // while preserving the independent durable Goal revision.
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 33;
+// Version 34: durable multi-Session summaries have no global `active` field.
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 34;
 
 // ---------------------------------------------------------------------------
 // Identities

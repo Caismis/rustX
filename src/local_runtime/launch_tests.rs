@@ -4401,3 +4401,157 @@ async fn app286_cold_node_routes_do_not_publish_graph_focus() {
         .unwrap();
     assert_eq!(catalog.snapshot(&a.id).unwrap(), changed);
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn app286_session_wire_results_compare_the_installed_route_without_rebinding() {
+    use super::session::SessionPersistentState;
+    use super::session_controller::SessionController;
+    use crate::durable::ConversationStore;
+    use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock, UserSource};
+    use crate::runtime::identity::MessageId;
+    use crate::runtime_client::host::RuntimeClientSessionControl;
+    use crate::runtime_client::types::{
+        RuntimeClientResult, RuntimeClientSessionRequest as Request,
+    };
+
+    let f = Fixture::new();
+    let launch = f.resolve();
+    let controller = SessionController::open(&launch.runtime_root).unwrap();
+    let original = controller
+        .create_session(SessionPersistentState::from_input(&launch.input))
+        .await
+        .unwrap()
+        .session;
+    let access = controller
+        .acquire_session(&original.id, None)
+        .await
+        .unwrap();
+    let store = crate::durable::SqliteConversationStore::open(
+        original.active_conversation_id.clone(),
+        &access.database_path,
+    )
+    .unwrap();
+    let message_id = MessageId::new("reattach-boundary");
+    store
+        .append_canonical(&MessageBlock::User(UserMessageBlock {
+            id: message_id.clone(),
+            content: vec![],
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        }))
+        .unwrap();
+    let surface_revision = store.load_head().unwrap().revision;
+    drop(store);
+    drop(access);
+    drop(controller);
+    let product = LocalSessionClient::compose(
+        &launch,
+        &LocalRuntimeDependencies {
+            startup_session: super::StartupSession::Select {
+                session: original.id.clone(),
+                node: None,
+            },
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let attachment = product.supervisor();
+    let runtime = product.runtime();
+    let lifecycle = runtime.lifecycle_state();
+    let history = runtime.historical_head_snapshot().unwrap();
+    let canonical = runtime.historical_canonical_history().unwrap();
+    let model = runtime.model_config();
+    for request in [
+        Request::New,
+        Request::Clone,
+        Request::Fork {
+            surface_revision,
+            message_id: message_id.clone(),
+        },
+        Request::TreeBranch {
+            surface_revision,
+            message_id,
+        },
+    ] {
+        let tree_branch = matches!(request, Request::TreeBranch { .. });
+        let RuntimeClientResult::SessionChanged {
+            session: target,
+            restart_required,
+            ..
+        } = attachment.handle(request).await.unwrap()
+        else {
+            panic!("route-changing result")
+        };
+        assert!(restart_required);
+        assert_ne!(
+            target.active_conversation_id,
+            original.active_conversation_id
+        );
+        assert_eq!(target.id == original.id.as_str(), tree_branch);
+        // Both another Session and another node in this Session require replacement.
+        let RuntimeClientResult::SessionChanged {
+            restart_required, ..
+        } = attachment
+            .handle(Request::Select {
+                session_id: target.id,
+                node_id: Some(target.active_node),
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("select result")
+        };
+        assert!(restart_required);
+        // Selecting the installed route is still a no-op, even after tree branch
+        // published a different durable graph default.
+        for node_id in [Some(original.active_node.as_str().to_owned()), None] {
+            let RuntimeClientResult::SessionChanged {
+                restart_required, ..
+            } = attachment
+                .handle(Request::Select {
+                    session_id: original.id.as_str().to_owned(),
+                    node_id: node_id.clone(),
+                })
+                .await
+                .unwrap()
+            else {
+                panic!("same Session select result")
+            };
+            assert_eq!(restart_required, tree_branch && node_id.is_none());
+        }
+        for request in [
+            Request::Get,
+            Request::Name("renamed".into()),
+            Request::Tree {
+                node_offset: 0,
+                history_offset: 0,
+                limit: 32,
+            },
+        ] {
+            let view = match attachment.handle(request).await.unwrap() {
+                RuntimeClientResult::Session { session }
+                | RuntimeClientResult::SessionTree { session, .. } => session,
+                RuntimeClientResult::SessionChanged {
+                    session,
+                    restart_required,
+                    ..
+                } => {
+                    assert!(!restart_required);
+                    session
+                }
+                other => panic!("unexpected metadata result: {other:?}"),
+            };
+            assert_eq!(view.id, original.id.as_str());
+            assert_eq!(view.active_conversation_id, original.active_conversation_id);
+        }
+        assert_eq!(runtime.conversation_id(), &original.active_conversation_id);
+        assert_eq!(runtime.lifecycle_state(), lifecycle, "no drain or shutdown");
+        assert_eq!(runtime.historical_head_snapshot().unwrap(), history);
+        assert_eq!(runtime.historical_canonical_history().unwrap(), canonical);
+        assert_eq!(runtime.model_config(), model);
+    }
+    runtime.shutdown().await.unwrap();
+}

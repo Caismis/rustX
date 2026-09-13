@@ -349,7 +349,9 @@ pub enum RuntimeClientSessionRequest {
 /// `goal_changed` for bounded live updates, including activation-only changes.
 /// The Goal durable revision is independent of the Runtime Client cursor;
 /// successful snapshots expose only the Goal view folded at that cursor.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 33;
+/// Version 34 removes the obsolete global `SessionSummaryView.active` field.
+/// Strict negotiation rejects v33 clients before they can decode Session lists.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 34;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1385,6 +1387,23 @@ mod tests {
     use crate::runtime::interaction::{ApprovalDecision, InteractionRef, InteractionResponse};
     use crate::runtime_client::event::RuntimeClientEvent;
 
+    #[test]
+    fn session_list_v34_round_trips_without_global_active() {
+        let wire = serde_json::json!({
+            "type": "session_list",
+            "sessions": [{
+                "id": "session-a",
+                "name": "A",
+                "updated_at": "2026-09-14T00:00:00Z",
+                "active_node": "node-a"
+            }]
+        });
+        let result: RuntimeClientResult = serde_json::from_value(wire.clone()).unwrap();
+        let encoded = serde_json::to_value(result).unwrap();
+        assert_eq!(encoded, wire);
+        assert!(encoded["sessions"][0].get("active").is_none());
+    }
+
     /// Issue #259 blocker 3: the Rust and TypeScript protocol constants are
     /// one number.
     ///
@@ -1420,7 +1439,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 33);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 34);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

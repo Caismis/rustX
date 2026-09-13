@@ -223,7 +223,7 @@ mod tests {
     fn cfg275_redacted_native_variants_deserialize_to_neutral_private_fields() {
         use crate::runtime::workflow::WorkflowDependencyFailure;
         let fixture: serde_json::Value = serde_json::from_str(include_str!(
-            "../../tests/fixtures/runtime-client/redacted-diagnostics-v33.json"
+            "../../tests/fixtures/runtime-client/redacted-diagnostics-v34.json"
         ))
         .unwrap();
         let source = SourceResolutionFailure::Unavailable {
@@ -278,7 +278,7 @@ mod tests {
     #[test]
     fn cfg275_wire_fixture_preserves_native_tags_and_order() {
         let value: serde_json::Value = serde_json::from_str(include_str!(
-            "../../tests/fixtures/runtime-client/capabilities-v33.json"
+            "../../tests/fixtures/runtime-client/capabilities-v34.json"
         ))
         .unwrap();
         let inspection: CapabilityInspection = serde_json::from_value(value.clone()).unwrap();

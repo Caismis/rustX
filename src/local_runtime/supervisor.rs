@@ -190,6 +190,14 @@ impl LocalSessionAttachment {
             .conversation_lineage(&self.session_id, runtime.conversation_id())?;
         Ok(route_view(SessionRoute { session, node }))
     }
+    fn requires_reattach(&self, target: &SessionView) -> bool {
+        self.session_id.as_str() != target.id
+            || self
+                .runtime
+                .get()
+                .is_none_or(|runtime| runtime.conversation_id() != &target.active_conversation_id)
+    }
+
     fn source(
         &self,
         revision: Option<SurfaceRevision>,
@@ -372,7 +380,7 @@ impl RuntimeClientSessionControl for LocalSessionAttachment {
     fn handle(&self, request: RuntimeClientSessionRequest) -> SessionControlFuture {
         let supervisor = self.clone();
         Box::pin(async move {
-            let result = match request {
+            let mut result = match request {
                 RuntimeClientSessionRequest::DeletePreview { session_id } => {
                     RuntimeClientResult::SessionDeletion {
                         result: project_session_deletion(
@@ -516,6 +524,16 @@ impl RuntimeClientSessionControl for LocalSessionAttachment {
                         .map_err(|error| session_error(&error))?,
                 ),
             };
+            // Durable publication does not rebind this single-runtime attachment.
+            // Compare every returned route, including metadata projections, here.
+            if let RuntimeClientResult::SessionChanged {
+                session,
+                restart_required,
+                ..
+            } = &mut result
+            {
+                *restart_required = supervisor.requires_reattach(session);
+            }
             Ok(result)
         })
     }

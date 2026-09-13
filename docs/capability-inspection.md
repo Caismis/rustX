@@ -22,7 +22,7 @@ never authorize additional Tools. Child IPC version 24 carries these facts.
 or omitting the target is a typed CLI error.
 
 `RuntimeResourceSnapshot::inspection()` reads the frozen projection. Runtime
-Client protocol 33 copies it into `resources.inspection`; the TUI's effective
+Client protocol 34 copies it into `resources.inspection`; the TUI's effective
 settings view renders those facts. Neither client resolves capabilities.
 
 ```sh

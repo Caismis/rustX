@@ -5262,6 +5262,11 @@ events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
 The current Runtime Client protocol is defined by `RUNTIME_CLIENT_PROTOCOL_VERSION`.
+
+Runtime Client protocol 34 removes the obsolete global `SessionSummaryView.active`
+field. Strict initialization rejects v33 clients; Session route changes report
+reattachment requirements against the installed single-runtime attachment.
+
 Version 24 added the typed question
 vocabulary, its canonical scalar domains — a finite-binary64 `Number` carried
 as canonical binary64 text and an `Integer` carried as canonical decimal text,

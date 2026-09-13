@@ -6718,6 +6718,10 @@ semantic normalization boundary. The frozen invariants:
   RuntimeEvent/Event Journal schema versioning.** Version negotiation is
   explicit at attachment admission; the current protocol is the sole
   supported version, and every superseded version is rejected explicitly.
+- **Runtime Client protocol v34 removes global Session focus.** Session summaries
+  omit `active`; strict initialization rejects v33 clients. Route-changing results
+  require reattachment whenever the returned Session/Conversation differs from
+  the installed runtime. Durable publication never shuts that runtime down.
 - **Runtime Client protocol v16 introduces the Issue #202 explicit tool
   outcome certainty projection.** The canonical `ToolExecutionStatus`
   replaces `interrupted` with `outcome_unknown` (carrying a bounded
