@@ -1002,7 +1002,9 @@ impl SubagentResolver {
         }
         let mut profile = definition.profile().clone();
         profile.tools = selected_tools;
-        profile.skills = selected_skills;
+        // A per-invocation replacement is always an exact identity list: it
+        // replaces the whole Skill dimension, and it is never a deny-list.
+        profile.skills = crate::runtime::agent_profile::AgentSkillSelection::Exact(selected_skills);
         profile.extensions = extensions;
         let resolved = if invocation.is_empty() {
             resources
@@ -2127,7 +2129,7 @@ mod tests {
                 model: None,
                 execution_deadline: None,
                 tools,
-                skills: Vec::new(),
+                skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 project_instructions:
                     crate::runtime::agent_profile::AgentProjectInstructionPolicy {
                         inherit: true,
@@ -2417,7 +2419,7 @@ mod tests {
                 model: None,
                 execution_deadline: None,
                 tools,
-                skills: Vec::new(),
+                skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 project_instructions:
                     crate::runtime::agent_profile::AgentProjectInstructionPolicy {
                         inherit: true,
@@ -2937,7 +2939,7 @@ mod tests {
                     model: None,
                     execution_deadline: None,
                     tools: Vec::new(),
-                    skills: Vec::new(),
+                    skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                     project_instructions:
                         crate::runtime::agent_profile::AgentProjectInstructionPolicy {
                             inherit: true,
@@ -2962,7 +2964,7 @@ mod tests {
                     model: None,
                     execution_deadline: None,
                     tools: Vec::new(),
-                    skills: Vec::new(),
+                    skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                     project_instructions:
                         crate::runtime::agent_profile::AgentProjectInstructionPolicy {
                             inherit: true,
@@ -3068,7 +3070,7 @@ mod tests {
             // an override would have replaced away.
             "An entirely different routing description.".to_owned(), instructions: "instructions".to_owned(), model: None, execution_deadline: None, tools: vec![AgentToolSelection::Builtin {
                 name: "read".to_owned(),
-            }], skills: vec!["some-skill".to_owned()], project_instructions: crate::runtime::agent_profile::AgentProjectInstructionPolicy {
+            }], skills: crate::runtime::agent_profile::AgentSkillSelection::Exact(vec!["some-skill".to_owned()]), project_instructions: crate::runtime::agent_profile::AgentProjectInstructionPolicy {
                 inherit: true,
                 files: Vec::new(),
             }, workspace_policy: WorkspacePolicy::SharedWorkspace, extensions: crate::extensions::NativeAgentExtensions::with_agent_status(crate::context::AgentStatusConfig::default()).and_todo(), agents: std::collections::BTreeSet::default(), workflows: std::collections::BTreeSet::default() }, std::path::PathBuf::from("/w/reviewer.md"))

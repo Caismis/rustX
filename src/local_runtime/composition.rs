@@ -315,14 +315,17 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                     "cannot register reload-time Workflow Tools: {error}"
                 ))
             })?;
-            let mut skill_discovery = SkillDiscoveryConfig {
-                automatic_roots: self.paths.skill_roots.clone(),
-                explicit_paths: Vec::new(),
+            // Reload rescans the launch-frozen source authorities; it never
+            // rereads the source policy itself, so a running composition
+            // cannot gain or lose a source mid-session.
+            let skill_discovery = SkillDiscoveryConfig {
+                automatic: if self.paths.no_skills {
+                    Vec::new()
+                } else {
+                    self.paths.skill_sources.clone()
+                },
+                explicit_paths: self.paths.skill_paths.clone(),
             };
-            if self.paths.no_skills {
-                skill_discovery.automatic_roots.clear();
-            }
-            skill_discovery.explicit_paths = self.paths.skill_paths.clone();
             let mcp_servers = mcp_bindings_with_authority(
                 &config,
                 &workspace,
@@ -1245,16 +1248,18 @@ impl LocalConversationCore {
                 detail: format!("{error:?}"),
             })?;
 
-            let mut skill_discovery = SkillDiscoveryConfig {
-                automatic_roots: paths.skill_roots.clone(),
-                explicit_paths: Vec::new(),
+            // Launch resolution already resolved the automatic source roots
+            // from the session `[skills].sources` policy, and rebased the
+            // explicit launch paths according to authority. Package discovery
+            // retains its own canonical identity validation.
+            let skill_discovery = SkillDiscoveryConfig {
+                automatic: if paths.no_skills {
+                    Vec::new()
+                } else {
+                    paths.skill_sources.clone()
+                },
+                explicit_paths: paths.skill_paths.clone(),
             };
-            if paths.no_skills {
-                skill_discovery.automatic_roots.clear();
-            }
-            // Launch resolution has already rebased paths according to authority.
-            // Package discovery retains its own canonical identity validation.
-            skill_discovery.explicit_paths = paths.skill_paths.clone();
 
             // 9. The resolver supplied launch controls and layered settings. The
             // coordinator receives the activation policy
@@ -4849,7 +4854,7 @@ mod source_demand_tests {
                     model: None,
                     execution_deadline: None,
                     tools: vec![AgentToolSelection::All { source_id: source }],
-                    skills: Vec::new(),
+                    skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                     project_instructions:
                         crate::runtime::agent_profile::AgentProjectInstructionPolicy {
                             inherit: false,

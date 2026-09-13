@@ -10,7 +10,9 @@ execution scope.
 # rustx.toml
 [agent]
 instructions = "Coordinate the review."
-skills = ["repository-guide"]
+# No positive Skill list: the root automatically sees every eligible Skill in
+# the effective catalog. Subtract one from root visibility only when needed:
+# disabled_skills = ["legacy-java"]
 agents = ["reviewer"]
 workflows = ["check"]
 
@@ -62,7 +64,8 @@ finite `ResolvedAgentProfile` against one admitted generation.
 | --- | --- |
 | `tools.builtin` | Exact ordinary native Tool names. |
 | `tools.sources` | `ToolSourceId` to `"all"` or an exact name array, for both MCP and Managed Python. |
-| `skills` | Exact admitted Skill names, in canonical order after resolution. |
+| `skills` | **Named Agents only.** Exact admitted Skill names, in canonical order after resolution. |
+| `disabled_skills` | **Root only.** Skill identities hidden from root visibility. It removes nothing from the generation catalog: a named Agent that selects a disabled Skill explicitly still gets it. |
 | `extensions` | Closed native composition: Agent Status, Todo and Goal. Extension Tools belong to their composition, never ordinary selectors. |
 | `agents` | Named Agents this caller may delegate to. Catalog existence alone grants no delegation. |
 | `workflows` | Admitted named Workflows this caller may invoke. Static Workflow program admission remains a separate owner. |
@@ -71,6 +74,60 @@ finite `ResolvedAgentProfile` against one admitted generation.
 | `agents_md` | Whether to inherit canonical project guidance, plus bounded supplemental files within admitted workspace authority. |
 | `worktree` | Isolated child workspace policy; clean parent required by default. No arbitrary workspace path may be authored. |
 | `timeout_ms` | Optional whole-child lifecycle deadline. Root scope rejects child lifecycle/worktree requests. |
+
+## Skill selection
+
+Skill selection is not Skill loading. Both polarities resolve against the same
+effective merged Skill catalog, produce the same frozen
+`SkillId`/`SkillVersionId` bindings, and feed the same lazy Read-based loading
+path. Only the *selection* differs:
+
+```text
+root selection policy
+    -> every eligible catalog identity minus agent.disabled_skills
+
+named selection policy
+    -> exactly the authored skills identities
+```
+
+"Eligible" is the catalog's own Skill-level model-invocation filtering: a
+package declaring `disable-model-invocation: true` stays owned by the
+generation and is never widened into any Agent's selection, root included.
+
+The polarity is owned by the authoring boundary. A root document naming
+`skills` and a named document naming `disabled_skills` are both hard
+authoring errors, not silently ignored fields.
+
+Rejection is driven by **authored presence**, never by whether the decoded
+collection is empty:
+
+```text
+root  + omitted skills            -> valid
+root  + skills = []               -> hard authoring error
+root  + skills = ["x"]            -> hard authoring error
+
+named + omitted disabled_skills   -> valid
+named + disabled_skills = []      -> hard authoring error
+named + disabled_skills = ["x"]   -> hard authoring error
+```
+
+`skills = []` is the clearest possible statement of "no Skills", and root
+semantics are "every eligible Skill", so accepting it would silently invert
+the author's intent. Presence is preserved only at the authoring layer
+(including across configuration layering); lowering resolves it into the
+runtime selection polarity, which has no notion of an omitted field.
+
+A malformed Skill identity is a hard error in either polarity. A syntactically
+valid `disabled_skills` identity that the effective catalog does not contain is
+one generation-scoped `disabled_skill_absent` diagnostic and never a startup
+failure.
+
+A Workflow child or dynamic invocation override replaces the whole Skill
+dimension with an exact identity list; there is no deny-list override.
+
+Where Skills are *discovered* is a separate owner — the session
+`[skills].sources` policy and the discovery/merge pipeline documented in
+[runtime resources](runtime-resources.md#skill-sources-and-discovery).
 
 Resource existence is not Agent selection. Source enabled is not Agent exposure.
 Agent Tool ownership is not invocation approval. A profile cannot discover a
@@ -83,7 +140,8 @@ configuration reject the document. For a valid profile, unavailable selections
 produce typed generation-scoped diagnostics and are suppressed. The remaining
 profile stays usable. Tool diagnostics distinguish unavailable builtins,
 undefined/inactive/unprepared/failed sources, and missing exact Tools in a ready
-source. Skills, Agents and Workflows have their own typed unavailable facts.
+source. Skills, Agents and Workflows have their own typed unavailable facts, and the
+root deny-list has its own typed absent fact.
 Diagnostics are canonically ordered and stored with the resolved generation,
 not emitted anew on every model turn.
 

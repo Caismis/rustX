@@ -340,7 +340,7 @@ mod tests {
                 model: None,
                 execution_deadline: None,
                 tools,
-                skills,
+                skills: crate::runtime::agent_profile::AgentSkillSelection::Exact(skills),
                 project_instructions:
                     crate::runtime::agent_profile::AgentProjectInstructionPolicy {
                         inherit: true,

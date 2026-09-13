@@ -109,6 +109,14 @@ pub enum TrustAction {
 #[derive(Debug, Clone)]
 pub struct HostEnvironment {
     pub launch_directory: PathBuf,
+    /// The captured home directory.
+    ///
+    /// This is the one owner of the `global` Skill source root
+    /// (`<home>/.agents/skills`, Issue #280). It is deliberately separate
+    /// from `config_directory`: the global Skill root is a user-owned
+    /// Agent-resource location, not rustX configuration state, and it is
+    /// never derived by shell-style string expansion at a use site.
+    pub home_directory: PathBuf,
     pub config_directory: PathBuf,
     pub state_directory: PathBuf,
 }
@@ -156,6 +164,7 @@ impl HostEnvironment {
             state_directory: state
                 .unwrap_or_else(|| home.join(".local/state"))
                 .join("rustx"),
+            home_directory: home,
         })
     }
 }
@@ -193,7 +202,10 @@ pub struct ProspectiveLaunch {
         >,
     >,
     pub(crate) subagents: crate::runtime::subagent::AgentCatalog,
-    pub(crate) skill_names: Vec<String>,
+    /// The effective source provenance of every admitted Skill identity.
+    pub(crate) skill_provenance: Vec<crate::skills::SkillProvenance>,
+    /// The typed Skill discovery facts of this prospective launch.
+    pub(crate) skill_diagnostics: Vec<crate::skills::SkillDiagnostic>,
     pub(crate) agent_root: PathBuf,
     pub(crate) role_sources:
         BTreeMap<crate::runtime::subagent::SubagentName, super::agent_resources::AgentSource>,
@@ -207,7 +219,7 @@ pub struct ProspectiveLaunch {
     pub(crate) models: ModelCatalog,
     pub(crate) provenance: BTreeMap<String, Origin>,
     pub(crate) identity: String,
-    pub(crate) skill_roots: Vec<PathBuf>,
+    pub(crate) skill_sources: Vec<crate::skills::AutomaticSkillRoot>,
     /// Fixed document slots for explicit resource reload; never discovery.
     documents: Vec<(PathBuf, bool, Origin)>,
     /// Project-origin paths retain their authority even after becoming absolute.
@@ -255,18 +267,22 @@ impl ProspectiveLaunch {
         self.validate_workspace_resource_roots()
     }
 
+    /// Recheck the workspace-owned resource collection roots.
+    ///
+    /// The Skill roots are deliberately **not** in the generic list below:
+    /// this layer has no access to the session Skill source policy, and
+    /// `[skills].sources` may legitimately omit `workspace` entirely. Their
+    /// owner ([`crate::skills::source::validate_selected_roots`]) is
+    /// policy-aware and validates exactly the roots this launch selected and
+    /// froze, so an unselected Skill source cannot fail startup or reload.
     pub(crate) fn validate_workspace_resource_roots(&self) -> Result<(), String> {
-        for relative in [".agents/tools", ".agents/skills"] {
-            if relative == ".agents/skills" && self.no_skills {
-                continue;
-            }
-            crate::runtime::resources::validate_project_resource_path(
-                &self.workspace,
-                &self.workspace.join(relative),
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        Ok(())
+        crate::runtime::resources::validate_project_resource_path(
+            &self.workspace,
+            &self.workspace.join(".agents/tools"),
+        )
+        .map_err(|e| e.to_string())?;
+        crate::skills::source::validate_selected_roots(&self.workspace, &self.skill_sources)
+            .map_err(|e| e.to_string())
     }
     pub(crate) fn settings_view(&self) -> crate::runtime_client::settings::LaunchSettings {
         use crate::runtime_client::settings::{LaunchSettings, ModelDefault, SettingOrigin};
@@ -306,6 +322,22 @@ impl ProspectiveLaunch {
     #[must_use]
     pub fn config(&self) -> &CurrentRuntimeConfig {
         &self.config
+    }
+
+    /// The effective source provenance of every Skill identity this launch
+    /// admitted, including what each one shadowed (Issue #280).
+    #[must_use]
+    pub fn skill_provenance(&self) -> &[crate::skills::SkillProvenance] {
+        &self.skill_provenance
+    }
+
+    /// The typed, canonically ordered Skill discovery facts of this launch.
+    ///
+    /// An excluded malformed package appears here rather than failing the
+    /// launch; only the explicit `--skill` authority itself can fail one.
+    #[must_use]
+    pub fn skill_diagnostics(&self) -> &[crate::skills::SkillDiagnostic] {
+        &self.skill_diagnostics
     }
 
     /// Safe field origins, without configuration values.
@@ -745,13 +777,26 @@ pub fn analyze(
             },
         );
     }
-    let skill_roots = if request.no_skills {
+    // The session Skill source policy decides *where* packages may be
+    // discovered. `--no-skills` is the launch-level off switch for automatic
+    // discovery; the policy itself never names a rustX configuration
+    // directory, and the global root is resolved from the captured host home.
+    let skill_sources = if request.no_skills {
         Vec::new()
     } else {
-        vec![
-            host.config_directory.join("skills"),
-            locations.workspace.join(".agents/skills"),
-        ]
+        crate::skills::automatic_skill_roots(
+            Some(host.home_directory.as_path()),
+            &locations.workspace,
+            &config.skills.selected().map_err(|detail| {
+                LaunchFailure::at(
+                    None,
+                    "skills.sources",
+                    "invalid Skill source policy",
+                    "declare each of \"global\" and \"workspace\" at most once",
+                    detail,
+                )
+            })?,
+        )
     };
     // Capture authority once, including host path aliases and missing leaves.
     // Reload reuses this physical identity; validators must not rebind it.
@@ -777,18 +822,17 @@ pub fn analyze(
     };
     let workspace =
         crate::tools::workspace::Workspace::new(&locations.workspace).map_err(|e| e.to_string())?;
-    let skill_packages = if trusted {
-        if !request.no_skills {
-            crate::runtime::resources::validate_project_resource_path(
-                &locations.workspace,
-                &locations.workspace.join(".agents/skills"),
-            )
+    let skill_discovery = if trusted {
+        // Only the roots this launch actually selected are validated: a Skill
+        // source the policy did not select is inert, so an invalid or
+        // redirected `<workspace>/.agents/skills` cannot fail a launch that
+        // never scans it.
+        crate::skills::source::validate_selected_roots(&locations.workspace, &skill_sources)
             .map_err(LaunchFailure::resource)?;
-        }
         crate::skills::SkillDiscovery::with_config(
             &workspace,
             crate::skills::SkillDiscoveryConfig {
-                automatic_roots: skill_roots.clone(),
+                automatic: skill_sources.clone(),
                 explicit_paths: locations.skill_paths.clone(),
             },
         )
@@ -797,24 +841,17 @@ pub fn analyze(
             LaunchFailure::at(
                 None,
                 "skills",
-                "invalid local Skill package or path",
-                "correct the explicit Skill path and package metadata",
+                "unusable explicit Skill path",
+                "correct the explicit --skill path",
                 e.to_string(),
             )
         })?
     } else {
-        Vec::new()
+        crate::skills::SkillDiscoveryOutcome::default()
     };
-    let skill_names = skill_packages
-        .iter()
-        .map(|package| package.name().to_owned())
-        .collect();
-    let skills = crate::skills::SkillSnapshot::new(
-        skill_packages
-            .into_iter()
-            .map(std::sync::Arc::new)
-            .collect(),
-    );
+    let skill_diagnostics = skill_discovery.diagnostics.clone();
+    let skills = crate::skills::SkillSnapshot::from_discovery(skill_discovery);
+    let skill_provenance = skills.provenance().to_vec();
     crate::runtime::subagent::SubagentResolver::validate_local_references(
         &subagents,
         &skills,
@@ -977,7 +1014,8 @@ pub fn analyze(
         subagents,
         agent_root,
         role_sources,
-        skill_names,
+        skill_provenance,
+        skill_diagnostics,
         source_activations,
         selected_tools,
         locations,
@@ -985,7 +1023,7 @@ pub fn analyze(
         models,
         provenance,
         identity,
-        skill_roots,
+        skill_sources,
         documents,
         project_resources,
     })

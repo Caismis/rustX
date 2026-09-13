@@ -215,23 +215,22 @@ fn committed_echo_package_is_discovered_by_production_python_discovery() {
 fn committed_example_skill_is_found_by_project_agents_discovery() {
     let workspace_path = examples_root().join("workspace");
     let workspace = Workspace::new(&workspace_path).expect("example workspace");
-    let packages = SkillDiscovery::with_config(
+    let outcome = SkillDiscovery::with_config(
         &workspace,
-        SkillDiscoveryConfig {
-            automatic_roots: vec![workspace_path.join(".agents/skills")],
-            explicit_paths: Vec::new(),
-        },
+        SkillDiscoveryConfig::workspace_root(workspace_path.join(".agents/skills")),
     )
     .discover()
     .expect("example Skill must be discoverable");
     assert_eq!(
-        packages
+        outcome
+            .packages
             .iter()
             .map(rustx::skills::SkillPackage::name)
             .collect::<Vec<_>>(),
         vec!["review-guidance"]
     );
-    assert!(packages[0].description().contains("bounded"));
+    assert!(outcome.diagnostics.is_empty());
+    assert!(outcome.packages[0].description().contains("bounded"));
 }
 
 #[test]

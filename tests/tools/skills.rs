@@ -9,7 +9,7 @@ use std::path::Path;
 
 use rustx::runtime::identity::SkillVersionId;
 use rustx::skills::{
-    DependencyError, SkillDiscovery, SkillDiscoveryConfig, SkillPackageError,
+    DependencyError, SkillDiagnostic, SkillDiscovery, SkillDiscoveryConfig, SkillPackageError,
     merge_dependency_manifests, node_environment_digest, python_environment_digest,
     render_skill_catalog,
 };
@@ -44,17 +44,42 @@ fn fixture() -> (tempfile::TempDir, Workspace) {
 }
 
 fn discover(workspace: &Workspace) -> Vec<rustx::skills::SkillPackage> {
-    project_discovery(workspace).discover().expect("discover")
+    project_discovery(workspace)
+        .discover()
+        .expect("discover")
+        .packages
+}
+
+/// The single typed exclusion cause of a workspace root holding exactly one
+/// malformed candidate.
+///
+/// A malformed package is never a discovery failure (#280): it is excluded
+/// with a typed generation diagnostic at the package boundary that owns it.
+fn invalid_cause(workspace: &Workspace) -> SkillPackageError {
+    let outcome = project_discovery(workspace).discover().expect("discovery");
+    assert!(
+        outcome.packages.is_empty(),
+        "the malformed candidate must not publish, got {:?}",
+        outcome
+            .packages
+            .iter()
+            .map(rustx::skills::SkillPackage::name)
+            .collect::<Vec<_>>()
+    );
+    let [SkillDiagnostic::PackageInvalid { cause, .. }] = outcome.diagnostics.as_slice() else {
+        panic!(
+            "expected exactly one package-invalid fact, got {:?}",
+            outcome.diagnostics
+        );
+    };
+    cause.clone()
 }
 
 /// Isolates the project-root tests from the developer's global Skill roots.
 fn project_discovery(workspace: &Workspace) -> SkillDiscovery {
     SkillDiscovery::with_config(
         workspace,
-        SkillDiscoveryConfig {
-            automatic_roots: vec![workspace.root().join(".agents/skills")],
-            explicit_paths: Vec::new(),
-        },
+        SkillDiscoveryConfig::workspace_root(workspace.root().join(".agents/skills")),
     )
 }
 
@@ -63,8 +88,8 @@ fn project_discovery(workspace: &Workspace) -> SkillDiscovery {
 #[test]
 fn missing_skill_root_is_an_empty_skill_set() {
     let (_dir, workspace) = fixture();
-    let packages = project_discovery(&workspace).discover().expect("discover");
-    assert!(packages.is_empty());
+    let outcome = project_discovery(&workspace).discover().expect("discover");
+    assert!(outcome.packages.is_empty());
 }
 
 /// Valid Skills are discovered with deterministic ordering independent of
@@ -117,11 +142,8 @@ fn name_must_match_the_parent_directory() {
         "---\nname: documents\ndescription: A skill.\n---\nbody\n",
     )
     .expect("SKILL.md");
-    let error = project_discovery(&workspace)
-        .discover()
-        .expect_err("rejected");
     assert!(matches!(
-        error,
+        invalid_cause(&workspace),
         SkillPackageError::NameDirectoryMismatch { .. }
     ));
 }
@@ -139,12 +161,10 @@ fn invalid_standard_names_are_rejected() {
             format!("---\nname: {bad}\ndescription: A skill.\n---\nbody\n"),
         )
         .expect("SKILL.md");
-        let error = project_discovery(&workspace)
-            .discover()
-            .expect_err("rejected");
+        let cause = invalid_cause(&workspace);
         assert!(
-            matches!(error, SkillPackageError::InvalidName { .. }),
-            "name {bad:?} must be rejected, got {error:?}"
+            matches!(cause, SkillPackageError::InvalidName { .. }),
+            "name {bad:?} must be rejected, got {cause:?}"
         );
     }
 }
@@ -161,9 +181,7 @@ fn empty_and_oversized_descriptions_are_rejected() {
     )
     .expect("SKILL.md");
     assert!(matches!(
-        project_discovery(&workspace)
-            .discover()
-            .expect_err("rejected"),
+        invalid_cause(&workspace),
         SkillPackageError::InvalidDescription { .. }
     ));
     std::fs::write(
@@ -175,9 +193,7 @@ fn empty_and_oversized_descriptions_are_rejected() {
     )
     .expect("SKILL.md");
     assert!(matches!(
-        project_discovery(&workspace)
-            .discover()
-            .expect_err("rejected"),
+        invalid_cause(&workspace),
         SkillPackageError::InvalidDescription { .. }
     ));
 }
@@ -193,9 +209,7 @@ fn malformed_yaml_is_rejected() {
     )
     .expect("SKILL.md");
     assert!(matches!(
-        project_discovery(&workspace)
-            .discover()
-            .expect_err("rejected"),
+        invalid_cause(&workspace),
         SkillPackageError::MalformedFrontmatter { .. }
     ));
     // A missing closing delimiter is malformed too.
@@ -205,9 +219,7 @@ fn malformed_yaml_is_rejected() {
     )
     .expect("SKILL.md");
     assert!(matches!(
-        project_discovery(&workspace)
-            .discover()
-            .expect_err("rejected"),
+        invalid_cause(&workspace),
         SkillPackageError::MalformedFrontmatter { .. }
     ));
 }
@@ -225,9 +237,7 @@ fn malformed_metadata_is_rejected() {
     )
     .expect("SKILL.md");
     assert!(matches!(
-        project_discovery(&workspace)
-            .discover()
-            .expect_err("rejected"),
+        invalid_cause(&workspace),
         SkillPackageError::MalformedMetadata { .. }
     ));
 }
@@ -238,11 +248,8 @@ fn malformed_metadata_is_rejected() {
 fn candidate_without_skill_markdown_is_rejected() {
     let (dir, workspace) = fixture();
     std::fs::create_dir_all(dir.path().join(".agents/skills/empty")).expect("dir");
-    let error = project_discovery(&workspace)
-        .discover()
-        .expect_err("rejected");
     assert!(matches!(
-        error,
+        invalid_cause(&workspace),
         SkillPackageError::MissingSkillMarkdown { .. }
     ));
 }
@@ -281,11 +288,22 @@ fn package_symlinks_are_rejected() {
         dir.path().join(".agents/skills/link"),
     )
     .expect("symlink root");
+    let outcome = project_discovery(&workspace).discover().expect("discovery");
+    // The valid sibling still publishes; only the symlinked root is excluded.
+    assert_eq!(
+        outcome
+            .packages
+            .iter()
+            .map(rustx::skills::SkillPackage::name)
+            .collect::<Vec<_>>(),
+        ["real"]
+    );
     assert!(matches!(
-        project_discovery(&workspace)
-            .discover()
-            .expect_err("rejected"),
-        SkillPackageError::UnsupportedSymlink { .. }
+        outcome.diagnostics.as_slice(),
+        [SkillDiagnostic::PackageInvalid {
+            cause: SkillPackageError::UnsupportedSymlink { .. },
+            ..
+        }]
     ));
 
     let (dir2, workspace2) = fixture();
@@ -295,11 +313,16 @@ fn package_symlinks_are_rejected() {
         dir2.path().join(".agents/skills/skill/scripts"),
     )
     .expect("internal symlink");
+    let internal = project_discovery(&workspace2)
+        .discover()
+        .expect("discovery");
+    assert!(internal.packages.is_empty());
     assert!(matches!(
-        project_discovery(&workspace2)
-            .discover()
-            .expect_err("rejected"),
-        SkillPackageError::UnsupportedSymlink { .. }
+        internal.diagnostics.as_slice(),
+        [SkillDiagnostic::PackageInvalid {
+            cause: SkillPackageError::UnsupportedSymlink { .. },
+            ..
+        }]
     ));
 }
 
@@ -333,18 +356,13 @@ fn a_non_canonical_package_root_is_published_canonically() {
         // spelling of the same package.
         workspace_root.join("../work/.agents/skills/deck"),
     ] {
-        let packages = SkillDiscovery::with_config(
+        let outcome = SkillDiscovery::with_config(
             &workspace,
-            SkillDiscoveryConfig {
-                automatic_roots: Vec::new(),
-                explicit_paths: vec![explicit.clone()],
-            },
+            SkillDiscoveryConfig::explicit(vec![explicit.clone()]),
         )
         .discover()
         .expect("discovery accepts a non-canonical root");
-        let snapshot = rustx::skills::SkillSnapshot::new(
-            packages.into_iter().map(std::sync::Arc::new).collect(),
-        );
+        let snapshot = rustx::skills::SkillSnapshot::from_discovery(outcome);
         let location = snapshot.catalog_entries()[0].location.clone();
         let published = std::path::Path::new(&location);
 
@@ -404,18 +422,21 @@ fn a_non_utf8_package_root_is_rejected_rather_than_published_lossily() {
     )
     .expect("SKILL.md");
 
-    let error = SkillDiscovery::with_config(
-        &workspace,
-        SkillDiscoveryConfig {
-            automatic_roots: Vec::new(),
-            explicit_paths: vec![package],
-        },
-    )
-    .discover()
-    .expect_err("a non-UTF-8 package root is rejected");
+    let outcome =
+        SkillDiscovery::with_config(&workspace, SkillDiscoveryConfig::explicit(vec![package]))
+            .discover()
+            .expect("an explicit path that exists is not a launch failure");
+    assert!(outcome.packages.is_empty());
     assert!(
-        matches!(error, SkillPackageError::UnrepresentableRoot { .. }),
-        "expected UnrepresentableRoot, got {error:?}"
+        matches!(
+            outcome.diagnostics.as_slice(),
+            [SkillDiagnostic::PackageInvalid {
+                cause: SkillPackageError::UnrepresentableRoot { .. },
+                ..
+            }]
+        ),
+        "expected UnrepresentableRoot, got {:?}",
+        outcome.diagnostics
     );
 }
 
@@ -917,10 +938,10 @@ fn merge_coalesces_and_conflicts_report_every_skill() {
     assert_eq!(versions, ["5.9.0", "5.10.0"]);
 }
 
-/// A malformed rustX dependency declaration fails the whole discovery
-/// transaction (one malformed Skill must not partially activate).
+/// A malformed rustX dependency declaration excludes exactly that package
+/// (#280): one malformed Skill must never suppress an unrelated valid one.
 #[test]
-fn malformed_dependency_declaration_fails_the_transaction() {
+fn malformed_dependency_declaration_excludes_only_its_own_package() {
     let (dir, workspace) = fixture();
     write_skill(dir.path(), "good", "Good skill.", &[], "body\n");
     write_skill(
@@ -930,12 +951,21 @@ fn malformed_dependency_declaration_fails_the_transaction() {
         &[("rustx.python-dependencies", r#"{"pypdf":"not a version"}"#)],
         "body\n",
     );
-    let error = project_discovery(&workspace)
-        .discover()
-        .expect_err("rejected");
+    let outcome = project_discovery(&workspace).discover().expect("discovery");
+    assert_eq!(
+        outcome
+            .packages
+            .iter()
+            .map(rustx::skills::SkillPackage::name)
+            .collect::<Vec<_>>(),
+        ["good"]
+    );
     assert!(matches!(
-        error,
-        SkillPackageError::InvalidDependencyDeclaration { .. }
+        outcome.diagnostics.as_slice(),
+        [SkillDiagnostic::PackageInvalid {
+            cause: SkillPackageError::InvalidDependencyDeclaration { .. },
+            ..
+        }]
     ));
 }
 

@@ -28,6 +28,74 @@ pub struct AgentProjectInstructionPolicy {
     pub files: Vec<ProjectContextFile>,
 }
 
+/// Which ownership the authored document belongs to.
+///
+/// The root and named Agents share one document, one resolver, one admitted
+/// catalog, one set of frozen bindings, and one lazy-loading mechanism. They
+/// differ in exactly one semantic: how the Skill dimension is *selected*.
+/// This kind is the boundary where that single difference is decided, at
+/// document lowering — never later, and never by execution scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentProfileKind {
+    /// The root Agent: automatic eligible-catalog selection minus a
+    /// deny-list.
+    Root,
+    /// A named Agent: exact explicitly authored Skill identities.
+    Named,
+}
+
+/// How one Agent selects Skills from the **same** admitted catalog.
+///
+/// Both variants resolve against the same effective merged catalog, produce
+/// the same frozen `SkillId`/`SkillVersionId` bindings, and feed the same
+/// lazy Read-based loading mechanism. Selection is not loading.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentSkillSelection {
+    /// Exactly these Skill identities (named Agents, Workflow children, and
+    /// dynamic per-invocation replacements).
+    Exact(Vec<String>),
+    /// Every eligible catalog identity except these (the root Agent).
+    ///
+    /// "Eligible" is the catalog's own Skill-level model-invocation
+    /// filtering: a package declaring `disable-model-invocation` is not
+    /// widened by automatic root selection.
+    EligibleExcept(Vec<String>),
+}
+
+impl Default for AgentSkillSelection {
+    fn default() -> Self {
+        Self::Exact(Vec::new())
+    }
+}
+
+impl AgentSkillSelection {
+    /// The authored identities of this selection, whatever its polarity.
+    #[must_use]
+    pub fn names(&self) -> &[String] {
+        match self {
+            Self::Exact(names) | Self::EligibleExcept(names) => names,
+        }
+    }
+
+    /// The authored identities, mutably, for normalization by a definition
+    /// owner.
+    pub fn names_mut(&mut self) -> &mut Vec<String> {
+        match self {
+            Self::Exact(names) | Self::EligibleExcept(names) => names,
+        }
+    }
+
+    /// The stable tag used by definition digests, so the two polarities can
+    /// never hash to the same preimage.
+    #[must_use]
+    pub const fn polarity(&self) -> &'static str {
+        match self {
+            Self::Exact(_) => "exact",
+            Self::EligibleExcept(_) => "eligible_except",
+        }
+    }
+}
+
 /// Complete typed selected intent, independent of root versus named ownership.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentProfile {
@@ -36,7 +104,7 @@ pub struct AgentProfile {
     pub model: Option<SessionModelConfig>,
     pub execution_deadline: Option<SubagentExecutionDeadline>,
     pub tools: Vec<AgentToolSelection>,
-    pub skills: Vec<String>,
+    pub skills: AgentSkillSelection,
     pub extensions: NativeAgentExtensions,
     pub agents: BTreeSet<SubagentName>,
     pub workflows: BTreeSet<WorkflowId>,
@@ -50,12 +118,53 @@ impl AgentProfile {
     /// Rejects malformed selections, invalid deadlines and native text bounds.
     pub fn from_document(
         document: &crate::local_runtime::config::AgentProfileDocument,
+        kind: AgentProfileKind,
         files: Vec<ProjectContextFile>,
     ) -> Result<Self, String> {
         document.tools.validate_spelling()?;
-        for name in &document.skills {
+        for name in document
+            .skills
+            .iter()
+            .chain(&document.disabled_skills)
+            .flatten()
+        {
             crate::skills::package::validate_skill_name(name)?;
         }
+        // The two polarities are not interchangeable authoring, so naming the
+        // wrong one is a hard error rather than a silently ignored field.
+        //
+        // The test is *authored presence*, never emptiness: `skills = []` on
+        // the root is the clearest possible statement of "no Skills", and root
+        // semantics are "every eligible Skill", so accepting it would silently
+        // invert the author's intent. Lowering happens only after the kind has
+        // admitted the document, so the runtime selection below never carries
+        // a field the kind forbids.
+        let skills = match kind {
+            AgentProfileKind::Root => {
+                if document.skills.is_some() {
+                    return Err(
+                        "the root Agent must not author skills: it sees every eligible catalog \
+                         Skill, so even an empty list would contradict its semantics; author \
+                         agent.disabled_skills to hide one"
+                            .to_owned(),
+                    );
+                }
+                AgentSkillSelection::EligibleExcept(
+                    document.disabled_skills.clone().unwrap_or_default(),
+                )
+            }
+            AgentProfileKind::Named => {
+                if document.disabled_skills.is_some() {
+                    return Err(
+                        "disabled_skills is root-only Skill visibility and must not be authored \
+                         on a named Agent, not even as an empty list; a named Agent selects \
+                         Skill identities explicitly with skills"
+                            .to_owned(),
+                    );
+                }
+                AgentSkillSelection::Exact(document.skills.clone().unwrap_or_default())
+            }
+        };
         if document.description.len()
             > crate::runtime::subagent::catalog::MAX_SUBAGENT_DESCRIPTION_BYTES
             || document.instructions.len()
@@ -69,7 +178,7 @@ impl AgentProfile {
             model: document.model.clone(),
             execution_deadline: document.execution_deadline()?,
             tools: document.tools.selectors(),
-            skills: document.skills.clone(),
+            skills,
             extensions: document.extensions.resolve(),
             agents: document.agents.iter().cloned().collect(),
             workflows: document.workflows.iter().cloned().collect(),
@@ -104,10 +213,24 @@ pub struct AgentProfileAuthority<'a> {
 #[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
 pub enum AgentProfileDiagnostic {
     Tool(ToolSelectionError),
-    SkillUnavailable { name: String },
-    AgentUnavailable { name: SubagentName },
-    WorkflowUnavailable { id: WorkflowId },
-    ScopeUnsupported { capability: ScopeCapability },
+    SkillUnavailable {
+        name: String,
+    },
+    /// A syntactically valid root `disabled_skills` identity that the
+    /// effective catalog does not contain. Hiding a Skill that is not there
+    /// is harmless, so this warns and never fails startup.
+    DisabledSkillAbsent {
+        name: String,
+    },
+    AgentUnavailable {
+        name: SubagentName,
+    },
+    WorkflowUnavailable {
+        id: WorkflowId,
+    },
+    ScopeUnsupported {
+        capability: ScopeCapability,
+    },
 }
 /// Closed scope-ineligible capability identities, requiring no string parsing.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -139,9 +262,10 @@ impl AgentProfileDiagnostic {
                 (2, format!("{source}/{name}"))
             }
             Self::SkillUnavailable { name } => (3, name.clone()),
-            Self::AgentUnavailable { name } => (4, name.to_string()),
-            Self::WorkflowUnavailable { id } => (5, id.to_string()),
-            Self::ScopeUnsupported { capability } => (6, capability.key()),
+            Self::DisabledSkillAbsent { name } => (4, name.clone()),
+            Self::AgentUnavailable { name } => (5, name.to_string()),
+            Self::WorkflowUnavailable { id } => (6, id.to_string()),
+            Self::ScopeUnsupported { capability } => (7, capability.key()),
         }
     }
 }
@@ -172,6 +296,51 @@ pub(crate) fn is_dispatcher(definition: &ToolDefinition, workflows: &BTreeSet<Wo
                 .any(|id| definition.id == crate::tools::native::workflow_tool_id(id)))
 }
 
+/// Resolves one Agent's Skill dimension against the admitted catalog.
+///
+/// Both polarities read exactly the same admitted catalog, and only its
+/// *metadata* entries: a resolved selection names Skills, it never loads one,
+/// and the existing lazy Read path stays the only way a `SKILL.md` body
+/// reaches a model. The eligible set is already Skill-level filtered, so a
+/// package declaring `disable-model-invocation` is never widened by the
+/// root's automatic selection.
+fn select_skills(
+    selection: &AgentSkillSelection,
+    catalog: &SkillSnapshot,
+    diagnostics: &mut Vec<AgentProfileDiagnostic>,
+) -> BTreeSet<String> {
+    let eligible = catalog.catalog_entries();
+    let mut skills = BTreeSet::new();
+    match selection {
+        AgentSkillSelection::Exact(names) => {
+            for name in names {
+                if eligible.iter().any(|entry| entry.name == *name) {
+                    skills.insert(name.clone());
+                } else {
+                    diagnostics
+                        .push(AgentProfileDiagnostic::SkillUnavailable { name: name.clone() });
+                }
+            }
+        }
+        AgentSkillSelection::EligibleExcept(disabled) => {
+            // Hiding a Skill the catalog does not contain is harmless, so it
+            // warns once with the generation and never fails startup.
+            for name in disabled {
+                if !eligible.iter().any(|entry| entry.name == *name) {
+                    diagnostics
+                        .push(AgentProfileDiagnostic::DisabledSkillAbsent { name: name.clone() });
+                }
+            }
+            for entry in eligible {
+                if !disabled.contains(&entry.name) {
+                    skills.insert(entry.name.clone());
+                }
+            }
+        }
+    }
+    skills
+}
+
 /// Well-formed but unavailable selection warns and suppresses. Dynamic
 /// invocation authorization must check its requested replacement separately.
 #[must_use]
@@ -200,19 +369,7 @@ pub fn resolve_agent_profile(
             Err(error) => diagnostics.push(AgentProfileDiagnostic::Tool(error)),
         }
     }
-    let mut skills = BTreeSet::new();
-    for name in &profile.skills {
-        if authority
-            .skills
-            .catalog_entries()
-            .iter()
-            .any(|entry| entry.name == *name)
-        {
-            skills.insert(name.clone());
-        } else {
-            diagnostics.push(AgentProfileDiagnostic::SkillUnavailable { name: name.clone() });
-        }
-    }
+    let skills = select_skills(&profile.skills, authority.skills, &mut diagnostics);
     let mut agents = BTreeSet::new();
     for name in &profile.agents {
         if !authority.agents.contains(name) {
@@ -303,6 +460,7 @@ mod tests {
                 },
                 ..Default::default()
             },
+            AgentProfileKind::Named,
             Vec::new(),
         )
         .unwrap()
@@ -331,7 +489,7 @@ mod tests {
         let mut root = profile(&["read"]);
         root.agents.insert(SubagentName::parse("reviewer").unwrap());
         let mut child = profile(&["read", "grep"]);
-        child.skills = vec!["missing".into()];
+        child.skills = AgentSkillSelection::Exact(vec!["missing".into()]);
         child.extensions = crate::extensions::NativeAgentExtensionSelection {
             todo: Some(crate::extensions::TodoExtensionDocument::default()),
             ..Default::default()
@@ -374,7 +532,7 @@ mod tests {
     #[test]
     fn cfg273_missing_builtin_and_catalog_selections_warn_in_canonical_order() {
         let mut profile = profile(&["read", "missing"]);
-        profile.skills = vec!["zeta".into(), "alpha".into()];
+        profile.skills = AgentSkillSelection::Exact(vec!["zeta".into(), "alpha".into()]);
         profile.agents = ["zeta", "alpha"]
             .map(|name| SubagentName::parse(name).unwrap())
             .into();
@@ -388,7 +546,7 @@ mod tests {
             AgentScope::Root,
         );
         profile.tools.reverse();
-        profile.skills.reverse();
+        profile.skills.names_mut().reverse();
         let second = resolve(
             &profile,
             &available(),
@@ -545,7 +703,7 @@ mod composition_tests {
         let catalog = crate::runtime::subagent::AgentCatalog::new([
             crate::runtime::subagent::NamedAgentDefinition::new(
                 reviewer.clone(),
-                AgentProfile::from_document(&named, Vec::new()).unwrap(),
+                AgentProfile::from_document(&named, AgentProfileKind::Named, Vec::new()).unwrap(),
                 "reviewer.toml".into(),
             )
             .unwrap(),
@@ -612,21 +770,19 @@ mod composition_tests {
         )
         .unwrap();
         let workspace = crate::tools::workspace::Workspace::new(directory.path()).unwrap();
-        let packages = crate::skills::SkillDiscovery::with_config(
+        let discovered = crate::skills::SkillDiscovery::with_config(
             &workspace,
-            crate::skills::SkillDiscoveryConfig {
-                automatic_roots: Vec::new(),
-                explicit_paths: vec![skill],
-            },
+            crate::skills::SkillDiscoveryConfig::explicit(vec![skill]),
         )
         .discover()
         .unwrap();
-        let skills = SkillSnapshot::new(packages.into_iter().map(std::sync::Arc::new).collect());
+        let skills = SkillSnapshot::from_discovery(discovered);
         let document = crate::local_runtime::agent_resources::parse(
             "skills = ['review', 'missing']\n[tools]\nbuiltin = ['read']",
         )
         .unwrap();
-        let profile = AgentProfile::from_document(&document, Vec::new()).unwrap();
+        let profile =
+            AgentProfile::from_document(&document, AgentProfileKind::Named, Vec::new()).unwrap();
         let tools = AvailableToolCatalog::metadata(
             crate::tools::native::definitions(
                 crate::tools::native::NativeToolPolicies::default(),
@@ -655,11 +811,214 @@ mod composition_tests {
             }]
         );
     }
+
+    /// The #280 root/named Skill-selection contract, resolved against **one**
+    /// admitted catalog through **one** resolver.
+    ///
+    /// Covers acceptance items 6, 7, 8, 9, 10, 17 and 21.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one contract, proven end to end in order
+    fn cfg280_root_sees_the_eligible_catalog_minus_its_deny_list() {
+        let directory = tempfile::tempdir().unwrap();
+        let global = directory.path().join("home/.agents/skills");
+        let workspace_root = directory.path().join("workspace");
+        std::fs::create_dir_all(&workspace_root).unwrap();
+        let project = workspace_root.join(".agents/skills");
+        for (root, name, description, extra) in [
+            (&global, "backend-conventions", "Backend conventions", ""),
+            (&global, "legacy-java", "Legacy Java guidance", ""),
+            (&project, "rust-review", "Review Rust", ""),
+            (
+                &project,
+                "internal-only",
+                "Runtime-only guidance",
+                "\ndisable-model-invocation: true",
+            ),
+        ] {
+            let package = root.join(name);
+            std::fs::create_dir_all(&package).unwrap();
+            std::fs::write(
+                package.join("SKILL.md"),
+                format!(
+                    "---\nname: {name}\ndescription: {description}{extra}\n---\nSECRET-BODY-{name}\n"
+                ),
+            )
+            .unwrap();
+        }
+        let workspace = crate::tools::workspace::Workspace::new(&workspace_root).unwrap();
+        let discovered = crate::skills::SkillDiscovery::with_config(
+            &workspace,
+            crate::skills::SkillDiscoveryConfig {
+                automatic: crate::skills::automatic_skill_roots(
+                    Some(&directory.path().join("home")),
+                    workspace.root(),
+                    &crate::skills::default_automatic_sources(),
+                ),
+                explicit_paths: Vec::new(),
+            },
+        )
+        .discover()
+        .unwrap();
+        let skills = SkillSnapshot::from_discovery(discovered);
+        // The catalog owns four packages; one is model-ineligible.
+        assert_eq!(skills.packages().len(), 4);
+        assert_eq!(
+            skills
+                .catalog_entries()
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            ["backend-conventions", "legacy-java", "rust-review"]
+        );
+
+        let tools = AvailableToolCatalog::metadata(
+            crate::tools::native::definitions(
+                crate::tools::native::NativeToolPolicies::default(),
+                &crate::runtime::subagent::AgentCatalog::empty(),
+            )
+            .into_iter()
+            .map(|(definition, _)| definition),
+        );
+        let authority = AgentProfileAuthority {
+            tools: &tools,
+            availability: &CapabilityAvailability::new(),
+            skills: &skills,
+            agents: &BTreeSet::new(),
+            workflows: &BTreeSet::new(),
+            scope: AgentScope::Root,
+        };
+        let root_document = crate::local_runtime::config::AgentProfileDocument {
+            disabled_skills: Some(vec!["legacy-java".into(), "absent-skill".into()]),
+            ..crate::local_runtime::config::builtin_root_profile()
+        };
+        let root = resolve_agent_profile(
+            &AgentProfile::from_document(&root_document, AgentProfileKind::Root, Vec::new())
+                .unwrap(),
+            &authority,
+        );
+        // (6)(7)(17): every *eligible* catalog Skill minus the deny-list.
+        // `internal-only` is never widened by automatic root selection.
+        assert_eq!(root.skills, ["backend-conventions", "rust-review"]);
+        // (8): a syntactically valid identity the catalog does not contain is
+        // exactly one generation diagnostic, not a startup failure.
+        assert_eq!(
+            root.diagnostics,
+            [AgentProfileDiagnostic::DisabledSkillAbsent {
+                name: "absent-skill".into()
+            }]
+        );
+
+        // (7)(9): the deny-list is root-only visibility. It removes nothing
+        // from the catalog, and a named Agent still selects the denied Skill
+        // against the same global/workspace merged catalog.
+        let named = resolve_agent_profile(
+            &AgentProfile::from_document(
+                &crate::local_runtime::agent_resources::parse(
+                    "description = 'r'\ninstructions = 'i'\n\
+                     skills = ['legacy-java', 'backend-conventions']",
+                )
+                .unwrap(),
+                AgentProfileKind::Named,
+                Vec::new(),
+            )
+            .unwrap(),
+            &authority,
+        );
+        assert_eq!(named.skills, ["backend-conventions", "legacy-java"]);
+        assert!(named.diagnostics.is_empty());
+        assert!(
+            skills
+                .packages()
+                .iter()
+                .any(|package| package.name() == "legacy-java"),
+            "a root deny-list must never delete a Skill from the generation catalog"
+        );
+
+        // (17): a named Agent cannot select a model-ineligible package either.
+        let ineligible = resolve_agent_profile(
+            &AgentProfile::from_document(
+                &crate::local_runtime::agent_resources::parse(
+                    "description = 'r'\ninstructions = 'i'\nskills = ['internal-only']",
+                )
+                .unwrap(),
+                AgentProfileKind::Named,
+                Vec::new(),
+            )
+            .unwrap(),
+            &authority,
+        );
+        assert!(ineligible.skills.is_empty());
+        assert_eq!(
+            ineligible.diagnostics,
+            [AgentProfileDiagnostic::SkillUnavailable {
+                name: "internal-only".into()
+            }]
+        );
+
+        // (10)(21): selection is not loading. Nothing a resolver produced —
+        // for the root or for a named child — contains a `SKILL.md` body, and
+        // the rendered catalog is metadata plus a host location only.
+        let rendered = crate::skills::render_skill_catalog(skills.catalog_entries());
+        for projection in [
+            rendered.clone(),
+            format!("{root:?}"),
+            format!("{named:?}"),
+            format!("{skills:?}"),
+        ] {
+            assert!(
+                !projection.contains("SECRET-BODY-"),
+                "a Skill body must never be injected by selection: {projection}"
+            );
+        }
+        assert!(rendered.contains("<location>"));
+    }
+
+    /// #280 (16): the resolved selection and its diagnostics are canonical
+    /// under a deliberately permuted deny-list.
+    #[test]
+    fn cfg280_root_selection_is_order_independent() {
+        let tools = AvailableToolCatalog::metadata(
+            crate::tools::native::definitions(
+                crate::tools::native::NativeToolPolicies::default(),
+                &crate::runtime::subagent::AgentCatalog::empty(),
+            )
+            .into_iter()
+            .map(|(definition, _)| definition),
+        );
+        let skills = SkillSnapshot::new(Vec::new());
+        let authority = AgentProfileAuthority {
+            tools: &tools,
+            availability: &CapabilityAvailability::new(),
+            skills: &skills,
+            agents: &BTreeSet::new(),
+            workflows: &BTreeSet::new(),
+            scope: AgentScope::Root,
+        };
+        let resolve = |names: &[&str]| {
+            resolve_agent_profile(
+                &AgentProfile::from_document(
+                    &crate::local_runtime::config::AgentProfileDocument {
+                        disabled_skills: Some(
+                            names.iter().map(|name| (*name).to_owned()).collect(),
+                        ),
+                        ..crate::local_runtime::config::builtin_root_profile()
+                    },
+                    AgentProfileKind::Root,
+                    Vec::new(),
+                )
+                .unwrap(),
+                &authority,
+            )
+        };
+        assert_eq!(resolve(&["zeta", "alpha"]), resolve(&["alpha", "zeta"]));
+        assert_eq!(resolve(&["zeta", "alpha"]).diagnostics.len(), 2);
+    }
     #[test]
     fn cfg273_known_builtin_unavailable_in_generation_is_suppressed() {
         let document =
             crate::local_runtime::agent_resources::parse("[tools]\nbuiltin = ['read']").unwrap();
-        let profile = AgentProfile::from_document(&document, Vec::new()).unwrap();
+        let profile =
+            AgentProfile::from_document(&document, AgentProfileKind::Named, Vec::new()).unwrap();
         let resolved = resolve_agent_profile(
             &profile,
             &AgentProfileAuthority {

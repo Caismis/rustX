@@ -6162,15 +6162,6 @@ mod tests {
     fn fixture_activation() -> crate::capabilities::AgentActivation {
         let mut activation = crate::capabilities::AgentActivation::default();
         activation.profile.tools.builtin.push("reload_proof".into());
-        activation.profile.skills = [
-            "exact-fit-skill",
-            "pinned-skill",
-            "reload-proof",
-            "late-skill",
-        ]
-        .into_iter()
-        .map(str::to_owned)
-        .collect();
         activation
     }
 
@@ -7879,10 +7870,7 @@ mod tests {
             Some(with_native_read(ToolRegistry::new())),
             None,
             HeadlessRuntimeOptions {
-                skill_discovery: crate::skills::SkillDiscoveryConfig {
-                    automatic_roots: Vec::new(),
-                    explicit_paths: vec![skill],
-                },
+                skill_discovery: crate::skills::SkillDiscoveryConfig::explicit(vec![skill]),
                 estimator: estimator(),
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -9092,10 +9080,7 @@ mod tests {
             )),
             None,
             HeadlessRuntimeOptions {
-                skill_discovery: crate::skills::SkillDiscoveryConfig {
-                    automatic_roots: Vec::new(),
-                    explicit_paths: vec![skill.clone()],
-                },
+                skill_discovery: crate::skills::SkillDiscoveryConfig::explicit(vec![skill.clone()]),
                 initial_messages: vec![seed_user(
                     "old",
                     "old history that the overflow compaction retires: this seed carries enough \
@@ -9136,10 +9121,7 @@ mod tests {
                 "Tool generation B",
             )),
             agent_activation: fixture_activation(),
-            skill_discovery: crate::skills::SkillDiscoveryConfig {
-                automatic_roots: Vec::new(),
-                explicit_paths: vec![skill],
-            },
+            skill_discovery: crate::skills::SkillDiscoveryConfig::explicit(vec![skill]),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: runtime.tool_runtime().environment().clone(),
         });
@@ -9264,10 +9246,7 @@ mod tests {
             source_demand: crate::capabilities::source::ToolSourceDemand::default(),
             base_tool_registry: Arc::new(with_native_read(registry)),
             agent_activation: fixture_activation(),
-            skill_discovery: crate::skills::SkillDiscoveryConfig {
-                automatic_roots: Vec::new(),
-                explicit_paths: vec![skill.clone()],
-            },
+            skill_discovery: crate::skills::SkillDiscoveryConfig::explicit(vec![skill.clone()]),
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: runtime.tool_runtime().environment().clone(),
         });

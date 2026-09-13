@@ -5,8 +5,13 @@
 //!
 //! The skills plane owns:
 //!
-//! - Skill discovery from current user/global, project, configured, and CLI
-//!   roots (`package::SkillDiscovery`);
+//! - the session-level Skill **source policy**, source identity, and
+//!   automatic root resolution (`source`);
+//! - Skill discovery, per-candidate validation, same-scope conflict
+//!   elimination, and `explicit > workspace > global` merge
+//!   (`package::SkillDiscovery`);
+//! - typed generation-scoped Skill diagnostics and effective provenance
+//!   (`diagnostics`);
 //! - Agent Skills `SKILL.md` frontmatter parsing and validation
 //!   (`package::SkillPackage`);
 //! - deterministic content-derived package/version hashing (`identity`);
@@ -32,10 +37,12 @@
 
 mod catalog;
 mod dependencies;
+mod diagnostics;
 pub mod environments;
 pub(crate) mod identity;
 pub mod materialization;
 pub(crate) mod package;
+pub mod source;
 
 pub(crate) use catalog::admitted_skill_entries;
 pub use catalog::{SkillCatalogEntry, SkillSnapshot, render_skill_catalog};
@@ -43,9 +50,17 @@ pub use dependencies::{
     DependencyConflict, DependencyError, DependencyManifest, Ecosystem, merge_dependency_manifests,
     parse_node_dependencies, parse_python_dependencies,
 };
+pub use diagnostics::{ShadowedSkill, SkillDiagnostic, SkillDiagnosticSeverity, SkillProvenance};
 pub use environments::{
     ENVIRONMENT_MANIFEST_FILE, EnvironmentPreparationError, EnvironmentStore, NodeEnvironment,
     PythonEnvironment, RuntimeVersions, SkillEnvironmentBackend, node_environment_digest,
     python_environment_digest,
 };
-pub use package::{SkillDiscovery, SkillDiscoveryConfig, SkillPackage, SkillPackageError};
+pub use package::{
+    SkillDiscovery, SkillDiscoveryConfig, SkillDiscoveryError, SkillDiscoveryOutcome, SkillPackage,
+    SkillPackageError,
+};
+pub use source::{
+    AutomaticSkillRoot, AutomaticSkillSource, SKILLS_DIRECTORY, SKILLS_ROOT, SkillSource,
+    automatic_skill_roots, default_automatic_sources,
+};

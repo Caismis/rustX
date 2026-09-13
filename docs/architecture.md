@@ -5000,21 +5000,53 @@ All active skills in one conversation share one Python environment and one Node 
 
 The M6 implementation (`src/skills`) freezes the Skill plane boundary:
 
-- **Skill roots.** `.agents/skills/` is the canonical project authoring
-  convention. The launch resolver supplies the host configuration directory's
-  `skills/` and `<workspace>/.agents/skills/` automatic roots, plus layered
-  explicit paths. It resolves document-relative and CLI-relative paths before
-  discovery. Package validation canonicalizes each admitted package, so it
-  always has a canonical absolute UTF-8 root and every consumer of the
-  published location resolves the same file. Missing automatic roots are
-  empty;
-  missing explicit paths fail. Hidden root entries and unrelated files are
-  ignored; results are deterministically ordered by validated Skill name;
-  any malformed candidate fails the whole discovery transaction; symlinked
+- **Skill sources (Issue #280).** `.agents/skills/` is the canonical
+  authoring convention on both sides of the two automatic sources:
+
+  ```text
+  global    -> ~/.agents/skills
+  workspace -> <workspace>/.agents/skills
+
+  precedence: explicit --skill > workspace > global
+  ```
+
+  The launch resolver resolves the global root from its captured host home
+  directory — never a rustX configuration directory, and never by shell
+  expansion at a use site — and selects which automatic roots are scanned
+  from the launch-scoped `[skills].sources` policy. `global` and `workspace`
+  are the only accepted identities; unknown names, duplicates and unknown
+  fields are hard authoring errors; the array order is never precedence.
+  `--skill` remains a separate launch authority for an explicit package,
+  `SKILL.md`, or collection root, and passes through the same validation,
+  conflict handling and generation freeze. It resolves document-relative and
+  CLI-relative paths before discovery.
+
+  Package validation canonicalizes each admitted package, so it always has a
+  canonical absolute UTF-8 root and every consumer of the published location
+  resolves the same file. A source is a bounded authority: an accepted
+  candidate must stay inside its own source's canonical root, so global and
+  workspace never measure each other's containment. Missing automatic roots
+  are a benign empty set and a typed fact; a missing explicit path is a
+  launch error. Hidden root entries and unrelated files are ignored; results
+  are deterministically ordered by validated Skill name, independent of
+  filesystem enumeration order and of configured root order; symlinked
   package roots and package-internal symlinks are rejected (Skill-package
   validation only — the general Workspace symlink contract for ordinary
-  tools is unchanged). Duplicate logical identities fail explicitly rather
-  than using root or filesystem enumeration order.
+  tools is unchanged).
+- **Exclusion, conflict and merge (Issue #280).** One malformed Skill package
+  never suppresses unrelated valid Skills: it is excluded with a typed
+  generation-scoped diagnostic that preserves its validation cause, and the
+  rest of its source still publishes. Two distinct packages resolving to one
+  logical identity *in the same scope* exclude every conflicting definition
+  and emit one deterministic conflict fact — discovery never picks a winner
+  by enumeration order. Validation and same-scope conflict elimination run
+  before cross-source winner selection, so an excluded candidate cannot win
+  merely by living in the higher-precedence source. A valid package shadowed
+  by a higher-precedence source is intentional: the shadow is kept as
+  generation provenance (winner source/location plus each shadowed
+  source/location) and never reaches the model-facing catalog. Diagnostics
+  are computed once with the candidate generation, canonically ordered, and
+  never re-emitted per model turn.
 - **Format.** `SKILL.md` is standard Agent Skills YAML frontmatter plus
   Markdown: `name` (validated against the standard naming rules and the
   parent directory), `description` (non-empty, standard length bound),
@@ -7981,8 +8013,16 @@ Representative current runtime/project configuration:
 ```toml
 schema_version = 8
 agent_id = "agent-default"
+
+# Where Skill packages may be discovered. This is the default.
+[skills]
+sources = ["global", "workspace"]
+
 [agent]
-skills = ["repository-guide"]
+# The root Agent needs no positive Skill list: it sees every eligible Skill in
+# the effective catalog. `disabled_skills = ["legacy-java"]` would hide one
+# from root visibility only. Authoring `skills` here is an error whenever it
+# appears, `skills = []` included.
 
 [agent.tools]
 builtin = ["read", "write", "edit", "glob", "grep", "bash"]

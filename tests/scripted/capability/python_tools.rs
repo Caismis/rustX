@@ -235,10 +235,9 @@ fn fixture_with_selection(
             base_tool_registry: Arc::new(ToolRegistry::new()),
             extension_tools: rustx::extensions::ExtensionToolPlane::none(),
             agent_activation: rustx::capabilities::AgentActivation::default(),
-            skill_discovery: rustx::skills::SkillDiscoveryConfig {
-                automatic_roots: vec![workspace_root.join(".agents/skills")],
-                explicit_paths: Vec::new(),
-            },
+            skill_discovery: rustx::skills::SkillDiscoveryConfig::workspace_root(
+                workspace_root.join(".agents/skills"),
+            ),
             mcp_servers,
             base_environment: ToolEnvironment::new(),
             environment_store_root: dir.path().join("skill-env"),

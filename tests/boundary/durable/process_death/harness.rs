@@ -108,7 +108,7 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
     toml::to_string_pretty(&serde_json::json!({
         "schema_version": 8,
         "agent_id": "agent-fnd06",
-        "agent": {"model": {"model": MODEL}, "tools": {"builtin": builtin_tools}, "extensions": {"agent_status": {"enabled": true}, "todo": {"enabled": include_todo}}, "agents": ["explore"], "skills": ["alpha", "beta"]},
+        "agent": {"model": {"model": MODEL}, "tools": {"builtin": builtin_tools}, "extensions": {"agent_status": {"enabled": true}, "todo": {"enabled": include_todo}}, "agents": ["explore"]},
         "approval_mode": "policy",
         "context": {"reserve_tokens": 0, "keep_recent_tokens": 0},
         "native_tools": {
