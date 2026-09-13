@@ -116,7 +116,9 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 33. Version 32 freezes Issue #258’s durable
+The current SQLite development schema is defined by `SQLITE_SCHEMA_VERSION`.
+Version 34 adds native revisioned Goal state and atomic Goal/inbound accounting.
+Version 32 freezes Issue #258’s durable
 `profile_digest` for the effective admitted child execution profile. Version 33 establishes
 non-creating rollback-journal management reads and separated workspace storage.
 Version 31 froze Issue
@@ -5259,7 +5261,8 @@ is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
-The current Runtime Client protocol is version 24, adding the typed question
+The current Runtime Client protocol is defined by `RUNTIME_CLIENT_PROTOCOL_VERSION`.
+Version 24 added the typed question
 vocabulary, its canonical scalar domains — a finite-binary64 `Number` carried
 as canonical binary64 text and an `Integer` carried as canonical decimal text,
 neither of them as a JSON number a JavaScript client would re-spell — and

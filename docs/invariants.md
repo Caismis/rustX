@@ -147,8 +147,9 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses rollback journaling (`DELETE`), `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 33 is the only accepted schema; version 32 and every older
-development schema fail explicitly at open and are not migrated. Version 32
+schema `SQLITE_SCHEMA_VERSION` is the only accepted schema; incompatible
+development schemas fail explicitly at open and are not migrated. Version 34
+adds native revisioned Goal state and atomic Goal/inbound accounting. Version 32
 freezes Issue #258’s effective child `profile_digest`; version 33 establishes
 Issue #254’s rollback-journal management and local storage contract. Version 31
 freezes the Issue #242 typed Questionnaire interaction audit — canonical
