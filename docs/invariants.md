@@ -3028,7 +3028,7 @@ after ChildGuidanceOutcome::Accepted:
 ### Two callers, one algorithm, different authority
 
 - **The caller's authority is an explicit typed native input, never model
-  input.** `SubagentOverrideAuthority` is supplied by the launch site.
+  input.** Dynamic Subagent delegation and static Workflow admission are separate launch boundaries.
   A model emits `override`; it cannot emit the authority its `override` is
   judged under, cannot change the Subagent admission domain, and cannot supply
   an authority snapshot of its own.
@@ -3547,7 +3547,7 @@ the launch-boundary policy inheritance.
   Agents without merging instructions or capabilities. `agent.agents` and
   `agent.workflows` select delegation and Workflow invocation capabilities from
   admitted resources, warning and suppressing unavailable selections.
-  `subagents.workflow` separately owns static Workflow Agent-node admission.
+  Workflow YAML alone declares static Workflow Agent dependencies.
   Discovery never prepares Python packages or grants execution or approval authority.
 - **One candidate publishes atomically.** Exact YAML loading, program
   compilation, profile admission, capability validation, and concrete

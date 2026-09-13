@@ -8460,7 +8460,7 @@ Agent or Workflow produces a typed generation-scoped diagnostic and is suppresse
 the remaining profile stays usable. Malformed identities, unknown fields and
 invalid authoring remain hard errors.
 
-`subagents.workflow` separately owns static Workflow Agent-node admission.
+Workflow YAML alone declares static Workflow Agent dependencies.
 Canonical `.agents/workflows/<id>.yaml` resources establish Workflow identities.
 Workflow program parsing, compilation and static admission errors remain owned
 by the Workflow subsystem; profile suppression does not relax those contracts.
@@ -8539,7 +8539,7 @@ Workflow-owned active work; no detached child survives successful quiescence.
 ### Publication, reload, and recovery
 
 Startup and reload construct one complete candidate: configuration, exact
-discovered YAML, compiled programs, both Agent admission sets, capability
+discovered YAML, frozen Workflow admission, Agent selections, capability
 availability, and native Tool registrations. Validation happens off-side and
 one publication boundary makes the coherent generation visible. An invalid
 candidate leaves the previous valid generation untouched. A foreground

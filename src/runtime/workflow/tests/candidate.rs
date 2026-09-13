@@ -56,7 +56,7 @@ async fn loop_checker_supervised_process_gate_blocks_next_writer_and_exhaustion_
         gate.local_addr().unwrap().port()
     );
     let state = schema(json!({"passed":{"type":"boolean"}}), &["passed"]);
-    let definition = serde_json::from_value(json!({"description":"native gated feedback","workspace":{"require_clean_parent":true},"tools":[{"origin":"builtin","name":"bash"}],"block":{
+    let definition = serde_json::from_value(json!({"description":"native gated feedback","workspace":{"require_clean_parent":true},"block":{
         "input":state,"output":state,"entry":"repair","nodes":{
             "repair":repair_agent(),
             "check":{"type":"tool","selector":{"origin":"builtin","name":"bash"},"arguments":{"type":"literal","value":{"command":command}},"result":{"type":"json","part":0,"schema":{"type":"object"}}},
@@ -68,7 +68,7 @@ async fn loop_checker_supervised_process_gate_blocks_next_writer_and_exhaustion_
     let (_, cancellation) = workflow_cancellation();
     let mut task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 program,
                 ToolCallId::new("process-loop"),
                 context,
@@ -187,7 +187,7 @@ async fn loop_failed_and_cancelled_owned_work_preserves_dirty_handoff_without_re
         let (trigger, cancellation) = workflow_cancellation();
         let task = tokio::spawn(async move {
             runtime
-                .run_foreground(
+                .run_test_foreground(
                     program,
                     ToolCallId::new("failed-loop"),
                     context,
@@ -311,7 +311,7 @@ async fn loop_candidate_mutation_clears_old_acceptance_and_stale_review_cannot_c
     let (_, cancellation) = workflow_cancellation();
     let task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 Arc::new(compile_test(definition).unwrap()),
                 ToolCallId::new("candidate-review-loop"),
                 context,
@@ -478,18 +478,19 @@ async fn agent_dirty_bytes_reach_exact_tool_context_after_child_settlement_with_
     let frozen_skills = resources.skill_catalog().map(str::to_owned);
     let frozen_instructions = resources.project_instructions().map(str::to_owned);
     let invocation = serde_json::from_value(json!({"extensions": {}})).unwrap();
-    let default = context
-        .resolve_workflow(&profile("reviewer"), None)
-        .unwrap();
+    let frozen_definition = resources.subagents().get(&profile("reviewer")).unwrap();
+    let resolved = resources.resolved_agent(&profile("reviewer")).unwrap();
     let frozen = context
-        .resolve_workflow(&profile("reviewer"), Some(&invocation))
+        .bind_workflow_agent(
+            &crate::runtime::subagent::resolver::FrozenAgentComposition::freeze(
+                frozen_definition,
+                resolved,
+                resources.capability().skills(),
+                resources.capability().mcp_servers(),
+            )
+            .unwrap(),
+        )
         .unwrap();
-    assert_eq!(default.definition_digest, frozen.definition_digest);
-    assert_eq!(
-        default.profile_digest(),
-        frozen.profile_digest(),
-        "the named fixture already selects no extensions"
-    );
     let mut definition = candidate_definition(true);
     let WorkflowNodeDefinition::Agent {
         invocation_override,
@@ -504,7 +505,7 @@ async fn agent_dirty_bytes_reach_exact_tool_context_after_child_settlement_with_
     let (_, cancellation) = workflow_cancellation();
     let mut task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 program,
                 ToolCallId::new("candidate-run"),
                 context,
@@ -667,7 +668,7 @@ async fn candidate_profile_conflict_and_unsupported_executor_fail_before_git_or_
         );
         let (_, cancellation) = workflow_cancellation();
         let error = workflow_runtime(&plane)
-            .run_foreground(
+            .run_test_foreground(
                 candidate_program(!unsupported),
                 ToolCallId::new("rejected"),
                 context,
@@ -698,7 +699,7 @@ async fn tool_mutation_invalidates_actual_invocation_and_retains_failed_candidat
     let context = setup_context(&plane, probe);
     let (_, cancellation) = workflow_cancellation();
     let error = workflow_runtime(&plane)
-        .run_foreground(
+        .run_test_foreground(
             candidate_program(false),
             ToolCallId::new("mutating-check"),
             context,
@@ -785,7 +786,7 @@ async fn cancellation_agent_failure_and_tool_failure_share_dirty_run_handoff() {
         };
         let task = tokio::spawn(async move {
             runtime
-                .run_foreground(
+                .run_test_foreground(
                     program,
                     ToolCallId::new("failed-run"),
                     context,
@@ -853,7 +854,7 @@ async fn retained_run_disposal_is_identity_only_idempotent_and_preserves_termina
     let context = setup_context(&plane, probe);
     let (_, cancellation) = workflow_cancellation();
     let error = workflow_runtime(&plane)
-        .run_foreground(
+        .run_test_foreground(
             candidate_program(false),
             ToolCallId::new("retained"),
             context,
@@ -972,7 +973,7 @@ async fn reopened_journal_retains_resource_facts_without_recreating_borrowers() 
     let context = setup_context(&plane, probe);
     let (_, cancellation) = workflow_cancellation();
     let error = workflow_runtime(&plane)
-        .run_foreground(
+        .run_test_foreground(
             candidate_program(false),
             ToolCallId::new("restart"),
             context,
@@ -1150,7 +1151,7 @@ async fn parallel_candidate_consumers_serialize_and_cancellation_waits_for_physi
         let (trigger, cancellation) = workflow_cancellation();
         let task = tokio::spawn(async move {
             runtime
-                .run_foreground(
+                .run_test_foreground(
                     program,
                     ToolCallId::new("parallel-candidates"),
                     context,
@@ -1322,7 +1323,7 @@ async fn stale_check_after_writer(return_value: bool, parallel_export: bool) {
     let (_, cancellation) = workflow_cancellation();
     let task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 program,
                 ToolCallId::new("stale-check"),
                 context,
@@ -1506,7 +1507,7 @@ async fn agent_review_case(writer: bool, parallel: bool) {
     let (_, cancellation) = workflow_cancellation();
     let task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 program,
                 ToolCallId::new("machine-review"),
                 context,
@@ -1653,7 +1654,7 @@ async fn agent_writer_summary_is_bound_to_post_write_candidate_b_for_next_tool()
     let (_, cancellation) = workflow_cancellation();
     let task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 program,
                 ToolCallId::new("writer-output"),
                 context,
@@ -1710,7 +1711,7 @@ async fn agent_inspection_recovery_case(writer: bool, later_edit: bool) {
     let (_, cancellation) = workflow_cancellation();
     let task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 agent_review_program(false, false),
                 ToolCallId::new("inspection-failure"),
                 context,
@@ -1964,7 +1965,7 @@ async fn review_dirty_candidate_accept_reject_mutation_and_cancel_gate_exact_dow
         let (trigger, cancellation) = workflow_cancellation();
         let mut task = tokio::spawn(async move {
             runtime
-                .run_foreground(
+                .run_test_foreground(
                     program,
                     ToolCallId::new("review-candidate"),
                     context,
@@ -2073,7 +2074,7 @@ async fn workspace_independent_question_wait_does_not_borrow_or_validate_candida
     );
     let question_schema = json!({"type":"object","properties":{"cancelled":{"type":"boolean"},"answers":{"type":"array","items":{"type":"object"}}},"required":["cancelled","answers"]});
     let empty = schema(json!({}), &[]);
-    let definition = serde_json::from_value(json!({"description":"Independent human and writer", "workspace":{"require_clean_parent":true},"timeout_ms":600_000,"tools":[{"origin":"builtin","name":"ask_user"}],"block":{
+    let definition = serde_json::from_value(json!({"description":"Independent human and writer", "workspace":{"require_clean_parent":true},"timeout_ms":600_000,"block":{
         "input":empty,"output":empty,"entry":"parallel","nodes":{
             "parallel":{"type":"parallel","branches":{
                 "question":{"input":{"type":"literal","value":{}},"block":{"input":empty,"output":question_schema,"entry":"ask","nodes":{
@@ -2094,7 +2095,7 @@ async fn workspace_independent_question_wait_does_not_borrow_or_validate_candida
     let (_, cancellation) = workflow_cancellation();
     let task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 program,
                 ToolCallId::new("independent-question"),
                 context,
@@ -2169,13 +2170,13 @@ async fn rejected_review_survives_writer_b_but_explicit_a_dependency_fails_befor
                 .unwrap()
                 .push(json!({"from":"rejected","to":"done"}));
         }
-        let definition = serde_json::from_value(json!({"description":"Rejection is business data","workspace":{"require_clean_parent":true},"timeout_ms":600_000,"tools":[],"block":{"input":empty,"output":result_schema,"entry":"first","nodes":nodes,"edges":edges}})).unwrap();
+        let definition = serde_json::from_value(json!({"description":"Rejection is business data","workspace":{"require_clean_parent":true},"timeout_ms":600_000,"block":{"input":empty,"output":result_schema,"entry":"first","nodes":nodes,"edges":edges}})).unwrap();
         let program = Arc::new(compile_test(definition).unwrap());
         let runtime = workflow_runtime(&plane);
         let (_, cancellation) = workflow_cancellation();
         let task = tokio::spawn(async move {
             runtime
-                .run_foreground(
+                .run_test_foreground(
                     program,
                     ToolCallId::new("reject-repair"),
                     context,
@@ -2268,7 +2269,7 @@ async fn plan_review_candidate_check_is_audited_and_mutation_invalidates_before_
     let (_, cancellation) = workflow_cancellation();
     let task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 program,
                 ToolCallId::new("plan-context"),
                 context,
@@ -2374,7 +2375,7 @@ async fn review_mismatched_candidate_context_fails_before_any_prompt() {
     let (_, cancellation) = workflow_cancellation();
     let task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 program,
                 ToolCallId::new("mismatched-context"),
                 context,
@@ -2508,7 +2509,7 @@ async fn pre_start_candidate_case(consumer: &str, failure: usize, looped: bool) 
     let (trigger, cancellation) = workflow_cancellation();
     let task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 program,
                 ToolCallId::new("pre-start"),
                 context,
@@ -2713,7 +2714,7 @@ async fn parallel_acceptance_case(mode: &str, nested: bool, idle_last: bool) {
     let (_, cancellation) = workflow_cancellation();
     let task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 program,
                 ToolCallId::new("parallel-acceptance"),
                 context,
@@ -2940,7 +2941,7 @@ async fn sequential_acceptance_case(mode: &str) {
     let (_, cancellation) = workflow_cancellation();
     let task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 program,
                 ToolCallId::new("sequential-acceptance"),
                 context,
@@ -3113,7 +3114,7 @@ async fn unchanged_agent_case(writer_wins: bool) {
     let (_, cancellation) = workflow_cancellation();
     let task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 program,
                 ToolCallId::new("unchanged-agent"),
                 context,
@@ -3285,7 +3286,7 @@ async fn none_entry_review_mutation_case(nested: bool) {
     let (_, cancellation) = workflow_cancellation();
     let task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 program,
                 ToolCallId::new("none-review-mutation"),
                 context,

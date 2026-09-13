@@ -8,7 +8,6 @@ Minimum project configuration:
 
 ```toml
 [subagents]
-workflow = ["reviewer"]
 max_concurrent = 2
 
 [agent]

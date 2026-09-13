@@ -583,7 +583,7 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
             ),
             "extensionToolsReason":"provided by composed Native Agent Extensions; not selectable through builtin_tools/--tools/--exclude-tools, and not removed by --no-tools",
             "onlineIdentities":"unresolved until source discovery"}),
-        discovered_workflows: launch.workflows.definitions().keys().map(ToString::to_string)
+        discovered_workflows: launch.workflows.entries().keys().map(ToString::to_string)
             .collect(),
     });
     report

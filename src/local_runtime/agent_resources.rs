@@ -1,5 +1,5 @@
 //! Bounded canonical named Agent discovery. Project overrides user as a whole resource.
-use super::config::{AgentProfileDocument, SubagentsDocument};
+use super::config::AgentProfileDocument;
 use crate::runtime::resources::{
     ProjectContextFile, RuntimeResourceLoadError, validate_project_resource_path,
 };
@@ -77,7 +77,6 @@ fn candidates(
 pub(crate) fn load(
     workspace: &Path,
     user_root: &Path,
-    document: &SubagentsDocument,
 ) -> Result<(AgentCatalog, BTreeMap<SubagentName, AgentSource>), RuntimeResourceLoadError> {
     let users = candidates(user_root, user_root)?;
     let projects = candidates(workspace, &workspace.join(".agents/agents"))?;
@@ -147,12 +146,6 @@ pub(crate) fn load(
     }
     let catalog =
         AgentCatalog::new(definitions).map_err(|e| RuntimeResourceLoadError::new(e.to_string()))?;
-    {
-        let (field, admission) = ("subagents.workflow", &document.workflow);
-        catalog
-            .admitted(&admission.iter().cloned().collect())
-            .map_err(|e| RuntimeResourceLoadError::new(e.to_string()).at(workspace, field))?;
-    }
     Ok((catalog, sources))
 }
 
@@ -234,8 +227,7 @@ mod tests {
                 "alpha",
                 "description = 'project'\ninstructions = 'project instructions'",
             );
-            let (catalog, sources) =
-                load(&workspace, &user, &SubagentsDocument::default()).unwrap();
+            let (catalog, sources) = load(&workspace, &user).unwrap();
             assert_eq!(
                 catalog
                     .definitions()
@@ -256,7 +248,7 @@ mod tests {
                 "project instructions"
             );
             assert_eq!(
-                load(&workspace, &user, &SubagentsDocument::default())
+                load(&workspace, &user)
                     .unwrap()
                     .0
                     .get(&alpha)
@@ -280,21 +272,11 @@ mod tests {
         let root = workspace.join(".agents/agents");
         write(&root, "zeta", "broken");
         write(&root, "alpha", "broken");
-        let first = load(
-            &workspace,
-            &workspace.join("user"),
-            &SubagentsDocument::default(),
-        )
-        .unwrap_err();
+        let first = load(&workspace, &workspace.join("user")).unwrap_err();
         assert_eq!(first.source_file, Some(root.join("alpha.toml")));
         assert_eq!(
             first,
-            load(
-                &workspace,
-                &workspace.join("user"),
-                &SubagentsDocument::default()
-            )
-            .unwrap_err()
+            load(&workspace, &workspace.join("user")).unwrap_err()
         );
     }
     #[test]
@@ -307,12 +289,7 @@ mod tests {
             root.join("alpha.toml"),
             "description = 'Alpha'\ninstructions = 'Inspect'\n[agents_md]\nfiles = ['../outside.md']\n",
         ).unwrap();
-        let error = load(
-            &workspace,
-            &workspace.join("user"),
-            &SubagentsDocument::default(),
-        )
-        .unwrap_err();
+        let error = load(&workspace, &workspace.join("user")).unwrap_err();
         assert_eq!(
             error.field_path.as_deref(),
             Some("agents.alpha.agents_md.files")
@@ -327,13 +304,6 @@ mod tests {
         let root = workspace.join(".agents/agents");
         std::fs::create_dir_all(&root).unwrap();
         std::os::unix::fs::symlink("/etc/passwd", root.join("alpha.toml")).unwrap();
-        assert!(
-            load(
-                &workspace,
-                &workspace.join("user"),
-                &SubagentsDocument::default()
-            )
-            .is_err()
-        );
+        assert!(load(&workspace, &workspace.join("user")).is_err());
     }
 }

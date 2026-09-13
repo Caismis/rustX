@@ -43,7 +43,7 @@ async fn native_observation_lag_does_not_change_loop_requests_or_outcome() {
     let history = plane.store.load_canonical().unwrap();
     // The native cut consumer is deliberately absent for the entire run.
     let output = runtime
-        .run_foreground(
+        .run_test_foreground(
             Arc::new(compile_test(checker_definition(100)).unwrap()),
             ToolCallId::new("lagged"),
             context,
@@ -153,7 +153,7 @@ async fn explicit_outcomes_select_only_the_matching_successor_with_the_full_valu
         );
         let (_, cancellation) = workflow_cancellation();
         let output = runtime
-            .run_foreground(
+            .run_test_foreground(
                 Arc::new(compile_test(distinct_outcomes(checker_definition(3))).unwrap()),
                 ToolCallId::new("explicit-outcomes"),
                 context,
@@ -365,7 +365,7 @@ async fn oversized_carry_commits_no_partial_state_and_admits_no_next_body() {
     };
     let (_, cancellation) = workflow_cancellation();
     let error = runtime
-        .run_foreground(
+        .run_test_foreground(
             Arc::new(compile_test(definition).unwrap()),
             ToolCallId::new("oversized-carry"),
             context,
@@ -464,7 +464,7 @@ fn checker_definition(max: u32) -> WorkflowDefinition {
         json!({"passed":{"type":"boolean"},"label":{"type":"string"}}),
         &["passed", "label"],
     );
-    let body = serde_json::from_value(json!({"description":"feedback","tools":[{"origin":"builtin","name":"check"}],"block":{
+    let body = serde_json::from_value(json!({"description":"feedback","block":{
         "input":state,"output":state,"entry":"check","nodes":{
             "check":{"type":"tool","selector":{"origin":"builtin","name":"check"},"arguments":{"type":"reference","path":["args"]},"result":{"type":"json","part":0,"schema":state}},
             "done":{"type":"return","output":{"type":"reference","path":["check"]}}
@@ -494,7 +494,7 @@ async fn exact_satisfaction_exhaustion_carry_and_concrete_tool_identity() {
         );
         let (_, cancellation) = workflow_cancellation();
         let output = runtime
-            .run_foreground(
+            .run_test_foreground(
                 Arc::new(compile_test(checker_definition(max)).unwrap()),
                 ToolCallId::new("loop"),
                 context,
@@ -591,7 +591,7 @@ async fn cancellation_at_second_iteration_frontier_consumes_and_starts_nothing_n
     let program = Arc::new(compile_test(wrap_definition(program_definition(), 3)).unwrap());
     let task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 program,
                 ToolCallId::new("cancel-loop"),
                 context,
@@ -788,7 +788,7 @@ async fn nested_loops_inside_parallel_have_bounded_counts_and_inherited_identity
     let observations = runtime.observations.subscribe();
     let (_, cancellation) = workflow_cancellation();
     let output = runtime
-        .run_foreground(
+        .run_test_foreground(
             Arc::new(compile_test(outer).unwrap()),
             ToolCallId::new("nested"),
             workflow_test_context(&plane),
@@ -849,7 +849,7 @@ async fn global_step_limit_does_not_reset_at_iteration_entry() {
     program.execution_bound = 5; // Loop + iteration + Tool + Return + iteration; no second Tool.
     let (_, cancellation) = workflow_cancellation();
     let error = runtime
-        .run_foreground(
+        .run_test_foreground(
             Arc::new(program),
             ToolCallId::new("step-budget"),
             context,
@@ -880,7 +880,7 @@ async fn retained_limit_in_admitted_body_never_routes_a_normal_outcome() {
     program.retained_bound = 2 * serde_json::to_vec(&json!({"passed":false})).unwrap().len();
     let (_, cancellation) = workflow_cancellation();
     let error = runtime
-        .run_foreground(
+        .run_test_foreground(
             Arc::new(program),
             ToolCallId::new("retained-limit"),
             context,
@@ -993,7 +993,7 @@ async fn parallel_body_return_waits_for_siblings_and_fresh_children_in_definitio
         let program = Arc::new(compile_test(wrap_definition(definition, 3)).unwrap());
         let task = tokio::spawn(async move {
             runtime
-                .run_foreground(
+                .run_test_foreground(
                     program,
                     ToolCallId::new("parallel-loop"),
                     context,

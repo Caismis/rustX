@@ -33,7 +33,6 @@ pub struct WorkflowProjection {
 #[derive(Debug, Serialize)]
 pub struct RoleProjection {
     pub source: super::agent_resources::AgentSource,
-    pub workflow_admitted: bool,
     pub selected_model: String,
     pub configured_timeout_ms: Option<u64>,
     pub tools: Vec<crate::capabilities::selection::AgentToolSelection>,
@@ -84,16 +83,12 @@ pub(super) fn inspect(
     let roles: BTreeMap<_, _> = inspection
         .profiles
         .iter()
-        .map(|name| {
-            let definition = launch
-                .subagents
-                .get(name)
-                .expect("discovered admitted role was resolved");
-            (
+        .filter_map(|name| {
+            let definition = launch.subagents.get(name)?;
+            Some((
                 name.clone(),
                 RoleProjection {
                     source: launch.role_sources[name].clone(),
-                    workflow_admitted: launch.config.subagents.workflow.contains(name),
                     selected_model: definition
                         .model()
                         .unwrap_or(launch.config.initial_model())
@@ -105,7 +100,7 @@ pub(super) fn inspect(
                     tools: definition.tools().to_vec(),
                     workspace_policy: definition.workspace_policy(),
                 },
-            )
+            ))
         })
         .collect();
     for role in roles.values() {
@@ -179,6 +174,10 @@ pub(super) fn inspect(
             DependencyState::Inert { .. } => (
                 "dependency_inert",
                 "Tool source is disabled, unconfigured, or untrusted; inspection does not activate it",
+            ),
+            DependencyState::Missing { .. } | DependencyState::Ineligible => (
+                "dependency_unavailable",
+                "required ordinary Tool is absent or ineligible",
             ),
             DependencyState::Unavailable => {
                 ("dependency_unavailable", "Tool source is known unavailable")

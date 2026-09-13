@@ -9,7 +9,6 @@ Minimum project selection:
 
 ```toml
 [subagents]
-workflow = ["reviewer"]
 
 [agent]
 workflows = ["specialized_agent"]

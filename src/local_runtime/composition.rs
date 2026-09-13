@@ -275,22 +275,10 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
             // The catalog is built before the base registry, because the
             // `subagent` intrinsic's model-facing description is generated
             // from exactly the catalog this candidate generation admits.
-            let subagents = super::agent_resources::load(
-                &workspace,
-                &self.paths.agent_root,
-                &config.subagents,
-            )?
-            .0;
+            let subagents = super::agent_resources::load(&workspace, &self.paths.agent_root)?.0;
             let main_admission = config.agent.agents.iter().cloned().collect::<BTreeSet<_>>();
-            let workflow_admission = config
-                .subagents
-                .workflow
-                .iter()
-                .cloned()
-                .collect::<BTreeSet<_>>();
             let main_catalog = subagents.selected_definitions(&main_admission);
-            let workflows =
-                super::workflow_resources::load(&workspace, &config.subagents, &subagents)?;
+            let mut workflows = super::workflow_resources::load(&workspace)?;
             let mut registry = ToolRegistry::new();
             register_native_tools(
                 &mut registry,
@@ -305,7 +293,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                     "cannot register reload-time native tools: {error}"
                 ))
             })?;
-            crate::tools::native::register_workflow_tools(
+            crate::tools::native::register_workflow_sources(
                 &mut registry,
                 &self.workflow_runtime,
                 &workflows,
@@ -333,7 +321,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                 &self.paths.credentials,
             )
             .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
-            let candidate = capability
+            let mut candidate = capability
                 .prepare_candidate_with_inputs(CapabilityResourceInputs {
                     source_demand: admitted_source_demand(
                         &config,
@@ -345,7 +333,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                     agent_activation: AgentActivation {
                         profile: config.agent.clone(),
                         admitted_agents: subagents.names().into_iter().cloned().collect(),
-                        admitted_workflows: workflows.admitted().clone(),
+                        admitted_workflows: workflows.enabled_ids().clone(),
                         project_files: super::agent_resources::load_profile_files(
                             &config.agent.agents_md.files,
                         )?,
@@ -365,6 +353,9 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                     ))
                 })?;
             validate_workflow_tool_name_collisions(&candidate, &workflows)?;
+            candidate
+                .admit_workflows(&mut workflows, &subagents, &self.workflow_runtime)
+                .map_err(RuntimeResourceLoadError::new)?;
             let prepared = PreparedRuntimeResources::new(
                 project_context_files,
                 None,
@@ -373,7 +364,6 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
             )
             .with_subagent_catalog(subagents);
             let prepared = prepared
-                .with_workflow_admission(workflow_admission)
                 .with_workflow_catalog(workflows)
                 .with_managed_python_catalog(managed_python);
             // The catalog is admitted against the very candidate that is
@@ -383,7 +373,6 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
             // selection, or the active generation — has been published yet,
             // so the previous complete generation stays authoritative.
             validate_subagent_catalog(&prepared, &self.models)?;
-            validate_workflow_agent_overrides(&prepared)?;
             #[cfg(test)]
             super::agent_resources::test_support::before_publication(&workspace).await;
             Ok(prepared)
@@ -864,9 +853,7 @@ fn admitted_source_demand(
         );
     }
     for agent in agents.definitions() {
-        if config.agent.agents.contains(agent.name())
-            || config.subagents.workflow.contains(agent.name())
-        {
+        if config.agent.agents.contains(agent.name()) {
             sources.extend(
                 agent
                     .tools()
@@ -875,10 +862,8 @@ fn admitted_source_demand(
             );
         }
     }
-    for program in workflows.definitions().values() {
-        if !config.agent.workflows.contains(program.id()) {
-            continue;
-        }
+    for entry in workflows.entries().values() {
+        let program = &entry.source;
         sources.extend(
             program
                 .inspect()
@@ -886,11 +871,16 @@ fn admitted_source_demand(
                 .iter()
                 .filter_map(|selector| selector.source().cloned()),
         );
-        for node in program.agent_override_nodes() {
-            if let Some(selection) = &node.invocation_override.tools {
+        for node in program.agent_nodes() {
+            if let Some(agent) = agents.get(&node.profile) {
+                let profile = node
+                    .invocation_override
+                    .clone()
+                    .unwrap_or_default()
+                    .effective_profile(agent);
                 sources.extend(
-                    selection
-                        .selectors()
+                    profile
+                        .tools
                         .iter()
                         .filter_map(|selector| selector.source().cloned()),
                 );
@@ -937,30 +927,6 @@ fn validate_subagent_catalog(
     .map_err(|(agent, error)| RuntimeResourceLoadError::new(format!("agents.{agent}: {error}")))
 }
 
-/// Admits every Workflow Agent node's trusted static invocation override
-/// against the same candidate generation that will publish it (Issue #258).
-///
-/// The override is trusted *program* data, so its authority is the admitted
-/// generation rather than the invoking main model's narrower active tool set.
-/// What is checked here is therefore reference validity, not delegation: a
-/// statically invalid selection rejects the whole candidate off-side, exactly
-/// as a statically invalid role definition does, and the previous complete
-/// generation stays authoritative.
-fn validate_workflow_agent_overrides(
-    prepared: &PreparedRuntimeResources,
-) -> Result<(), RuntimeResourceLoadError> {
-    let candidate = prepared.capability_candidate();
-    let skills = crate::skills::SkillSnapshot::new(candidate.skill_packages().to_vec());
-    prepared
-        .workflow_catalog()
-        .validate_agent_overrides(
-            &candidate.available_tools().definitions(),
-            candidate.availability(),
-            &skills,
-        )
-        .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))
-}
-
 /// Rejects a model-facing Workflow id that is already used by another
 /// capability in the same candidate generation. The active Tool selection can
 /// hide a duplicate under `noTools`, but hiding it must not turn an identity
@@ -969,10 +935,7 @@ fn validate_workflow_tool_name_collisions(
     candidate: &crate::capabilities::PreparedCapabilityCandidate,
     workflows: &WorkflowCatalog,
 ) -> Result<(), RuntimeResourceLoadError> {
-    workflows
-        .validate_capabilities(candidate.available_tools(), candidate.availability())
-        .map_err(RuntimeResourceLoadError::new)?;
-    for workflow_id in workflows.admitted() {
+    for workflow_id in workflows.entries().keys() {
         let expected_id = format!("tool-workflow-{workflow_id}");
         if workflow_id.as_str() == crate::tools::native::SUBAGENT_TOOL_NAME {
             return Err(RuntimeResourceLoadError::new(format!(
@@ -1163,14 +1126,8 @@ impl LocalConversationCore {
                 .iter()
                 .cloned()
                 .collect::<BTreeSet<_>>();
-            let workflow_admission = runtime_config
-                .subagents
-                .workflow
-                .iter()
-                .cloned()
-                .collect::<BTreeSet<_>>();
             let main_catalog = subagent_catalog.selected_definitions(&main_admission);
-            let workflows = paths.workflows.as_ref().clone();
+            let mut workflows = paths.workflows.as_ref().clone();
             //
             // The frozen model timeout policy is resolved once here so the
             // parent runtime and every launched subagent child share exactly
@@ -1239,7 +1196,7 @@ impl LocalConversationCore {
             .map_err(|error| LocalRuntimeError::NativeTools {
                 detail: format!("{error:?}"),
             })?;
-            crate::tools::native::register_workflow_tools(
+            crate::tools::native::register_workflow_sources(
                 &mut base_registry,
                 &workflow_runtime,
                 &workflows,
@@ -1282,7 +1239,7 @@ impl LocalConversationCore {
                 agent_activation: AgentActivation {
                     profile: runtime_config.agent.clone(),
                     admitted_agents: subagent_catalog.names().into_iter().cloned().collect(),
-                    admitted_workflows: workflows.admitted().clone(),
+                    admitted_workflows: workflows.enabled_ids().clone(),
                     project_files: super::agent_resources::load_profile_files(
                         &runtime_config.agent.agents_md.files,
                     )
@@ -1318,7 +1275,7 @@ impl LocalConversationCore {
             // servers, including managed Python packages) remain typed
             // availability state inside `prepare_candidate` (Issue #81); base
             // capability failures remain fatal.
-            let candidate = capability.prepare_candidate().await.map_err(|error| {
+            let mut candidate = capability.prepare_candidate().await.map_err(|error| {
                 LocalRuntimeError::Capability {
                     detail: format!("{error:?}"),
                 }
@@ -1328,6 +1285,9 @@ impl LocalConversationCore {
                     detail: error.to_string(),
                 }
             })?;
+            candidate
+                .admit_workflows(&mut workflows, &subagent_catalog, &workflow_runtime)
+                .map_err(|detail| LocalRuntimeError::Capability { detail })?;
             let prepared = PreparedRuntimeResources::new(
                 project_context_files,
                 None,
@@ -1335,7 +1295,6 @@ impl LocalConversationCore {
                 candidate,
             )
             .with_subagent_catalog(subagent_catalog)
-            .with_workflow_admission(workflow_admission)
             .with_workflow_catalog(workflows)
             .with_managed_python_catalog(paths.managed_python.clone());
             validate_subagent_catalog(&prepared, &registry).map_err(|error| {
@@ -1343,12 +1302,6 @@ impl LocalConversationCore {
                     detail: error.to_string(),
                 }
             })?;
-            validate_workflow_agent_overrides(&prepared).map_err(|error| {
-                LocalRuntimeError::Capability {
-                    detail: error.to_string(),
-                }
-            })?;
-
             // This is the sole startup publication boundary. Every value below
             // was admitted against the exact candidate that is now committed,
             // so startup cannot expose a capability generation whose subagent or
@@ -4495,7 +4448,7 @@ compat = { chat_reasoning_replay = "omit" }
 
                         "tools": {"builtin": ["read"]},
                     },
-                }, "workflow": []}, "agent": {"model": {"model": "scripted/scripted"}, "tools": {"builtin": ["read"], "sources": {SERVER_NAME: [TOOL_NAME]}}, "agents": [TEST_AGENT]}});
+                }}, "agent": {"model": {"model": "scripted/scripted"}, "tools": {"builtin": ["read"], "sources": {SERVER_NAME: [TOOL_NAME]}}, "agents": [TEST_AGENT]}});
         crate::launch_fixture::write_documents(
             &root.path().join("rustx.toml"),
             &toml::to_string_pretty(&config_document).unwrap(),
@@ -4786,7 +4739,7 @@ mod source_demand_tests {
         config.agent.workflows = vec![id.clone()];
         let selector = json!({"origin":"source","source_id":"github","name":"get_issue"});
         let mut authored = json!({
-            "description":"Demand contract", "tools":[selector],
+            "description":"Demand contract",
             "block":{
                 "input":{"type":"object"}, "output":{"type":"object"}, "entry":"leaf",
                 "nodes":{
@@ -4800,15 +4753,24 @@ mod source_demand_tests {
             }
         });
         let compile = |authored| {
-            WorkflowProgram::compile(
-                id.clone(),
-                serde_json::from_value(authored).unwrap(),
-                &[SubagentName::parse("reviewer").unwrap()].into(),
-            )
-            .unwrap()
+            WorkflowProgram::compile(id.clone(), serde_json::from_value(authored).unwrap()).unwrap()
         };
-        let workflows = WorkflowCatalog::new([compile(authored.clone())], [id.clone()]).unwrap();
-        let agents = AgentCatalog::new([]).unwrap();
+        let workflows = WorkflowCatalog::new([compile(authored.clone())]).unwrap();
+        let document =
+            super::super::agent_resources::parse("description='Review'\ninstructions='Review'")
+                .unwrap();
+        let agents = AgentCatalog::new([NamedAgentDefinition::new(
+            SubagentName::parse("reviewer").unwrap(),
+            crate::runtime::agent_profile::AgentProfile::from_document(
+                &document,
+                crate::runtime::agent_profile::AgentProfileKind::Named,
+                Vec::new(),
+            )
+            .unwrap(),
+            "reviewer.toml".into(),
+        )
+        .unwrap()])
+        .unwrap();
         let demand = |config: &CurrentRuntimeConfig, workflows: &WorkflowCatalog| {
             admitted_source_demand(
                 config,
@@ -4831,7 +4793,7 @@ mod source_demand_tests {
             .as_object_mut()
             .unwrap()
             .remove("override");
-        let workflows = WorkflowCatalog::new([compile(authored)], [id.clone()]).unwrap();
+        let workflows = WorkflowCatalog::new([compile(authored)]).unwrap();
         assert_eq!(
             demand(&config, &workflows),
             [ToolSourceId::Mcp(

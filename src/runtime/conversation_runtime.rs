@@ -8786,7 +8786,7 @@ mod tests {
                 crate::runtime::WorkflowId::parse("reload_workflow").expect("workflow id"),
                 crate::runtime::WorkflowDefinition {
                     workspace: None,
-                    tools: std::collections::BTreeSet::default(),
+
                     timeout_ms: 600_000,
                     description: description.to_owned(),
                     block: crate::runtime::WorkflowBlock {
@@ -8804,17 +8804,16 @@ mod tests {
                         edges: Vec::new(),
                     },
                 },
-                &std::collections::BTreeSet::new(),
             )
             .expect("workflow program")
         };
         let old_program = make_program("old generation");
         let old_id = old_program.id().clone();
-        let old_catalog = crate::runtime::WorkflowCatalog::new([old_program], [old_id.clone()])
-            .expect("old workflow catalog");
+        let old_catalog =
+            crate::runtime::WorkflowCatalog::new([old_program]).expect("old workflow catalog");
         let new_program = make_program("new generation");
-        let new_catalog = crate::runtime::WorkflowCatalog::new([new_program], [old_id.clone()])
-            .expect("new workflow catalog");
+        let new_catalog =
+            crate::runtime::WorkflowCatalog::new([new_program]).expect("new workflow catalog");
         let loader = Arc::new(MutableResourceLoader::new(Vec::new()));
         loader.set_workflow_catalog(old_catalog.clone());
         let loader_trait: Arc<dyn crate::runtime::RuntimeResourceLoader> = loader.clone();

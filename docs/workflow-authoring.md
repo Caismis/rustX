@@ -1,5 +1,7 @@
 # Offline Workflow authoring
 
+See [Workflow admission and Agent selection](workflow-admission.md) for static capability ownership and atomic disable semantics.
+
 ```text
 rustx workflow check <id> [--workspace <dir>] [--config <path>]
   [--models <path>] [--model <provider/model>] [--json]
@@ -28,34 +30,26 @@ The shared pipeline is:
 
 1. `launch::analyze` resolves bounded authorized local configuration, model
    selection, source enablement/trust and canonical Subagent resources.
-2. `workflow_resources::load` reads configured identities. Serde YAML, wrapped
-   by `serde_path_to_error`, deserializes the authoritative `WorkflowDefinition`.
+2. `workflow_resources::load` discovers canonical YAML identities. Serde YAML,
+   wrapped by `serde_path_to_error`, deserializes `WorkflowDefinition`.
    Strict unknown fields and unique graph keys remain parser-owned.
 3. `WorkflowProgram::compile` validates graphs, lexical scopes, schemas,
-   bindings, admitted profiles, finite bounds and retained-value reservation.
-   Its immutable program remains the executor's sole program type.
-4. `WorkflowCatalog::inspect_metadata` uses the native selector resolver and
-   genuine metadata. Prospective analysis and runtime resource admission share
-   this path. Typed dependencies retain known, inert, unavailable and unresolved
-   states instead of dropping unavailable-source facts. This static dependency
-   analysis is distinct from the shared resolver's warning/suppression of
-   unavailable selections in a complete Agent Profile.
-   `WorkflowCatalog::validate_agent_overrides` walks the same generation for
-   every `Agent` node's optional `override`, reusing that selector resolver and
-   the admitted Skill catalog. It keeps the same asymmetry: an unavailable
-   source is tolerated per selector and never ends the walk, so it cannot hide
-   a statically invalid selection listed after it, while an unknown capability,
-   an unknown or model-hidden Skill, and an extension unsupported by one-shot
-   child scope each reject the candidate. Structural child rules — nested
-   `subagent` delegation, child-unsafe lifecycle owners, empty selectors,
-   selection bounds — are compiler-owned and reported with the offending
-   dimension's authored path.
+   bindings, finite bounds and retained-value reservation. Missing capability
+   dependencies are not structural compile errors.
+4. `WorkflowCatalog::inspect_metadata` projects genuine prospective metadata,
+   including known, missing, ineligible, inert, unavailable and unresolved
+   dependencies. Offline checking does not fabricate executable admission.
+   At runtime, `WorkflowCatalog::admit` checks every node against one complete
+   candidate generation. Agent nodes use shared whole-dimension replacement,
+   `resolve_agent_profile`, and frozen child composition. Any required static
+   dependency diagnostic disables the whole program. Malformed overrides and
+   structural child rules remain compiler-owned authoring failures.
 5. `WorkflowProgram::inspect` projects compiled facts; the local report adds
    resolution provenance and configured source/profile policies.
 
 Static compilation ends before any executor is constructed, resource generation
-published or execution authority granted. Invocation still freezes the attempt's
-admitted roles/capabilities. Native preparation normalizes and validates concrete
+published or execution authority granted. Candidate-generation admission freezes
+capabilities before execution; invocation consumes only the Enabled program. Native preparation normalizes and validates concrete
 Tool arguments; execution validates concrete values. An online-only Tool schema
 is never supplied or assumed compatible offline. Provider behavior, source
 availability, human decisions and candidate acquisition remain runtime facts.

@@ -127,8 +127,7 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
 
                     "tools": {"builtin": ["read"]}
                 }
-            },
-            "workflow": []
+            }
         }
     }))
     .unwrap()

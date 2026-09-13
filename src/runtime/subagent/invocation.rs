@@ -39,10 +39,9 @@
 //! # This type carries no authority
 //!
 //! A request is what the caller *asked for*. Whether the caller may ask is
-//! [`SubagentOverrideAuthority`], a typed native input supplied by the launch
-//! site, never a field the model can set.
+//! distinct native admission boundaries. The model cannot choose static
+//! Workflow authority.
 //!
-//! [`SubagentOverrideAuthority`]: super::resolver::SubagentOverrideAuthority
 
 use serde::{Deserialize, Serialize};
 
@@ -66,11 +65,9 @@ pub const MAX_OVERRIDE_TOOLS: usize = 128;
 /// dimensions.
 ///
 /// The same value is produced by model-generated `subagent` arguments and by
-/// trusted static Workflow program data. The two differ only in the
-/// [`SubagentOverrideAuthority`] their launch site supplies, never in this
-/// vocabulary or in the resolution algorithm that consumes it.
+/// trusted static Workflow program data. The launch boundary determines
+/// authority; both share this vocabulary and the `AgentProfile` resolver.
 ///
-/// [`SubagentOverrideAuthority`]: super::resolver::SubagentOverrideAuthority
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 #[derive(schemars::JsonSchema)]
@@ -116,6 +113,21 @@ impl SubagentInvocationOverride {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.tools.is_none() && self.skills.is_none() && self.extensions.is_none()
+    }
+
+    /// Whole-dimension replacement shared by dynamic and static composition.
+    #[must_use]
+    pub fn effective_profile(
+        &self,
+        definition: &NamedAgentDefinition,
+    ) -> crate::runtime::agent_profile::AgentProfile {
+        let mut profile = definition.profile().clone();
+        profile.tools = self.effective_tools(definition);
+        profile.skills = crate::runtime::agent_profile::AgentSkillSelection::Exact(
+            self.effective_skills(definition),
+        );
+        profile.extensions = self.effective_extensions(definition);
+        profile
     }
 
     /// The effective Tool selectors of this invocation, canonically ordered

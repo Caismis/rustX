@@ -340,7 +340,7 @@ receive bounded feedback so the child can continue. Workflow-local values and
 child transcripts do not enter the parent conversation history.
 
 Workflow subagent admission is independent from `agent.agents`: a profile
-must be listed in `subagents.workflow` to be usable by a Workflow Agent, and
+is referenced directly by a Workflow Agent node, and
 being main-visible does not grant Workflow admission. In this example
 `navigator` is main-admitted while `reviewer`, `planner` and `implementer` are Workflow-only. A reload
 constructs and validates the complete candidate, then publishes it atomically;

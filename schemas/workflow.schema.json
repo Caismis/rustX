@@ -132,7 +132,7 @@
     },
     "SubagentInvocationOverride": {
       "additionalProperties": false,
-      "description": "One invocation-scoped replacement of selected child capability\ndimensions.\n\nThe same value is produced by model-generated `subagent` arguments and by\ntrusted static Workflow program data. The two differ only in the\n[`SubagentOverrideAuthority`] their launch site supplies, never in this\nvocabulary or in the resolution algorithm that consumes it.\n\n[`SubagentOverrideAuthority`]: super::resolver::SubagentOverrideAuthority",
+      "description": "One invocation-scoped replacement of selected child capability\ndimensions.\n\nThe same value is produced by model-generated `subagent` arguments and by\ntrusted static Workflow program data. The launch boundary determines\nauthority; both share this vocabulary and the `AgentProfile` resolver.",
       "properties": {
         "extensions": {
           "$ref": "#/$defs/NativeAgentExtensionSelection",
@@ -834,15 +834,6 @@
       "format": "uint64",
       "minimum": 0,
       "type": "integer"
-    },
-    "tools": {
-      "default": [],
-      "description": "Explicit capability admission, independent of main model exposure.",
-      "items": {
-        "$ref": "#/$defs/ExactToolSelector"
-      },
-      "type": "array",
-      "uniqueItems": true
     },
     "workspace": {
       "anyOf": [

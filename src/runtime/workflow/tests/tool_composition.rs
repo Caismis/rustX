@@ -129,6 +129,7 @@ async fn committed_completion_is_not_overwritten_by_later_cancel_or_deadline() {
         trigger.cancel();
         clock.advance(100);
     });
+    let context = context.with_test_workflow(&program());
     let executor = crate::tools::native::test_workflow_executor(runtime, program());
     let (result, facts) = drive_executor(executor, context, cancellation, Some(hook)).await;
     assert_eq!(result.status, ToolExecutionStatus::Success);
@@ -324,7 +325,6 @@ async fn fixed_admission_rejects_orchestration_background_and_composite_leaves()
         );
         let selector = ExactToolSelector::Builtin { name: name.into() };
         let mut definition = program_definition();
-        definition.tools = BTreeSet::from([selector.clone()]);
         if let WorkflowNodeDefinition::Tool {
             selector: target, ..
         } = definition.block.nodes.get_mut("check").unwrap()
@@ -335,7 +335,7 @@ async fn fixed_admission_rejects_orchestration_background_and_composite_leaves()
         let (_, cancellation) = workflow_cancellation();
         assert!(
             runtime
-                .run_foreground(
+                .run_test_foreground(
                     program,
                     ToolCallId::new("outer"),
                     context,
@@ -360,7 +360,6 @@ fn ext259_a_workflow_cannot_admit_an_extension_tool() {
         name: "todo".into(),
     };
     let mut definition = program_definition();
-    definition.tools = BTreeSet::from([selector.clone()]);
     if let WorkflowNodeDefinition::Tool {
         selector: target, ..
     } = definition.block.nodes.get_mut("check").unwrap()
@@ -471,7 +470,7 @@ async fn mixed_parallel_all_settles_in_key_order_without_internal_history() {
         let (_, cancellation) = workflow_cancellation();
         let task = tokio::spawn(async move {
             runtime
-                .run_foreground(
+                .run_test_foreground(
                     program,
                     ToolCallId::new("outer"),
                     context,

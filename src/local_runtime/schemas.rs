@@ -97,9 +97,9 @@ mod tests {
     use crate::runtime::workflow::{WorkflowDefinition, WorkflowNodeDefinition};
     use serde_json::json;
 
-    fn workflow(node: &serde_json::Value, tools: &serde_json::Value) -> serde_json::Value {
+    fn workflow(node: &serde_json::Value) -> serde_json::Value {
         json!({
-            "description":"selector contract", "tools":tools,
+            "description":"selector contract",
             "block":{
                 "input":{"type":"object"}, "output":{"type":"object"}, "entry":"work",
                 "nodes":{
@@ -131,7 +131,7 @@ mod tests {
             let node = json!({"type":"tool","selector":selector,
                 "arguments":{"type":"literal","value":{}},
                 "result":{"type":"json","part":0,"schema":{"type":"object"}}});
-            let document = workflow(&node, &json!([selector]));
+            let document = workflow(&node);
             assert!(validator.is_valid(&document));
             let parsed: WorkflowDefinition =
                 serde_yaml::from_str(&serde_yaml::to_string(&document).unwrap()).unwrap();
@@ -148,7 +148,8 @@ mod tests {
                 }
             };
             assert_eq!(name, selector["name"].as_str().unwrap());
-            for pointer in ["/tools/0", "/block/nodes/work/selector"] {
+            {
+                let pointer = "/block/nodes/work/selector";
                 let mut invalid = document.clone();
                 *invalid.pointer_mut(pointer).unwrap() =
                     json!({"origin":"all","source_id":"github"});
@@ -176,11 +177,8 @@ mod tests {
                 SourceToolSelection::Exact(vec!["get_issue".into()]),
             ),
         ] {
-            let document = workflow(
-                &json!({"type":"agent","profile":"reviewer","task":"Review",
-                "output":{"type":"object"},"override":{"tools":{"sources":{"github":selection}}}}),
-                &json!([]),
-            );
+            let document = workflow(&json!({"type":"agent","profile":"reviewer","task":"Review",
+                "output":{"type":"object"},"override":{"tools":{"sources":{"github":selection}}}}));
             assert!(validator.is_valid(&document));
             let parsed: WorkflowDefinition =
                 serde_yaml::from_str(&serde_yaml::to_string(&document).unwrap()).unwrap();
@@ -198,7 +196,6 @@ mod tests {
             crate::runtime::workflow::WorkflowProgram::compile(
                 crate::runtime::workflow::WorkflowId::parse("selector-contract").unwrap(),
                 parsed,
-                &[crate::runtime::subagent::SubagentName::parse("reviewer").unwrap()].into(),
             )
             .unwrap();
         }

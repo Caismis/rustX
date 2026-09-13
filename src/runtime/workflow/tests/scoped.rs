@@ -47,7 +47,7 @@ fn wrap(block: WorkflowBlock, count: usize) -> WorkflowBlock {
 fn compile_block_fixture(block: WorkflowBlock) -> Result<WorkflowProgram, WorkflowCompileError> {
     compile_test(WorkflowDefinition {
         workspace: None,
-        tools: std::collections::BTreeSet::default(),
+
         timeout_ms: 600_000,
         description: "scoped test".into(),
         block,
@@ -215,7 +215,7 @@ fn nested_program_and_expression_limits_are_aggregate() {
     assert!(value_schema(&bad_reference, &SchemaMap::default(), "reference", 0).is_err());
     let mut definition = WorkflowDefinition {
         workspace: None,
-        tools: std::collections::BTreeSet::default(),
+
         timeout_ms: 600_000,
         description: "large aggregate".into(),
         block: wrap(empty_block(), 32),
@@ -258,7 +258,7 @@ async fn repeated_outer_tool_correlation_does_not_reuse_run_identity() {
     for runtime in [runtime.clone(), runtime] {
         let (_, cancellation) = workflow_cancellation();
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 return_only_program(),
                 ToolCallId::new("same-model-id"),
                 workflow_test_context(&plane),
@@ -380,7 +380,7 @@ async fn shared_executor_return_ownership_instance_routing_and_child_settlement(
     let (_, cancellation) = workflow_cancellation();
     let task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 multi_step_program(),
                 ToolCallId::new("outer"),
                 context,
@@ -487,7 +487,7 @@ async fn cancellation_committed_before_node_admission_frontier_starts_no_child()
     let (signal, cancellation) = workflow_cancellation();
     let task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 program,
                 ToolCallId::new("outer"),
                 context,
@@ -527,7 +527,7 @@ async fn cancellation_wakes_native_capacity_waiter_and_drains_owned_child() {
     let (signal, cancellation) = workflow_cancellation();
     let task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 multi_step_program(),
                 ToolCallId::new("outer"),
                 context,
@@ -568,7 +568,7 @@ async fn nested_capacity_one_blocks_never_reserve_descendant_capacity() {
     let program = Arc::new(compile_block_fixture(wrap(nested, 1)).unwrap());
     let task = tokio::spawn(async move {
         runtime
-            .run_foreground(
+            .run_test_foreground(
                 program,
                 ToolCallId::new("outer"),
                 context,
@@ -609,7 +609,7 @@ async fn reversing_completions_preserves_keyed_outputs_failures_and_join_commit_
             let (_, cancellation) = workflow_cancellation();
             let task = tokio::spawn(async move {
                 runtime
-                    .run_foreground(
+                    .run_test_foreground(
                         multi_step_program(),
                         ToolCallId::new("outer"),
                         context,

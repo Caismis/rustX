@@ -149,7 +149,12 @@ fn validate_profiles(
         match node {
             WorkflowNodeProgram::Agent(agent) => {
                 let resolved = context
-                    .resolve_workflow(&agent.profile, agent.invocation_override.as_ref())
+                    .bind_workflow_agent(
+                        agent
+                            .resolved
+                            .as_ref()
+                            .expect("admission froze every Agent"),
+                    )
                     .map_err(|error| WorkflowRunError::InvocationAuthority(error.to_string()))?;
                 if resolved.workspace_policy != policy {
                     return Err(WorkflowRunError::InvalidProgram(format!(

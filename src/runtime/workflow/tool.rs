@@ -1,9 +1,8 @@
 //! Fixed Tool input and result contracts; native invocation owns execution.
 use super::{
     BTreeMap, Deserialize, EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope, Serialize,
-    Utc, Value, WorkflowCatalog, WorkflowNodeInstance, WorkflowProgram, WorkflowRun,
-    WorkflowRunError, WorkflowRuntime, bound_workflow_diagnostic, execution, expressions,
-    workflow_event_id,
+    Utc, Value, WorkflowCatalog, WorkflowNodeInstance, WorkflowRun, WorkflowRunError,
+    WorkflowRuntime, bound_workflow_diagnostic, execution, expressions, workflow_event_id,
 };
 use crate::capabilities::selection::ExactToolSelector;
 use crate::runtime::subagent::AttemptSubagentContext;
@@ -13,50 +12,7 @@ use crate::tools::types::{
     ToolDefinition, ToolExecutionResult, ToolExecutionStatus, ToolInvocationId,
 };
 
-pub(super) fn freeze(
-    program: &WorkflowProgram,
-    context: &AttemptSubagentContext,
-) -> Result<BTreeMap<ExactToolSelector, ToolDefinition>, WorkflowRunError> {
-    let resources = context.resources();
-    let catalog = resources.capability().available_tools();
-    program
-        .tools
-        .iter()
-        .map(|selector| {
-            let selected = crate::capabilities::selection::resolve_selector(
-                selector,
-                catalog,
-                resources.capability_availability(),
-            )
-            .map_err(|error| match error {
-                crate::capabilities::selection::ToolSelectionError::SourceUnavailable {
-                    ..
-                } => WorkflowRunError::SourceUnavailable(error.to_string()),
-                crate::capabilities::selection::ToolSelectionError::UnknownCapability {
-                    ..
-                }
-                | crate::capabilities::selection::ToolSelectionError::ExactToolAbsent { .. } => {
-                    WorkflowRunError::InvalidSelector(error.to_string())
-                }
-            })?;
-            let definition = selected;
-            if definition.execution_policy
-                == crate::tools::types::ToolExecutionPolicy::BackgroundOnly
-                || catalog
-                    .registration(definition)
-                    .map_err(WorkflowRunError::IdentityChanged)?
-                    .foreground()
-                    != crate::tools::deadline::ForegroundPolicy::Leaf
-                || !eligible(definition)
-            {
-                return Err(WorkflowRunError::IneligibleCapability(selector.to_string()));
-            }
-            Ok((selector.clone(), definition.clone()))
-        })
-        .collect()
-}
-
-fn eligible(definition: &ToolDefinition) -> bool {
+pub(super) fn eligible(definition: &ToolDefinition) -> bool {
     definition.execution_policy != crate::tools::types::ToolExecutionPolicy::BackgroundOnly
         && !definition
             .id
@@ -73,127 +29,6 @@ fn eligible(definition: &ToolDefinition) -> bool {
 }
 
 impl WorkflowCatalog {
-    /// Validate every selection against the same candidate generation. An
-    /// unavailable source cannot hide a later invalid selector.
-    pub(crate) fn validate_capabilities(
-        &self,
-        available: &crate::capabilities::AvailableToolCatalog,
-        availability: &crate::capabilities::CapabilityAvailability,
-    ) -> Result<(), String> {
-        self.inspect_metadata(&available.definitions(), availability, |definition| {
-            available.registration(definition).map(|registration| {
-                registration.foreground() == crate::tools::deadline::ForegroundPolicy::Leaf
-            })
-        })
-        .map(|_| ())
-        .map_err(|e| e.to_string())
-    }
-
-    /// Validates every Agent node's trusted static invocation override
-    /// against one candidate generation's metadata (Issue #258).
-    ///
-    /// This is *static reference* validation, not authorization: a Workflow
-    /// override's authority is the admitted generation itself, so what has to
-    /// hold here is that every statically knowable reference is real. It runs
-    /// offline and side-effect free — no provider, MCP connection, Python
-    /// environment, process, Session, worktree, or runtime state is created —
-    /// and it reuses the same availability/selection owner every other
-    /// selection path uses.
-    ///
-    /// The failure classes stay exactly the ones the rest of the runtime
-    /// already distinguishes:
-    ///
-    /// ```text
-    /// source authority absent   -> tolerated HERE, keep validating; the
-    ///                              invocation still fails at admission
-    /// source present, unknown   -> static configuration error
-    /// unknown/hidden Skill      -> static configuration error
-    /// child-unsupported scope   -> static configuration error
-    /// ```
-    ///
-    /// Tolerating an unavailable source never *stops* the walk, so an offline
-    /// MCP server listed before a misspelled selector cannot hide it.
-    ///
-    /// # Errors
-    ///
-    /// Returns the first static violation with the precise authored node
-    /// path, including nesting inside Loop bodies and Parallel branches.
-    pub(crate) fn validate_agent_overrides(
-        &self,
-        available: &[ToolDefinition],
-        availability: &crate::capabilities::CapabilityAvailability,
-        skills: &crate::skills::SkillSnapshot,
-    ) -> Result<(), super::inspection::CapabilityError> {
-        for program in self.definitions().values() {
-            for node in program.agent_override_nodes() {
-                let failure = |reason| super::inspection::CapabilityError {
-                    workflow: program.id().clone(),
-                    path: node.path.clone(),
-                    reason,
-                };
-                if let Some(selection) = &node.invocation_override.tools {
-                    for selector in selection.selectors() {
-                        match crate::capabilities::selection::project(
-                            &selector,
-                            available,
-                            availability,
-                        ) {
-                            Ok(selected)
-                                if selected.iter().all(|selected| !selected
-                                    .id
-                                    .as_str()
-                                    .starts_with(super::WORKFLOW_TOOL_ID_PREFIX)) => {}
-                            Err(
-                                crate::capabilities::selection::ToolSelectionError::SourceUnavailable { reason, .. },
-                            ) if !matches!(reason, crate::capabilities::selection::SourceResolutionFailure::Undefined) => {}
-                            _ => {
-                                return Err(failure(format!(
-                                    "Agent override selects {selector}, which this generation \
-                                     does not authorize"
-                                )));
-                            }
-                        }
-                    }
-                }
-                if let Some(selected) = &node.invocation_override.skills {
-                    for skill in selected {
-                        if !skills
-                            .packages()
-                            .iter()
-                            .any(|package| package.name() == skill)
-                        {
-                            return Err(failure(format!(
-                                "Agent override selects Skill {skill:?}, which this generation \
-                                 did not admit"
-                            )));
-                        }
-                        if !skills
-                            .catalog_entries()
-                            .iter()
-                            .any(|entry| entry.name == *skill)
-                        {
-                            return Err(failure(format!(
-                                "Agent override selects Skill {skill:?}, which this generation \
-                                 admitted but hides from model invocation"
-                            )));
-                        }
-                    }
-                }
-                if let Some(selection) = &node.invocation_override.extensions
-                    && let Some(unsupported) =
-                        crate::extensions::unsupported_child_scope(&selection.resolve())
-                {
-                    return Err(failure(format!(
-                        "Agent override enables extension {:?}, which one-shot subagent \
-                         execution does not support: {}",
-                        unsupported.extension, unsupported.reason
-                    )));
-                }
-            }
-        }
-        Ok(())
-    }
-
     pub(crate) fn inspect_metadata(
         &self,
         available: &[ToolDefinition],
@@ -204,7 +39,7 @@ impl WorkflowCatalog {
         super::inspection::CapabilityError,
     > {
         let mut dependencies = BTreeMap::new();
-        for program in self.definitions().values() {
+        for program in self.entries().values().map(|entry| &entry.source) {
             let mut selected_dependencies = Vec::new();
             for selector in &program.tools {
                 let paths = program.selector_paths(selector);
@@ -221,10 +56,12 @@ impl WorkflowCatalog {
                     Ok(selected) => {
                         let definition = selected;
                         if !eligible(definition) || !leaf(definition).map_err(failure)? {
-                            return Err(failure(format!(
-                                "Workflow {} selects ineligible leaf {selector}",
-                                program.id()
-                            )));
+                            selected_dependencies.push(super::inspection::ToolDependency {
+                                selector: selector.clone(),
+                                paths,
+                                state: super::inspection::DependencyState::Ineligible,
+                            });
+                            continue;
                         }
                         super::inspection::DependencyState::Known
                     }
@@ -250,7 +87,7 @@ impl WorkflowCatalog {
                             unreachable!("builtin has no external source")
                         }
                     },
-                    Err(error) => return Err(failure(error.to_string())),
+                    Err(error) => super::inspection::DependencyState::Missing { reason: error },
                 };
                 selected_dependencies.push(super::inspection::ToolDependency {
                     selector: selector.clone(),

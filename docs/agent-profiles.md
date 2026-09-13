@@ -1,5 +1,7 @@
 # Agent Profiles
 
+See [Workflow admission and Agent selection](workflow-admission.md) for static capability ownership and atomic disable semantics.
+
 rustX has one semantic definition of an Agent. Root `rustx.toml` selects its
 profile under `[agent]`; `.agents/agents/<name>.toml` contains that same profile
 directly. The filename establishes the named resource identity. There is no

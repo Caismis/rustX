@@ -101,7 +101,6 @@ higher layer would override them. Unknown fields fail at every schema boundary.
 | `native_tools`, `mcp_tool_policies` | Yes | Forbidden | — | Host-only whole named entries; empty map clears |
 | `agent.extensions` | Yes | Yes | — | Complete dimension replacement; an empty table composes none |
 | `subagents.max_concurrent` | Yes | Yes | — | Runtime child capacity; scalar replacement |
-| `subagents.workflow` | Yes | Yes | — | Static Workflow Agent-node admission; list replacement |
 | Runtime state root (`runtime_root`) | Yes | Forbidden | `--runtime-root` | Path replacement |
 | Workspace identity | No settings authority | Forbidden | `--workspace` | Canonical root selection |
 | Trust records/store, credential-store redirection | No settings authority | Forbidden | `--trust grant/revoke` only | Host-owned membership operation |
@@ -109,7 +108,7 @@ higher layer would override them. Unknown fields fail at every schema boundary.
 | `schema_version` | Yes | Yes | — | Explicit replacement; current schema only |
 
 `agent.agents` selects root delegation authority; a non-empty resolved selection
-derives the `subagent` dispatcher. `subagents.workflow` separately admits named
+derives the `subagent` dispatcher. Workflow YAML directly references named
 Agents for static Workflow Agent nodes. `agent.workflows` selects which admitted
 Workflows the root may invoke. Valid unavailable Agent/Profile capability
 selections produce diagnostics and suppression; Workflow static validation

@@ -76,21 +76,16 @@ fn cfg237_check_explain_zero_effects_precise_errors_and_authority() {
         json!({"description":"Review","tools":{"builtin":[]},"worktree":{"enabled":false}}),
         "SECRET_ROLE_PROMPT",
     );
-    let config = json!({"subagents": {"workflow": ["reviewer"]}, "agent": {"workflows": []}});
+    let config = json!({"subagents": {}, "agent": {"workflows": []}});
     let original = template_source("typed_agent");
     let scenarios = [
         (original.clone(), config.clone(), Validity::Valid, None),
-        (
-            original.clone(),
-            json!({}),
-            Validity::Invalid,
-            Some("block.nodes.summarize.profile"),
-        ),
+        (original.clone(), json!({}), Validity::Valid, None),
         (
             original.clone(),
             json!({"subagents": {}}),
-            Validity::Invalid,
-            Some("block.nodes.summarize.profile"),
+            Validity::Valid,
+            None,
         ),
         (
             original.replace("[args, topic]", "[args, missing]"),
@@ -174,7 +169,7 @@ fn cfg237_graph_paths_reach_diagnostics_with_zero_side_effects() {
         json!({"description":"Review","tools":{"builtin":[]}}),
         "Review.",
     );
-    f.project(json!({"subagents": {"workflow": ["reviewer"]}}));
+    f.project(json!({"subagents": {}}));
     let original: serde_json::Value = serde_json::to_value(
         serde_yaml::from_str::<crate::runtime::workflow::WorkflowDefinition>(&template_source(
             "parallel_checks",
@@ -228,7 +223,6 @@ fn cfg237_online_schema_unresolved_and_disabled_source_are_distinct() {
     use crate::runtime::workflow::inspection::DependencyState;
     let f = Fixture::new();
     let text = r"description: Inspect a declared external capability.
-tools: [{origin: source, source_id: external, name: inspect}]
 block:
   input: {type: object, properties: {}, additionalProperties: false}
   output: {type: object, properties: {text: {type: string}}, required: [text], additionalProperties: false}
@@ -292,7 +286,7 @@ fn cfg237_nested_paths_parser_locations_and_compiler_agreement() {
         json!({"description":"Review","tools":{"builtin":[]}}),
         "Review.",
     );
-    f.project(json!({"subagents": {"workflow": ["reviewer"]}}));
+    f.project(json!({"subagents": {}}));
     let definition: crate::runtime::workflow::WorkflowDefinition =
         serde_yaml::from_str(&template_source("parallel_checks")).unwrap();
     let original = serde_json::to_value(definition).unwrap();
@@ -394,7 +388,7 @@ fn cfg236_offline_role_provenance_rejections_and_trust_have_zero_effects() {
         json!({"description":"Project","tools":{"builtin":["read"]}}),
         "Project body",
     );
-    f.project(json!({"subagents": {"workflow": ["reviewer"]}, "agent": {"agents": []}}));
+    f.project(json!({"subagents": {}, "agent": {"agents": []}}));
     for operation in ["config_check", "config_show"] {
         let ((report, launch), effects) = super::static_effects::measure(|| {
             super::diagnostics::inspect(operation, &f.request, &f.host)
@@ -464,12 +458,7 @@ fn cfg236_user_role_authority_resolves_alias_once_for_launch_and_diagnostics() {
     std::fs::create_dir(&replacement).unwrap();
     std::fs::remove_file(&alias).unwrap();
     std::os::unix::fs::symlink(&replacement, &alias).unwrap();
-    let (catalog, _) = super::agent_resources::load(
-        &launch.workspace,
-        &launch.agent_root,
-        &launch.config.subagents,
-    )
-    .unwrap();
+    let (catalog, _) = super::agent_resources::load(&launch.workspace, &launch.agent_root).unwrap();
     assert_eq!(
         catalog.definitions().next().unwrap().instructions(),
         "User body"
@@ -483,14 +472,10 @@ fn cfg236_user_role_authority_resolves_alias_once_for_launch_and_diagnostics() {
     .unwrap();
     std::os::unix::fs::symlink(&replacement, &launch.agent_root).unwrap();
     assert!(
-        super::agent_resources::load(
-            &launch.workspace,
-            &launch.agent_root,
-            &launch.config.subagents
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("outside trusted workspace")
+        super::agent_resources::load(&launch.workspace, &launch.agent_root)
+            .unwrap_err()
+            .to_string()
+            .contains("outside trusted workspace")
     );
 }
 
@@ -503,7 +488,7 @@ async fn cfg236_gated_role_reload_cancels_or_publishes_one_complete_generation()
         json!({"description":"R1", "tools":{"builtin":["read"]}}),
         "R1 body",
     );
-    f.project(json!({"subagents": {"workflow": []}, "agent": {"agents": ["role"]}}));
+    f.project(json!({"subagents": {}, "agent": {"agents": ["role"]}}));
     let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
         .await
         .unwrap();
@@ -514,7 +499,7 @@ async fn cfg236_gated_role_reload_cancels_or_publishes_one_complete_generation()
         json!({"description":"R2", "tools":{"builtin":["grep"]}}),
         "R2 body",
     );
-    f.project(json!({"subagents": {"workflow": ["role"]}, "agent": {"agents": []}}));
+    f.project(json!({"subagents": {}, "agent": {"agents": []}}));
     let gate = super::agent_resources::test_support::arm(&f.host.launch_directory);
     let runtime = product.runtime().clone();
     let reload = tokio::spawn(async move { runtime.reload_resources().await });
@@ -544,10 +529,8 @@ async fn cfg236_gated_role_reload_cancels_or_publishes_one_complete_generation()
     let role = crate::runtime::subagent::SubagentName::parse("role").unwrap();
     assert_eq!(r2.subagents().get(&role).unwrap().instructions(), "R2 body");
     assert!(r2.delegatable_agents().is_empty());
-    assert!(r2.subagent_workflow_admission().contains(&role));
     assert_eq!(r1.subagents().get(&role).unwrap().instructions(), "R1 body");
     assert!(r1.delegatable_agents().contains(&role));
-    assert!(r1.subagent_workflow_admission().is_empty());
     product.runtime().shutdown().await.unwrap();
 }
 
@@ -930,10 +913,7 @@ fn cfg235_all_example_layers_use_real_resolver_and_workflow_compiler() {
         };
         change_trust(&request, &host, TrustAction::Grant).unwrap();
         let prospective = analyze(&request, &host).unwrap();
-        assert_eq!(
-            prospective.workflows.definitions().len(),
-            expected_workflows
-        );
+        assert_eq!(prospective.workflows.entries().len(), expected_workflows);
         assert!(
             prospective
                 .admit(crate::credentials::CredentialSnapshot::default)
@@ -3067,7 +3047,7 @@ async fn cfg271_all_catalogs_publish_together_and_failed_candidates_publish_noth
     assert_eq!(added.subagents().len(), 1);
     assert_eq!(added.managed_python_catalog().packages().len(), 1);
     assert_eq!(added.capability().skills().packages().len(), 1);
-    assert_eq!(added.workflows().definitions().len(), 1);
+    assert_eq!(added.workflows().entries().len(), 1);
     // A malformed Agent or Workflow still fails the whole candidate: the
     // atomic resource-generation contract is unchanged for those catalogs.
     for path in [&agent, &workflow] {
@@ -3095,7 +3075,7 @@ async fn cfg271_all_catalogs_publish_together_and_failed_candidates_publish_noth
     ));
     assert!(excluded.capability().skills().packages().is_empty());
     assert_eq!(excluded.subagents().len(), 1);
-    assert_eq!(excluded.workflows().definitions().len(), 1);
+    assert_eq!(excluded.workflows().entries().len(), 1);
     assert_eq!(excluded.managed_python_catalog().packages().len(), 1);
     assert_eq!(
         excluded
@@ -3134,11 +3114,11 @@ async fn cfg271_all_catalogs_publish_together_and_failed_candidates_publish_noth
     product.runtime().reload_resources().await.unwrap();
     let removed = product.runtime().runtime_resources();
     assert!(removed.subagents().is_empty());
-    assert!(removed.workflows().definitions().is_empty());
+    assert!(removed.workflows().entries().is_empty());
     assert!(removed.capability().skills().packages().is_empty());
     assert!(removed.managed_python_catalog().packages().is_empty());
     assert_eq!(added.subagents().len(), 1);
-    assert_eq!(added.workflows().definitions().len(), 1);
+    assert_eq!(added.workflows().entries().len(), 1);
     assert_eq!(added.capability().skills().packages().len(), 1);
     assert_eq!(added.managed_python_catalog().packages().len(), 1);
     product.runtime().shutdown().await.unwrap();
@@ -3171,4 +3151,83 @@ fn cfg271_removed_existence_registries_are_unknown_fields_in_each_layer() {
         );
         f.user(json!({"agent": {"model": {"model":"host/one"}}}));
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cfg274_skill_recovery_and_loss_publish_workflow_and_root_exposure_atomically() {
+    use crate::runtime::workflow::{WorkflowAdmission, WorkflowId};
+    let f = Fixture::new();
+    f.role(false, "reviewer", json!({"description":"Review","skills":["review"],"tools":{"builtin":[]},"worktree":{"enabled":false}}), "Review");
+    install_workflow(&f, &template_source("typed_agent"));
+    f.project(json!({"agent":{"workflows":["example"],"tools":{"builtin":[]}}}));
+    let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+        .await
+        .unwrap();
+    let id = WorkflowId::parse("example").unwrap();
+    let r1 = product.runtime().runtime_resources();
+    assert!(matches!(
+        r1.workflows().entries()[&id].admission,
+        WorkflowAdmission::Disabled(_)
+    ));
+    assert!(!r1.capability().tool_registry().names().contains(&"example"));
+    assert!(r1.root_profile().unwrap().workflows.is_empty());
+    let skill = f.host.launch_directory.join(".agents/skills/review");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: review\ndescription: Review\n---\nLAZY_REVIEW_BODY\n",
+    )
+    .unwrap();
+    let gate = super::agent_resources::test_support::arm(&f.host.launch_directory);
+    let runtime = product.runtime().clone();
+    let reload = tokio::spawn(async move { runtime.reload_resources().await });
+    gate.entered().await;
+    assert!(std::sync::Arc::ptr_eq(
+        &r1,
+        &product.runtime().runtime_resources()
+    ));
+    gate.release();
+    reload.await.unwrap().unwrap();
+    drop(gate);
+    let r2 = product.runtime().runtime_resources();
+    assert!(r2.workflows().executable(&id).is_ok());
+    assert!(r2.root_profile().unwrap().workflows.contains(&id));
+    assert!(r2.capability().tool_registry().names().contains(&"example"));
+    assert!(r1.workflows().executable(&id).is_err());
+    std::fs::write(skill.join("SKILL.md"), "invalid Skill").unwrap();
+    let gate = super::agent_resources::test_support::arm(&f.host.launch_directory);
+    let runtime = product.runtime().clone();
+    let reload = tokio::spawn(async move { runtime.reload_resources().await });
+    gate.entered().await;
+    assert!(std::sync::Arc::ptr_eq(
+        &r2,
+        &product.runtime().runtime_resources()
+    ));
+    gate.release();
+    reload.await.unwrap().unwrap();
+    let r3 = product.runtime().runtime_resources();
+    assert!(r3.workflows().executable(&id).is_err());
+    assert!(!r3.capability().tool_registry().names().contains(&"example"));
+    assert!(r3.root_profile().unwrap().workflows.is_empty());
+    assert!(r2.workflows().executable(&id).is_ok());
+    product.runtime().shutdown().await.unwrap();
+}
+
+#[test]
+fn cfg274_obsolete_registration_and_manifest_fields_are_authoring_errors() {
+    for text in [
+        "[subagents]\nworkflow=['reviewer']",
+        "[workflows]\nmain=['review']",
+        "[workflows.definitions]\nreview='review.yaml'",
+    ] {
+        assert!(
+            crate::local_runtime::config::CurrentRuntimeConfig::from_toml_slice(text.as_bytes())
+                .is_err(),
+            "obsolete authoring accepted: {text}"
+        );
+    }
+    let mut value: serde_json::Value =
+        serde_yaml::from_str(&template_source("typed_agent")).unwrap();
+    value["tools"] = json!([]);
+    assert!(serde_json::from_value::<crate::runtime::workflow::WorkflowDefinition>(value).is_err());
 }

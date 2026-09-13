@@ -806,7 +806,7 @@ pub fn analyze(
             .map_err(LaunchFailure::resource)?;
     }
     let (subagents, role_sources) = if trusted {
-        super::agent_resources::load(&locations.workspace, &agent_root, &config.subagents)
+        super::agent_resources::load(&locations.workspace, &agent_root)
             .map_err(LaunchFailure::resource)?
     } else {
         (
@@ -815,8 +815,7 @@ pub fn analyze(
         )
     };
     let workflows = if trusted {
-        super::workflow_resources::load(&locations.workspace, &config.subagents, &subagents)
-            .map_err(LaunchFailure::resource)?
+        super::workflow_resources::load(&locations.workspace).map_err(LaunchFailure::resource)?
     } else {
         crate::runtime::workflow::WorkflowCatalog::empty()
     };
@@ -892,9 +891,9 @@ pub fn analyze(
         .collect();
     definitions.extend(
         workflows
-            .admitted()
-            .iter()
-            .filter_map(|id| workflows.get(id))
+            .entries()
+            .values()
+            .map(|entry| &entry.source)
             .map(|program| crate::tools::native::workflow_definition(program)),
     );
     let mut source_activations = BTreeMap::new();
@@ -933,28 +932,6 @@ pub fn analyze(
             )
         })
         .collect();
-    // Every Agent node's trusted static invocation override is validated
-    // against the same prospective metadata, offline and side-effect free.
-    // An unavailable source is tolerated per selector rather than ending the
-    // walk, so it cannot hide a statically invalid selection listed later.
-    workflows
-        .validate_agent_overrides(&definitions, &availability, &skills)
-        .map_err(|e| {
-            let reason: String = e.reason.chars().take(1024).collect();
-            LaunchFailure::at(
-                Some(
-                    locations
-                        .workspace
-                        .join(".agents/workflows")
-                        .join(format!("{}.yaml", e.workflow)),
-                ),
-                &e.path,
-                &reason,
-                "select a capability and Skill this generation admits, or remove the \
-                 invocation override",
-                e.to_string(),
-            )
-        })?;
     let workflow_dependencies = workflows
         .inspect_metadata(&definitions, &availability, |definition| {
             Ok(native_leaves.contains(&definition.id))
@@ -981,7 +958,7 @@ pub fn analyze(
     let policy = crate::capabilities::AgentActivation {
         profile: config.agent.clone(),
         admitted_agents: subagents.names().into_iter().cloned().collect(),
-        admitted_workflows: workflows.admitted().clone(),
+        admitted_workflows: workflows.enabled_ids().clone(),
         project_files: super::agent_resources::load_profile_files(&config.agent.agents_md.files)
             .map_err(LaunchFailure::resource)?,
         no_tools: locations.no_tools,
@@ -1184,22 +1161,6 @@ pub(super) fn parse_layer(
                 super::config::CURRENT_RUNTIME_SCHEMA_VERSION
             ),
         ));
-    }
-    if let Some(subagents) = &layer.subagents {
-        for (field, names) in [("subagents.workflow", &subagents.workflow)] {
-            if let Some(names) = names {
-                let unique: std::collections::BTreeSet<_> = names.iter().collect();
-                if unique.len() != names.len() {
-                    return Err(LaunchFailure::at(
-                        Some(path.into()),
-                        field,
-                        "duplicate Agent selection",
-                        "select each Agent identity once per layer",
-                        "duplicate Agent selection".into(),
-                    ));
-                }
-            }
-        }
     }
     Ok(layer)
 }

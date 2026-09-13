@@ -418,6 +418,79 @@ pub struct PreparedCapabilityCandidate {
 }
 
 impl PreparedCapabilityCandidate {
+    /// Complete Workflow admission and root selection before the existing commit.
+    pub(crate) fn admit_workflows(
+        &mut self,
+        workflows: &mut crate::runtime::workflow::WorkflowCatalog,
+        agents: &crate::runtime::subagent::AgentCatalog,
+        runtime: &crate::runtime::workflow::WorkflowRuntime,
+    ) -> Result<(), String> {
+        if workflows.is_empty() {
+            return Ok(());
+        }
+        workflows.admit(
+            &self.available_tools,
+            &self.availability,
+            &self.skills,
+            agents,
+            &self.effective_mcp_servers,
+        );
+        let enabled = workflows.enabled_ids();
+        self.resource_inputs
+            .agent_activation
+            .admitted_workflows
+            .clone_from(&enabled);
+        // The ordinary catalog intentionally excludes dispatchers. Preserve
+        // their original candidate registrations while finalizing selection;
+        // they must never be inferred to be extension-provided capabilities.
+        let mut ordinary = self.resource_inputs.base_tool_registry.registrations();
+        for registration in self.available_tools.registrations() {
+            if let Some(existing) = ordinary
+                .iter_mut()
+                .find(|existing| existing.definition.id == registration.definition.id)
+            {
+                existing.clone_from(registration);
+            } else {
+                ordinary.push(registration.clone());
+            }
+        }
+        let extensions: Vec<_> = self
+            .candidate_registry
+            .registrations()
+            .into_iter()
+            .filter(|registration| {
+                !ordinary
+                    .iter()
+                    .any(|entry| entry.definition.id == registration.definition.id)
+            })
+            .collect();
+        let mut available: Vec<_> = ordinary
+            .into_iter()
+            .filter(|registration| {
+                !registration
+                    .definition
+                    .id
+                    .as_str()
+                    .starts_with(crate::runtime::workflow::WORKFLOW_TOOL_ID_PREFIX)
+            })
+            .collect();
+        let mut workflow_registry = ToolRegistry::new();
+        crate::tools::native::register_workflow_tools(&mut workflow_registry, runtime, workflows)
+            .map_err(|error| format!("cannot register admitted Workflow Tools: {error}"))?;
+        available.extend(workflow_registry.registrations());
+        let (available, registry, profile) = select_tools(
+            &available,
+            &extensions,
+            &self.resource_inputs.agent_activation,
+            &self.skills,
+            &self.availability,
+        )?;
+        self.available_tools = Arc::new(available);
+        self.candidate_registry = Arc::new(registry);
+        self.resolved_profile = Some(Arc::new(profile));
+        Ok(())
+    }
+
     #[must_use]
     pub fn resolved_profile(&self) -> Option<&crate::runtime::agent_profile::ResolvedAgentProfile> {
         self.resolved_profile.as_deref()
