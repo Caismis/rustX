@@ -78,7 +78,7 @@ pub struct RuntimeClientSnapshot {
     /// frozen at `LocalConversationCore::compose` for a root, and the value
     /// carried in `ResolvedSubagentSpec::extensions` for a Subagent child.
     /// Nothing on this path rereads `rustx.toml`, project or host
-    /// configuration, a role document, a `ProspectiveLaunch`, or the latest
+    /// configuration, a role document, a `ProspectiveSessionConfig`, or the latest
     /// `RuntimeResourceSnapshot`, and nothing infers it from Agent Status
     /// observations, context messages, or the Event Journal. It is therefore
     /// deliberately distinct from `rustx config show --sources`, which

@@ -33,6 +33,7 @@ mod authoring;
 pub mod cli;
 pub mod composition;
 pub mod config;
+pub mod configuration;
 mod diagnostics;
 pub(crate) mod dispatcher;
 mod initialization;
@@ -66,9 +67,7 @@ pub use config::{
     AgentWorktreeDocument, CURRENT_RUNTIME_SCHEMA_VERSION, CurrentRuntimeConfig,
     CurrentRuntimeConfigError, McpServerDocument, McpTransportType, ModelTimeoutPolicyDocument,
 };
-pub use launch::{
-    HostEnvironment, LaunchLocations, LaunchRequest, ResolvedLaunch, TrustAction, resolve,
-};
+pub use launch::{HostEnvironment, LaunchRequest, TrustAction, resolve};
 pub use serve::{ProcessOutcome, run_process, serve};
 pub use session::{
     CatalogCommitError, HistoricalConversationSnapshot, SESSION_CATALOG_SCHEMA_VERSION,
@@ -85,3 +84,8 @@ pub use supervisor::{
 mod settings_e2e;
 
 pub mod session_deletion;
+
+pub use configuration::{
+    AdmittedSessionConfig, SessionConfigInput, SessionLocations, UserConfigManager,
+    UserConfigSources,
+};

@@ -1,7 +1,7 @@
 //! Isolated launch fixture for composition tests. All production entry points
 //! receive the same resolver output; this helper supplies explicit test intent.
 #![allow(dead_code)]
-use rustx::local_runtime::{HostEnvironment, LaunchRequest, ResolvedLaunch, StartupSession};
+use rustx::local_runtime::{AdmittedSessionConfig, HostEnvironment, LaunchRequest, StartupSession};
 use std::path::{Path, PathBuf};
 
 /// Write canonical TOML Agent fixtures from an in-memory fixture builder.
@@ -93,6 +93,21 @@ pub struct LaunchFixture {
 }
 
 impl LaunchFixture {
+    pub async fn compose(
+        &self,
+        dependencies: &rustx::local_runtime::LocalRuntimeDependencies,
+    ) -> Result<rustx::local_runtime::LocalSessionProduct, rustx::local_runtime::LocalRuntimeError>
+    {
+        let dependencies = rustx::local_runtime::LocalRuntimeDependencies {
+            startup_session: self.startup_session.clone(),
+            session_name: self.session_name.clone(),
+            credentials: dependencies.credentials.clone(),
+            estimator: dependencies.estimator.clone(),
+            child_program: dependencies.child_program.clone(),
+        };
+        rustx::local_runtime::LocalSessionProduct::compose(&self.resolve(), &dependencies).await
+    }
+
     pub fn request(&self) -> LaunchRequest {
         LaunchRequest {
             models: Some(self.models.clone()),
@@ -111,7 +126,7 @@ impl LaunchFixture {
         }
     }
 
-    pub fn try_resolve(&self) -> Result<ResolvedLaunch, String> {
+    pub fn try_resolve(&self) -> Result<AdmittedSessionConfig, String> {
         let host = tempfile::tempdir().expect("isolated host");
         let mut environment = HostEnvironment::from_paths(
             std::env::current_dir().unwrap(),
@@ -130,11 +145,11 @@ impl LaunchFixture {
         rustx::local_runtime::resolve(&request, &environment)
     }
 
-    pub fn resolve(&self) -> ResolvedLaunch {
+    pub fn resolve(&self) -> AdmittedSessionConfig {
         self.try_resolve().expect("fixture resolves")
     }
 
-    pub fn locations(&self) -> rustx::local_runtime::LaunchLocations {
+    pub fn locations(&self) -> rustx::local_runtime::SessionLocations {
         let host = tempfile::tempdir().expect("isolated host");
         let environment = HostEnvironment::from_paths(
             std::env::current_dir().unwrap(),

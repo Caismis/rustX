@@ -3663,7 +3663,7 @@ impl ConversationRuntime {
     /// [`ConversationRuntimeError::ExtensionCompositionMismatch`]). So the
     /// projection cannot disagree with the Tool Plane, or with the Todo state
     /// the runtime actually owns, and there is no path from here to a
-    /// configuration document, a `ProspectiveLaunch`, a
+    /// configuration document, a `ProspectiveSessionConfig`, a
     /// `RuntimeResourceSnapshot`, an Agent Status observation, or the Event
     /// Journal.
     ///

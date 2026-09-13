@@ -22,13 +22,45 @@ The [configuration command contract](configuration-diagnostics.md) defines
 `rustx init`, offline `config check`, prospective `config show --sources`, and
 explicit `doctor --probe`, including output, exit codes and effect guarantees.
 
-`local_runtime::launch::resolve` is the only ordinary launch-resolution boundary.
-It takes `LaunchRequest` and path-only `HostEnvironment`. Its shared `analyze`
-phase finds bounded document slots, checks syntax/authority, merges explicitly
-present fields, applies domain defaults, validates launch semantics and compiles
-authorized local resources. Runtime admission then requires real host trust before
-capturing credentials and returning `ResolvedLaunch` with safe provenance. Native composition consumes that
-value; it does not reopen model/settings files to resolve startup.
+`local_runtime::configuration::UserConfigManager` owns reusable user source
+bindings and the single configuration resolution path. Its `resolve_session`
+method takes `SessionConfigInput` with an explicit absolute `cwd`, optional
+project-document selection, and intentional model/Tool/Skill selections. It
+rereads current settings, model catalog, Agent profiles, Workflow programs,
+project guidance, and Skill discovery inputs on every fresh resolution.
+
+```text
+user/process source bindings (UserConfigManager)
+    + current user and project source files
+    + explicit SessionConfigInput
+        -> ProspectiveSessionConfig (static validation, no external effects)
+        -> admit (trust check, then credential snapshot)
+        -> AdmittedSessionConfig
+        -> native preparation and resource-generation publication
+        -> frozen attempts / Tools / children / Workflows / model requests
+```
+
+Process lifetime, Session runtime lifetime, and configuration resolution lifetime
+are distinct. One manager can resolve A, observe a later source edit, and resolve
+B; A still owns its original values. A source edit can affect a fresh Session
+resolution or an explicit supported settings/resource publication. It cannot
+retroactively mutate admitted execution. There is no watcher or permanent parsed
+configuration cache.
+
+The CLI's `LaunchRequest::session_input` translates relative CLI paths and its
+workspace discovery into these shared inputs. `launch::analyze` delegates directly
+to the manager; it contains no parser, merge rules, or capability resolver.
+`HostEnvironment` is CLI input capture only and is never retained by the manager
+or prospective Session snapshot. `StartupSession` and Session naming are separate
+`LocalRuntimeDependencies` composition controls, not effective configuration.
+
+Initial composition consumes captured project guidance and Skill discovery as
+well as settings/catalogs/profiles/programs. It rechecks physical resource
+authority before preparation; it does not reinterpret changed configuration.
+Explicit resource reload retains its existing generation owner and pinned source
+slots. Runtime admission requires real host trust before capturing credentials.
+Native composition consumes the admitted snapshot; it does not reopen settings
+or model catalogs to resolve startup.
 
 Provider adapters still translate protocols. The composition owner constructs
 provider bindings, Sessions, capability resources and Context Engine wiring.
@@ -57,7 +89,14 @@ optional settings are empty layers. A discovered malformed or unknown-field
 document fails. An explicitly selected missing `--config` fails. Configuration
 and catalog reads are limited to 1 MiB each, and retain strict TOML syntax.
 
-An explicit `--workspace` selects that existing directory. Otherwise the
+The shared resolver uses exactly the supplied Session `cwd`; it performs no
+ancestor discovery and never reads or changes process cwd. All Session input
+paths must be absolute. Its canonical cwd is exposed to existing native resource
+and execution owners as `SessionLocations.workspace`. This is configuration and
+execution context, not a sandbox or authorization boundary. Higher-level hosts
+choose cwd and enforce any required allocation or filesystem isolation.
+
+The local CLI retains its directory convenience: an explicit `--workspace` selects that existing directory. Otherwise the
 canonical launch directory is walked upward until the nearest directory with
 either `.git` (file or directory) or `rustx.toml`. That directory alone is the
 workspace. The walk has a hard 128-directory limit; exceeding it requires
@@ -82,6 +121,37 @@ Runtime roots must be disjoint from the workspace, including existing symlink
 ancestors. `--runtime-root` overrides only runtime state, never the host trust
 store. Explicit previous state paths remain usable when valid under this rule.
 
+## Configuration lifetime ownership
+
+The table covers every `CurrentRuntimeConfig` field and the additional resolution
+and composition domains. `CurrentRuntimeConfig` is a materialized effective
+settings value, not a live registry and not durable Session authority.
+
+| Fields/domain | Owner and lifetime |
+| --- | --- |
+| `UserConfigSources.home_directory`, `config_directory`, `state_directory`, explicit `models`, explicit `runtime_root` | Process/user bindings retained by `UserConfigManager`; all absolute. User-authored `models`/`runtime_root` are current source selectors unless the host explicitly binds them. The local default root remains derived from canonical cwd identity. A future process host can bind one runtime root explicitly. |
+| HOME/XDG discovery, CLI launch directory, relative CLI spellings | CLI input adapter only. No shared resolver uses ambient cwd. |
+| Credential environment | Existing process credential owner; no values captured in static resolution. `AdmittedSessionConfig.credentials` freezes the admitted snapshot; lazy source credential binding remains at its existing use boundary. |
+| `schema_version`, `agent_id` | Current source/default content, validated and captured per Session composition. |
+| `approval_mode`, `native_tools` (all execution/concurrency/approval members), `mcp_tool_policies` | Current **user-only** policy content; projects and Session overrides cannot acquire this authority. Live approval changes retain the existing publication owner. |
+| `agent.model` | Current user/project model default unless `SessionConfigInput.model` explicitly supplies whole `SessionModelConfig`. Its model, reasoning profile, request parameters, output limit and summary policy are then explicit Session selection. Omission is never filled back into the input. |
+| `agent.description`, `instructions`, `timeout_ms`, `tools`, `skills`, `disabled_skills`, `agents`, `workflows`, `agents_md`, `worktree`, `extensions` | Current authored profile content. Existing Agent-kind validation, ToolSource All/Exact, delegation ceilings, project-instruction/worktree rules and native Extension scope apply. Native Extensions freeze at composition; reloadable profile/resource dimensions retain their existing generation rules. |
+| `context` (reserves, recent-history budget, summary cap), `model_timeout_policy`, `tool_deadline_policy` | Current defaults captured for composition; supported live context/model publications retain next-admission semantics. |
+| `mcp_servers` (`enabled`, transport, URL, headers, command, args, env, cwd, sensitive references), `environment` | Current source definitions/literal Tool defaults. Secret references remain user-only; source definitions are not connections. Omitted/false/true activation remain distinct. |
+| `subagents.max_concurrent`, `skills.sources` | Current capacity/source policy frozen per Session composition. Explicit resource reload does not rediscover source authority. |
+| Model/provider catalog including endpoints, protocol, limits, capabilities, reasoning/request defaults and credential references | Current model source content, validated per fresh resolution. Runtime binding uses the captured catalog. |
+| Agent TOML, Workflow YAML, Skill Markdown, AGENTS Markdown, Managed Python package discovery | Current canonical resource content/discovery, captured per resolution and handled by existing domain owners. Python discovery stays inert; preparation is demand-driven. |
+| `SessionConfigInput.cwd`, `config`, `model`, `skill_paths`, `no_automatic_skills`, `no_builtin_tools`, `no_direct_tools`, `tools`, `exclude_tools` | Explicit Session context/selections or allowed host inputs. No generic configuration override. `None` inherits; explicit empty authored lists/maps remain empty; empty exact Tool flag lists are rejected rather than treated as omission; explicit disable flags remain separate. Only existing model Session state has durable behavior today; #286 owns final multi-Session persistence. |
+| `StartupSession`, Session name; estimator, child executable and injected credential environment | Composition/host controls in `LocalRuntimeDependencies`, outside effective settings. |
+| Provenance, trust result, canonical identity, resource roots/document slots, static `CapabilityInspection` | Derived prospective snapshot metadata; never serialized as Session configuration authority. Provenance contains origins, not values. |
+| Tool registries, model bindings, MCP connections, prepared environments, `RuntimeResourceSnapshot`, `CapabilitySnapshot`, native Extensions, admitted attempts, children and Workflow runs | Resolved/live owners. Publication replaces generations atomically; already-admitted work retains owned snapshots. None is configuration authoring authority. |
+
+A Session model override is a whole-state selection, matching the existing model
+owner: empty request parameters discard inherited Session-level parameters, absent
+reasoning/output selection chooses catalog defaults, and summary `session` follows
+the selected model. Catalog request defaults still apply through the model owner.
+No complete effective settings object is added to durable storage by this issue.
+
 ## Precedence and field ownership
 
 `built-in defaults < user settings < trusted project settings < explicit CLI`
@@ -96,7 +166,7 @@ higher layer would override them. Unknown fields fail at every schema boundary.
 | `approval_mode` | Yes | Forbidden | — | Host scalar replacement |
 | `context`, `model_timeout_policy`, `tool_deadline_policy` | Yes | Yes | — | Explicit members of these finite records |
 | `agent.tools`, `agent.disabled_skills`, `agent.agents`, `agent.workflows` | Yes | Yes | Tool selection flags | Each selected dimension replaces; names select admitted resources. `agent.skills` is named-Agent authoring and is rejected on the root whenever it is authored, including `skills = []`. |
-| `skills.sources` | Yes | Yes | `--skill`, `--no-automatic-skills` | Launch-scoped automatic source selection; list replacement, empty list selects none. An unselected source is inert: its root is never validated, scanned, or diagnosed. Resource reload rescans and revalidates the resolved roots but never rereads this policy |
+| `skills.sources` | Yes | Yes | `--skill`, `--no-automatic-skills` | Session-composition automatic source selection; list replacement, empty list selects none. An unselected source is inert: its root is never validated, scanned, or diagnosed. Resource reload rescans and revalidates the resolved roots but never rereads this policy |
 | `mcp_servers`, `environment` | Yes | Yes | — | Named entries replace whole entries; empty map clears |
 | `native_tools`, `mcp_tool_policies` | Yes | Forbidden | — | Host-only whole named entries; empty map clears |
 | `agent.extensions` | Yes | Yes | — | Complete dimension replacement; an empty table composes none |
@@ -190,7 +260,7 @@ is still an executable name. MCP cwd also remains subject to the existing
 workspace constraint. Workflow IDs refer to the explicitly owned resource root
 `<workspace>/.agents/workflows`. Native tool paths retain execution-cwd semantics.
 No global process cwd change is used. `Origin` records the document and its base
-or the captured CLI base; rebasing occurs before merging, so a later document
+or the explicit Session context base (CLI-relative paths have already been translated); rebasing occurs before merging, so a later document
 cannot reinterpret an earlier relative path. Provenance carries no values or
 credentials.
 

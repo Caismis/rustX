@@ -263,7 +263,8 @@ impl Lab {
     }
 
     async fn compose(&self) -> LocalSessionProduct {
-        LocalSessionProduct::compose(&(self.paths()).resolve(), &dependencies())
+        (self.paths())
+            .compose(&dependencies())
             .await
             .expect("the runtime composes")
     }

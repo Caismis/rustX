@@ -1,5 +1,6 @@
 //! CFG-01 filesystem and real native composition regressions (Linux and macOS CI).
 #![allow(clippy::needless_pass_by_value, clippy::too_many_lines)] // linear fixture scenarios
+use super::configuration::*;
 use super::launch::*;
 use super::{LocalRuntimeDependencies, LocalSessionProduct};
 use crate::capabilities::{CapabilitySourceState, ToolSourceId};
@@ -1368,13 +1369,13 @@ impl Fixture {
     fn trust(&self, action: TrustAction) {
         change_trust(&self.request, &self.host, action).unwrap();
     }
-    fn resolve(&self) -> ResolvedLaunch {
+    fn resolve(&self) -> AdmittedSessionConfig {
         analyze(&self.request, &self.host)
             .unwrap()
             .admit(|| self.credentials.clone())
             .unwrap()
     }
-    fn resolve_locations_only(&self) -> LaunchLocations {
+    fn resolve_locations_only(&self) -> SessionLocations {
         resolve_locations(&self.request, &self.host).unwrap().0
     }
 }
@@ -1786,11 +1787,11 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
     assert_eq!(cli.config.initial_model().model.to_string(), "host/one");
     assert!(matches!(
         cli.provenance["agent.model.model"],
-        Origin::Cli { .. }
+        Origin::Explicit { .. }
     ));
     assert!(matches!(
         cli.provenance["exclude_tools"],
-        Origin::Cli { .. }
+        Origin::Explicit { .. }
     ));
     assert_eq!(cli.tools, Some(vec!["read".into(), "bash".into()]));
     f.project(json!({"environment":{},"mcp_servers":{},"subagents":{}}));
@@ -2172,7 +2173,10 @@ fn host_state_and_catalog_overrides_keep_document_and_cli_origins() {
     f.request.models = Some(f.host.config_directory.join("models.toml"));
     let cli = f.resolve();
     assert_eq!(cli.runtime_root, f.root.path().join("cli-state"));
-    assert!(matches!(cli.provenance["runtime_root"], Origin::Cli { .. }));
+    assert!(matches!(
+        cli.provenance["runtime_root"],
+        Origin::Explicit { .. }
+    ));
     f.request.runtime_root = Some(f.host.state_directory.clone());
     assert!(
         resolve(&f.request, &f.host)
@@ -2429,7 +2433,7 @@ async fn project_resource_authority_rejects_every_declared_escape_but_preserves_
     .unwrap();
     assert!(matches!(
         f.resolve().provenance["skills"],
-        Origin::Cli { .. }
+        Origin::Explicit { .. }
     ));
     let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
         .await
@@ -2474,7 +2478,7 @@ async fn cfg280_launch_resolves_the_canonical_skill_sources_and_explicit_authori
     f.project(json!({"subagents": {}}));
 
     let resolved = f.resolve();
-    let names = |launch: &ResolvedLaunch| {
+    let names = |launch: &AdmittedSessionConfig| {
         launch
             .inspection
             .skills
@@ -2865,7 +2869,7 @@ fn cfg270_every_checked_in_toml_example_uses_its_production_authoring_owner() {
                             .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
                     }
                     "settings.toml" | "rustx.toml" => {
-                        super::launch::parse_layer(
+                        super::configuration::parse_layer(
                             &path,
                             &bytes,
                             path.file_name().unwrap() == "rustx.toml",
@@ -2926,7 +2930,7 @@ async fn cfg280_an_unselected_skill_source_is_inert_at_startup_and_reload() {
         f.project(policy);
         f
     }
-    fn names(launch: &ResolvedLaunch) -> Vec<String> {
+    fn names(launch: &AdmittedSessionConfig) -> Vec<String> {
         launch
             .inspection
             .skills
@@ -3639,4 +3643,248 @@ async fn cfg275_child_inspection_and_execution_share_frozen_r1_after_parent_relo
     assert_eq!(r1.inspection().agents[&name], expected);
     drop(core); // composed child has not been activated or started execution
     parent.runtime().shutdown().await.unwrap();
+}
+
+/// Shared source-owner regressions. CLI fixtures only author isolated inputs;
+/// every assertion below resolves through the same long-lived manager.
+mod session_resolution {
+    use super::*;
+    use crate::model::{catalog::ModelRef, session::SessionModelConfig};
+
+    #[test]
+    fn one_manager_isolates_explicit_cwd_and_captured_resources() {
+        let f = Fixture::new();
+        let (manager, input_a) = f.request.session_input(&f.host).unwrap();
+        let b = f.root.path().join("second");
+        std::fs::create_dir_all(b.join(".agents/skills/only-b")).unwrap();
+        std::fs::write(b.join("rustx.toml"), "[agent.model]\nmodel = 'host/two'\n").unwrap();
+        std::fs::write(b.join("AGENTS.md"), "B guidance").unwrap();
+        std::fs::write(
+            b.join(".agents/skills/only-b/SKILL.md"),
+            "---\nname: only-b\ndescription: B resource\n---\nB body\n",
+        )
+        .unwrap();
+        change_trust(
+            &LaunchRequest {
+                workspace: Some(b.clone()),
+                ..Default::default()
+            },
+            &f.host,
+            TrustAction::Grant,
+        )
+        .unwrap();
+        std::fs::write(input_a.cwd.join("AGENTS.md"), "A guidance").unwrap();
+        let a = manager.resolve_session(&input_a).unwrap();
+        let b = manager
+            .resolve_session(&SessionConfigInput::new(b))
+            .unwrap();
+        assert_eq!(a.config().initial_model().model.to_string(), "host/one");
+        assert_eq!(b.config().initial_model().model.to_string(), "host/two");
+        assert_eq!(a.project_context_files[0].content, "A guidance");
+        assert_eq!(b.project_context_files[0].content, "B guidance");
+        assert!(a.skill_provenance().is_empty());
+        assert_eq!(b.skill_provenance().len(), 1);
+        assert_ne!(a.workspace, b.workspace);
+        assert_eq!(
+            manager.resolve_session(&input_a).unwrap().config(),
+            a.config()
+        );
+    }
+
+    #[test]
+    fn fresh_sources_change_only_later_snapshots_and_omission_stays_omission() {
+        let f = Fixture::new();
+        let (manager, input) = f.request.session_input(&f.host).unwrap();
+        let a = manager.resolve_session(&input).unwrap();
+        f.user(json!({"agent":{"model":{"model":"host/two", "request_params":{"temperature":0.3}}}, "skills":{"sources":[]}}));
+        let b = manager.resolve_session(&input).unwrap();
+        assert_eq!(a.config().initial_model().model.to_string(), "host/one");
+        assert_eq!(b.config().initial_model().model.to_string(), "host/two");
+        assert!(a.input.model.is_none());
+        assert!(b.input.model.is_none());
+        assert!(input.model.is_none());
+        assert!(!a.skill_sources.is_empty());
+        assert!(b.skill_sources.is_empty());
+        let catalog = f.host.config_directory.join("models.toml");
+        let bytes = std::fs::read_to_string(&catalog).unwrap();
+        std::fs::write(&catalog, bytes.replace("128000", "64000")).unwrap();
+        let c = manager.resolve_session(&input).unwrap();
+        assert_ne!(format!("{:?}", b.models), format!("{:?}", c.models));
+        assert_eq!(b.config().initial_model(), c.config().initial_model());
+    }
+
+    #[test]
+    fn explicit_session_model_is_whole_state_and_beats_current_defaults() {
+        let f = Fixture::new();
+        f.user(json!({"agent":{"model":{"model":"host/one", "request_params":{"temperature":0.3}, "max_output_tokens":{"mode":"limit","tokens":1024}}}}));
+        let (manager, mut input) = f.request.session_input(&f.host).unwrap();
+        let omitted = manager.resolve_session(&input).unwrap();
+        assert!(!omitted.config().initial_model().request_params.is_empty());
+        let mut selected = SessionModelConfig::of(ModelRef::parse("host/two").unwrap());
+        selected.max_output_tokens = Some(2048);
+        input.model = Some(selected.clone());
+        let explicit = manager.resolve_session(&input).unwrap();
+        assert_eq!(explicit.config().initial_model(), &selected);
+        assert!(explicit.config().initial_model().request_params.is_empty());
+        f.user(
+            json!({"agent":{"model":{"model":"host/one", "request_params":{"temperature":0.8}}}}),
+        );
+        assert_eq!(
+            manager
+                .resolve_session(&input)
+                .unwrap()
+                .config()
+                .initial_model(),
+            &selected
+        );
+        input
+            .model
+            .as_mut()
+            .unwrap()
+            .request_params
+            .insert("messages".into(), json!([]));
+        let (invalid, effects) =
+            super::super::static_effects::measure(|| manager.resolve_session(&input));
+        assert!(invalid.is_err());
+        assert_eq!(effects, [0; 13]);
+    }
+
+    #[test]
+    fn empty_and_disabled_tool_and_skill_inputs_remain_distinct() {
+        let f = Fixture::new();
+        let (manager, mut input) = f.request.session_input(&f.host).unwrap();
+        let omitted = manager.resolve_session(&input).unwrap();
+        assert!(omitted.input.tools.is_none());
+        input.tools = Some(Vec::new());
+        // The exact CLI-derived Tool list contract rejects empty instead of
+        // silently treating it as omission. Empty authored selections remain valid.
+        assert!(manager.resolve_session(&input).is_err());
+        input.tools = None;
+        input.exclude_tools = Some(Vec::new());
+        assert!(manager.resolve_session(&input).is_err());
+        input.exclude_tools = None;
+        input.no_direct_tools = true;
+        input.no_automatic_skills = true;
+        let disabled = manager.resolve_session(&input).unwrap();
+        assert!(disabled.no_direct_tools);
+        input.no_direct_tools = false;
+        input.no_builtin_tools = true;
+        assert!(manager.resolve_session(&input).unwrap().no_builtin_tools);
+        assert!(disabled.skill_sources.is_empty());
+        assert!(disabled.input.tools.is_none());
+        assert!(!omitted.skill_sources.is_empty());
+    }
+
+    #[test]
+    fn invalid_sources_and_disabled_external_sources_have_zero_effects() {
+        let f = Fixture::new();
+        let (manager, input) = f.request.session_input(&f.host).unwrap();
+        for source in [
+            "secret_unknown = 'secret-value'",
+            "invalid = [",
+            "[skills]\nsources = ['unknown']",
+            "[agent.model]\nmodel = 'host/absent'",
+        ] {
+            std::fs::write(f.host.config_directory.join("settings.toml"), source).unwrap();
+            let (result, effects) =
+                super::super::static_effects::measure(|| manager.resolve_session(&input));
+            assert!(result.is_err());
+            assert_eq!(effects, [0; 13]);
+        }
+        f.user(json!({"agent":{"model":{"model":"host/one"}}, "mcp_servers":{"disabled":{"type":"stdio", "command":"/never-execute", "enabled":false}}}));
+        let (result, effects) =
+            super::super::static_effects::measure(|| manager.resolve_session(&input));
+        result.unwrap();
+        assert_eq!(effects, [0; 13]);
+        f.trust(TrustAction::Revoke);
+        let prospective = manager.resolve_session(&input).unwrap();
+        assert!(
+            prospective
+                .admit(|| panic!("untrusted resolution must not capture credentials"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn resolver_has_no_ambient_cwd_or_environment_mutation_and_cli_delegates() {
+        let source = include_str!("configuration.rs");
+        for forbidden in [
+            "current_dir(",
+            "set_current_dir(",
+            "set_var(",
+            "remove_var(",
+            "HostEnvironment",
+            "LaunchRequest",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "shared owner must not contain {forbidden}"
+            );
+        }
+        let f = Fixture::new();
+        let (manager, _) = f.request.session_input(&f.host).unwrap();
+        let (result, effects) = super::super::static_effects::measure(|| {
+            manager.resolve_session(&SessionConfigInput::new(".".into()))
+        });
+        assert!(result.is_err());
+        assert_eq!(effects, [0; 13]);
+        let cli = include_str!("launch.rs");
+        assert!(cli.contains("manager.resolve_session(&input)"));
+        assert!(!cli.contains("merged.overlay"));
+        assert!(!cli.contains("resolve_agent_profile"));
+    }
+
+    #[tokio::test]
+    async fn captured_guidance_and_skills_survive_source_edits_before_composition() {
+        let f = Fixture::new();
+        let (manager, input) = f.request.session_input(&f.host).unwrap();
+        std::fs::write(input.cwd.join("AGENTS.md"), "Captured guidance").unwrap();
+        let skill = input.cwd.join(".agents/skills/frozen");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: frozen\ndescription: Captured Skill\n---\nbody\n",
+        )
+        .unwrap();
+        let a = manager.resolve_session(&input).unwrap();
+        std::fs::remove_dir_all(&skill).unwrap();
+        std::fs::write(input.cwd.join("AGENTS.md"), "Later guidance").unwrap();
+        let b = manager.resolve_session(&input).unwrap();
+        assert_eq!(a.project_context_files[0].content, "Captured guidance");
+        assert_eq!(b.project_context_files[0].content, "Later guidance");
+        let admitted = a.admit(|| f.credentials.clone()).unwrap();
+        let product = LocalSessionProduct::compose(&admitted, &LocalRuntimeDependencies::default())
+            .await
+            .unwrap();
+        let resources = product.runtime().runtime_resources();
+        assert_eq!(
+            resources.project_context_files()[0].content,
+            "Captured guidance"
+        );
+        assert_eq!(resources.inspection().skills.len(), 1);
+        assert!(b.skill_provenance().is_empty());
+        drop(product);
+        assert_eq!(
+            admitted.project_context_files[0].content,
+            "Captured guidance"
+        );
+    }
+    #[test]
+    fn session_input_and_provenance_redact_provider_native_values() {
+        let f = Fixture::new();
+        let (manager, mut input) = f.request.session_input(&f.host).unwrap();
+        let mut selected = SessionModelConfig::of(ModelRef::parse("host/one").unwrap());
+        selected
+            .request_params
+            .insert("custom".into(), json!("session-secret-value"));
+        input.model = Some(selected);
+        let prospective = manager.resolve_session(&input).unwrap();
+        for text in [
+            format!("{input:?}"),
+            format!("{prospective:?}"),
+            serde_json::to_string(prospective.provenance()).unwrap(),
+        ] {
+            assert!(!text.contains("session-secret-value"));
+        }
+    }
 }

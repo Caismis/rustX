@@ -122,7 +122,16 @@ async fn serve_request(request: super::launch::LaunchRequest) -> ProcessOutcome 
                 Ok(paths) => paths,
                 Err(error) => return ProcessOutcome::StartupFailed(error),
             };
-            match LocalSessionProduct::compose(&paths, &LocalRuntimeDependencies::default()).await {
+            match LocalSessionProduct::compose(
+                &paths,
+                &LocalRuntimeDependencies {
+                    startup_session: request.startup_session,
+                    session_name: request.session_name,
+                    ..Default::default()
+                },
+            )
+            .await
+            {
                 Ok(runtime) => ServingRuntime::Session(Box::new(runtime)),
                 Err(error) => return ProcessOutcome::StartupFailed(error.to_string()),
             }

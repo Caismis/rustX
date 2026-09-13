@@ -4,7 +4,7 @@ use super::{
         ContextPolicyDocument, CurrentRuntimeConfig, InvocationPolicyDocument, McpServerDocument,
         McpTransportType, NativePolicyOverrideDocument,
     },
-    launch::Origin,
+    configuration::Origin,
 };
 use crate::model::catalog::{ModelRef, ReasoningProfileId};
 use crate::model::session::{SessionModelConfig, SummaryModelPolicy};
@@ -808,7 +808,7 @@ tokens = 1024
             "[mcp_servers.source]\nsensitive_headers = {}",
         ] {
             assert!(
-                super::super::launch::parse_layer(
+                super::super::configuration::parse_layer(
                     std::path::Path::new("rustx.toml"),
                     text.as_bytes(),
                     true
@@ -817,7 +817,7 @@ tokens = 1024
                 "{text}"
             );
             assert!(
-                super::super::launch::parse_layer(
+                super::super::configuration::parse_layer(
                     std::path::Path::new("settings.toml"),
                     text.as_bytes(),
                     false

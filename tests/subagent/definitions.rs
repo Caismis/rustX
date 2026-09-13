@@ -241,7 +241,8 @@ impl Lab {
     }
 
     async fn compose(&self) -> LocalSessionProduct {
-        LocalSessionProduct::compose(&(self.paths()).resolve(), &dependencies())
+        (self.paths())
+            .compose(&dependencies())
             .await
             .expect("the runtime composes")
     }
@@ -829,7 +830,8 @@ async fn recursive_and_execution_selections_are_rejected_at_admission() {
 async fn an_explicit_ask_user_selection_is_admitted_for_a_child() {
     let lab = Lab::new();
     lab.write_config(&explore(&["ask_user"]));
-    LocalSessionProduct::compose(&(lab.paths()).resolve(), &dependencies())
+    (lab.paths())
+        .compose(&dependencies())
         .await
         .expect("ask_user is a routed child capability when explicitly selected");
 }
@@ -1765,7 +1767,8 @@ async fn skill_version_identity_is_frozen_across_the_boundary() {
         .expect("settle the original owner");
     drop(resources);
     drop(product);
-    let reloaded = LocalSessionProduct::compose(&(lab.paths()).resolve(), &dependencies())
+    let reloaded = (lab.paths())
+        .compose(&dependencies())
         .await
         .expect("the rewritten workspace composes");
     let rewritten = reloaded
