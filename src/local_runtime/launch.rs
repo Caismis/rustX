@@ -3,8 +3,8 @@
 use super::composition::StartupSession;
 use super::configuration::{
     AdmittedSessionConfig, ProspectiveSessionConfig, SessionConfigInput, SessionLocations,
-    UserConfigManager, UserConfigSources, absolute, canonical_directory, normalize_missing,
-    present_on_disk, trust_root,
+    UserConfigManager, UserConfigSources, absolute, bind_user_source_path, canonical_directory,
+    canonical_settings_source, present_on_disk, trust_root,
 };
 use super::diagnostics::LaunchFailure;
 use crate::bounded_file::read_bounded;
@@ -245,8 +245,8 @@ pub fn resolve_inspection_locations(
     host: &HostEnvironment,
 ) -> Result<SessionLocations, String> {
     let (mut locations, _) = resolve_locations(request, host)?;
-    let settings = host.config_directory.join("settings.toml");
-    if request.runtime_root.is_none() && present_on_disk(&settings)? {
+    let settings = canonical_settings_source(&host.config_directory.join("settings.toml"))?;
+    let authored = if request.runtime_root.is_none() && present_on_disk(&settings)? {
         // Location-only inspection must not validate unrelated model/resource
         // fields. This bounded projection grants no configuration authority.
         #[derive(serde::Deserialize)]
@@ -254,13 +254,20 @@ pub fn resolve_inspection_locations(
             runtime_root: Option<PathBuf>,
         }
         let document: StateLocation = crate::toml_authoring::parse(&read_bounded(&settings)?)?;
-        if let Some(path) = document.runtime_root {
-            if path.as_os_str().is_empty() {
-                return Err("user runtime_root must be a non-empty path".into());
-            }
-            locations.runtime_root = normalize_missing(&absolute(&host.config_directory, &path))?;
-        }
-    }
+        document.runtime_root
+    } else {
+        None
+    };
+    let explicit = request
+        .runtime_root
+        .as_ref()
+        .map(|p| absolute(&host.launch_directory, p));
+    locations.runtime_root = bind_user_source_path(
+        &settings,
+        authored.as_deref(),
+        explicit.as_deref(),
+        &locations.runtime_root,
+    )?;
     Ok(locations)
 }
 

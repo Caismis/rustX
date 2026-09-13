@@ -2185,6 +2185,93 @@ fn host_state_and_catalog_overrides_keep_document_and_cli_origins() {
     );
 }
 
+#[cfg(unix)]
+fn symlinked_binding_fixture(authored: serde_json::Value) -> (Fixture, std::path::PathBuf) {
+    let f = Fixture::new();
+    let shared = f.root.path().join("shared");
+    std::fs::create_dir(&shared).unwrap();
+    let settings = shared.join("settings.toml");
+    std::fs::write(&settings, toml::to_string_pretty(&authored).unwrap()).unwrap();
+    std::fs::remove_file(f.host.config_directory.join("settings.toml")).unwrap();
+    std::os::unix::fs::symlink(&settings, f.host.config_directory.join("settings.toml")).unwrap();
+    (f, shared)
+}
+
+#[cfg(unix)]
+#[test]
+fn inspection_and_bootstrap_share_symlinked_settings_binding() {
+    let (f, shared) = symlinked_binding_fixture(json!({"runtime_root":"state"}));
+    std::fs::create_dir(shared.join("state")).unwrap();
+    let expected = std::fs::canonicalize(shared.join("state")).unwrap();
+    let (manager, input) = f.request.session_input(&f.host).unwrap();
+    assert_eq!(
+        manager.resolve_locations(&input).unwrap().0.runtime_root,
+        expected
+    );
+    assert_eq!(
+        resolve_inspection_locations(&f.request, &f.host)
+            .unwrap()
+            .runtime_root,
+        expected
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn inspection_and_bootstrap_explicit_root_overrides_symlinked_authoring() {
+    let (mut f, _) = symlinked_binding_fixture(json!({"runtime_root":"state"}));
+    f.request.runtime_root = Some("explicit-state".into());
+    let expected = f.host.launch_directory.join("explicit-state");
+    let (manager, input) = f.request.session_input(&f.host).unwrap();
+    assert_eq!(
+        manager.resolve_locations(&input).unwrap().0.runtime_root,
+        expected
+    );
+    assert_eq!(
+        resolve_inspection_locations(&f.request, &f.host)
+            .unwrap()
+            .runtime_root,
+        expected
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn inspection_and_bootstrap_keep_workspace_default_with_symlinked_settings() {
+    let (f, _) = symlinked_binding_fixture(json!({}));
+    let expected =
+        f.host
+            .state_directory
+            .join("workspaces")
+            .join(super::configuration::workspace_identity(
+                &f.host.launch_directory,
+            ));
+    let (manager, input) = f.request.session_input(&f.host).unwrap();
+    assert_eq!(
+        manager.resolve_locations(&input).unwrap().0.runtime_root,
+        expected
+    );
+    assert_eq!(
+        resolve_inspection_locations(&f.request, &f.host)
+            .unwrap()
+            .runtime_root,
+        expected
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn inspection_symlink_binding_ignores_invalid_runtime_domains() {
+    let (f, shared) = symlinked_binding_fixture(json!({"runtime_root":"state", "context":false}));
+    assert_eq!(
+        resolve_inspection_locations(&f.request, &f.host)
+            .unwrap()
+            .runtime_root,
+        shared.join("state")
+    );
+    assert!(f.request.session_input(&f.host).is_err());
+}
+
 #[test]
 fn inspection_reads_only_the_host_state_reference_without_activation_or_writes() {
     let f = Fixture::new();

@@ -122,6 +122,44 @@ impl SessionConfigInput {
         }
     }
 }
+/// Canonical authoring identity determines the base of relative user bindings.
+pub(super) fn canonical_settings_source(path: &Path) -> Result<PathBuf, String> {
+    if !path.is_absolute() {
+        return Err("user settings source must be absolute".into());
+    }
+    normalize_missing(path)
+}
+
+/// Shared location semantics, independent of full settings deserialization.
+/// The caller supplies a canonical settings identity and absolute host/default paths.
+pub(super) fn bind_user_source_path(
+    settings: &Path,
+    authored: Option<&Path>,
+    explicit: Option<&Path>,
+    default: &Path,
+) -> Result<PathBuf, String> {
+    let selected = if let Some(path) = explicit {
+        if !path.is_absolute() {
+            return Err("host source bindings must be absolute".into());
+        }
+        path.to_path_buf()
+    } else if let Some(path) = authored {
+        if path.as_os_str().is_empty() {
+            return Err("user source binding must be a non-empty path".into());
+        }
+        absolute(
+            settings.parent().ok_or("settings source has no parent")?,
+            path,
+        )
+    } else {
+        if !default.is_absolute() {
+            return Err("default source bindings must be absolute".into());
+        }
+        default.to_path_buf()
+    };
+    normalize_missing(&selected)
+}
+
 impl UserConfigManager {
     /// Bind absolute user roots without reading configuration or credentials.
     /// # Errors
@@ -142,7 +180,7 @@ impl UserConfigManager {
         sources.home_directory = normalize_missing(&sources.home_directory)?;
         sources.config_directory = normalize_missing(&sources.config_directory)?;
         sources.state_directory = normalize_missing(&sources.state_directory)?;
-        sources.settings = normalize_missing(&sources.settings)?;
+        sources.settings = canonical_settings_source(&sources.settings)?;
         sources.models = normalize_missing(&sources.models)?;
         sources.runtime_root = normalize_missing(&sources.runtime_root)?;
         let explicit = Origin::Explicit {
@@ -167,10 +205,7 @@ impl UserConfigManager {
         runtime_root: Option<PathBuf>,
     ) -> Result<Self, LaunchFailure> {
         let mut sources = sources;
-        if !sources.settings.is_absolute() {
-            return Err("user settings source must be absolute".into());
-        }
-        sources.settings = normalize_missing(&sources.settings)?;
+        sources.settings = canonical_settings_source(&sources.settings)?;
         let user = read_layer(&sources.settings, false, false)?;
         let base = sources
             .settings
@@ -196,14 +231,15 @@ impl UserConfigManager {
                 user.runtime_root,
             ),
         ] {
-            if let Some(path) = host {
-                if !path.is_absolute() {
-                    return Err("host source bindings must be absolute".into());
-                }
-                *target = path;
+            *target = bind_user_source_path(
+                &sources.settings,
+                authored.as_deref(),
+                host.as_deref(),
+                target,
+            )?;
+            if host.is_some() {
                 *origin = explicit.clone();
-            } else if let Some(path) = authored {
-                *target = absolute(&base, &path);
+            } else if authored.is_some() {
                 *origin = user_origin.clone();
             }
         }

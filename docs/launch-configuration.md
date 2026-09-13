@@ -37,7 +37,10 @@ settings document, but those binding fields cannot redirect its existing sources
 Editing the bytes of the already-bound model file affects the next resolution;
 editing the setting that names another model file does not. The settings source
 itself, HOME/config/state roots, model source, and runtime root are canonical
-bindings retained for the manager lifetime.
+bindings retained for the manager lifetime. Relative authored binding paths use
+the canonical settings document parent, including when settings is symlinked.
+Conversation inspection shares these path and precedence rules through a bounded
+location projection; it does not validate unrelated runtime configuration.
 
 The `resolve_session`
 method takes `SessionConfigInput` with an explicit absolute `cwd`, optional
