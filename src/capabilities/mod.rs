@@ -55,6 +55,8 @@ pub mod selected;
 pub mod selection;
 mod snapshot;
 mod tools;
+pub(crate) use tools::inspect_profile;
+#[cfg(test)]
 pub(crate) use tools::select_definitions;
 
 pub use availability::{

@@ -221,7 +221,7 @@ SCENARIOS = {"my_scenario": my_scenario}
 Register the module's `SCENARIOS` in `scenarios/__init__.py`, then drive it
 from a Rust or TypeScript test. Expectation primitives: `model`, `path`,
 `json_subset`, `json_exact`, `body_contains`, `body_excludes`,
-`tools_include`, `no_tools`, `headers_present`. Response script items:
+`tools_include`, `no_direct_tools`, `headers_present`. Response script items:
 `Text`, `Reasoning`, `ToolCall`, `Usage`, `Finish`, `Gate`, `Raw`,
 `Disconnect`; responses are `Stream`, `HttpError`, or `RawResponse`.
 

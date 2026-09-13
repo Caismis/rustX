@@ -68,11 +68,11 @@ export interface RuntimeStartupOptions {
   /** Repeatable explicit Skill package/root paths, in caller order. */
   skillPaths: string[];
   /** Disable automatic/default Skill roots. */
-  noSkills: boolean;
+  noAutomaticSkills: boolean;
   /** Disable native/built-in Tool activation. */
   noBuiltinTools: boolean;
   /** Disable every active Tool. */
-  noTools: boolean;
+  noDirectTools: boolean;
   /** Exact comma-separated strict Tool allowlist, when supplied. */
   tools?: string;
   /** Exact comma-separated final Tool exclusions, when supplied. */
@@ -167,14 +167,14 @@ export class ChildRuntimeProcess {
     for (const skillPath of startup.skillPaths) {
       startupArguments.push("--skill", skillPath);
     }
-    if (startup.noSkills) {
-      startupArguments.push("--no-skills");
+    if (startup.noAutomaticSkills) {
+      startupArguments.push("--no-automatic-skills");
     }
     if (startup.noBuiltinTools) {
       startupArguments.push("--no-builtin-tools");
     }
-    if (startup.noTools) {
-      startupArguments.push("--no-tools");
+    if (startup.noDirectTools) {
+      startupArguments.push("--no-direct-tools");
     }
     if (startup.tools !== undefined) {
       startupArguments.push("--tools", startup.tools);
@@ -323,9 +323,9 @@ function emptyRuntimeStartupOptions(): RuntimeStartupOptions {
     node: undefined,
     sessionName: undefined,
     skillPaths: [],
-    noSkills: false,
+    noAutomaticSkills: false,
     noBuiltinTools: false,
-    noTools: false,
+    noDirectTools: false,
   };
 }
 

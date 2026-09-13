@@ -1481,7 +1481,7 @@ The explicit lower-priority root product profile enables it; complete-profile
 omission composes none; `agent.tools.builtin`, `--tools`, `--exclude-tools`, a role's
 `tools.builtin`, and a Workflow's admitted capability set all reject the name
 `todo` outright, because they address the ordinary capability plane and Todo is
-not in it. `--no-tools` therefore leaves an enabled Todo's Tool in place: a
+not in it. `--no-direct-tools` therefore leaves an enabled Todo's Tool in place: a
 Tool-free model request needs no ordinary Tools **and** no Tool-providing
 extension.
 
@@ -3740,7 +3740,7 @@ the launch-boundary policy inheritance.
   inspection but their schemas never enter provider requests.
 - **Startup Tool selection is deterministic.** The base selection applies
   `agent.tools.builtin` to built-ins, `--no-builtin-tools` removes all built-ins,
-  `--no-tools` selects zero ordinary Tools, `--tools` selects exactly its
+  `--no-direct-tools` selects zero ordinary Tools, `--tools` selects exactly its
   names, and exclusions subtract last. Read has no activation exception.
   Empty, unknown/ineligible, ambiguous or duplicate explicit CLI entries fail.
   Complete-profile empty dimensions are valid, and unavailable selections warn

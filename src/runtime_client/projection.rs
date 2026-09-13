@@ -2010,10 +2010,8 @@ pub(crate) fn capability_view(
                 crate::capabilities::CapabilitySourceState::Ready => {
                     super::snapshot::CapabilitySourceStateView::Ready
                 }
-                crate::capabilities::CapabilitySourceState::Unavailable { reason } => {
-                    super::snapshot::CapabilitySourceStateView::Unavailable {
-                        reason: reason.clone(),
-                    }
+                crate::capabilities::CapabilitySourceState::Unavailable { .. } => {
+                    super::snapshot::CapabilitySourceStateView::Unavailable
                 }
             },
         })
@@ -2038,6 +2036,7 @@ pub(crate) fn resources_view(
     resources: &crate::runtime::resources::RuntimeResourceSnapshot,
 ) -> super::snapshot::RuntimeClientResourcesView {
     super::snapshot::RuntimeClientResourcesView {
+        inspection: Box::new(resources.inspection().clone()),
         revision: resources.revision(),
         context_files: resources
             .project_context_files()

@@ -9,7 +9,7 @@
 //! # This layer owns the ordinary capability plane only
 //!
 //! Everything here — `agent.tools.builtin`, `--tools`, `--exclude-tools`,
-//! `--no-tools`, `--no-builtin-tools` — addresses *ordinary execution
+//! `--no-direct-tools`, `--no-builtin-tools` — addresses *ordinary execution
 //! capabilities*. A Native Agent Extension may also contribute a model-facing
 //! Tool, and that Tool belongs to the extension's composition, not to this
 //! selection:
@@ -20,7 +20,7 @@
 //! ```
 //!
 //! [`select_tools`] therefore takes the two sets separately and never lets one
-//! decide the other. Selection cannot remove an extension Tool (so `--no-tools`
+//! decide the other. Selection cannot remove an extension Tool (so `--no-direct-tools`
 //! plus an enabled Todo still exposes `todo`, and a truly Tool-free request
 //! needs both zero ordinary Tools and no Tool-providing extension), and it
 //! cannot add one either: an extension's Tool name is not an ordinary
@@ -48,10 +48,10 @@ pub struct AgentActivation {
     pub admitted_agents: BTreeSet<crate::runtime::subagent::SubagentName>,
     pub admitted_workflows: BTreeSet<crate::runtime::workflow::WorkflowId>,
     pub project_files: Vec<crate::runtime::resources::ProjectContextFile>,
-    /// Remove all built-ins from default selection, including generated Tools.
+    /// Remove ordinary built-ins from direct selection; dispatch remains independent.
     pub no_builtin_tools: bool,
     /// Expose and authorize zero ordinary main-model Tools.
-    pub no_tools: bool,
+    pub no_direct_tools: bool,
     /// Exact model-facing allowlist across applicable origins.
     pub tools: Option<Vec<String>>,
     /// Final subtraction from selection, resolved against applicable identities.
@@ -66,7 +66,7 @@ impl Default for AgentActivation {
             admitted_workflows: BTreeSet::new(),
             project_files: Vec::new(),
             no_builtin_tools: false,
-            no_tools: false,
+            no_direct_tools: false,
             tools: None,
             exclude_tools: Vec::new(),
         }
@@ -109,14 +109,14 @@ fn reject_extension_tool(name: &str, label: &str) -> Result<(), String> {
 
 impl AgentActivation {
     pub(crate) fn conflict(&self) -> Option<(&'static str, &'static str)> {
-        if self.no_tools {
+        if self.no_direct_tools {
             for (present, flag) in [
                 (self.tools.is_some(), "--tools"),
                 (!self.exclude_tools.is_empty(), "--exclude-tools"),
                 (self.no_builtin_tools, "--no-builtin-tools"),
             ] {
                 if present {
-                    return Some(("--no-tools", flag));
+                    return Some(("--no-direct-tools", flag));
                 }
             }
         }
@@ -164,7 +164,7 @@ impl AgentActivation {
 pub(crate) fn validate_names(names: &[String], label: &str) -> Result<(), String> {
     if names.is_empty() || names.iter().any(|name| name.trim().is_empty()) {
         return Err(format!(
-            "Tool {label} must contain non-empty names; use --no-tools for zero Tools"
+            "Tool {label} must contain non-empty names; use --no-direct-tools for zero direct ordinary Tools"
         ));
     }
     let mut seen = BTreeSet::new();
@@ -305,7 +305,7 @@ pub(crate) fn select_tools(
     String,
 > {
     // Validate every candidate before projecting availability. Selection can
-    // intentionally hide ordinary tools (`no_tools`, exclusions, or a strict
+    // intentionally hide ordinary tools (`no_direct_tools`, exclusions, or a strict
     // allowlist), but it must never hide an identity collision with a
     // runtime-owned protocol name.
     for registration in available.iter().chain(extensions) {
@@ -318,12 +318,7 @@ pub(crate) fn select_tools(
     let available_catalog = AvailableToolCatalog::new(
         available
             .iter()
-            .filter(|entry| {
-                !crate::runtime::agent_profile::is_dispatcher(
-                    &entry.definition,
-                    &policy.admitted_workflows,
-                )
-            })
+            .filter(|entry| !crate::runtime::agent_profile::is_dispatcher(&entry.definition))
             .cloned()
             .collect(),
     );
@@ -333,16 +328,7 @@ pub(crate) fn select_tools(
         .collect::<Vec<_>>();
     let mut profile = resolve_profile(&available_catalog, policy, skills, availability)?;
     let selected = apply_cli(&definitions, &profile, policy)?;
-    // Freeze the final host-restricted exposure in the same profile value.
-    // CLI restrictions never grant a capability to another profile.
-    let selected_ids: BTreeSet<_> = selected.iter().map(|tool| &tool.id).collect();
-    profile.tools.retain(|tool| selected_ids.contains(&tool.id));
-    profile
-        .workflows
-        .retain(|id| selected_ids.contains(&crate::tools::native::workflow_tool_id(id)));
-    if !selected_ids.contains(&crate::tools::native::subagent_tool_id()) {
-        profile.agents.clear();
-    }
+    restrict_profile(&mut profile, &selected);
     let registrations = selected
         .into_iter()
         .map(|definition| {
@@ -353,7 +339,7 @@ pub(crate) fn select_tools(
                 .clone()
         })
         // The composition, and the reason it is an append rather than a
-        // filter pass: no ordinary selection outcome — `no_tools`, an exact
+        // filter pass: no ordinary selection outcome — `no_direct_tools`, an exact
         // allowlist, an exclusion — participates in whether an extension
         // Tool is active. The frozen extension composition already decided.
         .chain(extensions.iter().cloned());
@@ -362,25 +348,58 @@ pub(crate) fn select_tools(
     Ok((available_catalog, active, profile))
 }
 
-/// Prospective metadata projection uses the same profile boundary as execution.
+fn restrict_profile(
+    profile: &mut crate::runtime::agent_profile::ResolvedAgentProfile,
+    selected: &[&ToolDefinition],
+) {
+    // Freeze the final host-restricted exposure in the same profile value.
+    // CLI restrictions never grant a capability to another profile.
+    let selected_ids: BTreeSet<_> = selected.iter().map(|tool| &tool.id).collect();
+    for tool in &profile.tools {
+        if !selected_ids.contains(&tool.id) {
+            profile.diagnostics.push(
+                crate::runtime::agent_profile::AgentProfileDiagnostic::HostToolSuppressed {
+                    id: tool.id.clone(),
+                    name: tool.name.clone(),
+                    source: tool.origin.source(),
+                },
+            );
+        }
+    }
+    profile
+        .diagnostics
+        .sort_by_key(crate::runtime::agent_profile::AgentProfileDiagnostic::key);
+    profile.diagnostics.dedup();
+    profile.tools.retain(|tool| selected_ids.contains(&tool.id));
+    profile
+        .workflows
+        .retain(|id| selected_ids.contains(&crate::tools::native::workflow_tool_id(id)));
+    if !selected_ids.contains(&crate::tools::native::subagent_tool_id()) {
+        profile.agents.clear();
+    }
+}
+
+pub(crate) fn inspect_profile(
+    available: &[&ToolDefinition],
+    policy: &AgentActivation,
+    skills: &crate::skills::SkillSnapshot,
+    availability: &super::CapabilityAvailability,
+) -> Result<crate::runtime::agent_profile::ResolvedAgentProfile, String> {
+    let catalog = AvailableToolCatalog::metadata(available.iter().map(|tool| (*tool).clone()));
+    let mut profile = resolve_profile(&catalog, policy, skills, availability)?;
+    let selected = apply_cli(available, &profile, policy)?;
+    restrict_profile(&mut profile, &selected);
+    Ok(profile)
+}
+
+#[cfg(test)]
 pub(crate) fn select_definitions<'a>(
     available: &[&'a ToolDefinition],
     policy: &AgentActivation,
     skills: &crate::skills::SkillSnapshot,
     availability: &super::CapabilityAvailability,
 ) -> Result<Vec<&'a ToolDefinition>, String> {
-    let catalog = AvailableToolCatalog::metadata(
-        available
-            .iter()
-            .filter(|definition| {
-                !crate::runtime::agent_profile::is_dispatcher(
-                    definition,
-                    &policy.admitted_workflows,
-                )
-            })
-            .map(|definition| (*definition).clone()),
-    );
-    let profile = resolve_profile(&catalog, policy, skills, availability)?;
+    let profile = inspect_profile(available, policy, skills, availability)?;
     apply_cli(available, &profile, policy)
 }
 fn resolve_profile(
@@ -438,24 +457,34 @@ fn apply_cli<'a>(
     policy: &AgentActivation,
 ) -> Result<Vec<&'a ToolDefinition>, String> {
     policy.validate()?;
+    let dispatcher =
+        |definition: &&ToolDefinition| crate::runtime::agent_profile::is_dispatcher(definition);
+    let dispatch: Vec<_> = available
+        .iter()
+        .copied()
+        .filter(dispatcher)
+        .filter(|definition| {
+            profile
+                .workflows
+                .iter()
+                .any(|id| definition.id == crate::tools::native::workflow_tool_id(id))
+                || (!profile.agents.is_empty()
+                    && definition.id == crate::tools::native::subagent_tool_id())
+        })
+        .collect();
     let eligible: Vec<_> = available
         .iter()
         .copied()
+        .filter(|definition| !dispatcher(definition))
         .filter(|definition| !policy.no_builtin_tools || definition.origin != ToolOrigin::Builtin)
         .filter(|definition| {
             profile
                 .tools
                 .iter()
                 .any(|selected| selected.id == definition.id)
-                || profile
-                    .workflows
-                    .iter()
-                    .any(|id| definition.id == crate::tools::native::workflow_tool_id(id))
-                || (!profile.agents.is_empty()
-                    && definition.id == crate::tools::native::subagent_tool_id())
         })
         .collect();
-    let mut selected = if policy.no_tools {
+    let mut selected = if policy.no_direct_tools {
         Vec::new()
     } else if let Some(names) = &policy.tools {
         names
@@ -471,6 +500,7 @@ fn apply_cli<'a>(
         .map(|name| resolve_name(&eligible, name, "exclusion").map(|entry| &entry.id))
         .collect::<Result<BTreeSet<_>, _>>()?;
     selected.retain(|definition| !excluded.contains(&definition.id));
+    selected.extend(dispatch);
     Ok(selected)
 }
 
@@ -640,7 +670,7 @@ mod tests {
     fn cfg273_frozen_profile_reports_final_host_restricted_exposure() {
         for policy in [
             AgentActivation {
-                no_tools: true,
+                no_direct_tools: true,
                 ..Default::default()
             },
             AgentActivation {
@@ -668,7 +698,7 @@ mod tests {
     }
 
     #[test]
-    fn builtin_disable_and_no_tools_retain_truthful_availability() {
+    fn builtin_disable_and_no_direct_tools_retain_truthful_availability() {
         let (available, active) = select_tools(
             &registrations(),
             &[],
@@ -703,7 +733,7 @@ mod tests {
             &registrations(),
             &[],
             &AgentActivation {
-                no_tools: true,
+                no_direct_tools: true,
                 ..source_policy()
             },
         )
@@ -862,17 +892,17 @@ mod tests {
                 ..Default::default()
             },
             AgentActivation {
-                no_tools: true,
+                no_direct_tools: true,
                 tools: Some(vec!["read".into()]),
                 ..Default::default()
             },
             AgentActivation {
-                no_tools: true,
+                no_direct_tools: true,
                 exclude_tools: vec!["read".into()],
                 ..Default::default()
             },
             AgentActivation {
-                no_tools: true,
+                no_direct_tools: true,
                 no_builtin_tools: true,
                 ..Default::default()
             },
@@ -928,7 +958,7 @@ mod tests {
     /// Candidate availability is validated before activation filtering, so a
     /// hidden ordinary capability cannot collide with a runtime protocol.
     #[test]
-    fn reserved_workflow_output_is_rejected_before_no_tools_hides_it() {
+    fn reserved_workflow_output_is_rejected_before_no_direct_tools_hides_it() {
         for origin in [
             ToolOrigin::Builtin,
             ToolOrigin::Mcp {
@@ -942,7 +972,7 @@ mod tests {
                 )],
                 &[],
                 &AgentActivation {
-                    no_tools: true,
+                    no_direct_tools: true,
                     ..source_policy()
                 },
             )

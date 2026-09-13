@@ -180,4 +180,7 @@ workflow.
 MIT
 External sources are opt-in: see [source activation and credentials](docs/source-activation.md).
 Native-only startup needs no Python, `uv`, MCP executable/endpoint or external
-source secret. `--no-tools` controls model exposure; source disabling controls preparation.
+source secret. `--no-direct-tools` controls model exposure; source disabling controls preparation.
+
+For typed generation diagnostics and offline Agent/Workflow inspection, see
+[capability inspection](docs/capability-inspection.md) and the [CFG2 example](examples/cfg2/README.md).

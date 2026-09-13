@@ -269,10 +269,36 @@ async fn run_configuration_command(command: super::cli::Command) -> i32 {
             super::diagnostics::inspect("config_check", &request, &host).0,
             json,
         ),
-        Command::Show { request, json } => (
-            super::diagnostics::inspect("config_show", &request, &host).0,
+        Command::Show {
+            request,
             json,
-        ),
+            agent,
+        } => {
+            let (mut report, launch) = super::diagnostics::inspect("config_show", &request, &host);
+            if let (Some(name), Some(launch)) = (agent, launch) {
+                let selected = if name == "main" {
+                    launch.inspection.main.as_ref()
+                } else {
+                    crate::runtime::subagent::SubagentName::parse(&name)
+                        .ok()
+                        .and_then(|name| launch.inspection.agents.get(&name))
+                };
+                if let Some(selected) = selected {
+                    report.agent = Some(selected.clone());
+                    report.launch = None;
+                    report.capabilities = None;
+                } else {
+                    report = super::diagnostics::Report::failure(
+                        "config_show",
+                        None,
+                        "agent",
+                        "Agent not discovered",
+                        "select main or a discovered named Agent",
+                    );
+                }
+            }
+            (report, json)
+        }
         Command::Doctor {
             request,
             json,

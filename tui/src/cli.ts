@@ -6,8 +6,8 @@
  *           [--workspace <dir>] [--runtime-root <dir>] [--model <provider/model>]
  *           [--trust grant|revoke]
  *           [--inspect-conversation <id> | --continue | --resume | --session <id> [--node <id>]]
- *           [--name <text>] [--skill <path>] [--no-skills]
- *           [--no-builtin-tools] [--no-tools]
+ *           [--name <text>] [--skill <path>] [--no-automatic-skills]
+ *           [--no-builtin-tools] [--no-direct-tools]
  *           [--tools <a,b,c>] [--exclude-tools <a,b,c>]
  * ```
  *
@@ -53,7 +53,7 @@ export const USAGE = `usage: rustx-tui --binary <rustx> [--models <models.toml>]
                  [--config <rustx.toml>] [--workspace <dir>] [--runtime-root <dir>] \\
                  [--model <provider/model>] [--trust grant|revoke] \\
                  [--inspect-conversation <conversation-id> | --continue | --resume | --session <id> [--node <id>]] \\
-                 [--name <text>] [--skill <path>] [--no-skills] [--no-builtin-tools] [--no-tools] \\
+                 [--name <text>] [--skill <path>] [--no-automatic-skills] [--no-builtin-tools] [--no-direct-tools] \\
                  [--tools <a,b,c>] [--exclude-tools <a,b,c>]`;
 
 export interface TuiArguments {
@@ -96,9 +96,9 @@ const VALUE_FLAGS = [
 const BOOLEAN_FLAGS = [
   "--continue",
   "--resume",
-  "--no-skills",
+  "--no-automatic-skills",
   "--no-builtin-tools",
-  "--no-tools",
+  "--no-direct-tools",
 ] as const;
 
 type ValueFlag = (typeof VALUE_FLAGS)[number];
@@ -207,9 +207,9 @@ export function parseArguments(argv: readonly string[]): TuiArguments {
       node,
       sessionName: values.get("--name"),
       skillPaths,
-      noSkills: booleans.has("--no-skills"),
+      noAutomaticSkills: booleans.has("--no-automatic-skills"),
       noBuiltinTools: booleans.has("--no-builtin-tools"),
-      noTools: booleans.has("--no-tools"),
+      noDirectTools: booleans.has("--no-direct-tools"),
       tools: values.get("--tools"),
       excludeTools: values.get("--exclude-tools"),
     },

@@ -4777,9 +4777,9 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
         models: dir.path().join("unused-models.toml"),
         config: dir.path().join("unused-config.toml"),
         skill_paths: Vec::new(),
-        no_skills: true,
+        no_automatic_skills: true,
         no_builtin_tools: false,
-        no_tools: false,
+        no_direct_tools: false,
         startup_session: rustx::local_runtime::StartupSession::InspectConversation {
             conversation_id: child_conversation_id.clone(),
         },

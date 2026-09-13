@@ -1130,6 +1130,8 @@ export function renderSettings(state: PresentationState): string {
     `- published revision: ${state.resources.revision}; capability revision: ${state.capabilities.revision}`,
     renderTools(state),
     renderSkills(state),
+    "Generation capability facts (active selections, suppression, source state and Workflow admission):",
+    JSON.stringify(state.resources.inspection, null, 2),
     ...renderExtensions(state),
     `### Admitted execution (${lifetime(state, "attempt")})`,
     `- model: ${state.attempt?.model?.primary.model ?? "unavailable / no admitted attempt"}`,

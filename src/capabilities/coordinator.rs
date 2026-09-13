@@ -418,6 +418,10 @@ pub struct PreparedCapabilityCandidate {
 }
 
 impl PreparedCapabilityCandidate {
+    pub(crate) fn skills(&self) -> &SkillSnapshot {
+        &self.skills
+    }
+
     /// Complete Workflow admission and root selection before the existing commit.
     pub(crate) fn admit_workflows(
         &mut self,
@@ -3324,7 +3328,7 @@ mod mcp_race_tests {
                 "capabilities::coordinator::mcp_race_tests::cfg233_exposure_and_domain_references_never_grant_source_activation",
             );
             let mut inputs = coordinator.inner.resource_inputs.lock().unwrap().clone();
-            inputs.agent_activation.no_tools = true;
+            inputs.agent_activation.no_direct_tools = true;
             if !enabled {
                 inputs.mcp_servers.get_mut(&id).unwrap().activation =
                     crate::capabilities::activation::SourceActivation::Disabled;
@@ -3336,7 +3340,7 @@ mod mcp_race_tests {
             assert_eq!(
                 candidate.mcp_runtimes.len(),
                 usize::from(enabled),
-                "--no-tools does not suppress authorized preparation"
+                "--no-direct-tools does not suppress authorized preparation"
             );
             let snapshot = coordinator.commit(candidate).unwrap();
             assert!(snapshot.tool_registry().definitions().is_empty());

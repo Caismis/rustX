@@ -262,15 +262,15 @@ not in this table.
 main Workflows remain default-eligible. `--no-builtin-tools` removes all
 built-ins, including generated dispatchers, from default selection.
 `--tools a,b` is an exact allowlist; `--exclude-tools a,b` subtracts last.
-`--no-tools` exposes zero ordinary main-model tools, including Read,
+`--no-direct-tools` exposes zero ordinary main-model tools, including Read,
 Subagent and Workflow tools. It conflicts with the other three selection
 flags; `--tools` also conflicts with `--no-builtin-tools`.
 
 Every control in this paragraph addresses the *ordinary* capability plane.
 A Tool contributed by a Native Agent Extension — `todo` — is composed under
 `extensions` and is unnameable here: listing it in `agent.tools.builtin`, `--tools`
-or `--exclude-tools` is a validation error, and `--no-tools` does not remove
-it. A model request with no Tools at all therefore needs `--no-tools` *and*
+or `--exclude-tools` is a validation error, and `--no-direct-tools` does not remove
+it. A model request with no Tools at all therefore needs `--no-direct-tools` *and*
 `"extensions": { "todo": { "enabled": false } }`.
 Allowlist plus exclusions and default selection plus exclusions are supported.
 Explicit lists reject empty entries/lists, duplicates, unknown/unavailable
@@ -429,7 +429,7 @@ interpret, or configure MCP independently.
 ## Custom Python tool
 
 The `echo` package is discovered inertly from its canonical folder. It remains
-unmaterialized: discovery does not authorize preparation, even with `--no-tools`
+unmaterialized: discovery does not authorize preparation, even with `--no-direct-tools`
 absent. Demand-driven source preparation belongs to the subsequent CFG2-03 step.
 
 ```text
@@ -658,3 +658,7 @@ Supplemental `AGENTS.md` files remain explicit project guidance. See the
 [authoring contract](../../docs/subagent-resources.md) and generated
 [Agent TOML schema](../../schemas/agent.schema.json). All fixed reference
 Workflows retain these canonical role identities.
+
+Direct Tool restrictions leave separately selected Agent/Workflow dispatch intact.
+A model request with no Tool surfaces also needs empty Agent/Workflow selections
+and no Tool-providing Native Extensions.

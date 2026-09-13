@@ -732,7 +732,7 @@ async fn exact_selection_reaches_provider_requests_and_domain_skill_projection()
             ),
             (
                 Selection {
-                    no_tools: true,
+                    no_direct_tools: true,
                     ..Default::default()
                 },
                 vec![],
@@ -806,8 +806,9 @@ async fn exact_selection_reaches_provider_requests_and_domain_skill_projection()
                     .iter()
                     .any(|tool| tool.name == "subagent")
             );
+            // Workflow dispatch is never an ordinary Tool, even before admission.
             assert!(
-                snapshot
+                !snapshot
                     .available_tools()
                     .definitions()
                     .iter()
@@ -946,7 +947,7 @@ async fn invalid_exact_selection_rejects_capability_preparation_without_fallback
             ..Default::default()
         },
         Selection {
-            no_tools: true,
+            no_direct_tools: true,
             tools: Some(vec!["read".into()]),
             ..Default::default()
         },
@@ -996,7 +997,7 @@ async fn filtered_calls_cannot_recover_available_native_or_generated_dispatchers
         let coordinator = selected_capabilities(
             &fixture,
             rustx::capabilities::AgentActivation {
-                no_tools: true,
+                no_direct_tools: true,
                 ..Default::default()
             },
         )
@@ -1050,7 +1051,7 @@ async fn filtered_calls_cannot_recover_available_native_or_generated_dispatchers
 }
 
 #[tokio::test]
-async fn main_no_tools_coexists_with_independent_workflow_terminal_authority() {
+async fn main_no_direct_tools_coexists_with_independent_workflow_terminal_authority() {
     use rustx::runtime::workflow::{
         WorkflowOutputLatch, WorkflowOutputSubmission, WorkflowOutputTerminal,
     };
@@ -1058,7 +1059,7 @@ async fn main_no_tools_coexists_with_independent_workflow_terminal_authority() {
     let main = selected_capabilities(
         &fixture,
         rustx::capabilities::AgentActivation {
-            no_tools: true,
+            no_direct_tools: true,
             ..Default::default()
         },
     )

@@ -29,7 +29,9 @@ use crate::skills::package::SkillPackageError;
 use crate::skills::source::SkillSource;
 
 /// Whether one diagnostic reports an ordinary fact or an exclusion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillDiagnosticSeverity {
     /// Nothing was excluded; the generation simply records what it observed.
@@ -43,7 +45,7 @@ pub enum SkillDiagnosticSeverity {
 /// The variant declaration order, followed by the field order, **is** the
 /// canonical diagnostic order: the derived [`Ord`] is the only sort key, so
 /// no consumer can observe a filesystem-enumeration-dependent ordering.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SkillDiagnostic {
     /// A configured automatic source root does not exist. This is the normal
@@ -63,6 +65,7 @@ pub enum SkillDiagnostic {
         /// The resolved root path.
         root: String,
         /// The structural reason, preserved verbatim.
+        #[serde(skip)]
         detail: String,
     },
     /// One source offered more candidate packages than its cumulative budget
@@ -134,6 +137,16 @@ pub enum SkillDiagnostic {
 }
 
 impl SkillDiagnostic {
+    pub(crate) fn redacted(&self) -> Self {
+        let mut fact = self.clone();
+        match &mut fact {
+            Self::SourceRootInvalid { detail, .. } => detail.clear(),
+            Self::PackageInvalid { cause, .. } => *cause = cause.redacted(),
+            _ => {}
+        }
+        fact
+    }
+
     /// Whether this diagnostic excluded a candidate from the catalog.
     #[must_use]
     pub const fn severity(&self) -> SkillDiagnosticSeverity {
@@ -236,7 +249,7 @@ impl core::fmt::Display for SkillDiagnostic {
 /// This is generation/inspection metadata. It deliberately never enters the
 /// model-facing catalog: a Skill's instructions are not improved by knowing
 /// which root won it.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct SkillProvenance {
     /// The effective logical Skill identity.
     pub name: String,
@@ -249,7 +262,7 @@ pub struct SkillProvenance {
 }
 
 /// One valid package that a higher-precedence source shadowed.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct ShadowedSkill {
     /// The source whose package was shadowed.
     pub source: SkillSource,

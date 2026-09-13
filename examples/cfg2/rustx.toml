@@ -1,0 +1,23 @@
+schema_version = 8
+
+# Source eligibility is independent of Agent Tool exposure.
+[mcp_servers.github]
+enabled = true
+url = "https://mcp.example.invalid/mcp"
+
+[skills]
+sources = ["global", "workspace"]
+
+[agent]
+agents = ["reviewer"]
+workflows = ["review"]
+disabled_skills = []
+
+# Main has no direct external Tool authority.
+[agent.tools]
+builtin = ["read"]
+
+[agent.model.request_params]
+temperature = 0.7
+top_p = 0.95
+chat_template_kwargs.enable_thinking = true

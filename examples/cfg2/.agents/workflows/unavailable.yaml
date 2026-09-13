@@ -1,0 +1,15 @@
+description: Intentionally disabled because its required source does not exist.
+block:
+  input: {type: object, properties: {}, additionalProperties: false}
+  output: {type: object, properties: {text: {type: string}}, required: [text], additionalProperties: false}
+  entry: inspect
+  nodes:
+    inspect:
+      type: tool
+      selector: {origin: source, source_id: optional, name: annotate}
+      arguments: {type: literal, value: {}}
+      result: {type: text, part: 0}
+    done:
+      type: return
+      output: {type: object, fields: {text: {type: reference, path: [inspect]}}}
+  edges: [{from: inspect, to: done}]

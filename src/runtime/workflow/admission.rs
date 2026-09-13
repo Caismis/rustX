@@ -19,6 +19,53 @@ impl WorkflowCatalog {
         agents: &crate::runtime::subagent::AgentCatalog,
         servers: &crate::tools::mcp::McpServerBindings,
     ) {
+        self.admit_with_leaf(
+            available,
+            availability,
+            skills,
+            agents,
+            servers,
+            &|definition| {
+                available
+                    .registration(definition)
+                    .is_ok_and(|registration| {
+                        registration.foreground() == crate::tools::deadline::ForegroundPolicy::Leaf
+                    })
+            },
+        );
+    }
+
+    /// Offline candidate admission uses native leaf metadata and the exact same
+    /// dependency traversal. External sources remain Unprepared. No executors
+    /// or source owners are needed or called.
+    pub(crate) fn admit_metadata(
+        &mut self,
+        available: &crate::capabilities::AvailableToolCatalog,
+        availability: &crate::capabilities::CapabilityAvailability,
+        skills: &crate::skills::SkillSnapshot,
+        agents: &crate::runtime::subagent::AgentCatalog,
+        native_leaves: &std::collections::BTreeSet<crate::runtime::identity::ToolId>,
+    ) {
+        self.admit_with_leaf(
+            available,
+            availability,
+            skills,
+            agents,
+            &BTreeMap::default(),
+            &|definition| native_leaves.contains(&definition.id),
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn admit_with_leaf(
+        &mut self,
+        available: &crate::capabilities::AvailableToolCatalog,
+        availability: &crate::capabilities::CapabilityAvailability,
+        skills: &crate::skills::SkillSnapshot,
+        agents: &crate::runtime::subagent::AgentCatalog,
+        servers: &crate::tools::mcp::McpServerBindings,
+        leaf: &dyn Fn(&crate::tools::types::ToolDefinition) -> bool,
+    ) {
         let names = agents.names().into_iter().cloned().collect();
         // One-shot children cannot invoke Workflows. Supplying discovered ids
         // lets the shared resolver report scope, without a publication cycle.
@@ -42,6 +89,7 @@ impl WorkflowCatalog {
                 &mut program.frozen_tools,
                 &mut diagnostics,
                 servers,
+                leaf,
             );
             entry.admission = if diagnostics.is_empty() {
                 WorkflowAdmission::Enabled(Arc::new(program))
@@ -56,6 +104,7 @@ impl WorkflowCatalog {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn admit_block(
     block: &mut WorkflowBlockProgram,
     path: &str,
@@ -67,6 +116,7 @@ fn admit_block(
     >,
     diagnostics: &mut Vec<WorkflowAdmissionDiagnostic>,
     servers: &crate::tools::mcp::McpServerBindings,
+    leaf: &dyn Fn(&crate::tools::types::ToolDefinition) -> bool,
 ) {
     for (id, node) in &mut block.nodes {
         let path = format!("{path}.nodes.{id}");
@@ -79,14 +129,7 @@ fn admit_block(
                 )
                 .map_err(WorkflowDependencyFailure::Tool)
                 .and_then(|definition| {
-                    let leaf = authority
-                        .tools
-                        .registration(definition)
-                        .is_ok_and(|registration| {
-                            registration.foreground()
-                                == crate::tools::deadline::ForegroundPolicy::Leaf
-                        });
-                    if tool::eligible(definition) && leaf {
+                    if tool::eligible(definition) && leaf(definition) {
                         Ok(definition.clone())
                     } else {
                         Err(WorkflowDependencyFailure::IneligibleTool(selector.clone()))
@@ -151,6 +194,7 @@ fn admit_block(
                 tools,
                 diagnostics,
                 servers,
+                leaf,
             ),
             WorkflowNodeProgram::Parallel { branches, .. } => {
                 for (key, branch) in branches {
@@ -162,6 +206,7 @@ fn admit_block(
                         tools,
                         diagnostics,
                         servers,
+                        leaf,
                     );
                 }
             }

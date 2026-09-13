@@ -305,3 +305,40 @@ fn reference_authoring_errors_fail_before_execution() {
         );
     }
 }
+
+#[test]
+fn cfg275_current_product_surfaces_cannot_reintroduce_obsolete_authoring() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let obsolete = [
+        "settings.jsonc",
+        "models.jsonc",
+        "rustx.jsonc",
+        "request_params_json",
+        "defaultTools",
+        "pythonSources",
+        "--no-tools",
+        "--no-skills",
+        ".agents/subagents/",
+    ];
+    for path in [
+        "README.md",
+        "src/local_runtime/cli.rs",
+        "tui/src/cli.ts",
+        "schemas/settings.schema.json",
+        "schemas/rustx.schema.json",
+        "schemas/models.schema.json",
+        "schemas/agent.schema.json",
+        "examples/cfg2/rustx.toml",
+        "examples/cfg2/README.md",
+    ] {
+        let text = std::fs::read_to_string(root.join(path)).unwrap();
+        // CLI unit tests deliberately exercise rejected historical spellings.
+        let product = text.split("#[cfg(test)]").next().unwrap();
+        for spelling in obsolete {
+            assert!(
+                !product.contains(spelling),
+                "{path} contains obsolete {spelling}"
+            );
+        }
+    }
+}

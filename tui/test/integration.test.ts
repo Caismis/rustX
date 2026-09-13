@@ -218,7 +218,7 @@ block:
     await child.waitOrTerminate(10_000);
     const reopened = spawnTrusted({ binary: BINARY,
       paths: { models: fixture.path("models.toml"), config: fixture.path("rustx.toml"), workspace, runtimeRoot: fixture.path("private") },
-      startup: { continueActiveSession: true, skillPaths: [], noSkills: false, noBuiltinTools: false, noTools: false },
+      startup: { continueActiveSession: true, skillPaths: [], noAutomaticSkills: false, noBuiltinTools: false, noDirectTools: false },
       env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE },
     });
     const reopenedConnection = new RuntimeClientConnection({ input: reopened.stdout, output: reopened.stdin });
@@ -1127,7 +1127,7 @@ it("Session deletion: real resume UI → attachment → native preview/block/del
   const historical = await session.refreshSession();
   await session.cloneSession();
   child.closeStdin(); await child.waitOrTerminate();
-  options.startup = { continueActiveSession: true, skillPaths: [], noSkills: false, noBuiltinTools: false, noTools: false };
+  options.startup = { continueActiveSession: true, skillPaths: [], noAutomaticSkills: false, noBuiltinTools: false, noDirectTools: false };
   child = spawnTrusted(options); session = await attach();
   const active = await session.refreshSession();
   const before = structuredClone(session.state), beforeModel = await session.modelGet(), beforeProvider = await provider.requests();

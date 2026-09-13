@@ -33,7 +33,7 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
         ),
         (
             AgentActivation {
-                no_tools: true,
+                no_direct_tools: true,
                 ..Default::default()
             },
             false,
@@ -121,7 +121,7 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
                 .protocol_version(),
             &rmcp::model::ProtocolVersion::V_2026_07_28
         );
-        let mut expected = if selection.no_tools || selection.tools.is_some() {
+        let mut expected = if selection.no_direct_tools || selection.tools.is_some() {
             vec![]
         } else {
             fixture.registry.model_definitions()

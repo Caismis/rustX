@@ -174,17 +174,23 @@ pub const MAX_SOURCE_SKILL_PACKAGES: usize = 128;
 /// excludes exactly that candidate and is preserved verbatim inside
 /// [`SkillDiagnostic::PackageInvalid`]; it never fails discovery, and it
 /// never suppresses an unrelated valid package.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "cause", rename_all = "snake_case")]
 pub enum SkillPackageError {
     /// The package name violates the Agent Skills naming rules.
     InvalidName {
         directory: String,
+        #[serde(skip)]
         name: String,
+        #[serde(skip)]
         detail: String,
     },
     /// The frontmatter `name` does not match the parent directory name.
-    NameDirectoryMismatch { directory: String, name: String },
+    NameDirectoryMismatch {
+        directory: String,
+        #[serde(skip)]
+        name: String,
+    },
     /// The candidate directory contains no `SKILL.md`.
     MissingSkillMarkdown { directory: String },
     /// The `SKILL.md` entry is not an ordinary regular file (or is a
@@ -192,15 +198,35 @@ pub enum SkillPackageError {
     SkillMarkdownNotRegularFile { directory: String },
     /// The `SKILL.md` frontmatter is malformed YAML or violates the
     /// standard shape.
-    MalformedFrontmatter { directory: String, detail: String },
+    MalformedFrontmatter {
+        directory: String,
+        #[serde(skip)]
+        detail: String,
+    },
     /// The standard description is empty or exceeds the length bound.
-    InvalidDescription { directory: String, detail: String },
+    InvalidDescription {
+        directory: String,
+        #[serde(skip)]
+        detail: String,
+    },
     /// The standard `compatibility` field exceeds its length bound.
-    InvalidCompatibility { directory: String, detail: String },
+    InvalidCompatibility {
+        directory: String,
+        #[serde(skip)]
+        detail: String,
+    },
     /// The `metadata` field is not a string-to-string map.
-    MalformedMetadata { directory: String, detail: String },
+    MalformedMetadata {
+        directory: String,
+        #[serde(skip)]
+        detail: String,
+    },
     /// A rustX dependency declaration is malformed or unsupported.
-    InvalidDependencyDeclaration { directory: String, detail: String },
+    InvalidDependencyDeclaration {
+        directory: String,
+        #[serde(skip)]
+        detail: String,
+    },
     /// A symlinked package root or a symlink entry inside the package was
     /// found. Package-internal symlinks are rejected; this is Skill-package
     /// validation, not a change to normal Workspace semantics.
@@ -209,7 +235,32 @@ pub enum SkillPackageError {
     /// so it cannot be published as a model-visible location.
     UnrepresentableRoot { path: String },
     /// A filesystem failure while reading the package.
-    Io { path: String, detail: String },
+    Io {
+        path: String,
+        #[serde(skip)]
+        detail: String,
+    },
+}
+
+impl SkillPackageError {
+    pub(crate) fn redacted(&self) -> Self {
+        let mut error = self.clone();
+        match &mut error {
+            Self::InvalidName { name, detail, .. } => {
+                name.clear();
+                detail.clear();
+            }
+            Self::NameDirectoryMismatch { name, .. } => name.clear(),
+            Self::MalformedFrontmatter { detail, .. }
+            | Self::InvalidDescription { detail, .. }
+            | Self::InvalidCompatibility { detail, .. }
+            | Self::MalformedMetadata { detail, .. }
+            | Self::InvalidDependencyDeclaration { detail, .. }
+            | Self::Io { detail, .. } => detail.clear(),
+            _ => {}
+        }
+        error
+    }
 }
 
 impl core::fmt::Display for SkillPackageError {
@@ -1699,6 +1750,33 @@ mod frontmatter_tests {
         assert_eq!(name, "same");
         assert_eq!(packages.len(), 2);
         assert!(packages[0] < packages[1]);
+        let inspect = |outcome| {
+            let snapshot = crate::skills::SkillSnapshot::from_discovery(outcome);
+            crate::runtime::capability_inspection::CapabilityInspection::collect(
+                None,
+                std::iter::empty(),
+                &crate::runtime::workflow::WorkflowCatalog::empty(),
+                &crate::capabilities::CapabilityAvailability::new(),
+                &snapshot,
+            )
+        };
+        let facts = inspect(forward);
+        assert_eq!(facts, inspect(reversed));
+        assert_eq!(
+            facts
+                .skills
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            ["other"]
+        );
+        assert!(matches!(
+            facts.skill_diagnostics[0],
+            SkillDiagnostic::DuplicateIdentity {
+                source: SkillSource::Explicit,
+                ..
+            }
+        ));
     }
 
     /// #280 (23): the explicit launch authority passes through the same

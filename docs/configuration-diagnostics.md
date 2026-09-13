@@ -1,3 +1,5 @@
+See [generation capability inspection](capability-inspection.md) for Agent selection, Workflow admission, and the shared protocol projection.
+
 # Configuration authoring and diagnostics
 
 See [offline Workflow authoring](workflow-authoring.md) for `rustx workflow check <id>`
@@ -24,24 +26,24 @@ rustx init --template openai-chat|openai-responses|anthropic
 rustx init --template custom --provider ID --endpoint URL
   --credential-env NAME --model-document PATH [--json]
 rustx config check [SELECTION] [--json]
-rustx config show --sources [SELECTION] [--json]
+rustx config show (--sources | --agent main|NAME) [SELECTION] [--json]
 rustx doctor --probe [--prepare] [SELECTION] [--json]
 
 SELECTION := [--models PATH] [--config PATH] [--workspace DIRECTORY]
   [--runtime-root DIRECTORY] [--model PROVIDER/MODEL]
-  [--skill PATH ...] [--no-skills]
-  [--no-tools | --no-builtin-tools | --tools NAME,...]
+  [--skill PATH ...] [--no-automatic-skills]
+  [--no-direct-tools | --no-builtin-tools | --tools NAME,...]
   [--exclude-tools NAME,...]
 ```
 
 Switches cannot repeat; `--skill` is repeatable. `--skill` is the explicit
 Skill launch authority: it is validated exactly like a discovered package and
-takes precedence over both automatic sources, while `--no-skills` disables
-automatic discovery. The JSON launch projection reports the effective Skill
-provenance (`skillProvenance`, including what each identity shadowed) and the
-typed generation-scoped discovery facts (`skillDiagnostics`, each with its
-severity, source, and rendered explanation). Tool conflicts and exact-name
-selection are the ordinary launch contract: `--no-tools` also conflicts with
+takes precedence over both automatic sources, while `--no-automatic-skills` disables
+automatic discovery. The JSON `capabilities` projection reports effective Skill
+provenance (`skills`, including shadowed origins) and typed generation facts
+(`skill_diagnostics`). Agent selections and Workflow admission use that same
+projection. Tool conflicts and exact-name
+selection are the ordinary launch contract: `--no-direct-tools` also conflicts with
 `--exclude-tools`. Diagnostic commands reject trust changes, Session selection,
 conversation inspection, and Session names. Ordinary startup remains
 `rustx [launch flags]`; see [launch configuration](launch-configuration.md).
@@ -68,8 +70,9 @@ local static source failure exists (2). Independent sources are still probed;
 a probe failure takes precedence over static invalidity in the final doctor exit.
 
 Human output shows classification, reasons, corrections, and redacted structured
-values. `--json` emits a version-1 object with `operation`, `scope`, `validity`,
-`readiness`, `diagnostics`, `launch`, `partial`, and `initialization` members.
+values. `--json` emits a version-2 object with `operation`, `scope`, `validity`,
+`readiness`, `diagnostics`, `launch`, `partial`, `initialization`, `capabilities`,
+`agent`, and `workflow` members.
 Validity is `valid`, `invalid`, or `incomplete`. Execution readiness currently
 has only the state `unresolved`: static launch reports cannot establish ready because
 provider execution is unverified. Initialization has `readiness: null`: it
@@ -186,9 +189,9 @@ Enabled online sources are unresolved until discovery; no schemas or executors
 are fabricated. Untrusted project resources remain unread and unresolved. A
 source probe cannot enable them or grant workspace authority.
 
-Managed Python discovery records directory identity only. `discovered_package`
-distinguishes these sources from MCP settings; readiness remains inert until
-admitted preparation demand exists. Static discovery never reads package code or
+Managed Python discovery records canonical package identity only. The shared
+`capabilities.sources` map preserves source state independently of Agent selection;
+preparation requires admitted demand. Static discovery never reads package code or
 dependencies, creates environments, runs uv/Python, spawns MCP, or captures credentials.
 Missing roots and unprepared packages do not fail native-only startup. Invalid
 identities and escaping/symlinked canonical packages fail bounded static discovery.
@@ -198,8 +201,8 @@ The projection includes the selected model, paths, safe provider metadata,
 resolved config, origins, precedence reasons, source activation/readiness,
 main-model Tool policy/selection and exclusion reasons, discovered Workflows and
 local Skills. Origins distinguish builtin, user, trusted project, CLI, and
-untrusted prospective project declarations. Online Tool identities remain null
-until known; `--no-tools` is a known empty selection independently of activation.
+untrusted prospective project declarations. External Tool selections retain typed unprepared reasons until online admission
+establishes exact identities; `--no-direct-tools` makes direct ordinary selection empty independently of source activation; Agent/Workflow dispatch remains separately selected.
 
 ## Explicit probes
 

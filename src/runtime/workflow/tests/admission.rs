@@ -563,6 +563,13 @@ fn cfg274_model_exposure_requires_agent_selection_and_enabled_admission() {
         !select(&activation).contains(&&ordinary),
         "Workflow selection cannot grant its internal Tool directly"
     );
+    activation.no_direct_tools = true;
+    assert_eq!(
+        select(&activation),
+        [&workflow],
+        "direct Tool restrictions cannot remove independently admitted Workflow dispatch"
+    );
+    activation.no_direct_tools = false;
     activation.profile.workflows.clear();
     assert!(
         select(&activation).is_empty(),
@@ -578,4 +585,29 @@ fn cfg274_model_exposure_requires_agent_selection_and_enabled_admission() {
         catalog.get(source.id()).is_some(),
         "inspection retains discovery"
     );
+}
+
+#[test]
+fn cfg275_disabled_workflow_metadata_never_becomes_an_ordinary_agent_tool() {
+    let source = program();
+    let metadata = crate::tools::native::workflow_definition(&source);
+    let mut profile = crate::local_runtime::config::AgentProfileDocument::default();
+    profile.tools.builtin.push(metadata.name.clone());
+    let resolved = crate::capabilities::inspect_profile(
+        &[&metadata],
+        &crate::capabilities::AgentActivation {
+            profile,
+            ..Default::default()
+        },
+        &SkillSnapshot::new(Vec::new()),
+        &crate::capabilities::CapabilityAvailability::new(),
+    )
+    .unwrap();
+    assert!(resolved.tools.is_empty());
+    assert!(matches!(
+        resolved.diagnostics.as_slice(),
+        [crate::runtime::agent_profile::AgentProfileDiagnostic::Tool(
+            crate::capabilities::selection::ToolSelectionError::UnknownCapability { .. }
+        )]
+    ));
 }

@@ -23,7 +23,7 @@ const banner = (state: Parameters<typeof renderResourceBanner>[0], workspace?: s
 describe("loaded resources", () => {
   it("names the context files, Skills, and active Tools the runtime published", () => {
     const state = stateOf({
-      resources: {
+      resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] },
         revision: 3,
         context_files: [
           { path: "/home/dev/AGENTS.md", bytes: 12 },
@@ -45,7 +45,7 @@ describe("loaded resources", () => {
 
   it("keeps context files in the runtime's own precedence order", () => {
     const state = stateOf({
-      resources: {
+      resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] },
         revision: 1,
         context_files: [
           { path: "/work/zeta/AGENTS.md", bytes: 1 },
@@ -72,14 +72,14 @@ describe("loaded resources", () => {
 
   it("reports a frozen agent profile as context", () => {
     const state = stateOf({
-      resources: { revision: 2, context_files: [], agent_profile: true },
+      resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] }, revision: 2, context_files: [], agent_profile: true },
     });
     assert.match(banner(state), /\[Context\]\n {2}agent profile/);
   });
 
   it("folds a reload's whole generation from one event", () => {
     const before = stateOf({
-      resources: { revision: 1, context_files: [], agent_profile: false },
+      resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] }, revision: 1, context_files: [], agent_profile: false },
     });
     const after = reduce(before, {
       cursor: runtimeCursor(before.cursor + 1),
@@ -98,7 +98,7 @@ describe("loaded resources", () => {
             },
           ],
         },
-        resources: {
+        resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] },
           revision: 2,
           context_files: [{ path: "/work/project/AGENTS.md", bytes: 9 }],
           agent_profile: false,
@@ -120,7 +120,7 @@ describe("loaded resources", () => {
 
   it("folds a resource-only reload without waiting for a capability revision", () => {
     const before = stateOf({
-      resources: { revision: 1, context_files: [], agent_profile: false },
+      resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] }, revision: 1, context_files: [], agent_profile: false },
     });
     const after = reduce(before, {
       cursor: runtimeCursor(before.cursor + 1),
@@ -129,7 +129,7 @@ describe("loaded resources", () => {
         // A reload that only rewrote project instructions repeats the
         // capability view it composed against, unchanged revision and all.
         capabilities: before.capabilities,
-        resources: {
+        resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] },
           revision: 2,
           context_files: [{ path: "/work/project/AGENTS.md", bytes: 9 }],
           agent_profile: false,
@@ -151,4 +151,15 @@ describe("resource path display", () => {
   it("leaves a path outside the workspace absolute rather than inventing a base", () => {
     assert.equal(displayPath("/etc/rustx/AGENTS.md", "/work/project"), "/etc/rustx/AGENTS.md");
   });
+});
+
+
+it("CFG275 reload replaces diagnostics with the resource generation and preserves retained state", () => {
+  const before = stateOf({ resources: { revision: 1, inspection: { main: null, agents: {}, workflows: {}, sources: { optional: { status: "unprepared" } }, skills: [], skill_diagnostics: [] } } });
+  const frozen = JSON.stringify(before.resources);
+  const next = { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] };
+  const after = reduce(before, { cursor: runtimeCursor(before.cursor + 1), event: { type: "resource_generation_updated", capabilities: before.capabilities, resources: { revision: 2, inspection: next } } });
+  assert.equal(after.resources.revision, 2);
+  assert.deepEqual(after.resources.inspection, next);
+  assert.equal(JSON.stringify(before.resources), frozen);
 });

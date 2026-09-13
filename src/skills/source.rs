@@ -218,7 +218,7 @@ pub fn automatic_skill_roots(
 /// `selected`, the roots the launch actually resolved from `[skills].sources`
 /// and then froze, so a source the launch did not select is never inspected,
 /// never canonicalized, never validated, and can therefore never fail
-/// startup or reload. `--no-skills` resolves no automatic roots at all and so
+/// startup or reload. `--no-automatic-skills` resolves no automatic roots at all and so
 /// reaches this function with an empty slice.
 ///
 /// The generic workspace resource layer must not reintroduce an independent

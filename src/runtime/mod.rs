@@ -22,6 +22,7 @@
 
 pub mod agent_profile;
 pub mod cancellation;
+pub mod capability_inspection;
 pub mod continuation;
 /// The conversation runtime coordinator (Issue #61): the semantic owner of
 /// conversation coordination — session model state, attempt admission, the

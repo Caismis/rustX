@@ -69,7 +69,7 @@ export function emptyPresentationState(
     statuses: [],
     context: { compaction_in_progress: false, compaction_count: 0 },
     capabilities: { revision: 0, tools: [], skills: [] },
-    resources: { revision: 0, context_files: [], agent_profile: false },
+    resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] }, revision: 0, context_files: [], agent_profile: false },
     sessionModel,
     launchSettings: null,
     effectiveExtensions: null,
@@ -165,6 +165,7 @@ export function replaceFromSnapshot(
     context: snapshot.context,
     capabilities: snapshot.capabilities,
     resources: snapshot.resources ?? {
+      inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] },
       revision: 0,
       context_files: [],
       agent_profile: false,

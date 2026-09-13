@@ -96,7 +96,7 @@ higher layer would override them. Unknown fields fail at every schema boundary.
 | `approval_mode` | Yes | Forbidden | — | Host scalar replacement |
 | `context`, `model_timeout_policy`, `tool_deadline_policy` | Yes | Yes | — | Explicit members of these finite records |
 | `agent.tools`, `agent.disabled_skills`, `agent.agents`, `agent.workflows` | Yes | Yes | Tool selection flags | Each selected dimension replaces; names select admitted resources. `agent.skills` is named-Agent authoring and is rejected on the root whenever it is authored, including `skills = []`. |
-| `skills.sources` | Yes | Yes | `--skill`, `--no-skills` | Launch-scoped automatic source selection; list replacement, empty list selects none. An unselected source is inert: its root is never validated, scanned, or diagnosed. Resource reload rescans and revalidates the resolved roots but never rereads this policy |
+| `skills.sources` | Yes | Yes | `--skill`, `--no-automatic-skills` | Launch-scoped automatic source selection; list replacement, empty list selects none. An unselected source is inert: its root is never validated, scanned, or diagnosed. Resource reload rescans and revalidates the resolved roots but never rereads this policy |
 | `mcp_servers`, `environment` | Yes | Yes | — | Named entries replace whole entries; empty map clears |
 | `native_tools`, `mcp_tool_policies` | Yes | Forbidden | — | Host-only whole named entries; empty map clears |
 | `agent.extensions` | Yes | Yes | — | Complete dimension replacement; an empty table composes none |
@@ -370,7 +370,7 @@ Neither plane filters the other:
 - `agent.extensions` never selects, enables, or filters an *ordinary* execution
   capability. Composing Todo adds no `read`, `bash`, or MCP tool;
 - ordinary Tool selection never adds or removes an *extension-provided* Tool.
-  `--no-tools` selects zero ordinary capabilities and leaves an enabled Todo's
+  `--no-direct-tools` selects zero ordinary capabilities and leaves an enabled Todo's
   `todo` Tool in place, and `--no-builtin-tools` removes ordinary built-ins
   rather than every Tool that happens to be implemented in Rust. The
   classification is semantic, not incidental to where the code lives.

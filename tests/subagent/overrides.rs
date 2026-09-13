@@ -250,9 +250,9 @@ impl Lab {
             models: self.root().join("models.toml"),
             config: self.root().join("rustx.toml"),
             skill_paths: Vec::new(),
-            no_skills: false,
+            no_automatic_skills: false,
             no_builtin_tools: false,
-            no_tools: false,
+            no_direct_tools: false,
             startup_session: rustx::local_runtime::StartupSession::Empty,
             session_name: None,
             tools: None,
@@ -763,7 +763,7 @@ async fn sub258_skill_delegation_follows_frozen_model_visible_authority() {
     )
     .expect("resolution");
     assert_eq!(tool_names(&resolved), vec!["builtin:read".to_owned()]);
-    let no_tools = delegate(
+    let no_direct_tools = delegate(
         &resources,
         "reviewer",
         Some(&parse_override(
@@ -773,10 +773,13 @@ async fn sub258_skill_delegation_follows_frozen_model_visible_authority() {
     )
     .expect("resolution");
     assert!(
-        no_tools.tools.is_empty(),
+        no_direct_tools.tools.is_empty(),
         "selecting a Skill never implicitly grants Read or any other tool"
     );
-    assert_eq!(skill_names(&no_tools), vec!["review-guidance".to_owned()]);
+    assert_eq!(
+        skill_names(&no_direct_tools),
+        vec!["review-guidance".to_owned()]
+    );
 }
 
 /// An unknown or hidden reference keeps its own failure class: it is never
@@ -1356,16 +1359,16 @@ async fn sub258_extension_composition_is_not_an_ordinary_tool_selection() {
     );
 
     // Clearing every ordinary tool leaves the composed extension untouched.
-    let no_tools = delegate(
+    let no_direct_tools = delegate(
         &resources,
         "reviewer",
         Some(&parse_override(serde_json::json!({"tools": {}}))),
         &parent,
     )
     .expect("resolution");
-    assert!(no_tools.tools.is_empty());
+    assert!(no_direct_tools.tools.is_empty());
     assert!(
-        no_tools.extensions.agent_status().is_some(),
+        no_direct_tools.extensions.agent_status().is_some(),
         "an enabled extension is never silently stripped by the tools allowlist"
     );
 

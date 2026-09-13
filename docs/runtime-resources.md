@@ -17,7 +17,7 @@ runtime registration selection, not a checker-specific Tool interpreter. See
 External discovery is inert until host trust and explicit source activation
 admit preparation. See [source activation and credentials](source-activation.md)
 for TOML settings, whole-source replacement, secret authority, and the exact
-publication/retirement/reconnect frontiers. `--no-tools` is model exposure
+publication/retirement/reconnect frontiers. `--no-direct-tools` is model exposure
 control and does not disable external preparation.
 
 ## Exact Tool authority and native defaults
@@ -31,7 +31,7 @@ authored profile — including an exact `skills` list — against generation
 authority, never the root registry as a ceiling.
 
 `--tools a,b` is an explicit host profile layer selecting admitted ordinary
-names. Unknown or ambiguous CLI names fail. `--no-builtin-tools` and `--no-tools`
+names. Unknown or ambiguous CLI names fail. `--no-builtin-tools` and `--no-direct-tools`
 restrict model exposure; `--exclude-tools a,b` subtracts last. None activates a
 source or changes invocation policy. Profile capabilities unavailable in the
 current generation produce typed diagnostics and suppression.
@@ -48,7 +48,7 @@ Extension may also contribute a model-facing Tool, and that Tool belongs to
 + already-admitted domain terminal protocols Workflow output, ...
 ```
 
-Neither plane filters the other. `--no-tools` selects zero *ordinary*
+Neither plane filters the other. `--no-direct-tools` selects zero *ordinary*
 capabilities and does not disable an independently composed extension, so a
 truly Tool-free model request needs no ordinary Tools **and** no Tool-providing
 extension. `--no-builtin-tools` removes ordinary built-ins, not every Tool that
@@ -63,11 +63,11 @@ an ordinary available capability at all, so it never appears in the available
 catalog those selectors resolve against. See
 [Native Agent Extensions](launch-configuration.md#native-agent-extensions).
 
-`--no-tools` conflicts with `--tools`, `--exclude-tools`, and
+`--no-direct-tools` conflicts with `--tools`, `--exclude-tools`, and
 `--no-builtin-tools`; `--tools` conflicts with `--no-builtin-tools`.
 Explicit CLI lists reject empty values/entries, duplicates, unknown or
 unavailable identities, and names shared by multiple applicable origins.
-There is no registration-order precedence. Use `--no-tools`, not an empty
+There is no registration-order precedence. Use `--no-direct-tools`, not an empty
 `--tools` list. The Rust selection boundary validates resolved intent too.
 Complete-profile empty dimensions are valid; unavailable profile selections
 produce typed diagnostics and suppression. These filters do not grant source activation or alter independently admitted
@@ -111,7 +111,7 @@ published in the capability generation and pinned at attempt lease acquisition.
 Request compilation and call preflight use that same immutable registry;
 model capability flags never silently remove its definitions. Existing request
 validation rejects Tools for a model without Tool-call support; select
-`--no-tools` **and** disable every Tool-providing extension
+`--no-direct-tools` **and** disable every Tool-providing extension
 (`"extensions": { "todo": { "enabled": false } }`) to use such a model with no
 Tools at all.
 Preflight freezes mode, concurrency and approval in the prepared invocation.
@@ -572,7 +572,7 @@ generation freeze; it is not a bypass. Because explicit launch intent is the
 highest-precedence layer everywhere else in rustX, an explicit package wins
 the same logical identity against both automatic sources. A `--skill` path
 that does not exist is a launch error — it is authored intent, not discovered
-content. `--no-skills` disables automatic discovery entirely.
+content. `--no-automatic-skills` disables automatic discovery entirely.
 
 Discovery is bounded by its source: an accepted candidate's canonical root must
 stay inside its own source's canonical root. Global and workspace are different
@@ -879,3 +879,7 @@ failure retains guard B; unchanged B may recover, while later C must survive.
 The native disposer rehashes source immediately before first removal. Durable
 intent permits exact continuation after removal without hashing a checkout that
 no longer exists.
+
+Direct Tool restrictions leave separately selected Agent/Workflow dispatch intact.
+A model request with no Tool surfaces also needs empty Agent/Workflow selections
+and no Tool-providing Native Extensions.

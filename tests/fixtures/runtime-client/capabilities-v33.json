@@ -1,0 +1,115 @@
+{
+  "main": {
+    "identity": {
+      "kind": "main"
+    },
+    "source": null,
+    "tools": [
+      {
+        "id": "builtin:read",
+        "name": "read",
+        "origin": "builtin"
+      }
+    ],
+    "skills": [
+      {
+        "name": "rust-review",
+        "source": "workspace",
+        "location": "/work/.agents/skills/rust-review/SKILL.md",
+        "shadowed": [
+          {
+            "source": "global",
+            "location": "/home/user/.agents/skills/rust-review/SKILL.md"
+          }
+        ]
+      }
+    ],
+    "disabled_skills": [
+      "hidden"
+    ],
+    "agents": [
+      "reviewer"
+    ],
+    "workflows": [],
+    "extensions": [
+      {
+        "identity": "todo",
+        "active": false
+      }
+    ],
+    "diagnostics": [
+      {
+        "kind": "tool",
+        "detail": {
+          "kind": "source_unavailable",
+          "selector": "source:optional/inspect",
+          "source": "optional",
+          "reason": {
+            "kind": "unprepared"
+          }
+        }
+      }
+    ],
+    "tool_selection": [
+      {
+        "origin": "builtin",
+        "name": "read"
+      },
+      {
+        "origin": "all",
+        "source_id": "optional"
+      }
+    ]
+  },
+  "agents": {},
+  "workflows": {
+    "review": {
+      "status": "disabled",
+      "diagnostics": [
+        {
+          "path": "block.nodes.inspect.selector",
+          "reason": {
+            "kind": "tool",
+            "detail": {
+              "kind": "source_unavailable",
+              "selector": "source:optional/inspect",
+              "source": "optional",
+              "reason": {
+                "kind": "unprepared"
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "sources": {
+    "optional": {
+      "status": "unprepared"
+    }
+  },
+  "skills": [
+    {
+      "name": "rust-review",
+      "source": "workspace",
+      "location": "/work/.agents/skills/rust-review/SKILL.md",
+      "shadowed": [
+        {
+          "source": "global",
+          "location": "/home/user/.agents/skills/rust-review/SKILL.md"
+        }
+      ]
+    }
+  ],
+  "skill_diagnostics": [
+    {
+      "kind": "duplicate_identity",
+      "source": "explicit",
+      "name": "conflict",
+      "packages": [
+        "/a/conflict",
+        "/b/conflict"
+      ]
+    }
+  ]
+}

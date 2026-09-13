@@ -1269,7 +1269,7 @@ second, independent plane:
 ```
 
 `capabilities::select_tools` takes the two sets separately, so neither filters
-the other: `--no-tools` leaves an enabled Todo's Tool in place, and no
+the other: `--no-direct-tools` leaves an enabled Todo's Tool in place, and no
 selection surface can name an extension Tool at all — `todo` is refused with a
 diagnostic naming the extension, in root configuration, in the CLI activation
 policy, in a role's `tools.builtin`, and in a Workflow's admitted capability
@@ -6479,7 +6479,7 @@ available definitions
 ```
 
 `--no-builtin-tools` removes built-ins from default eligibility;
-`--no-tools` selects zero ordinary main-model Tools. Read has no exception.
+`--no-direct-tools` selects zero ordinary main-model Tools. Read has no exception.
 `--tools` is exact and exclusions subtract last. Invalid or ambiguous
 explicit names fail deterministically. Execution ownership, approval,
 concurrency, source activation and model selection remain separate authorities.

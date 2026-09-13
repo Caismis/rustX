@@ -743,20 +743,33 @@ pub enum WorkflowAdmission {
     Disabled(Vec<WorkflowAdmissionDiagnostic>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkflowAdmissionDiagnostic {
     pub path: String,
     pub reason: WorkflowDependencyFailure,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
 pub enum WorkflowDependencyFailure {
     NotAdmitted,
-    Materialization(String),
+    Materialization(#[serde(skip)] String),
     Agent(crate::runtime::agent_profile::AgentProfileDiagnostic),
     Tool(crate::capabilities::selection::ToolSelectionError),
     IneligibleTool(crate::capabilities::selection::ExactToolSelector),
+}
+
+impl WorkflowAdmissionDiagnostic {
+    pub(crate) fn redacted(&self) -> Self {
+        let mut fact = self.clone();
+        match &mut fact.reason {
+            WorkflowDependencyFailure::Agent(reason) => *reason = reason.redacted(),
+            WorkflowDependencyFailure::Tool(reason) => *reason = reason.redacted(),
+            WorkflowDependencyFailure::Materialization(detail) => detail.clear(),
+            _ => {}
+        }
+        fact
+    }
 }
 
 /// One immutable catalog; enabled identities are derived, never separately authored.
