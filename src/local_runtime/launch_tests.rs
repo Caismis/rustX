@@ -3685,6 +3685,7 @@ mod session_resolution {
         assert!(a.skill_provenance().is_empty());
         assert_eq!(b.skill_provenance().len(), 1);
         assert_ne!(a.workspace, b.workspace);
+        assert_eq!(a.runtime_root, b.runtime_root);
         assert_eq!(
             manager.resolve_session(&input_a).unwrap().config(),
             a.config()
@@ -3885,6 +3886,157 @@ mod session_resolution {
             serde_json::to_string(prospective.provenance()).unwrap(),
         ] {
             assert!(!text.contains("session-secret-value"));
+        }
+    }
+    #[test]
+    fn bound_locations_survive_edits_but_new_bootstrap_and_bound_bytes_refresh() {
+        let f = Fixture::new();
+        let source_a = f.host.config_directory.join("models-a.toml");
+        let source_b = f.host.config_directory.join("models-b.toml");
+        let bytes = std::fs::read_to_string(f.host.config_directory.join("models.toml")).unwrap();
+        std::fs::write(&source_a, &bytes).unwrap();
+        std::fs::write(&source_b, bytes.replace("128000", "32000")).unwrap();
+        f.user(json!({"models":"models-a.toml", "runtime_root":"root-a", "agent":{"model":{"model":"host/one"}}}));
+        let (manager, input) = f.request.session_input(&f.host).unwrap();
+        let a = manager.resolve_session(&input).unwrap();
+        f.user(json!({"models":"models-b.toml", "runtime_root":"root-b", "agent":{"model":{"model":"host/two"}}}));
+        let fresh = manager.resolve_session(&input).unwrap();
+        assert_eq!(fresh.runtime_root, a.runtime_root);
+        assert_eq!(fresh.sources.models, source_a);
+        assert_eq!(fresh.provenance()["models"], a.provenance()["models"]);
+        assert_eq!(fresh.config().initial_model().model.to_string(), "host/two");
+        assert_eq!(format!("{:?}", fresh.models), format!("{:?}", a.models));
+        std::fs::write(&source_a, bytes.replace("128000", "64000")).unwrap();
+        let refreshed_catalog = manager.resolve_session(&input).unwrap();
+        assert_eq!(refreshed_catalog.sources.models, source_a);
+        assert_ne!(
+            format!("{:?}", fresh.models),
+            format!("{:?}", refreshed_catalog.models)
+        );
+        let (new_manager, _) = f.request.session_input(&f.host).unwrap();
+        let new = new_manager.resolve_session(&input).unwrap();
+        assert_eq!(new.sources.models, source_b);
+        assert_ne!(new.runtime_root, a.runtime_root);
+        assert!(new.runtime_root.ends_with("root-b"));
+        assert!(a.runtime_root.ends_with("root-a"));
+    }
+
+    #[tokio::test]
+    async fn root_explicit_instruction_capture_survives_edit_and_fresh_resolution_refreshes() {
+        let f = Fixture::new();
+        let file = f.host.launch_directory.join("root-instructions.md");
+        std::fs::write(&file, "instruction A").unwrap();
+        f.project(json!({"agent":{"agents_md":{"files":["root-instructions.md"]}}}));
+        let (manager, input) = f.request.session_input(&f.host).unwrap();
+        let a = manager.resolve_session(&input).unwrap();
+        let inspection_a = a.inspection.clone();
+        assert_eq!(a.root_agent_project_files[0].content, "instruction A");
+        std::fs::write(&file, "instruction B").unwrap();
+        let b = manager.resolve_session(&input).unwrap();
+        assert_eq!(b.root_agent_project_files[0].content, "instruction B");
+        // Removal cannot cause a semantic reread failure at initial composition.
+        std::fs::remove_file(&file).unwrap();
+        let admitted_a = a.admit(|| f.credentials.clone()).unwrap();
+        let product_a =
+            LocalSessionProduct::compose(&admitted_a, &LocalRuntimeDependencies::default())
+                .await
+                .unwrap();
+        let resources_a = product_a.runtime().runtime_resources();
+        assert_eq!(
+            resources_a
+                .root_profile()
+                .unwrap()
+                .project_instructions
+                .files[0]
+                .content,
+            "instruction A"
+        );
+        assert_eq!(resources_a.inspection(), &inspection_a);
+        let old_files = resources_a
+            .root_profile()
+            .unwrap()
+            .project_instructions
+            .files
+            .clone();
+        drop(resources_a);
+        drop(product_a);
+        let inspection_b = b.inspection.clone();
+        let admitted_b = b.admit(|| f.credentials.clone()).unwrap();
+        let product_b =
+            LocalSessionProduct::compose(&admitted_b, &LocalRuntimeDependencies::default())
+                .await
+                .unwrap();
+        let resources_b = product_b.runtime().runtime_resources();
+        assert_eq!(
+            resources_b
+                .root_profile()
+                .unwrap()
+                .project_instructions
+                .files[0]
+                .content,
+            "instruction B"
+        );
+        assert_eq!(resources_b.inspection(), &inspection_b);
+        assert_eq!(old_files[0].content, "instruction A");
+    }
+
+    #[test]
+    fn whole_session_model_provenance_covers_every_field_and_catalog_default_choice() {
+        use crate::model::catalog::ReasoningProfileId;
+        use crate::model::session::SummaryModelPolicy;
+        use crate::runtime_client::settings::SettingOrigin;
+        let f = Fixture::new();
+        let path = f.host.config_directory.join("models.toml");
+        let mut catalog: serde_json::Value =
+            toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let entry = &mut catalog["providers"]["host"]["models"][0];
+        entry["capabilities"]["reasoning"] = json!(true);
+        entry["reasoning"] = json!({"default_profile":"off", "profiles":{"off":{"enabled":false},"on":{"enabled":true,"request_params":{"reasoning_effort":"high"}}}});
+        std::fs::write(path, toml::to_string_pretty(&catalog).unwrap()).unwrap();
+        let (manager, mut input) = f.request.session_input(&f.host).unwrap();
+        let mut model = SessionModelConfig::of(ModelRef::parse("host/one").unwrap());
+        model.reasoning_profile = Some(ReasoningProfileId::parse("on").unwrap());
+        model
+            .request_params
+            .insert("custom".into(), json!("secret-model-parameter"));
+        model.max_output_tokens = Some(1024);
+        model.summary_model = SummaryModelPolicy::Explicit {
+            model: ModelRef::parse("host/two").unwrap(),
+            reasoning_profile: None,
+            request_params: serde_json::Map::default(),
+            max_output_tokens: Some(512),
+        };
+        for selected in [
+            model,
+            SessionModelConfig::of(ModelRef::parse("host/one").unwrap()),
+        ] {
+            input.model = Some(selected.clone());
+            let prospective = manager.resolve_session(&input).unwrap();
+            assert_eq!(prospective.config().initial_model(), &selected);
+            for field in [
+                "model",
+                "reasoning_profile",
+                "request_params",
+                "max_output_tokens",
+                "summary_model",
+            ] {
+                assert!(matches!(
+                    prospective.provenance()[&format!("agent.model.{field}")],
+                    Origin::Explicit { .. }
+                ));
+            }
+            assert_eq!(prospective.settings_view().model_origin, SettingOrigin::Cli);
+            assert_eq!(
+                prospective.settings_view().reasoning_origin,
+                SettingOrigin::Cli
+            );
+            for text in [
+                format!("{input:?}"),
+                format!("{prospective:?}"),
+                serde_json::to_string(prospective.provenance()).unwrap(),
+            ] {
+                assert!(!text.contains("secret-model-parameter"));
+            }
         }
     }
 }

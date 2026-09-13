@@ -23,7 +23,23 @@ The [configuration command contract](configuration-diagnostics.md) defines
 explicit `doctor --probe`, including output, exit codes and effect guarantees.
 
 `local_runtime::configuration::UserConfigManager` owns reusable user source
-bindings and the single configuration resolution path. Its `resolve_session`
+bindings and the single configuration resolution path.
+`UserConfigManager::new` accepts fully specified source paths and one durable
+runtime root. `bootstrap` additionally reads user-authored `models` and
+`runtime_root` once, with explicit host overrides taking precedence. The CLI
+computes its workspace-derived default runtime root before this bootstrap.
+Neither constructor retains cwd. Every Session resolved by one manager uses the
+same bound runtime root and model catalog path.
+
+Changing `models` or `runtime_root` in settings requires a new manager/process
+bootstrap to take effect. Fresh resolution still strictly parses the current
+settings document, but those binding fields cannot redirect its existing sources.
+Editing the bytes of the already-bound model file affects the next resolution;
+editing the setting that names another model file does not. The settings source
+itself, HOME/config/state roots, model source, and runtime root are canonical
+bindings retained for the manager lifetime.
+
+The `resolve_session`
 method takes `SessionConfigInput` with an explicit absolute `cwd`, optional
 project-document selection, and intentional model/Tool/Skill selections. It
 rereads current settings, model catalog, Agent profiles, Workflow programs,
@@ -54,7 +70,7 @@ to the manager; it contains no parser, merge rules, or capability resolver.
 or prospective Session snapshot. `StartupSession` and Session naming are separate
 `LocalRuntimeDependencies` composition controls, not effective configuration.
 
-Initial composition consumes captured project guidance and Skill discovery as
+Initial composition consumes captured project guidance, root `agent.agents_md.files`, and Skill discovery as
 well as settings/catalogs/profiles/programs. It rechecks physical resource
 authority before preparation; it does not reinterpret changed configuration.
 Explicit resource reload retains its existing generation owner and pinned source
@@ -129,7 +145,7 @@ settings value, not a live registry and not durable Session authority.
 
 | Fields/domain | Owner and lifetime |
 | --- | --- |
-| `UserConfigSources.home_directory`, `config_directory`, `state_directory`, explicit `models`, explicit `runtime_root` | Process/user bindings retained by `UserConfigManager`; all absolute. User-authored `models`/`runtime_root` are current source selectors unless the host explicitly binds them. The local default root remains derived from canonical cwd identity. A future process host can bind one runtime root explicitly. |
+| `UserConfigSources.home_directory`, `config_directory`, `state_directory`, `settings`, `models`, `runtime_root` | Canonical, concrete process/user bindings retained by `UserConfigManager`. Bootstrap chooses user-authored `models`/`runtime_root` once, with host overrides taking precedence. Later settings edits do not rebind the manager. The CLI chooses its workspace-derived default root before bootstrap; the shared manager never derives a root from Session cwd. |
 | HOME/XDG discovery, CLI launch directory, relative CLI spellings | CLI input adapter only. No shared resolver uses ambient cwd. |
 | Credential environment | Existing process credential owner; no values captured in static resolution. `AdmittedSessionConfig.credentials` freezes the admitted snapshot; lazy source credential binding remains at its existing use boundary. |
 | `schema_version`, `agent_id` | Current source/default content, validated and captured per Session composition. |
@@ -149,7 +165,14 @@ settings value, not a live registry and not durable Session authority.
 A Session model override is a whole-state selection, matching the existing model
 owner: empty request parameters discard inherited Session-level parameters, absent
 reasoning/output selection chooses catalog defaults, and summary `session` follows
-the selected model. Catalog request defaults still apply through the model owner.
+the selected model. Catalog request defaults still apply through the model owner. Provenance records
+all five whole-state Session model domains (`model`, `reasoning_profile`,
+`request_params`, `max_output_tokens`, `summary_model`) as explicit. An explicit
+`None` reasoning/output selection owns the decision to use the bound catalog's
+default; it does not claim the catalog's eventual resolved value is authored by
+the Session. Empty parameters likewise remain an explicit whole-state choice.
+The existing local settings projection renders explicit origins as `Cli`; shared
+provenance itself uses the host-neutral `Explicit` vocabulary.
 No complete effective settings object is added to durable storage by this issue.
 
 ## Precedence and field ownership
@@ -622,3 +645,23 @@ The [source activation contract](source-activation.md) defines schema 8's
 MCP and Managed Python selection uses [the shared ToolSource contract](tool-source-selection.md).
 Definition/enablement is not Agent exposure; offline discovery is inert, and
 only admitted demand enters native source preparation.
+
+
+## Initial composition freeze audit
+
+| Input or operation | Category and owner |
+| --- | --- |
+| `settings.toml`, `models.toml`, `rustx.toml` contents, MCP definitions, model catalog | **A — captured.** `resolve_session` reads bound user/model sources and the explicit cwd/project slot. Initial composition only resolves model bindings from the captured catalog. |
+| Ordinary AGENTS chain and root `agent.agents_md.files` | **A — captured.** Existing loaders run during resolution. Static root inspection and initial `AgentActivation` consume the same `root_agent_project_files` capture; initial composition performs no semantic reread. |
+| Named Agent TOML and their supplemental project files; Workflow YAML | **A — captured.** Existing resource owners load complete definitions/programs before admission. |
+| Skill metadata, identities, versions, dependency declarations, discovery diagnostics | **A — captured.** Initial capability preparation consumes captured discovery. Skill bodies retain ordinary use-time Tool semantics. |
+| Managed Python identities and package locations | **A — captured inert discovery.** Package implementation/dependency materialization remains with the Python preparation owner, not configuration parsing. |
+| Resource path/root checks, native storage/workspace authority checks | **B — physical authority.** Validate confinement/identity; do not replace captured configuration or instruction content. |
+| Credential binding, environment materialization, Managed Python package/dependency reads, MCP executable startup/connect | **C — external preparation.** Existing owners consume captured definitions and source grants. Executable package bodies are not a new configuration snapshot domain. |
+| Durable catalog/conversation recovery; published Session model state; native process/tool environment and executable handles | **D — runtime owners.** These retain their established durability/admission or execution boundaries. They are not configuration authoring rereads. |
+| Reload of pinned settings resource dimensions, root instruction files, AGENTS, Agent/Workflow resources and Skill discovery | **E — explicit generation reload only.** `LocalRuntimeResourceLoader` may reread and atomically publish a new generation; admitted work retains the old generation. |
+
+There is no initial-composition reread of settings/model/project TOML, root or
+named Agent instruction files, ordinary AGENTS content, Workflow programs, or
+Skill metadata after successful prospective resolution. Runtime history and
+external executable/package preparation reads are intentionally owned separately.

@@ -105,19 +105,37 @@ impl LaunchRequest {
     pub fn session_input(
         &self,
         host: &HostEnvironment,
-    ) -> Result<(UserConfigManager, SessionConfigInput), String> {
+    ) -> Result<(UserConfigManager, SessionConfigInput), LaunchFailure> {
+        let (sources, input) = self.source_inputs(host)?;
+        let launch = canonical_directory(&host.launch_directory)?;
+        let manager = UserConfigManager::bootstrap(
+            sources,
+            self.models.as_ref().map(|p| absolute(&launch, p)),
+            self.runtime_root.as_ref().map(|p| absolute(&launch, p)),
+        )?;
+        Ok((manager, input))
+    }
+
+    fn source_inputs(
+        &self,
+        host: &HostEnvironment,
+    ) -> Result<(UserConfigSources, SessionConfigInput), String> {
         let launch = canonical_directory(&host.launch_directory)?;
         let cwd = match &self.workspace {
             Some(path) => canonical_directory(&absolute(&launch, path))?,
             None => discover_workspace(&launch)?,
         };
-        let manager = UserConfigManager::new(UserConfigSources {
+        let sources = UserConfigSources {
             home_directory: host.home_directory.clone(),
             config_directory: host.config_directory.clone(),
             state_directory: host.state_directory.clone(),
-            models: self.models.as_ref().map(|p| absolute(&launch, p)),
-            runtime_root: self.runtime_root.as_ref().map(|p| absolute(&launch, p)),
-        })?;
+            settings: host.config_directory.join("settings.toml"),
+            models: host.config_directory.join("models.toml"),
+            runtime_root: host
+                .state_directory
+                .join("workspaces")
+                .join(super::configuration::workspace_identity(&cwd)),
+        };
         let input = SessionConfigInput {
             cwd,
             config: self.config.as_ref().map(|p| absolute(&launch, p)),
@@ -141,7 +159,7 @@ impl LaunchRequest {
             tools: self.tools.clone(),
             exclude_tools: self.exclude_tools.clone(),
         };
-        Ok((manager, input))
+        Ok((sources, input))
     }
 }
 /// CLI projection of the shared static resolver.
@@ -161,8 +179,11 @@ pub fn resolve_locations(
     request: &LaunchRequest,
     host: &HostEnvironment,
 ) -> Result<(SessionLocations, String), String> {
-    let (manager, input) = request.session_input(host)?;
-    manager.resolve_locations(&input)
+    let (mut sources, input) = request.source_inputs(host)?;
+    if let Some(root) = &request.runtime_root {
+        sources.runtime_root = absolute(&host.launch_directory, root);
+    }
+    UserConfigManager::new(sources)?.resolve_locations(&input)
 }
 /// Resolve and admit CLI input through the shared Session configuration owner.
 /// # Errors
@@ -189,8 +210,9 @@ pub fn change_trust(
         home_directory: host.home_directory.clone(),
         config_directory: host.config_directory.clone(),
         state_directory: host.state_directory.clone(),
-        models: None,
-        runtime_root: None,
+        settings: host.config_directory.join("settings.toml"),
+        models: host.config_directory.join("models.toml"),
+        runtime_root: locations.runtime_root.clone(),
     };
     let root = trust_root(&sources, &locations.workspace)?;
     let record = root.join(identity);

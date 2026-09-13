@@ -1248,12 +1248,7 @@ impl LocalConversationCore {
                     profile: runtime_config.agent.clone(),
                     admitted_agents: subagent_catalog.names().into_iter().cloned().collect(),
                     admitted_workflows: workflows.enabled_ids().clone(),
-                    project_files: super::agent_resources::load_profile_files(
-                        &runtime_config.agent.agents_md.files,
-                    )
-                    .map_err(|error| LocalRuntimeError::Capability {
-                        detail: error.to_string(),
-                    })?,
+                    project_files: paths.root_agent_project_files.clone(),
                     no_builtin_tools: paths.no_builtin_tools,
                     no_direct_tools: paths.no_direct_tools,
                     tools: paths.tools.clone(),

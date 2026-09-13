@@ -887,7 +887,7 @@ and no Tool-providing Native Extensions.
 
 
 Fresh Session resolution uses `UserConfigManager` with explicit cwd. Its captured
-AGENTS content and Skill discovery feed initial preparation; a later source edit
+AGENTS content, root explicit `agent.agents_md.files`, and Skill discovery feed initial preparation; a later source edit
 cannot replace those values between resolution and composition. The existing
 resource reload owner may explicitly discover a new candidate and publish it
 atomically. It keeps the admitted model catalog, Skill source policy, cwd and

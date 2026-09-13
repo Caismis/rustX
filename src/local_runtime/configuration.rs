@@ -77,8 +77,9 @@ pub struct UserConfigSources {
     pub home_directory: PathBuf,
     pub config_directory: PathBuf,
     pub state_directory: PathBuf,
-    pub models: Option<PathBuf>,
-    pub runtime_root: Option<PathBuf>,
+    pub settings: PathBuf,
+    pub models: PathBuf,
+    pub runtime_root: PathBuf,
 }
 
 /// Reusable source owner. Each resolution rereads current files; snapshots never
@@ -86,6 +87,9 @@ pub struct UserConfigSources {
 #[derive(Debug, Clone)]
 pub struct UserConfigManager {
     sources: UserConfigSources,
+    models_origin: Origin,
+    runtime_root_origin: Origin,
+    catalog_required: bool,
 }
 
 /// Intentional inputs for one prospective Session. Omission remains omission.
@@ -127,11 +131,10 @@ impl UserConfigManager {
             &sources.home_directory,
             &sources.config_directory,
             &sources.state_directory,
-        ]
-        .into_iter()
-        .chain(sources.models.iter())
-        .chain(sources.runtime_root.iter())
-        {
+            &sources.settings,
+            &sources.models,
+            &sources.runtime_root,
+        ] {
             if !path.is_absolute() {
                 return Err("user source bindings must be absolute".into());
             }
@@ -139,17 +142,77 @@ impl UserConfigManager {
         sources.home_directory = normalize_missing(&sources.home_directory)?;
         sources.config_directory = normalize_missing(&sources.config_directory)?;
         sources.state_directory = normalize_missing(&sources.state_directory)?;
-        sources.models = sources
-            .models
-            .as_deref()
-            .map(normalize_missing)
-            .transpose()?;
-        sources.runtime_root = sources
-            .runtime_root
-            .as_deref()
-            .map(normalize_missing)
-            .transpose()?;
-        Ok(Self { sources })
+        sources.settings = normalize_missing(&sources.settings)?;
+        sources.models = normalize_missing(&sources.models)?;
+        sources.runtime_root = normalize_missing(&sources.runtime_root)?;
+        let explicit = Origin::Explicit {
+            base: sources.config_directory.clone(),
+        };
+        Ok(Self {
+            sources,
+            models_origin: explicit.clone(),
+            runtime_root_origin: explicit,
+            catalog_required: true,
+        })
+    }
+
+    /// Bootstrap process bindings once using the canonical user document and
+    /// optional host overrides. Supplied sources provide the default locations;
+    /// no Session cwd participates in this operation.
+    /// # Errors
+    /// Rejects invalid user authoring and nonabsolute source bindings.
+    pub fn bootstrap(
+        sources: UserConfigSources,
+        models: Option<PathBuf>,
+        runtime_root: Option<PathBuf>,
+    ) -> Result<Self, LaunchFailure> {
+        let mut sources = sources;
+        if !sources.settings.is_absolute() {
+            return Err("user settings source must be absolute".into());
+        }
+        sources.settings = normalize_missing(&sources.settings)?;
+        let user = read_layer(&sources.settings, false, false)?;
+        let base = sources
+            .settings
+            .parent()
+            .ok_or("settings source has no parent")?
+            .to_path_buf();
+        let user_origin = Origin::User {
+            document: sources.settings.clone(),
+            base: base.clone(),
+        };
+        let explicit = Origin::Explicit {
+            base: sources.config_directory.clone(),
+        };
+        let catalog_required = models.is_some() || user.models.is_some();
+        let mut models_origin = Origin::Builtin;
+        let mut runtime_root_origin = Origin::Builtin;
+        for (target, origin, host, authored) in [
+            (&mut sources.models, &mut models_origin, models, user.models),
+            (
+                &mut sources.runtime_root,
+                &mut runtime_root_origin,
+                runtime_root,
+                user.runtime_root,
+            ),
+        ] {
+            if let Some(path) = host {
+                if !path.is_absolute() {
+                    return Err("host source bindings must be absolute".into());
+                }
+                *target = path;
+                *origin = explicit.clone();
+            } else if let Some(path) = authored {
+                *target = absolute(&base, &path);
+                *origin = user_origin.clone();
+            }
+        }
+        // Only selected paths are canonicalized; unused default files are inert.
+        let mut manager = Self::new(sources)?;
+        manager.models_origin = models_origin;
+        manager.runtime_root_origin = runtime_root_origin;
+        manager.catalog_required = catalog_required;
+        Ok(manager)
     }
     /// Resolve only locations; no configuration, credentials, or runtime creation.
     /// # Errors
@@ -179,12 +242,10 @@ impl UserConfigManager {
         .validate()?;
         let workspace = canonical_directory(&request.cwd)?;
         let identity = workspace_identity(&workspace);
-        let runtime_root = self.sources.runtime_root.clone().unwrap_or_else(|| {
-            self.sources
-                .state_directory
-                .join("workspaces")
-                .join(&identity)
-        });
+        let runtime_root = self.sources.runtime_root.clone();
+        if normalize_missing(&runtime_root)? != runtime_root {
+            return Err("bound runtime_root physical authority changed".into());
+        }
         Ok((
             SessionLocations {
                 workspace,
@@ -223,6 +284,7 @@ pub struct AdmittedSessionConfig {
 /// native composition owns external preparation and generation publication.
 #[derive(Clone)]
 pub struct ProspectiveSessionConfig {
+    pub(crate) root_agent_project_files: Vec<crate::runtime::resources::ProjectContextFile>,
     pub(crate) skill_discovery: crate::skills::SkillDiscoveryOutcome,
     pub(crate) project_context_files: Vec<crate::runtime::resources::ProjectContextFile>,
     pub(crate) inspection: crate::runtime::capability_inspection::CapabilityInspection,
@@ -433,9 +495,9 @@ impl UserConfigManager {
         request: &SessionConfigInput,
     ) -> Result<ProspectiveSessionConfig, LaunchFailure> {
         let host = &self.sources;
-        let (mut locations, identity) = self.resolve_locations(request)?;
+        let (locations, identity) = self.resolve_locations(request)?;
         let launch = locations.workspace.clone();
-        let user_path = host.config_directory.join("settings.toml");
+        let user_path = host.settings.clone();
         let project_path = request.config.as_ref().map_or_else(
             || locations.workspace.join("rustx.toml"),
             |p| absolute(&launch, p),
@@ -447,29 +509,10 @@ impl UserConfigManager {
         let trusted = trust_root(host, &locations.workspace)?
             .join(&identity)
             .is_dir();
-        let user_models = user.models.take();
-        let user_selected_catalog = user_models.is_some();
-        let models_path = host
-            .models
-            .as_ref()
-            .map(|p| absolute(&launch, p))
-            .or_else(|| user_models.map(|p| absolute(user_path.parent().expect("parent"), &p)))
-            .unwrap_or_else(|| host.config_directory.join("models.toml"));
-        let state = user.runtime_root.take();
-        let state_origin = if state.is_some() {
-            Origin::User {
-                document: user_path.clone(),
-                base: user_path.parent().expect("parent").into(),
-            }
-        } else {
-            Origin::Builtin
-        };
-        if host.runtime_root.is_none()
-            && let Some(value) = state
-        {
-            locations.runtime_root = absolute(user_path.parent().expect("parent"), &value);
-        }
-        locations.runtime_root = normalize_missing(&locations.runtime_root)?;
+        // Binding authoring remains strictly validated, but cannot rebind this manager.
+        user.models = None;
+        user.runtime_root = None;
+        let models_path = host.models.clone();
         let trust_directory = trust_root(host, &locations.workspace)?;
         if locations.runtime_root.starts_with(&trust_directory)
             || trust_directory.starts_with(&locations.runtime_root)
@@ -489,8 +532,7 @@ impl UserConfigManager {
                 "run rustx init or correct the explicit catalog path",
                 detail,
             );
-            error.incomplete =
-                host.models.is_none() && !user_selected_catalog && !models_path.exists();
+            error.incomplete = !self.catalog_required && !models_path.exists();
             error.partial = Some(Box::new(super::diagnostics::PartialProjection::new(
                 &locations,
                 trusted,
@@ -558,13 +600,11 @@ impl UserConfigManager {
                 },
             );
         }
-        if request.model.is_some() {
-            // Whole-state Session model selection, using the existing model owner.
-            // Applying after layer materialization preserves explicit empty parameters.
-            provenance.retain(|key, _| !key.starts_with("agent.model."));
-            provenance.insert(
-                "agent.model.model".into(),
-                Origin::Explicit {
+        if let Some(model) = &request.model {
+            record_session_model_origins(
+                model,
+                &mut provenance,
+                &Origin::Explicit {
                     base: launch.clone(),
                 },
             );
@@ -646,37 +686,14 @@ impl UserConfigManager {
                 },
             );
         }
-        for (key, explicit, fallback) in [
-            ("workspace", true, Origin::Builtin),
-            ("runtime_root", host.runtime_root.is_some(), state_origin),
-            (
-                "models",
-                host.models.is_some(),
-                Origin::User {
-                    document: if user_selected_catalog {
-                        user_path.clone()
-                    } else {
-                        models_path.clone()
-                    },
-                    base: if user_selected_catalog {
-                        user_path.parent().expect("parent").into()
-                    } else {
-                        models_path.parent().expect("parent").into()
-                    },
-                },
-            ),
-        ] {
-            provenance.insert(
-                key.into(),
-                if explicit {
-                    Origin::Explicit {
-                        base: launch.clone(),
-                    }
-                } else {
-                    fallback
-                },
-            );
-        }
+        provenance.insert(
+            "workspace".into(),
+            Origin::Explicit {
+                base: launch.clone(),
+            },
+        );
+        provenance.insert("runtime_root".into(), self.runtime_root_origin.clone());
+        provenance.insert("models".into(), self.models_origin.clone());
         // The session Skill source policy decides *where* packages may be
         // discovered. `--no-automatic-skills` is the launch-level off switch for automatic
         // discovery; the policy itself never names a rustX configuration
@@ -842,14 +859,14 @@ impl UserConfigManager {
             &subagents,
             &native_leaves,
         );
+        let root_agent_project_files =
+            super::agent_resources::load_profile_files(&config.agent.agents_md.files)
+                .map_err(LaunchFailure::resource)?;
         let policy = crate::capabilities::AgentActivation {
             profile: config.agent.clone(),
             admitted_agents: subagents.names().into_iter().cloned().collect(),
             admitted_workflows: workflows.enabled_ids().clone(),
-            project_files: super::agent_resources::load_profile_files(
-                &config.agent.agents_md.files,
-            )
-            .map_err(LaunchFailure::resource)?,
+            project_files: root_agent_project_files.clone(),
             no_direct_tools: locations.no_direct_tools,
             no_builtin_tools: locations.no_builtin_tools,
             tools: locations.tools.clone(),
@@ -900,6 +917,7 @@ impl UserConfigManager {
             &skills,
         );
         Ok(ProspectiveSessionConfig {
+            root_agent_project_files,
             skill_discovery,
             project_context_files,
             inspection,
@@ -1147,5 +1165,32 @@ impl std::fmt::Debug for SessionConfigInput {
             .field("cwd", &self.cwd)
             .field("selections", &"<redacted>")
             .finish_non_exhaustive()
+    }
+}
+
+/// Whole-state ownership includes intentional catalog-default selections and
+/// empty parameters. Exhaustive destructuring makes new model fields a compile
+/// error here rather than silently giving them builtin provenance.
+fn record_session_model_origins(
+    selection: &crate::model::session::SessionModelConfig,
+    origins: &mut BTreeMap<String, Origin>,
+    origin: &Origin,
+) {
+    let crate::model::session::SessionModelConfig {
+        model: _,
+        reasoning_profile: _,
+        request_params: _,
+        max_output_tokens: _,
+        summary_model: _,
+    } = selection;
+    origins.retain(|key, _| !key.starts_with("agent.model."));
+    for field in [
+        "model",
+        "reasoning_profile",
+        "request_params",
+        "max_output_tokens",
+        "summary_model",
+    ] {
+        origins.insert(format!("agent.model.{field}"), origin.clone());
     }
 }

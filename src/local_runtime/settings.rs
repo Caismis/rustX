@@ -21,6 +21,7 @@ use crate::runtime_client::types::RuntimeClientError;
 #[derive(Clone)]
 pub(crate) struct UserDefaults {
     directory: PathBuf,
+    settings_source: PathBuf,
     models: crate::model::catalog::ModelCatalog,
 }
 
@@ -181,12 +182,18 @@ enum Frontier {
 impl UserDefaults {
     pub(crate) fn new(paths: &AdmittedSessionConfig) -> Self {
         Self {
-            directory: paths.sources.config_directory.clone(),
+            directory: paths
+                .sources
+                .settings
+                .parent()
+                .expect("absolute settings source has parent")
+                .to_path_buf(),
+            settings_source: paths.sources.settings.clone(),
             models: paths.models.clone(),
         }
     }
     fn target(&self) -> PathBuf {
-        self.directory.join("settings.toml")
+        self.settings_source.clone()
     }
     fn read_sync(&self, scope: DefaultScope) -> Result<DefaultDocument, RuntimeClientError> {
         let path = self.target();
