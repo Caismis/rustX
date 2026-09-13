@@ -1388,16 +1388,20 @@ cross-conversation children, or recursion were added.
 
 ### M9.5 — Native YAML WorkflowRuntime (Issue #83, delivered)
 
-M9.5 adds the bounded native Workflow layer over named SubagentRuntime. The
-authoring surface is `.agents/workflows/<configured-id>.yaml`, but YAML is only
-serialization. Configuration registers exact ids and separately admits
-`agent.workflows`; the discovered Agent catalog remains the one profile source of
-truth, with Agent selection independent of static Workflow authority.
+M9.5 adds the bounded native Workflow layer over named SubagentRuntime.
+Canonical `.agents/workflows/<workflow-id>.yaml` files define Workflow existence
+and the fixed program declaration; there is no settings-level registration list.
+`agent.workflows` is Agent selection only: it selects which enabled Workflow
+identities that Agent may invoke, independently of static Workflow authority.
+The discovered Agent catalog remains the one profile source of truth.
 
-The loader compiles each registered definition into an immutable
-`WorkflowProgram`. The compiler enforces an explicit-entry acyclic graph within each block,
+The loader discovers and structurally compiles each canonical YAML definition.
+The compiler enforces an explicit-entry acyclic graph within each block,
 reachability/termination, explicit typed references, path availability,
-schema compatibility, complete Branch ports, and workflow profile admission.
+schema compatibility, and complete Branch ports. Static admission then checks
+all required Workflow dependencies atomically against one immutable candidate
+resource generation. Each Workflow is either Enabled with a frozen executable
+`WorkflowProgram` or Disabled with deterministic diagnostics.
 `WorkflowRuntime` owns only per-run values, deterministic progression,
 keyed all-settle Parallel joins, cancellation/drain, and terminal settlement;
 the existing SubagentRuntime continues to own child Agent loops, tools,
@@ -1416,9 +1420,9 @@ identity, shared run-wide budgets and native settlement before another body.
 Workflow Agent success is exclusively the reserved
 `workflow_output` protocol: schema validation, exactly-once commit,
 same-turn exclusivity, bounded correction feedback, and cancellation/output
-linearization are all deterministic. A Workflow is exposed as one concrete
-Tool per `agent.workflows` id, with no generic dispatcher and no intermediate
-parent-history injection.
+linearization are all deterministic. Only enabled Workflows selected by the
+invoking Agent's `agent.workflows` are exposed as concrete model-facing Tools,
+with no generic dispatcher and no intermediate parent-history injection.
 
 Reload builds the complete capability/subagent/Workflow candidate off-side
 and publishes it atomically; active runs retain their program snapshot.
