@@ -40,9 +40,20 @@
 //! A candidate that fails validation is excluded and represented by a typed
 //! [`SkillDiagnostic`](crate::skills::SkillDiagnostic); the rest of its
 //! source still publishes. Only a failure of the *explicit launch authority*
-//! itself — a `--skill` path that does not exist, or more explicit paths
-//! than the bound allows — is an error, because that is authored launch
+//! itself — a `--skill` path that does not exist, more explicit paths than
+//! the bound allows, or more explicit candidate packages than one source's
+//! cumulative budget allows — is an error, because that is authored launch
 //! intent rather than discovered content.
+//!
+//! # Resource bounding
+//!
+//! Enumeration is separated from validation so that a source's complete
+//! candidate count is known before a single `SKILL.md` is parsed.
+//! [`MAX_SOURCE_SKILL_PACKAGES`] then bounds one logical **source**,
+//! cumulatively across every root that source aggregates — see its
+//! documentation for why that is not a per-root bound. An automatic source
+//! that overruns its budget is excluded whole with a typed diagnostic; the
+//! explicit authority's overrun is a launch error.
 //!
 //! # Package root invariant
 //!
@@ -135,9 +146,26 @@ pub const MAX_SKILL_COMPATIBILITY_CHARS: usize = 500;
 
 /// The maximum number of explicit `--skill` launch paths.
 pub const MAX_EXPLICIT_SKILL_PATHS: usize = 128;
-/// The maximum number of direct entries one Skill collection root may hold.
+/// The maximum number of direct entries one Skill collection *directory* may
+/// hold.
+///
+/// This bounds one `read_dir`, so it is deliberately per directory: it is the
+/// cost of enumerating that directory, not the cost of the source.
 pub const MAX_SKILL_ROOT_ENTRIES: usize = 1024;
-/// The maximum number of candidate packages one source may offer.
+/// The maximum number of candidate packages **one logical source** may offer,
+/// cumulatively across every root that source aggregates.
+///
+/// This is a per-source bound, not a per-root one. A source may aggregate
+/// several roots — every `--skill` collection path and every explicitly named
+/// package path feeds the one [`SkillSource::Explicit`] domain — and all of
+/// them draw from the same budget. Charging the bound per root instead would
+/// silently multiply the ceiling by the number of configured roots, so a
+/// launch with sixteen `--skill` collections could admit sixteen times the
+/// intended startup and reload work.
+///
+/// The budget is charged against *candidates*, before validation, because the
+/// work being bounded is the per-candidate validation itself: an excluded
+/// malformed package still costs a `SKILL.md` parse and a package walk.
 pub const MAX_SOURCE_SKILL_PACKAGES: usize = 128;
 
 /// A parsing/validation failure of **one** Skill package.
@@ -249,6 +277,14 @@ pub enum SkillDiscoveryError {
     ExplicitPath { path: String, detail: String },
     /// More explicit Skill paths were supplied than the bound allows.
     TooManyExplicitPaths { count: usize },
+    /// The explicit paths together offered more candidate packages than one
+    /// source's cumulative budget allows.
+    ///
+    /// This is a launch error rather than a diagnostic for the same reason a
+    /// missing `--skill` path is: the explicit authority is authored intent,
+    /// and silently dropping the packages an author named would be worse than
+    /// refusing the launch.
+    TooManyExplicitPackages { count: usize },
 }
 
 impl core::fmt::Display for SkillDiscoveryError {
@@ -260,6 +296,11 @@ impl core::fmt::Display for SkillDiscoveryError {
             Self::TooManyExplicitPaths { count } => write!(
                 f,
                 "explicit Skill paths exceed the {MAX_EXPLICIT_SKILL_PATHS} bound, found {count}"
+            ),
+            Self::TooManyExplicitPackages { count } => write!(
+                f,
+                "the explicit Skill paths together offer {count} candidate packages, exceeding \
+                 the cumulative {MAX_SOURCE_SKILL_PACKAGES}-package bound of one Skill source"
             ),
         }
     }
@@ -451,6 +492,10 @@ pub struct SkillDiscoveryOutcome {
 #[derive(Debug, Clone)]
 pub struct SkillDiscovery {
     config: SkillDiscoveryConfig,
+    /// The cumulative candidate budget of **one logical source**. Always
+    /// [`MAX_SOURCE_SKILL_PACKAGES`] in production; a test may lower it to
+    /// prove the boundary without materializing hundreds of package trees.
+    source_budget: usize,
 }
 
 /// One validated candidate before cross-source merge.
@@ -458,6 +503,19 @@ pub struct SkillDiscovery {
 struct Candidate {
     source: SkillSource,
     package: SkillPackage,
+}
+
+/// One source's resolved candidate entries, bounded by the root that offered
+/// them.
+///
+/// Enumeration is separated from validation so that a source's *complete*
+/// candidate count is known before a single `SKILL.md` is parsed. That is what
+/// makes the cumulative budget decision — and the number it reports — a
+/// function of the source alone, independent of the order its roots were
+/// configured in.
+struct ResolvedRoot {
+    boundary: PathBuf,
+    entries: Vec<(String, PathBuf)>,
 }
 
 impl SkillDiscovery {
@@ -469,7 +527,27 @@ impl SkillDiscovery {
     /// a test injects an isolated HOME without touching process-global state.
     #[must_use]
     pub fn with_config(_workspace: &Workspace, config: SkillDiscoveryConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            source_budget: MAX_SOURCE_SKILL_PACKAGES,
+        }
+    }
+
+    /// The same discovery with a lowered per-source candidate budget.
+    ///
+    /// A deterministic boundary seam, not a configuration knob: production has
+    /// exactly one budget ([`MAX_SOURCE_SKILL_PACKAGES`]). The arithmetic and
+    /// every reporting path are shared, so a test proves the real contract —
+    /// cumulative per source, exact at the limit, enumeration-order
+    /// independent — without materializing hundreds of real package trees per
+    /// root.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_source_budget(config: SkillDiscoveryConfig, source_budget: usize) -> Self {
+        Self {
+            config,
+            source_budget,
+        }
     }
 
     /// Discovers the effective Skill package set.
@@ -497,11 +575,24 @@ impl SkillDiscovery {
         let mut automatic = self.config.automatic.clone();
         automatic.sort();
         automatic.dedup();
+        // Group the roots under the source that owns them: the candidate budget
+        // is cumulative per *source*, so a source is admitted or excluded as a
+        // whole rather than root by root.
+        let mut by_source: BTreeMap<SkillSource, Vec<&AutomaticSkillRoot>> = BTreeMap::new();
         for root in &automatic {
-            candidates.extend(collect_automatic_source(root, &mut diagnostics));
+            by_source.entry(root.source).or_default().push(root);
+        }
+        for (source, roots) in by_source {
+            candidates.extend(collect_automatic_source(
+                source,
+                &roots,
+                self.source_budget,
+                &mut diagnostics,
+            ));
         }
         candidates.extend(collect_explicit_source(
             &self.config.explicit_paths,
+            self.source_budget,
             &mut diagnostics,
         )?);
         Ok(merge_candidates(candidates, diagnostics))
@@ -582,14 +673,57 @@ fn merge_candidates(
     }
 }
 
-/// Enumerates and validates one automatic source root.
+/// Enumerates and validates one automatic **source**, across every root
+/// configured for it.
 ///
-/// Every failure below the root is a per-candidate exclusion; only a failure
-/// of the root itself suppresses the whole source, and never another one.
+/// Every failure below a root is a per-candidate exclusion; only a failure of a
+/// root itself, or an overrun of the source's cumulative candidate budget,
+/// suppresses this source — and never another one.
 fn collect_automatic_source(
-    root: &AutomaticSkillRoot,
+    source: SkillSource,
+    roots: &[&AutomaticSkillRoot],
+    budget: usize,
     diagnostics: &mut Vec<SkillDiagnostic>,
 ) -> Vec<Candidate> {
+    // Phase 1: enumerate. No `SKILL.md` is parsed yet, so the source's total
+    // candidate count is known before any validation work is spent.
+    let mut resolved = Vec::with_capacity(roots.len());
+    for root in roots {
+        if let Some(root) = resolve_automatic_root(root, diagnostics) {
+            resolved.push(root);
+        }
+    }
+    let candidates = resolved
+        .iter()
+        .map(|root| root.entries.len())
+        .sum::<usize>();
+    if candidates > budget {
+        // The budget belongs to the source, so the source contributes nothing.
+        // Every other source stays unaffected, exactly as for an unusable root.
+        diagnostics.push(SkillDiagnostic::SourceBudgetExceeded {
+            source,
+            roots: roots
+                .iter()
+                .map(|root| root.root.display().to_string())
+                .collect(),
+            candidates,
+            limit: budget,
+        });
+        return Vec::new();
+    }
+    // Phase 2: validate each candidate against the root that offered it.
+    let mut collected = Vec::with_capacity(candidates);
+    for ResolvedRoot { boundary, entries } in resolved {
+        collected.extend(validate_candidates(source, &boundary, entries, diagnostics));
+    }
+    collected
+}
+
+/// Enumerates one automatic source root, or reports why it offers nothing.
+fn resolve_automatic_root(
+    root: &AutomaticSkillRoot,
+    diagnostics: &mut Vec<SkillDiagnostic>,
+) -> Option<ResolvedRoot> {
     let source = root.source;
     let display = root.root.display().to_string();
     let Some(metadata) = existing_symlink_metadata(&root.root) else {
@@ -597,69 +731,58 @@ fn collect_automatic_source(
             source,
             root: display,
         });
-        return Vec::new();
+        return None;
+    };
+    let mut invalid = |detail: String| {
+        diagnostics.push(SkillDiagnostic::SourceRootInvalid {
+            source,
+            root: display.clone(),
+            detail,
+        });
+        None
     };
     let metadata = match metadata {
         Ok(metadata) => metadata,
-        Err(detail) => {
-            diagnostics.push(SkillDiagnostic::SourceRootInvalid {
-                source,
-                root: display,
-                detail,
-            });
-            return Vec::new();
-        }
+        Err(detail) => return invalid(detail),
     };
     if metadata.file_type().is_symlink() {
-        diagnostics.push(SkillDiagnostic::SourceRootInvalid {
-            source,
-            root: display,
-            detail: "a Skill collection root must not be a symlink".to_owned(),
-        });
-        return Vec::new();
+        return invalid("a Skill collection root must not be a symlink".to_owned());
     }
     if !metadata.is_dir() {
-        diagnostics.push(SkillDiagnostic::SourceRootInvalid {
-            source,
-            root: display,
-            detail: "the Skill source root is not a directory".to_owned(),
-        });
-        return Vec::new();
+        return invalid("the Skill source root is not a directory".to_owned());
     }
     let boundary = match std::fs::canonicalize(&root.root) {
         Ok(boundary) => boundary,
         Err(error) => {
-            diagnostics.push(SkillDiagnostic::SourceRootInvalid {
-                source,
-                root: display,
-                detail: format!("cannot canonicalize the Skill source root: {error}"),
-            });
-            return Vec::new();
+            return invalid(format!(
+                "cannot canonicalize the Skill source root: {error}"
+            ));
         }
     };
     match collect_collection_entries(&root.root) {
-        Ok(entries) => validate_candidates(source, &boundary, entries, diagnostics),
-        Err(detail) => {
-            diagnostics.push(SkillDiagnostic::SourceRootInvalid {
-                source,
-                root: display,
-                detail,
-            });
-            Vec::new()
-        }
+        Ok(entries) => Some(ResolvedRoot { boundary, entries }),
+        Err(detail) => invalid(detail),
     }
 }
 
 /// Enumerates and validates the explicit `--skill` launch authority.
 ///
 /// Each explicit path is its own containment boundary: an explicit package
-/// path bounds itself, an explicit collection root bounds its children.
+/// path bounds itself, an explicit collection root bounds its children. All of
+/// them belong to the one [`SkillSource::Explicit`] domain, so they share one
+/// cumulative candidate budget rather than each admitting a full one.
 fn collect_explicit_source(
     paths: &[PathBuf],
+    budget: usize,
     diagnostics: &mut Vec<SkillDiagnostic>,
 ) -> Result<Vec<Candidate>, SkillDiscoveryError> {
     let source = SkillSource::Explicit;
-    let mut candidates = Vec::new();
+    // Phase 1: resolve every explicit path into candidate entries, without
+    // validating any package. The cumulative count is therefore a function of
+    // the authored path set alone, never of the order it was supplied in.
+    let mut resolved = Vec::with_capacity(paths.len());
+    let mut excluded = Vec::new();
+    let mut candidates = 0usize;
     for path in paths {
         let display = path.display().to_string();
         let explicit_error = |detail: String| SkillDiscoveryError::ExplicitPath {
@@ -670,7 +793,9 @@ fn collect_explicit_source(
             .ok_or_else(|| explicit_error("explicit Skill path does not exist".to_owned()))?
             .map_err(explicit_error)?;
         if metadata.file_type().is_symlink() {
-            diagnostics.push(SkillDiagnostic::PackageInvalid {
+            // A rejected candidate still occupied a candidate slot.
+            candidates += 1;
+            excluded.push(SkillDiagnostic::PackageInvalid {
                 source,
                 package: display,
                 cause: SkillPackageError::UnsupportedSymlink {
@@ -679,25 +804,31 @@ fn collect_explicit_source(
             });
             continue;
         }
-        if metadata.is_file() {
+        let package_root = if metadata.is_file() {
             if path.file_name().and_then(|name| name.to_str()) != Some(SKILL_MARKDOWN_FILE) {
                 return Err(explicit_error(format!(
                     "an explicit Skill file must be named {SKILL_MARKDOWN_FILE}"
                 )));
             }
-            let root = path
-                .parent()
-                .ok_or_else(|| explicit_error("no package directory".to_owned()))?;
-            candidates.extend(validate_explicit_package(root, diagnostics));
-            continue;
-        }
-        if !metadata.is_dir() {
+            Some(
+                path.parent()
+                    .ok_or_else(|| explicit_error("no package directory".to_owned()))?,
+            )
+        } else if !metadata.is_dir() {
             return Err(explicit_error(
                 "an explicit Skill path must be a directory or SKILL.md".to_owned(),
             ));
-        }
-        if path.join(SKILL_MARKDOWN_FILE).is_file() {
-            candidates.extend(validate_explicit_package(path, diagnostics));
+        } else if path.join(SKILL_MARKDOWN_FILE).is_file() {
+            Some(path.as_path())
+        } else {
+            None
+        };
+        if let Some(root) = package_root {
+            candidates += 1;
+            match resolve_explicit_package(root) {
+                Ok(resolved_root) => resolved.push(resolved_root),
+                Err(diagnostic) => excluded.push(diagnostic),
+            }
             continue;
         }
         let boundary = std::fs::canonicalize(path).map_err(|error| {
@@ -706,42 +837,45 @@ fn collect_explicit_source(
             ))
         })?;
         let entries = collect_collection_entries(path).map_err(explicit_error)?;
-        candidates.extend(validate_candidates(source, &boundary, entries, diagnostics));
+        candidates += entries.len();
+        resolved.push(ResolvedRoot { boundary, entries });
     }
-    Ok(candidates)
+    // An overrun of the *explicit* authority is a launch error rather than a
+    // diagnostic, for the same reason a missing `--skill` path is: the packages
+    // were authored by name, so dropping them silently would be worse than
+    // refusing the launch.
+    if candidates > budget {
+        return Err(SkillDiscoveryError::TooManyExplicitPackages { count: candidates });
+    }
+    // Phase 2: validate.
+    diagnostics.append(&mut excluded);
+    let mut collected = Vec::with_capacity(candidates);
+    for ResolvedRoot { boundary, entries } in resolved {
+        collected.extend(validate_candidates(source, &boundary, entries, diagnostics));
+    }
+    Ok(collected)
 }
 
-/// Validates one explicitly named package directory, bounded by itself.
-fn validate_explicit_package(
-    root: &Path,
-    diagnostics: &mut Vec<SkillDiagnostic>,
-) -> Option<Candidate> {
+/// Enumerates one explicitly named package directory, bounded by itself.
+fn resolve_explicit_package(root: &Path) -> Result<ResolvedRoot, SkillDiagnostic> {
     let name = root
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default()
         .to_owned();
-    let boundary = match std::fs::canonicalize(root) {
-        Ok(boundary) => boundary,
-        Err(error) => {
-            diagnostics.push(SkillDiagnostic::PackageInvalid {
-                source: SkillSource::Explicit,
-                package: root.display().to_string(),
-                cause: SkillPackageError::Io {
-                    path: root.display().to_string(),
-                    detail: format!("cannot canonicalize the Skill package root: {error}"),
-                },
-            });
-            return None;
-        }
-    };
-    validate_candidates(
-        SkillSource::Explicit,
-        &boundary,
-        vec![(name, root.to_path_buf())],
-        diagnostics,
-    )
-    .pop()
+    let boundary =
+        std::fs::canonicalize(root).map_err(|error| SkillDiagnostic::PackageInvalid {
+            source: SkillSource::Explicit,
+            package: root.display().to_string(),
+            cause: SkillPackageError::Io {
+                path: root.display().to_string(),
+                detail: format!("cannot canonicalize the Skill package root: {error}"),
+            },
+        })?;
+    Ok(ResolvedRoot {
+        boundary,
+        entries: vec![(name, root.to_path_buf())],
+    })
 }
 
 /// Validates each candidate independently against its own source boundary.
@@ -867,11 +1001,10 @@ fn collect_collection_entries(path: &Path) -> Result<Vec<(String, PathBuf)>, Str
             children.push((name, entry.path()));
         }
     }
-    if children.len() > MAX_SOURCE_SKILL_PACKAGES {
-        return Err(format!(
-            "the Skill collection root offers more than {MAX_SOURCE_SKILL_PACKAGES} packages"
-        ));
-    }
+    // The candidate *count* is deliberately not bounded here: it is charged
+    // against the owning source's cumulative budget by the caller, because one
+    // source may aggregate several roots. See `MAX_SOURCE_SKILL_PACKAGES`.
+    //
     // Canonical candidate order. Discovery must not be able to observe the
     // filesystem's enumeration order, even before validation.
     children.sort();
@@ -1251,12 +1384,26 @@ mod frontmatter_tests {
             .expect("skill supporting resource");
     }
 
-    fn workspace_fixture() -> (tempfile::TempDir, Workspace) {
+    /// One isolated filesystem fixture.
+    ///
+    /// The returned base is the **canonical** temporary root, and every root a
+    /// test derives from it is therefore spelled the way discovery publishes
+    /// it. That matters on hosts whose temporary directory is itself an alias
+    /// (macOS hands out `/var/folders/...` for `/private/var/folders/...`):
+    /// discovery canonicalizes every admitted package root exactly once, at
+    /// the filesystem authority boundary, so a test comparing against the
+    /// pre-canonical spelling would be asserting a host alias rather than the
+    /// contract. `TempDir` still owns cleanup through the returned handle.
+    fn workspace_fixture() -> (tempfile::TempDir, PathBuf, Workspace) {
         let directory = tempfile::tempdir().expect("temporary root");
-        let workspace_root = directory.path().join("workspace");
+        let base = directory
+            .path()
+            .canonicalize()
+            .expect("canonical temporary root");
+        let workspace_root = base.join("workspace");
         std::fs::create_dir_all(&workspace_root).expect("workspace");
         let workspace = Workspace::new(&workspace_root).expect("workspace");
-        (directory, workspace)
+        (directory, base, workspace)
     }
 
     fn automatic(roots: &[(SkillSource, PathBuf)]) -> SkillDiscoveryConfig {
@@ -1306,17 +1453,12 @@ mod frontmatter_tests {
     /// automatic roots, against an isolated HOME rather than the developer's.
     #[test]
     fn cfg280_default_source_policy_scans_exactly_global_and_workspace() {
-        let (directory, workspace) = workspace_fixture();
-        let home = directory.path().join("home");
+        let (_temp, base, workspace) = workspace_fixture();
+        let home = base.join("home");
         write_skill(&home.join(".agents/skills"), "alpha", "Alpha", "");
         write_skill(&workspace.root().join(".agents/skills"), "zeta", "Zeta", "");
         // A legacy rustX-config-relative root must contribute nothing.
-        write_skill(
-            &directory.path().join("config/rustx/skills"),
-            "legacy",
-            "Legacy",
-            "",
-        );
+        write_skill(&base.join("config/rustx/skills"), "legacy", "Legacy", "");
         let roots = automatic_skill_roots(
             Some(&home),
             workspace.root(),
@@ -1350,8 +1492,8 @@ mod frontmatter_tests {
     /// #280 (2)(3): each single-source policy excludes the other root.
     #[test]
     fn cfg280_single_source_policies_exclude_the_other_root() {
-        let (directory, workspace) = workspace_fixture();
-        let home = directory.path().join("home");
+        let (_temp, base, workspace) = workspace_fixture();
+        let home = base.join("home");
         write_skill(&home.join(".agents/skills"), "alpha", "Alpha", "");
         write_skill(&workspace.root().join(".agents/skills"), "zeta", "Zeta", "");
         for (selected, expected) in [
@@ -1378,8 +1520,8 @@ mod frontmatter_tests {
     /// #280 (5): a missing automatic root is a benign empty set.
     #[test]
     fn cfg280_missing_automatic_roots_are_benign_empty_sets() {
-        let (directory, workspace) = workspace_fixture();
-        let home = directory.path().join("home");
+        let (_temp, base, workspace) = workspace_fixture();
+        let home = base.join("home");
         let outcome = SkillDiscovery::with_config(
             &workspace,
             SkillDiscoveryConfig {
@@ -1408,14 +1550,13 @@ mod frontmatter_tests {
     /// packages in the same source still publish.
     #[test]
     fn cfg280_one_malformed_package_never_suppresses_valid_ones() {
-        let (directory, workspace) = workspace_fixture();
+        let (_temp, _base, workspace) = workspace_fixture();
         let root = workspace.root().join(".agents/skills");
         write_skill(&root, "rust-review", "Review Rust", "");
         write_skill(&root, "debugging", "Debug", "");
         std::fs::create_dir_all(root.join("broken")).expect("broken package");
         std::fs::write(root.join("broken/SKILL.md"), "not frontmatter at all\n")
             .expect("broken SKILL.md");
-        let _ = directory;
         let outcome =
             SkillDiscovery::with_config(&workspace, SkillDiscoveryConfig::workspace_root(root))
                 .discover()
@@ -1431,8 +1572,8 @@ mod frontmatter_tests {
     /// the roots are configured in, and the shadow is retained as provenance.
     #[test]
     fn cfg280_workspace_shadows_global_independently_of_configured_order() {
-        let (directory, workspace) = workspace_fixture();
-        let home = directory.path().join("home");
+        let (_temp, base, workspace) = workspace_fixture();
+        let home = base.join("home");
         write_skill(&home.join(".agents/skills"), "foo", "Global foo", "");
         write_skill(
             &workspace.root().join(".agents/skills"),
@@ -1479,8 +1620,8 @@ mod frontmatter_tests {
     /// by being in the higher-precedence source.
     #[test]
     fn cfg280_an_invalid_workspace_candidate_does_not_shadow_a_valid_global_one() {
-        let (directory, workspace) = workspace_fixture();
-        let home = directory.path().join("home");
+        let (_temp, base, workspace) = workspace_fixture();
+        let home = base.join("home");
         write_skill(&home.join(".agents/skills"), "foo", "Global foo", "");
         let project = workspace.root().join(".agents/skills/foo");
         std::fs::create_dir_all(&project).expect("workspace package");
@@ -1513,9 +1654,9 @@ mod frontmatter_tests {
     /// definition rather than picking an arbitrary winner.
     #[test]
     fn cfg280_same_scope_duplicates_exclude_every_definition() {
-        let (directory, workspace) = workspace_fixture();
-        let first = directory.path().join("first");
-        let second = directory.path().join("second");
+        let (_temp, base, workspace) = workspace_fixture();
+        let first = base.join("first");
+        let second = base.join("second");
         write_skill(&first, "same", "First", "");
         write_skill(&second, "same", "Second", "");
         write_skill(&first, "other", "Other", "");
@@ -1565,14 +1706,14 @@ mod frontmatter_tests {
     /// excluded rather than silently admitted.
     #[test]
     fn cfg280_explicit_paths_use_the_same_validation_and_win_the_merge() {
-        let (directory, workspace) = workspace_fixture();
+        let (_temp, base, workspace) = workspace_fixture();
         write_skill(
             &workspace.root().join(".agents/skills"),
             "guide",
             "Workspace guide",
             "",
         );
-        let explicit = directory.path().join("explicit");
+        let explicit = base.join("explicit");
         write_skill(&explicit, "guide", "Explicit guide", "");
         let outcome = SkillDiscovery::with_config(
             &workspace,
@@ -1598,10 +1739,10 @@ mod frontmatter_tests {
     /// authored intent, not discovered content.
     #[test]
     fn cfg280_a_missing_explicit_path_is_a_launch_error() {
-        let (directory, workspace) = workspace_fixture();
+        let (_temp, base, workspace) = workspace_fixture();
         let error = SkillDiscovery::with_config(
             &workspace,
-            SkillDiscoveryConfig::explicit(vec![directory.path().join("absent")]),
+            SkillDiscoveryConfig::explicit(vec![base.join("absent")]),
         )
         .discover()
         .expect_err("missing explicit path");
@@ -1612,12 +1753,11 @@ mod frontmatter_tests {
     /// fact it is, without suppressing its source.
     #[test]
     fn cfg280_a_symlinked_package_root_is_excluded_not_fatal() {
-        let (directory, workspace) = workspace_fixture();
+        let (_temp, base, workspace) = workspace_fixture();
         let root = workspace.root().join(".agents/skills");
         write_skill(&root, "valid", "Valid", "");
-        write_skill(directory.path(), "linked", "Linked", "");
-        std::os::unix::fs::symlink(directory.path().join("linked"), root.join("linked"))
-            .expect("symlink");
+        write_skill(&base, "linked", "Linked", "");
+        std::os::unix::fs::symlink(base.join("linked"), root.join("linked")).expect("symlink");
         let outcome =
             SkillDiscovery::with_config(&workspace, SkillDiscoveryConfig::workspace_root(root))
                 .discover()
@@ -1636,8 +1776,8 @@ mod frontmatter_tests {
     /// source; every other source still publishes.
     #[test]
     fn cfg280_an_unusable_source_root_excludes_only_that_source() {
-        let (directory, workspace) = workspace_fixture();
-        let home = directory.path().join("home");
+        let (_temp, base, workspace) = workspace_fixture();
+        let home = base.join("home");
         std::fs::create_dir_all(home.join(".agents")).expect("home agents");
         std::fs::write(home.join(".agents/skills"), "not a directory").expect("file root");
         write_skill(&workspace.root().join(".agents/skills"), "zeta", "Zeta", "");
@@ -1665,10 +1805,10 @@ mod frontmatter_tests {
 
     #[test]
     fn discovery_merges_bounded_roots_in_deterministic_identity_order() {
-        let (directory, workspace) = workspace_fixture();
-        let user_agents = directory.path().join("user/.agents/skills");
+        let (_temp, base, workspace) = workspace_fixture();
+        let user_agents = base.join("user/.agents/skills");
         let project_agents = workspace.root().join(".agents/skills");
-        let explicit = directory.path().join("explicit/skills");
+        let explicit = base.join("explicit/skills");
         write_skill(&project_agents, "zeta", "Zeta", "");
         write_skill(&user_agents, "alpha", "Alpha", "");
         write_skill(&explicit, "middle", "Middle", "");
@@ -1705,8 +1845,8 @@ mod frontmatter_tests {
     /// discovery location, a fallback, or a migration path.
     #[test]
     fn cfg280_the_legacy_config_relative_skill_root_is_never_read() {
-        let (directory, workspace) = workspace_fixture();
-        let home = directory.path().join("home");
+        let (_temp, base, workspace) = workspace_fixture();
+        let home = base.join("home");
         let legacy = home.join(".config/rustx/skills/ignored/SKILL.md");
         std::fs::create_dir_all(legacy.parent().expect("parent")).expect("legacy root");
         std::fs::write(
@@ -1734,10 +1874,261 @@ mod frontmatter_tests {
         );
     }
 
+    /// Path identity: every **admitted** location is the canonical host path,
+    /// whatever spelling the caller configured.
+    ///
+    /// This is the platform-independent statement of the contract a host alias
+    /// exposes. macOS hands out `/var/folders/...` for `/private/var/...`, so
+    /// on that host a tempdir-derived root reaches discovery pre-aliased; here
+    /// the alias is constructed explicitly with a symlinked *ancestor*, so the
+    /// same semantics are proven identically on every platform. Discovery
+    /// canonicalizes once, at the filesystem authority boundary, and every
+    /// published location — the effective package, its provenance, and the
+    /// provenance of the package it shadowed — is that canonical path. Nothing
+    /// downstream may re-resolve a published path and reach a different file.
+    #[cfg(unix)]
+    #[test]
+    fn cfg280_admitted_locations_are_canonical_whatever_spelling_is_configured() {
+        let (_temp, base, workspace) = workspace_fixture();
+        let home = base.join("home");
+        write_skill(&home.join(".agents/skills"), "foo", "Global foo", "");
+        write_skill(
+            &workspace.root().join(".agents/skills"),
+            "foo",
+            "Workspace foo",
+            "",
+        );
+        // An aliased spelling of the very same global root: `alias` is a
+        // symlink to `home`, so `alias/.agents/skills` is a real directory
+        // reached through a link, exactly like macOS's `/var` alias.
+        let alias = base.join("alias");
+        std::os::unix::fs::symlink(&home, &alias).expect("home alias");
+        let canonical = SkillDiscovery::with_config(
+            &workspace,
+            automatic(&[
+                (SkillSource::Global, home.join(".agents/skills")),
+                (
+                    SkillSource::Workspace,
+                    workspace.root().join(".agents/skills"),
+                ),
+            ]),
+        )
+        .discover()
+        .expect("canonical spelling");
+        let aliased = SkillDiscovery::with_config(
+            &workspace,
+            automatic(&[
+                (SkillSource::Global, alias.join(".agents/skills")),
+                (
+                    SkillSource::Workspace,
+                    workspace.root().join(".agents/skills"),
+                ),
+            ]),
+        )
+        .discover()
+        .expect("aliased spelling");
+        // The alias is not a second Skill plane: it publishes the identical
+        // generation, down to the shadowed provenance location.
+        assert_eq!(canonical, aliased);
+        let expected_shadow = home
+            .join(".agents/skills/foo/SKILL.md")
+            .to_str()
+            .expect("utf-8 home")
+            .to_owned();
+        for outcome in [&canonical, &aliased] {
+            let provenance = &outcome.provenance[0];
+            assert_eq!(provenance.source, SkillSource::Workspace);
+            assert_eq!(
+                provenance.location,
+                workspace
+                    .root()
+                    .join(".agents/skills/foo/SKILL.md")
+                    .to_str()
+                    .expect("utf-8 workspace")
+            );
+            assert_eq!(provenance.shadowed.len(), 1);
+            // The admitted location is the canonical host path, never the
+            // aliased spelling discovery was handed.
+            assert_eq!(provenance.shadowed[0].location, expected_shadow);
+            assert_eq!(
+                outcome.packages[0].location(),
+                provenance.location,
+                "the catalog publishes exactly the provenance location"
+            );
+        }
+        assert!(
+            !aliased.provenance[0].shadowed[0]
+                .location
+                .starts_with(alias.to_str().expect("utf-8 alias")),
+            "an aliased ancestor must never reach a published location"
+        );
+    }
+
+    /// The cumulative per-source candidate budget: exact at the limit, one
+    /// over is an exclusion, and every root of one source draws from the same
+    /// counter.
+    ///
+    /// The budget is lowered through a deterministic seam rather than by
+    /// materializing `MAX_SOURCE_SKILL_PACKAGES` + 1 real package trees: the
+    /// arithmetic and every reporting path are the production ones.
+    #[test]
+    fn cfg280_one_cumulative_candidate_budget_per_source() {
+        let (_temp, base, workspace) = workspace_fixture();
+        let global = base.join("home/.agents/skills");
+        let project = workspace.root().join(".agents/skills");
+        for name in ["g-one", "g-two", "g-three"] {
+            write_skill(&global, name, "Global", "");
+        }
+        write_skill(&project, "p-one", "Workspace", "");
+        let config = || {
+            automatic(&[
+                (SkillSource::Global, global.clone()),
+                (SkillSource::Workspace, project.clone()),
+            ])
+        };
+
+        // Exactly at the limit: the source publishes completely.
+        let exact = SkillDiscovery::with_source_budget(config(), 3)
+            .discover()
+            .expect("automatic discovery never fails on a budget");
+        assert_eq!(
+            names(&exact.packages),
+            ["g-one", "g-three", "g-two", "p-one"]
+        );
+        assert!(
+            !exact
+                .diagnostics
+                .iter()
+                .any(|fact| matches!(fact, SkillDiagnostic::SourceBudgetExceeded { .. })),
+            "{:?}",
+            exact.diagnostics
+        );
+
+        // One over: that source is excluded, and only that source. The
+        // budget belongs to the source, so the workspace source — well inside
+        // its own budget — still publishes.
+        let over = SkillDiscovery::with_source_budget(config(), 2)
+            .discover()
+            .expect("a budget overrun is not a discovery failure");
+        assert_eq!(names(&over.packages), ["p-one"]);
+        let [
+            SkillDiagnostic::SourceBudgetExceeded {
+                source,
+                roots,
+                candidates,
+                limit,
+            },
+        ] = over.diagnostics.as_slice()
+        else {
+            panic!("expected one budget fact, got {:?}", over.diagnostics);
+        };
+        assert_eq!(*source, SkillSource::Global);
+        assert_eq!(roots, &[global.display().to_string()]);
+        assert_eq!((*candidates, *limit), (3, 2));
+        assert_eq!(
+            over.diagnostics[0].severity(),
+            SkillDiagnosticSeverity::Warning
+        );
+
+        // Several roots configured for the *same* source share that source's
+        // one budget, in either configured order: four candidates spread over
+        // two global roots fit a budget of four and overrun a budget of three,
+        // even though either root alone fits inside three.
+        let split = base.join("home-two/.agents/skills");
+        write_skill(&split, "g-four", "Global", "");
+        let two_roots = |reverse: bool| {
+            let mut roots = vec![
+                (SkillSource::Global, global.clone()),
+                (SkillSource::Global, split.clone()),
+            ];
+            if reverse {
+                roots.reverse();
+            }
+            automatic(&roots)
+        };
+        for reverse in [false, true] {
+            let outcome = SkillDiscovery::with_source_budget(two_roots(reverse), 4)
+                .discover()
+                .expect("exactly at the shared budget");
+            assert_eq!(
+                names(&outcome.packages),
+                ["g-four", "g-one", "g-three", "g-two"]
+            );
+            let over = SkillDiscovery::with_source_budget(two_roots(reverse), 3)
+                .discover()
+                .expect("a budget overrun is not a discovery failure");
+            assert!(over.packages.is_empty(), "the source is excluded whole");
+            let [
+                SkillDiagnostic::SourceBudgetExceeded {
+                    roots, candidates, ..
+                },
+            ] = over.diagnostics.as_slice()
+            else {
+                panic!("expected one budget fact, got {:?}", over.diagnostics);
+            };
+            // Canonically ordered and order-independent: both the decision and
+            // the number it reports are functions of the source alone.
+            assert_eq!(
+                roots,
+                &[global.display().to_string(), split.display().to_string()]
+            );
+            assert_eq!(*candidates, 4);
+        }
+    }
+
+    /// The complete `Explicit` source shares **one** cumulative budget across
+    /// every explicit collection path and named package, and the result cannot
+    /// depend on the order those paths are enumerated in.
+    #[test]
+    fn cfg280_explicit_collection_roots_share_one_cumulative_budget() {
+        let (_temp, base, _workspace) = workspace_fixture();
+        let first = base.join("first");
+        let second = base.join("second");
+        write_skill(&first, "alpha", "Alpha", "");
+        write_skill(&first, "beta", "Beta", "");
+        write_skill(&second, "gamma", "Gamma", "");
+        write_skill(&second, "delta", "Delta", "");
+
+        // Four candidates spread over two collection roots fit a budget of
+        // four: the roots share it rather than each claiming a full one.
+        let outcome = SkillDiscovery::with_source_budget(
+            SkillDiscoveryConfig::explicit(vec![first.clone(), second.clone()]),
+            4,
+        )
+        .discover()
+        .expect("exactly at the cumulative budget");
+        assert_eq!(
+            names(&outcome.packages),
+            ["alpha", "beta", "delta", "gamma"]
+        );
+
+        // A budget of three would be enough for either root alone, and is a
+        // hard launch error for the authored explicit authority as a whole.
+        for paths in [
+            vec![first.clone(), second.clone()],
+            vec![second.clone(), first.clone()],
+            // The same total spread over a collection root plus two named
+            // package paths charges the identical cumulative amount.
+            vec![first.clone(), second.join("gamma"), second.join("delta")],
+        ] {
+            let error = SkillDiscovery::with_source_budget(
+                SkillDiscoveryConfig::explicit(paths.clone()),
+                3,
+            )
+            .discover()
+            .expect_err("one over the cumulative budget");
+            assert_eq!(
+                error,
+                super::SkillDiscoveryError::TooManyExplicitPackages { count: 4 },
+                "{paths:?}"
+            );
+        }
+    }
+
     #[test]
     fn no_automatic_roots_still_loads_explicit_skill_and_maps_resources() {
-        let (directory, workspace) = workspace_fixture();
-        let explicit = directory.path().join("user/skills");
+        let (_temp, base, workspace) = workspace_fixture();
+        let explicit = base.join("user/skills");
         write_skill(
             &explicit,
             "private-guide",

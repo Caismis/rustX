@@ -3519,16 +3519,26 @@ the launch-boundary policy inheritance.
   stays lazy.** `[skills].sources` selects which automatic roots are scanned and
   nothing else: it names no individual Skill and preloads no content. Its array
   order is never precedence — precedence is the architectural rule
-  `explicit --skill > workspace > global`. Validation and same-scope logical
-  conflict elimination run before cross-source winner selection, so an invalid
-  or conflicting candidate never wins by living in the higher-precedence source;
-  a same-scope conflict excludes every definition rather than choosing by
-  filesystem enumeration order. A shadowed valid package is retained as
-  generation provenance, never as model input. The root Agent has no positive
-  Skill list: its visible set is the effective eligible catalog minus
+  `explicit --skill > workspace > global`. A source the launch did not select is
+  completely inert: its root is never validated, scanned, or diagnosed, so an
+  invalid `<workspace>/.agents/skills` cannot fail a `sources = ["global"]`
+  launch or its reloads. Resource bounding is per logical source, cumulative
+  across every root that source aggregates, never per root. Validation and
+  same-scope logical conflict elimination run before cross-source winner
+  selection, so an invalid or conflicting candidate never wins by living in the
+  higher-precedence source; a same-scope conflict excludes every definition
+  rather than choosing by filesystem enumeration order. A shadowed valid package
+  is retained as generation provenance, never as model input. The root Agent has
+  no positive Skill list: its visible set is the effective eligible catalog minus
   `agent.disabled_skills`, which is root-only *visibility* and never deletes a
-  Skill from the generation catalog or constrains a named Agent. A package
-  declaring `disable-model-invocation` is not widened by automatic root
+  Skill from the generation catalog or constrains a named Agent. A field illegal
+  for an Agent kind is rejected on authored *presence*, never on emptiness, so
+  root `skills = []` and named `disabled_skills = []` are both hard authoring
+  errors rather than silently inverted intent. A rediscovery is a publication
+  no-op only when the complete generation is unchanged: executable Skill
+  semantics *plus* effective provenance *plus* typed diagnostics, so a
+  diagnostics-only or provenance-only change still publishes a new generation. A
+  package declaring `disable-model-invocation` is not widened by automatic root
   selection. Selecting a Skill — for the root, a named Agent, or a Workflow
   child — publishes compact metadata (name, description, host location) and
   frozen identity/version bindings only; a `SKILL.md` body reaches a model

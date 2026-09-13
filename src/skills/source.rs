@@ -36,6 +36,25 @@
 //! ordering. It is deliberately **not** derived from `[skills].sources`
 //! array order, from filesystem enumeration order, or from the order the
 //! resolved roots happen to reach discovery.
+//!
+//! # Unselected sources are inert
+//!
+//! A source that the launch did not select must have **zero** effect on
+//! Skill discovery, validation, startup, reload, diagnostics, and
+//! publication. `[skills].sources` may legitimately omit `workspace`
+//! (`sources = ["global"]`) or select nothing at all (`sources = []`), and in
+//! those launches an invalid, redirected, or unauthorized
+//! `<workspace>/.agents/skills` is not a Skill root at all — it is an
+//! unrelated directory that happens to share a name.
+//!
+//! That is why [`validate_selected_roots`] lives here rather than in the
+//! generic workspace resource layer: it is the single place a Skill
+//! collection root is measured against the trusted workspace boundary, and it
+//! is policy-aware by construction because it walks the launch-resolved root
+//! list. The launch resolves that list once and freezes it, so reload
+//! validates and scans exactly the sources the launch authorized and can
+//! neither install nor remove a source authority under a running
+//! composition.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -81,6 +100,17 @@ impl SkillSource {
             Self::Workspace => "workspace",
             Self::Explicit => "explicit",
         }
+    }
+
+    /// Whether this source's root lives inside the model-visible workspace
+    /// and therefore falls under the trusted-workspace resource authority.
+    ///
+    /// `Global` is a user-owned location outside the workspace, and
+    /// `Explicit` is a launch authority that carries its own per-path
+    /// containment boundary; neither is measured against the workspace.
+    #[must_use]
+    pub const fn is_workspace_owned(self) -> bool {
+        matches!(self, Self::Workspace)
     }
 }
 
@@ -179,6 +209,39 @@ pub fn automatic_skill_roots(
         });
     }
     roots
+}
+
+/// Admits the workspace-owned Skill collection roots this launch selected.
+///
+/// This is the **only** place a Skill root is measured against the trusted
+/// workspace boundary, and it is policy-aware by construction: it iterates
+/// `selected`, the roots the launch actually resolved from `[skills].sources`
+/// and then froze, so a source the launch did not select is never inspected,
+/// never canonicalized, never validated, and can therefore never fail
+/// startup or reload. `--no-skills` resolves no automatic roots at all and so
+/// reaches this function with an empty slice.
+///
+/// The generic workspace resource layer must not reintroduce an independent
+/// `<workspace>/.agents/skills` check: that layer has no access to the source
+/// policy and would resurrect exactly the ownership violation this function
+/// exists to prevent.
+///
+/// # Errors
+///
+/// Returns the workspace resource authority's own failure for a selected
+/// workspace Skill root that resolves outside the trusted workspace or cannot
+/// be authorized at all.
+pub(crate) fn validate_selected_roots(
+    workspace: &Path,
+    selected: &[AutomaticSkillRoot],
+) -> Result<(), crate::runtime::resources::RuntimeResourceLoadError> {
+    for root in selected
+        .iter()
+        .filter(|root| root.source.is_workspace_owned())
+    {
+        crate::runtime::resources::validate_project_resource_path(workspace, &root.root)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

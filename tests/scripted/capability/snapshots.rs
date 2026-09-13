@@ -341,7 +341,7 @@ async fn cfg280_the_committed_generation_owns_sources_merge_and_root_visibility(
     let (conversation, home) = conversation_with_sources(
         rustx::capabilities::AgentActivation {
             profile: rustx::local_runtime::config::AgentProfileDocument {
-                disabled_skills: vec!["legacy-java".into(), "never-authored".into()],
+                disabled_skills: Some(vec!["legacy-java".into(), "never-authored".into()]),
                 ..rustx::local_runtime::config::builtin_root_profile()
             },
             ..Default::default()
@@ -594,6 +594,150 @@ async fn cfg280_a_later_generation_never_mutates_an_admitted_attempt() {
         first.skills().catalog_entries()[0].description,
         "First generation guidance."
     );
+}
+
+/// #280: a rediscovery is a publication no-op only when the **complete**
+/// generation is unchanged — executable Skill semantics *and* every
+/// generation-scoped Skill fact.
+///
+/// Both halves are proven through the real candidate/commit owner:
+///
+/// - a *diagnostics-only* change: a newly added malformed package excludes
+///   itself, so the effective catalog, bindings, and locations are identical
+///   while the generation now owns a typed exclusion fact;
+/// - a *provenance-only* change: the lower-precedence global source starts
+///   offering an identity the workspace source already won, so the winner, its
+///   version binding, and its published location are identical while the
+///   generation now owns shadowing provenance.
+///
+/// A byte-for-byte identical rediscovery stays a true no-op, and neither new
+/// fact is model-visible.
+#[tokio::test]
+async fn cfg280_generation_scoped_skill_facts_are_published_not_collapsed() {
+    for (change, diagnostics_only) in [("diagnostics", true), ("provenance", false)] {
+        let (conversation, home) = conversation_with_sources(
+            fixture_activation(),
+            &rustx::skills::default_automatic_sources(),
+            "home",
+        );
+        write_skill(conversation.workspace.root(), "foo", "Foo guidance.", &[]);
+        let first = prepare_and_commit(&conversation.coordinator).await;
+        assert_eq!(first.skills().catalog_entries().len(), 1);
+        assert!(first.skills().diagnostics().iter().all(|fact| matches!(
+            fact,
+            rustx::skills::SkillDiagnostic::SourceRootMissing { .. }
+        )));
+        assert!(first.skills().provenance()[0].shadowed.is_empty());
+
+        // An identical rediscovery is a true no-op: no revision is fabricated.
+        let unchanged = prepare_and_commit(&conversation.coordinator).await;
+        assert_eq!(
+            unchanged.revision(),
+            first.revision(),
+            "{change}: a byte-for-byte identical generation must not publish"
+        );
+
+        if diagnostics_only {
+            // A newly added malformed package excludes itself: one new typed
+            // fact, and nothing an execution can observe.
+            let broken = conversation.workspace.root().join(".agents/skills/broken");
+            std::fs::create_dir_all(&broken).expect("broken package");
+            std::fs::write(broken.join("SKILL.md"), "not frontmatter\n").expect("broken SKILL.md");
+        } else {
+            // The lower-precedence global source starts offering the identity
+            // the workspace source already won: new shadowing provenance, and
+            // the same winner, binding, and location.
+            write_skill(&home, "foo", "Foo guidance.", &[]);
+        }
+
+        // A previously admitted attempt stays pinned to the old generation.
+        let lease = conversation.coordinator.acquire_attempt_lease();
+        let pinned = lease.snapshot().clone();
+        let candidate = conversation
+            .coordinator
+            .prepare_candidate()
+            .await
+            .expect("prepare");
+        assert_eq!(pinned.revision(), first.revision(), "{change}");
+        drop(lease);
+        let second = conversation
+            .coordinator
+            .commit(candidate)
+            .expect("commit")
+            .as_ref()
+            .clone();
+
+        // The executable Skill semantics are unchanged...
+        assert!(
+            second.skills().semantically_equivalent(first.skills()),
+            "{change}: this case must not change what an execution observes"
+        );
+        assert_eq!(second.skills().bindings(), first.skills().bindings());
+        assert_eq!(
+            second.skills().catalog_entries(),
+            first.skills().catalog_entries()
+        );
+        assert_eq!(second.skills().locations(), first.skills().locations());
+        // ...and the generation is still published, because a generation-scoped
+        // Skill fact changed.
+        assert!(
+            !second.skills().publication_equivalent(first.skills()),
+            "{change}"
+        );
+        assert_ne!(
+            second.revision(),
+            first.revision(),
+            "{change}: a changed generation fact must publish a new revision"
+        );
+        if diagnostics_only {
+            assert!(
+                second.skills().diagnostics().iter().any(|fact| matches!(
+                    fact,
+                    rustx::skills::SkillDiagnostic::PackageInvalid { .. }
+                )),
+                "{:?}",
+                second.skills().diagnostics()
+            );
+            assert_eq!(second.skills().provenance(), first.skills().provenance());
+        } else {
+            let provenance = &second.skills().provenance()[0];
+            assert_eq!(provenance.source, rustx::skills::SkillSource::Workspace);
+            assert_eq!(
+                provenance.shadowed[0].source,
+                rustx::skills::SkillSource::Global
+            );
+            assert!(
+                second
+                    .skills()
+                    .diagnostics()
+                    .iter()
+                    .any(|fact| matches!(fact, rustx::skills::SkillDiagnostic::Shadowed { .. }))
+            );
+        }
+
+        // The old lease value still describes the old generation, while a
+        // newly admitted lease observes the new one.
+        assert_eq!(pinned.revision(), first.revision(), "{change}");
+        assert_eq!(pinned.skills().diagnostics(), first.skills().diagnostics());
+        assert_eq!(pinned.skills().provenance(), first.skills().provenance());
+        let later = conversation.coordinator.acquire_attempt_lease();
+        assert_eq!(later.snapshot().revision(), second.revision(), "{change}");
+        drop(later);
+
+        // Neither generation fact is model-visible.
+        let rendered = second.skill_catalog().expect("catalog");
+        assert!(!rendered.contains("broken"), "{change}");
+        assert!(!rendered.contains("shadow"), "{change}");
+        let view = crate::runtime_client::projection::capability_view(&second, &BTreeMap::new());
+        assert_eq!(
+            view.skills
+                .iter()
+                .map(|skill| skill.name.as_str())
+                .collect::<Vec<_>>(),
+            ["foo"],
+            "{change}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

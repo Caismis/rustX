@@ -8187,13 +8187,18 @@ model = "scripted/scripted"
         );
 
         // The bootstrap snapshot is exactly the startup state at cursor 0.
-        // (The startup capability commit during composition was a no-op
-        // against the empty candidate, so the seeded revision is 0.)
+        // (The startup capability commit during composition published the
+        // first real generation — this fixture's base registry is empty, but
+        // the generation still owns the Skill discovery facts of the workspace
+        // it scanned, which capability revision zero, "no capabilities have
+        // been established", by definition does not. It happened before the
+        // runtime existed, so it emitted no Runtime Client event and the cursor
+        // is untouched.)
         let (snapshot, cursor) = host.snapshot().expect("snapshot");
         assert_eq!(cursor, RuntimeClientCursor::new(0));
         assert_eq!(
             snapshot.capabilities.revision.get(),
-            0,
+            1,
             "the startup capability revision is seeded"
         );
         assert!(
@@ -8227,8 +8232,8 @@ model = "scripted/scripted"
             .expect("a runtime-owned resource reload succeeds after activation");
         assert_eq!(
             activated.capability_revision.get(),
-            1,
-            "the first real activation"
+            2,
+            "the first real activation, after the seeded startup generation"
         );
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = registry
             .commit_dispatch(
@@ -8957,8 +8962,8 @@ model = "scripted/scripted"
             .expect("a post-transition resource/capability reload succeeds");
         assert_eq!(
             reloaded.capability_revision.get(),
-            1,
-            "the first live capability revision"
+            2,
+            "the first live capability revision, after the seeded startup one"
         );
 
         fixture
@@ -9049,7 +9054,10 @@ model = "scripted/scripted"
             .await
             .expect("reload task")
             .expect("the runtime-owned publication observes Running");
-        assert_eq!(committed.capability_revision.get(), 1);
+        // Revision 1 is the seeded startup generation this fixture's
+        // composition-time commit published, so the first post-activation
+        // publication is revision 2.
+        assert_eq!(committed.capability_revision.get(), 2);
 
         // The background commit completes successfully.
         {
@@ -9075,7 +9083,7 @@ model = "scripted/scripted"
             .reload_resources()
             .await
             .expect("a second resource publication remains live");
-        assert_eq!(committed.capability_revision.get(), 2);
+        assert_eq!(committed.capability_revision.get(), 3);
 
         // Settle the background execution cleanly.
         release.send_replace(true);

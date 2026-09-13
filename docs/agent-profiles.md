@@ -96,10 +96,31 @@ generation and is never widened into any Agent's selection, root included.
 
 The polarity is owned by the authoring boundary. A root document naming
 `skills` and a named document naming `disabled_skills` are both hard
-authoring errors, not silently ignored fields. A malformed Skill identity is
-a hard error in either. A syntactically valid `disabled_skills` identity that
-the effective catalog does not contain is one generation-scoped
-`disabled_skill_absent` diagnostic and never a startup failure.
+authoring errors, not silently ignored fields.
+
+Rejection is driven by **authored presence**, never by whether the decoded
+collection is empty:
+
+```text
+root  + omitted skills            -> valid
+root  + skills = []               -> hard authoring error
+root  + skills = ["x"]            -> hard authoring error
+
+named + omitted disabled_skills   -> valid
+named + disabled_skills = []      -> hard authoring error
+named + disabled_skills = ["x"]   -> hard authoring error
+```
+
+`skills = []` is the clearest possible statement of "no Skills", and root
+semantics are "every eligible Skill", so accepting it would silently invert
+the author's intent. Presence is preserved only at the authoring layer
+(including across configuration layering); lowering resolves it into the
+runtime selection polarity, which has no notion of an omitted field.
+
+A malformed Skill identity is a hard error in either polarity. A syntactically
+valid `disabled_skills` identity that the effective catalog does not contain is
+one generation-scoped `disabled_skill_absent` diagnostic and never a startup
+failure.
 
 A Workflow child or dynamic invocation override replaces the whole Skill
 dimension with an exact identity list; there is no deny-list override.

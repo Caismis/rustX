@@ -10,6 +10,7 @@ Abbreviations below identify concrete files:
 
 - **package**: `src/skills/package.rs`
 - **source**: `src/skills/source.rs`
+- **catalog**: `src/skills/catalog.rs`
 - **authoring**: `src/local_runtime/config.rs`
 - **profile**: `src/runtime/agent_profile.rs`
 - **launch**: `src/local_runtime/launch_tests.rs`
@@ -42,14 +43,37 @@ Abbreviations below identify concrete files:
 | 22 | The rustX-config Skill root is gone from behavior, tests, examples and docs | package: `cfg280_the_legacy_config_relative_skill_root_is_never_read`; launch: `cfg280_launch_resolves_the_canonical_skill_sources_and_explicit_authority` (a package under `<config>/skills` is neither read nor modified) |
 | 23 | Explicit `--skill` uses the same validation and freeze | package: `cfg280_explicit_paths_use_the_same_validation_and_win_the_merge`, `cfg280_a_missing_explicit_path_is_a_launch_error`, `cfg280_same_scope_duplicates_exclude_every_definition`; launch: `cfg280_launch_resolves_the_canonical_skill_sources_and_explicit_authority` |
 
+## Publication, ownership, and bounding contracts
+
+These rows cover the boundaries #280 introduced around the discovery plane
+rather than inside it.
+
+| Invariant | Concrete regression |
+| --- | --- |
+| A publication no-op requires unchanged executable semantics **and** unchanged generation facts | catalog: `cfg280_provenance_and_diagnostics_each_defeat_a_publication_noop` (each half isolated); snapshots: `cfg280_generation_scoped_skill_facts_are_published_not_collapsed` (through the real candidate/commit owner) |
+| A diagnostics-only rediscovery publishes a new revision | snapshots: `cfg280_generation_scoped_skill_facts_are_published_not_collapsed` (`change = "diagnostics"`) |
+| A provenance-only rediscovery publishes a new revision | snapshots: `cfg280_generation_scoped_skill_facts_are_published_not_collapsed` (`change = "provenance"`) |
+| A byte-for-byte identical rediscovery stays a true no-op | snapshots: `cfg280_generation_scoped_skill_facts_are_published_not_collapsed` (asserts the revision is unchanged before any edit) |
+| An admitted lease stays pinned while later admissions observe the new generation | snapshots: `cfg280_generation_scoped_skill_facts_are_published_not_collapsed` (held lease value plus a newly acquired lease); snapshots: `cfg280_a_later_generation_never_mutates_an_admitted_attempt` |
+| An unselected Skill source is inert at startup, reload, and diagnostics | launch: `cfg280_an_unselected_skill_source_is_inert_at_startup_and_reload` (`sources = ["global"]` and `sources = []` against a workspace root redirected outside the trusted workspace, with the selecting policy as the control) |
+| Illegal Agent fields are rejected on authored presence, not emptiness | authoring: `cfg280_skill_selection_polarity_is_owned_by_the_authoring_boundary` (all four presence cases plus the non-empty cases); launch: `optional_explicit_malformed_and_typed_rejections_are_distinct` (`skills = []` through the real launch resolver) |
+| One cumulative candidate budget per logical source | package: `cfg280_one_cumulative_candidate_budget_per_source` (exact at the limit, one over excludes only that source), `cfg280_explicit_collection_roots_share_one_cumulative_budget` (roots share the budget; enumeration order cannot change the result) |
+| Every admitted location is the canonical host path | package: `cfg280_admitted_locations_are_canonical_whatever_spelling_is_configured` (a symlinked ancestor publishes the identical generation — the platform-neutral statement of the macOS `/var` alias) |
+
 ## Ownership summary
 
 ```text
 [skills].sources            launch/configuration    which roots are scanned
 skills::source              runtime                 source identity + precedence
-skills::package             candidate construction  enumerate, validate, merge
+  validate_selected_roots   launch + reload         workspace authority over the
+                                                    selected roots only
+skills::package             candidate construction  enumerate, bound, validate,
+                                                    merge
 skills::diagnostics         candidate construction  typed facts + provenance
 SkillSnapshot               capability candidate    frozen catalog/bindings/facts
+  publication_equivalent    commit                  what makes a rediscovery a
+                                                    true publication no-op
+AgentProfileDocument        authoring               authored field presence
 AgentProfile::from_document authoring               root vs named Skill polarity
 resolve_agent_profile       generation resolution   selection over one catalog
 CapabilityCoordinator       commit                  atomic publication and freeze

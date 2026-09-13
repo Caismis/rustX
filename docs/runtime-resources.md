@@ -552,6 +552,16 @@ rule above. The policy is launch-scoped: a reload rescans the roots the launch
 resolved, but never installs or removes a source authority under a running
 composition.
 
+**A source the launch did not select is completely inert.** It has zero effect
+on discovery, validation, startup, reload, diagnostics, and publication. Under
+`sources = ["global"]` or `sources = []`, `<workspace>/.agents/skills` is not a
+Skill root at all — it is an unrelated directory that happens to share the name,
+and an invalid or redirected one cannot fail startup or reload. Skill root
+validation therefore belongs to the Skill source owner, which validates exactly
+the roots the launch resolved and froze; the generic workspace resource layer
+never independently authorizes a Skill root, because it cannot see the source
+policy.
+
 `--skill <path>` remains a separate launch authority for an explicit package
 directory, a `SKILL.md`, or a collection root. It passes through the same
 Agent Skills package validation, the same identity validation, the same
@@ -566,6 +576,35 @@ Discovery is bounded by its source: an accepted candidate's canonical root must
 stay inside its own source's canonical root. Global and workspace are different
 authorities, so containment is always package-in-source, never
 package-in-workspace.
+
+Resource bounding is per **logical source**, not per root. One source may
+aggregate several roots — every `--skill` collection path and every explicitly
+named package path feeds the one `explicit` source — and all of them draw from
+one cumulative candidate budget:
+
+| Bound | Scope |
+| --- | --- |
+| `MAX_SKILL_ROOT_ENTRIES` | one collection *directory*: the cost of one `read_dir` |
+| `MAX_SOURCE_SKILL_PACKAGES` | one logical *source*, cumulative across every root it aggregates |
+| `MAX_EXPLICIT_SKILL_PATHS` | the number of `--skill` paths the launch may name |
+
+The budget is charged against candidates *before* validation, because the work
+being bounded is the per-candidate validation itself: an excluded malformed
+package still costs a `SKILL.md` parse and a package walk. An automatic source
+that overruns its budget is excluded whole, with a `source_budget_exceeded`
+fact, and every other source is unaffected; an overrun of the explicit
+authority is a launch error, like every other failure of authored launch
+intent. Charging the bound per root instead would silently multiply the ceiling
+by the number of configured roots.
+
+Every **admitted** Skill location is the canonical absolute host path,
+whatever spelling the caller configured: discovery canonicalizes once, at the
+filesystem authority boundary, so a published location can never be
+re-resolved against a different base and reach a different file. This covers
+the effective package, its provenance, and the provenance of any package it
+shadowed. A diagnostic about a *configured root* echoes the configured
+spelling instead, because an absent or unusable root has no canonical host
+identity to report.
 
 **One malformed Skill package never suppresses unrelated valid Skills.** A
 candidate that fails validation is excluded and represented by a typed
@@ -583,6 +622,7 @@ The typed facts frozen with each generation are:
 | --- | --- | --- |
 | `source_root_missing` | fact | The root does not exist; an empty set, never a failure. |
 | `source_root_invalid` | warning | The root exists but cannot be scanned; only that source is excluded. |
+| `source_budget_exceeded` | warning | The source offered more candidates than its cumulative budget; only that source is excluded. |
 | `package_invalid` | warning | One candidate failed Agent Skills validation; the typed cause is preserved. |
 | `package_escapes_source` | warning | One candidate resolved outside its own source root. |
 | `duplicate_identity` | warning | One scope defines the identity more than once; every definition is excluded. |
@@ -597,6 +637,32 @@ A later generation may change discovered and effective Skills for future work.
 It never mutates an already admitted attempt, child, or running Workflow: an
 attempt admitted against generation R1 keeps R1's frozen Skill identities,
 versions, and locations after R2 publishes.
+
+A rediscovery is a publication **no-op only when the complete generation is
+unchanged** — the executable Skill semantics *and* every generation-scoped
+Skill fact:
+
+```text
+publication no-op = same bindings, visible bindings, catalog and locations
+                  + same effective provenance
+                  + same typed diagnostics
+```
+
+The last two lines are why publication equivalence is a distinct, stronger
+concept than execution equivalence. Both of these leave the executable catalog
+byte-identical and must still publish a new generation:
+
+- a **diagnostics-only** change: a newly added malformed package excludes
+  itself, so nothing an execution observes changes while the generation now
+  owns an exclusion fact;
+- a **provenance-only** change: a lower-precedence source starts offering an
+  identity the winner already owned, so the winner, its version binding, and
+  its published location are unchanged while the generation now owns shadowing
+  provenance.
+
+Collapsing either into a no-op would leave inspection describing a filesystem
+state that no longer exists. Neither half is model-visible: both travel beside
+the catalog, never inside it.
 
 See [launch configuration](launch-configuration.md) and
 [Agent Profiles](agent-profiles.md).

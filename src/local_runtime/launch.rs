@@ -267,18 +267,22 @@ impl ProspectiveLaunch {
         self.validate_workspace_resource_roots()
     }
 
+    /// Recheck the workspace-owned resource collection roots.
+    ///
+    /// The Skill roots are deliberately **not** in the generic list below:
+    /// this layer has no access to the session Skill source policy, and
+    /// `[skills].sources` may legitimately omit `workspace` entirely. Their
+    /// owner ([`crate::skills::source::validate_selected_roots`]) is
+    /// policy-aware and validates exactly the roots this launch selected and
+    /// froze, so an unselected Skill source cannot fail startup or reload.
     pub(crate) fn validate_workspace_resource_roots(&self) -> Result<(), String> {
-        for relative in [".agents/tools", ".agents/skills"] {
-            if relative == ".agents/skills" && self.no_skills {
-                continue;
-            }
-            crate::runtime::resources::validate_project_resource_path(
-                &self.workspace,
-                &self.workspace.join(relative),
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        Ok(())
+        crate::runtime::resources::validate_project_resource_path(
+            &self.workspace,
+            &self.workspace.join(".agents/tools"),
+        )
+        .map_err(|e| e.to_string())?;
+        crate::skills::source::validate_selected_roots(&self.workspace, &self.skill_sources)
+            .map_err(|e| e.to_string())
     }
     pub(crate) fn settings_view(&self) -> crate::runtime_client::settings::LaunchSettings {
         use crate::runtime_client::settings::{LaunchSettings, ModelDefault, SettingOrigin};
@@ -819,13 +823,12 @@ pub fn analyze(
     let workspace =
         crate::tools::workspace::Workspace::new(&locations.workspace).map_err(|e| e.to_string())?;
     let skill_discovery = if trusted {
-        if !request.no_skills {
-            crate::runtime::resources::validate_project_resource_path(
-                &locations.workspace,
-                &locations.workspace.join(".agents/skills"),
-            )
+        // Only the roots this launch actually selected are validated: a Skill
+        // source the policy did not select is inert, so an invalid or
+        // redirected `<workspace>/.agents/skills` cannot fail a launch that
+        // never scans it.
+        crate::skills::source::validate_selected_roots(&locations.workspace, &skill_sources)
             .map_err(LaunchFailure::resource)?;
-        }
         crate::skills::SkillDiscovery::with_config(
             &workspace,
             crate::skills::SkillDiscoveryConfig {

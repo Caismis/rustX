@@ -522,14 +522,22 @@ impl RuntimeLayer {
                 description,
                 instructions,
                 tools,
-                skills,
-                disabled_skills,
                 extensions,
                 agents,
                 workflows,
                 agents_md,
                 worktree
             );
+            // The Skill selection fields are presence-preserving all the way
+            // through layering: a layer that authors `skills = []` must reach
+            // the document as an authored empty list, because the Agent kind
+            // rejects the field on presence rather than on emptiness.
+            if let Some(skills) = layer.skills {
+                profile.skills = Some(skills);
+            }
+            if let Some(disabled_skills) = layer.disabled_skills {
+                profile.disabled_skills = Some(disabled_skills);
+            }
             if let Some(model) = layer.model {
                 profile.model = Some(model.resolve()?);
             }

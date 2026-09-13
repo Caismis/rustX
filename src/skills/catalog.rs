@@ -192,19 +192,59 @@ impl SkillSnapshot {
             .collect()
     }
 
-    /// Whether two snapshots have the same execution-semantic Skill state.
+    /// Whether two snapshots have the same **execution-semantic** Skill
+    /// state.
     ///
     /// Skill identity/version bindings describe package provenance, while the
     /// published locations describe where the admitted packages currently
     /// live. Both facts are required for rediscovery to be a no-op: identical
     /// package content moved to another current root must replace the active
     /// snapshot rather than leave the catalog pointing at the old host path.
+    ///
+    /// This deliberately covers *only* what an execution can observe. It is
+    /// therefore **not** sufficient to decide a publication no-op: a
+    /// generation also publishes provenance and diagnostics, which explain
+    /// facts no executable binding can express. Use
+    /// [`Self::publication_equivalent`] for that decision.
     #[must_use]
     pub fn semantically_equivalent(&self, other: &Self) -> bool {
         self.bindings == other.bindings
             && self.visible_bindings == other.visible_bindings
             && self.catalog == other.catalog
             && self.locations() == other.locations()
+    }
+
+    /// Whether two snapshots publish the **complete** same generation.
+    ///
+    /// A candidate is a true publication no-op only when both the executable
+    /// Skill semantics and every generation-scoped Skill fact are unchanged:
+    ///
+    /// ```text
+    /// publication_equivalent = semantically_equivalent
+    ///                        + effective provenance
+    ///                        + typed diagnostics
+    /// ```
+    ///
+    /// The two extra dimensions are the reason this concept exists separately.
+    /// Both of these rediscoveries leave the executable catalog untouched and
+    /// must still publish a new generation:
+    ///
+    /// - a *diagnostics-only* change — a newly added malformed package
+    ///   excludes itself, so the effective catalog is byte-identical while
+    ///   the generation now owns a `package_invalid` fact;
+    /// - a *provenance-only* change — a lower-precedence source starts
+    ///   offering an identity the winner already owned, so the winner, its
+    ///   bindings, and its location are unchanged while the generation now
+    ///   owns shadowing provenance.
+    ///
+    /// Collapsing either into a no-op would leave inspection describing a
+    /// filesystem state that no longer exists. Neither half is model-visible:
+    /// they travel beside the catalog, never inside it.
+    #[must_use]
+    pub fn publication_equivalent(&self, other: &Self) -> bool {
+        self.semantically_equivalent(other)
+            && self.provenance == other.provenance
+            && self.diagnostics == other.diagnostics
     }
 }
 
@@ -268,4 +308,75 @@ fn escape_catalog_text(value: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SkillSnapshot;
+    use crate::skills::diagnostics::{ShadowedSkill, SkillDiagnostic, SkillProvenance};
+    use crate::skills::package::{SkillDiscoveryOutcome, SkillPackageError};
+    use crate::skills::source::SkillSource;
+
+    fn snapshot(
+        provenance: Vec<SkillProvenance>,
+        diagnostics: Vec<SkillDiagnostic>,
+    ) -> SkillSnapshot {
+        SkillSnapshot::from_discovery(SkillDiscoveryOutcome {
+            packages: Vec::new(),
+            provenance,
+            diagnostics,
+        })
+    }
+
+    fn provenance(shadowed: Vec<ShadowedSkill>) -> Vec<SkillProvenance> {
+        vec![SkillProvenance {
+            name: "foo".to_owned(),
+            source: SkillSource::Workspace,
+            location: "/w/.agents/skills/foo/SKILL.md".to_owned(),
+            shadowed,
+        }]
+    }
+
+    /// #280: publication equivalence is strictly stronger than execution
+    /// equivalence. Provenance and diagnostics each independently make a
+    /// rediscovery a real publication, even when nothing an execution can
+    /// observe has changed.
+    #[test]
+    fn cfg280_provenance_and_diagnostics_each_defeat_a_publication_noop() {
+        let base = snapshot(provenance(Vec::new()), Vec::new());
+        // Provenance only: the same winner now shadows a lower-precedence
+        // package. No binding, catalog entry, or location changes.
+        let shadowing = snapshot(
+            provenance(vec![ShadowedSkill {
+                source: SkillSource::Global,
+                location: "/h/.agents/skills/foo/SKILL.md".to_owned(),
+            }]),
+            Vec::new(),
+        );
+        // Diagnostics only: a newly added malformed package excludes itself,
+        // so the effective catalog is byte-identical.
+        let diagnosed = snapshot(
+            provenance(Vec::new()),
+            vec![SkillDiagnostic::PackageInvalid {
+                source: SkillSource::Workspace,
+                package: "/w/.agents/skills/broken".to_owned(),
+                cause: SkillPackageError::MissingSkillMarkdown {
+                    directory: "broken".to_owned(),
+                },
+            }],
+        );
+        for changed in [&shadowing, &diagnosed] {
+            assert!(
+                base.semantically_equivalent(changed),
+                "executable Skill semantics must be unchanged for this to prove anything"
+            );
+            assert!(
+                !base.publication_equivalent(changed),
+                "a generation-scoped Skill fact changed, so this is a real publication"
+            );
+            assert!(!changed.publication_equivalent(&base), "symmetric");
+        }
+        // A byte-for-byte identical generation stays a true no-op.
+        assert!(base.publication_equivalent(&snapshot(provenance(Vec::new()), Vec::new())));
+    }
 }

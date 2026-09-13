@@ -122,31 +122,47 @@ impl AgentProfile {
         files: Vec<ProjectContextFile>,
     ) -> Result<Self, String> {
         document.tools.validate_spelling()?;
-        for name in document.skills.iter().chain(&document.disabled_skills) {
+        for name in document
+            .skills
+            .iter()
+            .chain(&document.disabled_skills)
+            .flatten()
+        {
             crate::skills::package::validate_skill_name(name)?;
         }
         // The two polarities are not interchangeable authoring, so naming the
         // wrong one is a hard error rather than a silently ignored field.
+        //
+        // The test is *authored presence*, never emptiness: `skills = []` on
+        // the root is the clearest possible statement of "no Skills", and root
+        // semantics are "every eligible Skill", so accepting it would silently
+        // invert the author's intent. Lowering happens only after the kind has
+        // admitted the document, so the runtime selection below never carries
+        // a field the kind forbids.
         let skills = match kind {
             AgentProfileKind::Root => {
-                if !document.skills.is_empty() {
+                if document.skills.is_some() {
                     return Err(
-                        "the root Agent has no positive skills list: it sees every eligible \
-                         catalog Skill; author agent.disabled_skills to hide one"
+                        "the root Agent must not author skills: it sees every eligible catalog \
+                         Skill, so even an empty list would contradict its semantics; author \
+                         agent.disabled_skills to hide one"
                             .to_owned(),
                     );
                 }
-                AgentSkillSelection::EligibleExcept(document.disabled_skills.clone())
+                AgentSkillSelection::EligibleExcept(
+                    document.disabled_skills.clone().unwrap_or_default(),
+                )
             }
             AgentProfileKind::Named => {
-                if !document.disabled_skills.is_empty() {
+                if document.disabled_skills.is_some() {
                     return Err(
-                        "disabled_skills is root-only Skill visibility; a named Agent selects \
+                        "disabled_skills is root-only Skill visibility and must not be authored \
+                         on a named Agent, not even as an empty list; a named Agent selects \
                          Skill identities explicitly with skills"
                             .to_owned(),
                     );
                 }
-                AgentSkillSelection::Exact(document.skills.clone())
+                AgentSkillSelection::Exact(document.skills.clone().unwrap_or_default())
             }
         };
         if document.description.len()
@@ -872,7 +888,7 @@ mod composition_tests {
             scope: AgentScope::Root,
         };
         let root_document = crate::local_runtime::config::AgentProfileDocument {
-            disabled_skills: vec!["legacy-java".into(), "absent-skill".into()],
+            disabled_skills: Some(vec!["legacy-java".into(), "absent-skill".into()]),
             ..crate::local_runtime::config::builtin_root_profile()
         };
         let root = resolve_agent_profile(
@@ -982,7 +998,9 @@ mod composition_tests {
             resolve_agent_profile(
                 &AgentProfile::from_document(
                     &crate::local_runtime::config::AgentProfileDocument {
-                        disabled_skills: names.iter().map(|name| (*name).to_owned()).collect(),
+                        disabled_skills: Some(
+                            names.iter().map(|name| (*name).to_owned()).collect(),
+                        ),
                         ..crate::local_runtime::config::builtin_root_profile()
                     },
                     AgentProfileKind::Root,

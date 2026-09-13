@@ -2391,12 +2391,19 @@ fn paths_overlap(left: &Path, right: &Path) -> bool {
 /// model-facing `tools/list` catalog is byte-identical: after a successful
 /// commit, newly admitted executions must use the new executable
 /// generation, never the old one.
+///
+/// The Skill half is compared with
+/// [`SkillSnapshot::publication_equivalent`], not with the narrower
+/// execution-semantic comparison: a generation also publishes Skill
+/// provenance and typed Skill diagnostics, so a rediscovery that changes
+/// only those is still a real publication. See that method for the two
+/// cases (diagnostics-only and provenance-only) this distinction exists for.
 fn candidate_is_noop(
     candidate: &PreparedCapabilityCandidate,
     current: &CapabilitySnapshot,
 ) -> bool {
     !candidate.force_publish
-        && candidate.skills.semantically_equivalent(current.skills())
+        && candidate.skills.publication_equivalent(current.skills())
         && candidate.candidate_registry.definitions() == current.tool_registry().definitions()
         && candidate.available_tools.as_ref() == current.available_tools()
         && candidate.python.as_ref().map(|env| env.digest.clone())

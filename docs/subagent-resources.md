@@ -74,7 +74,7 @@ Both root and named authoring use this type and the same semantic resolver.
 | `timeout_ms` | Optional integer, 1–86,400,000; the whole-child lifecycle deadline. |
 | `tools.builtin` | Exact array of **ordinary** native Tool names; default empty. A Tool provided by an Agent Extension (`todo`) is rejected here by name: compose it under `extensions` instead. |
 | `tools.sources` | Map of typed source identities to `"all"` or exact Tool-name arrays; default empty. MCP and `python:<package>` use this same selection vocabulary. |
-| `skills` | Exact Skill-name array over the effective merged catalog; default empty. Root `disabled_skills` never constrains it. |
+| `skills` | Exact Skill-name array over the effective merged catalog; omission selects none. Root `disabled_skills` never constrains it, and authoring `disabled_skills` here is a hard error even when empty. |
 | `agents_md.inherit` | Boolean, default true; include the parent's frozen project guidance. |
 | `agents_md.files` | Ordered supplemental guidance paths; default empty, at most eight. They are distinct project instructions, never the primary role body. |
 | `worktree.enabled` | Boolean, default false. |

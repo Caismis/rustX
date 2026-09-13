@@ -234,17 +234,28 @@ pub struct AgentProfileDocument {
     pub tools: ToolSelectionDocument,
     /// The exact Skill allowlist over the admitted Skill catalog.
     ///
-    /// **Named Agents only.** The root Agent has no positive Skill list: it
-    /// sees every eligible catalog Skill and subtracts `disabled_skills`.
-    #[serde(default)]
-    pub skills: Vec<String>,
+    /// **Named Agents only.** Authoring it on the root Agent is an error even
+    /// when the list is empty: the root sees every eligible catalog Skill and
+    /// subtracts `disabled_skills`, so `skills = []` would state the opposite
+    /// of what the runtime does.
+    //
+    // The `Option` preserves *authored presence*, which is the whole
+    // contract: a field illegal for an Agent kind is rejected whenever it is
+    // authored, never merely when its decoded collection is non-empty.
+    // Presence stops at this authoring layer — lowering resolves it into the
+    // runtime's `AgentSkillSelection` polarity, which has no notion of an
+    // omitted field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
     /// The root Agent's Skill deny-list over the effective catalog.
     ///
-    /// **Root only.** This is capability *visibility*, not catalog
-    /// membership: a disabled Skill stays in the generation's catalog and a
-    /// named Agent that selects it explicitly still gets it.
-    #[serde(default)]
-    pub disabled_skills: Vec<String>,
+    /// **Root only.** Authoring it on a named Agent is an error even when the
+    /// list is empty; a named Agent selects Skill identities explicitly with
+    /// `skills`. This is capability *visibility*, not catalog membership: a
+    /// disabled Skill stays in the generation's catalog and a named Agent that
+    /// selects it explicitly still gets it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disabled_skills: Option<Vec<String>>,
     /// The project-instruction policy of this agent.
     #[serde(default)]
     pub agents_md: AgentProjectInstructionsDocument,
@@ -1982,6 +1993,11 @@ model = 'provider/model'
     /// #280 (6)(7): the root has no positive Skill list and a named Agent
     /// has no deny-list. Naming the wrong polarity is a hard authoring
     /// error, never a silently ignored field.
+    ///
+    /// The rejection is driven by **authored presence**, not by whether the
+    /// decoded collection is empty: `skills = []` on the root states "no
+    /// Skills" while root semantics are "every eligible Skill", so accepting
+    /// it would silently invert the author's intent.
     #[test]
     fn cfg280_skill_selection_polarity_is_owned_by_the_authoring_boundary() {
         let root = CurrentRuntimeConfig::from_toml_slice(
@@ -1990,30 +2006,53 @@ model = 'provider/model'
                 .as_bytes(),
         )
         .expect("a root deny-list is valid authoring");
-        assert_eq!(root.agent.disabled_skills, ["legacy-java"]);
-        assert!(root.agent.skills.is_empty());
-        assert!(
-            CurrentRuntimeConfig::from_toml_slice(
-                MINIMAL
-                    .replace("[agent]", "[agent]\nskills = ['repository-guide']")
-                    .as_bytes(),
-            )
-            .is_err(),
-            "the root Agent must not author a positive skills list"
+        assert_eq!(
+            root.agent.disabled_skills.as_deref(),
+            Some(["legacy-java".to_owned()].as_slice())
         );
+        // Omission is the only legal root state of `skills`, and it stays
+        // distinguishable from an authored empty list.
+        assert_eq!(root.agent.skills, None);
+        let root_omitted = CurrentRuntimeConfig::from_toml_slice(MINIMAL.as_bytes())
+            .expect("an omitted root skills field is valid authoring");
+        assert_eq!(root_omitted.agent.skills, None);
+        assert_eq!(root_omitted.agent.disabled_skills, None);
 
         let named = crate::local_runtime::agent_resources::parse(
             "description = 'r'\ninstructions = 'i'\nskills = ['repository-guide']",
         )
         .expect("a named exact selection is valid authoring");
-        assert_eq!(named.skills, ["repository-guide"]);
-        assert!(
-            crate::local_runtime::agent_resources::parse(
-                "description = 'r'\ninstructions = 'i'\ndisabled_skills = ['legacy-java']",
-            )
-            .is_err(),
-            "disabled_skills is root-only Skill visibility"
+        assert_eq!(
+            named.skills.as_deref(),
+            Some(["repository-guide".to_owned()].as_slice())
         );
+        let named_omitted =
+            crate::local_runtime::agent_resources::parse("description = 'r'\ninstructions = 'i'")
+                .expect("an omitted named disabled_skills field is valid authoring");
+        assert_eq!(named_omitted.disabled_skills, None);
+
+        // An illegal field is rejected whenever it is *authored*, whether it
+        // carries identities or is explicitly empty.
+        for authored in ["skills = ['repository-guide']", "skills = []"] {
+            assert!(
+                CurrentRuntimeConfig::from_toml_slice(
+                    MINIMAL
+                        .replace("[agent]", &format!("[agent]\n{authored}"))
+                        .as_bytes(),
+                )
+                .is_err(),
+                "the root Agent must not author skills: {authored}"
+            );
+        }
+        for authored in ["disabled_skills = ['legacy-java']", "disabled_skills = []"] {
+            assert!(
+                crate::local_runtime::agent_resources::parse(&format!(
+                    "description = 'r'\ninstructions = 'i'\n{authored}"
+                ))
+                .is_err(),
+                "disabled_skills is root-only Skill visibility: {authored}"
+            );
+        }
 
         // A malformed identity stays a hard error in both polarities.
         for text in ["skills = ['NOT VALID']", "disabled_skills = ['NOT VALID']"] {

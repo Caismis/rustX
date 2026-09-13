@@ -1859,6 +1859,10 @@ fn optional_explicit_malformed_and_typed_rejections_are_distinct() {
         ),
         ("[agent]\nskills = 'null'", "expected a sequence"),
         ("[agent]\ndisabled_skills = 'null'", "expected a sequence"),
+        // #280: a field illegal for the Agent kind is rejected on authored
+        // presence, so an explicitly empty list is rejected too.
+        ("[agent]\nskills = []", "must not author skills"),
+        ("[agent]\nskills = ['guide']", "must not author skills"),
         // #280: the source policy is closed authoring.
         ("[skills]\nsources = ['all']", "unknown variant"),
         (
@@ -1873,9 +1877,7 @@ fn optional_explicit_malformed_and_typed_rejections_are_distinct() {
         let error = resolve(&f.request, &f.host).unwrap_err();
         assert!(error.contains(expected), "{text}: {error}");
     }
-    f.project(
-        json!({"context": {"summary_output_cap":{"mode":"model_limit"}}, "agent": {"skills": []}}),
-    );
+    f.project(json!({"context": {"summary_output_cap":{"mode":"model_limit"}}}));
     assert_eq!(f.resolve().config.context.summary_output_cap, None);
     std::fs::remove_file(f.host.config_directory.join("settings.toml")).unwrap();
     f.request.model = Some("host/one".into());
@@ -1923,7 +1925,10 @@ fn relative_paths_keep_their_document_and_cli_bases() {
     );
     f.project(json!({"subagents":{}}));
     let resolved = f.resolve();
-    assert_eq!(resolved.config.agent.disabled_skills, ["user-skills"]);
+    assert_eq!(
+        resolved.config.agent.disabled_skills.as_deref(),
+        Some(["user-skills".to_owned()].as_slice())
+    );
     f.request.skill_paths = vec!["cli-skill".into()];
     assert_eq!(
         f.resolve().skill_paths,
@@ -2077,7 +2082,7 @@ async fn minimal_native_composition_and_frozen_launch_ignore_later_config_edits(
     assert_eq!(launch.config.initial_model().model.to_string(), "host/one");
     assert_eq!(launch.config.agent_id.as_str(), "rustx");
     assert!(launch.config.mcp_servers.is_empty());
-    assert!(launch.config.agent.skills.is_empty());
+    assert_eq!(launch.config.agent.skills, None);
     product.runtime().shutdown().await.unwrap();
     assert!(
         resolve(&f.request, &f.host).is_err(),
@@ -2882,6 +2887,136 @@ fn cfg270_every_checked_in_toml_example_uses_its_production_authoring_owner() {
         }
     }
     visit(&Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/local-runtime"));
+}
+
+/// #280: a Skill source the launch did not select is completely **inert**.
+///
+/// `[skills].sources` may legitimately omit `workspace`, and in such a launch
+/// `<workspace>/.agents/skills` is not a Skill root — it is an unrelated
+/// directory that happens to share the name. It must therefore have zero
+/// effect on discovery, validation, startup, reload, diagnostics, and
+/// publication, even when it is redirected outside the trusted workspace.
+///
+/// The control case at the end proves the guard is real rather than vacuous:
+/// the *same* redirected directory still fails a launch whose policy selects
+/// the workspace source.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cfg280_an_unselected_skill_source_is_inert_at_startup_and_reload() {
+    /// One fixture whose global Skill root is valid and whose workspace Skill
+    /// root is deliberately redirected outside the trusted workspace.
+    fn fixture(policy: serde_json::Value) -> Fixture {
+        let f = Fixture::new();
+        let write_skill = |root: &Path, name: &str, description: &str| {
+            let package = root.join(name);
+            std::fs::create_dir_all(&package).unwrap();
+            std::fs::write(
+                package.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: {description}\n---\nInstructions\n"),
+            )
+            .unwrap();
+        };
+        write_skill(
+            &f.host.home_directory.join(".agents/skills"),
+            "global-only",
+            "Global only",
+        );
+        let outside = f.root.path().join("outside-skills");
+        write_skill(&outside, "redirected", "Redirected");
+        let agents = f.host.launch_directory.join(".agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::os::unix::fs::symlink(&outside, agents.join("skills")).unwrap();
+        f.project(policy);
+        f
+    }
+    fn names(launch: &ResolvedLaunch) -> Vec<String> {
+        launch
+            .skill_provenance
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect()
+    }
+    fn mentions_workspace(diagnostics: &[crate::skills::SkillDiagnostic]) -> bool {
+        diagnostics.iter().any(|fact| {
+            fact.source() == Some(crate::skills::SkillSource::Workspace)
+                || fact.to_string().contains("redirected")
+        })
+    }
+
+    // `sources = ["global"]`: startup succeeds, only global is scanned, and
+    // the unselected workspace source contributes neither a package nor a
+    // Skill diagnostic — at startup and again after reload, which must honour
+    // the same frozen source policy.
+    let f = fixture(json!({"subagents": {}, "skills": {"sources": ["global"]}}));
+    let launch = f.resolve();
+    assert_eq!(names(&launch), ["global-only"]);
+    assert!(
+        !mentions_workspace(launch.skill_diagnostics()),
+        "{:?}",
+        launch.skill_diagnostics()
+    );
+    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+        .await
+        .unwrap();
+    for stage in ["startup", "reload"] {
+        if stage == "reload" {
+            product.runtime().reload_resources().await.unwrap();
+        }
+        let resources = product.runtime().runtime_resources();
+        let skills = resources.capability().skills();
+        assert_eq!(
+            skills
+                .packages()
+                .iter()
+                .map(|package| package.name().to_owned())
+                .collect::<Vec<_>>(),
+            ["global-only"],
+            "{stage}"
+        );
+        assert!(
+            !mentions_workspace(skills.diagnostics()),
+            "{stage}: {:?}",
+            skills.diagnostics()
+        );
+    }
+    product.runtime().shutdown().await.unwrap();
+
+    // The control: the same redirected directory still fails a launch whose
+    // policy selects the workspace source, and `--no-skills` makes it inert
+    // again without touching the policy.
+    let f = fixture(json!({"subagents": {}}));
+    assert!(
+        resolve(&f.request, &f.host)
+            .unwrap_err()
+            .contains("outside trusted workspace")
+    );
+    let mut request = f.request.clone();
+    request.no_skills = true;
+    assert!(resolve(&request, &f.host).is_ok());
+
+    // `sources = []`: the Skill subsystem is entirely inert. No root is
+    // resolved, so there is nothing to validate, scan, or diagnose.
+    let f = fixture(json!({"subagents": {}, "skills": {"sources": []}}));
+    let launch = f.resolve();
+    assert!(names(&launch).is_empty());
+    assert!(
+        launch.skill_diagnostics().is_empty(),
+        "{:?}",
+        launch.skill_diagnostics()
+    );
+    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+        .await
+        .unwrap();
+    for stage in ["startup", "reload"] {
+        if stage == "reload" {
+            product.runtime().reload_resources().await.unwrap();
+        }
+        let resources = product.runtime().runtime_resources();
+        let skills = resources.capability().skills();
+        assert!(skills.packages().is_empty(), "{stage}");
+        assert!(skills.diagnostics().is_empty(), "{stage}");
+    }
+    product.runtime().shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

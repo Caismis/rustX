@@ -33,6 +33,9 @@ sources = ["global", "workspace"]
 # The root Agent needs no positive Skill list: it automatically sees every
 # eligible Skill in the effective catalog. `disabled_skills` would subtract
 # one from root visibility only, leaving it available to named Agents.
+# Authoring `skills` here is an error even as `skills = []`: the root is
+# rejected on presence, because an empty list would state the opposite of
+# what root selection does.
 [agent]
 agents = ["navigator"]
 workflows = ["parallel_review", "implement_and_review"]

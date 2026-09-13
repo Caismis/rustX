@@ -95,8 +95,8 @@ higher layer would override them. Unknown fields fail at every schema boundary.
 | `agent_id` | Yes | Yes | — | Scalar replacement |
 | `approval_mode` | Yes | Forbidden | — | Host scalar replacement |
 | `context`, `model_timeout_policy`, `tool_deadline_policy` | Yes | Yes | — | Explicit members of these finite records |
-| `agent.tools`, `agent.disabled_skills`, `agent.agents`, `agent.workflows` | Yes | Yes | Tool selection flags | Each selected dimension replaces; names select admitted resources. `agent.skills` is named-Agent authoring and is rejected on the root. |
-| `skills.sources` | Yes | Yes | `--skill`, `--no-skills` | Launch-scoped automatic source selection; list replacement, empty list selects none. Resource reload rescans the resolved roots but never rereads this policy |
+| `agent.tools`, `agent.disabled_skills`, `agent.agents`, `agent.workflows` | Yes | Yes | Tool selection flags | Each selected dimension replaces; names select admitted resources. `agent.skills` is named-Agent authoring and is rejected on the root whenever it is authored, including `skills = []`. |
+| `skills.sources` | Yes | Yes | `--skill`, `--no-skills` | Launch-scoped automatic source selection; list replacement, empty list selects none. An unselected source is inert: its root is never validated, scanned, or diagnosed. Resource reload rescans and revalidates the resolved roots but never rereads this policy |
 | `mcp_servers`, `environment` | Yes | Yes | — | Named entries replace whole entries; empty map clears |
 | `native_tools`, `mcp_tool_policies` | Yes | Forbidden | — | Host-only whole named entries; empty map clears |
 | `agent.extensions` | Yes | Yes | — | Complete dimension replacement; an empty table composes none |

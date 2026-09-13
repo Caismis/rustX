@@ -13,6 +13,7 @@
 //! ```text
 //! SourceRootMissing      an automatic root simply does not exist (benign)
 //! SourceRootInvalid      an automatic root exists but cannot be scanned
+//! SourceBudgetExceeded   one source offered more candidates than its budget
 //! PackageInvalid         one candidate failed Agent Skills validation
 //! PackageEscapesSource   one candidate resolved outside its own source
 //! DuplicateIdentity      one scope defines the same identity twice
@@ -63,6 +64,25 @@ pub enum SkillDiagnostic {
         root: String,
         /// The structural reason, preserved verbatim.
         detail: String,
+    },
+    /// One source offered more candidate packages than its cumulative budget
+    /// allows, so it contributes nothing.
+    ///
+    /// The budget belongs to the logical *source*, not to any single root (see
+    /// [`MAX_SOURCE_SKILL_PACKAGES`](crate::skills::package::MAX_SOURCE_SKILL_PACKAGES)),
+    /// so the count is the source's total and the exclusion applies to the
+    /// whole source. Every other source is unaffected. Enumeration is separated
+    /// from validation upstream, so this decision is a function of the source
+    /// alone and never of the order its roots were configured in.
+    SourceBudgetExceeded {
+        /// The source whose cumulative budget was exhausted.
+        source: SkillSource,
+        /// Every root configured for that source, in canonical order.
+        roots: Vec<String>,
+        /// The source's total candidate count.
+        candidates: usize,
+        /// The source's cumulative candidate budget.
+        limit: usize,
     },
     /// One candidate package failed Agent Skills validation and is excluded.
     /// Unrelated valid packages in the same source still publish.
@@ -120,6 +140,7 @@ impl SkillDiagnostic {
         match self {
             Self::SourceRootMissing { .. } | Self::Shadowed { .. } => SkillDiagnosticSeverity::Fact,
             Self::SourceRootInvalid { .. }
+            | Self::SourceBudgetExceeded { .. }
             | Self::PackageInvalid { .. }
             | Self::PackageEscapesSource { .. }
             | Self::DuplicateIdentity { .. } => SkillDiagnosticSeverity::Warning,
@@ -132,6 +153,7 @@ impl SkillDiagnostic {
         match self {
             Self::SourceRootMissing { source, .. }
             | Self::SourceRootInvalid { source, .. }
+            | Self::SourceBudgetExceeded { source, .. }
             | Self::PackageInvalid { source, .. }
             | Self::PackageEscapesSource { source, .. }
             | Self::DuplicateIdentity { source, .. } => Some(*source),
@@ -154,6 +176,17 @@ impl core::fmt::Display for SkillDiagnostic {
             } => write!(
                 formatter,
                 "the {source} Skill source root {root:?} cannot be scanned: {detail}"
+            ),
+            Self::SourceBudgetExceeded {
+                source,
+                roots,
+                candidates,
+                limit,
+            } => write!(
+                formatter,
+                "the {source} Skill source offers {candidates} candidate packages across {}, \
+                 exceeding its cumulative {limit}-package budget; the source is excluded",
+                roots.join(", ")
             ),
             Self::PackageInvalid {
                 source,

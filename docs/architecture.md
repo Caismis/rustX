@@ -8021,7 +8021,8 @@ sources = ["global", "workspace"]
 [agent]
 # The root Agent needs no positive Skill list: it sees every eligible Skill in
 # the effective catalog. `disabled_skills = ["legacy-java"]` would hide one
-# from root visibility only.
+# from root visibility only. Authoring `skills` here is an error whenever it
+# appears, `skills = []` included.
 
 [agent.tools]
 builtin = ["read", "write", "edit", "glob", "grep", "bash"]
