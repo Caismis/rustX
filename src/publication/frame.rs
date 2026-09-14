@@ -248,6 +248,7 @@ impl PublicationSettlement {
 /// canonical conversation acceptance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum PublicationAuditKind {
     /// Publication reached U, but the Assistant was never accepted.
     Unaccepted,
@@ -271,6 +272,7 @@ impl From<PublicationAuditKind> for PublicationSettlement {
 /// never O(number-of-frames) permanent staging rows.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum PublicationAuditBlock {
     /// The complete released text of one output block.
     Text {
@@ -318,6 +320,7 @@ pub enum PublicationAuditBlock {
 /// One bounded immutable audit of a settled non-canonical publication.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct PublicationAudit {
     /// The settled publication stream.
     pub stream_id: PublicationStreamId,

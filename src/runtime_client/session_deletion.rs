@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Confirmation metadata; counts include the complete native ownership graph.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct RuntimeClientSessionDeletePreview {
     pub session_id: String,
     /// Display name, truncated to at most 256 Unicode scalar values.
@@ -18,6 +19,7 @@ pub struct RuntimeClientSessionDeletePreview {
 /// Bounded safety summary. Resource identities and storage diagnostics stay native.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum RuntimeClientSessionDeletionBlocker {
     CurrentSession,
     InUse,
@@ -25,9 +27,10 @@ pub enum RuntimeClientSessionDeletionBlocker {
     InvalidOwnership,
 }
 
-/// External outcomes, independently owned by the Runtime Client protocol.
+/// Bounded external outcomes shared by App Server and local presentation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum RuntimeClientSessionDeletionResult {
     Preview {
         preview: RuntimeClientSessionDeletePreview,

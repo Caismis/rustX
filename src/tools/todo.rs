@@ -209,6 +209,7 @@ impl TodoStatusPresentation {
 /// The lifecycle status of one task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum TodoStatus {
     /// Queued, not started.
     Pending,
@@ -256,6 +257,7 @@ impl core::fmt::Display for TodoStatus {
 /// One task of the conversation's list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct TodoTask {
     /// The task id, unique within the current list generation.
     ///
@@ -515,6 +517,7 @@ impl std::error::Error for TodoRebuildError {}
 /// publishes, and it is what [`ConversationTodoList::rebuilt`] reads back.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct TodoSnapshot {
     /// Every task, tombstones included, in creation order.
     #[serde(default)]

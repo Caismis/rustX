@@ -114,7 +114,7 @@ pub(crate) enum ChildControlEvent {
         /// The full routed semantic address.
         interaction: crate::runtime::interaction::InteractionRef,
         /// The typed response to validate at the child coordinator.
-        response: crate::runtime::interaction::InteractionResponse,
+        response: crate::runtime::interaction::InteractionControl,
     },
     /// An early root Runtime Client human-provider availability hint.
     /// Publication admission uses a separate authoritative handshake.
@@ -456,75 +456,6 @@ impl WriterGate {
     }
 }
 
-/// Test-only gate that delays delivery of one provider-detach notification
-/// after it has reached the child dispatcher. The root host's admission
-/// authority remains ungated; this exists solely to make stale child-cache
-/// interleavings explicit without scheduler timing.
-#[cfg(test)]
-#[derive(Clone, Debug)]
-pub(crate) struct ProviderAvailabilityGate {
-    armed: Arc<std::sync::atomic::AtomicBool>,
-    entered: Arc<tokio::sync::watch::Sender<bool>>,
-    release: Arc<tokio::sync::watch::Sender<bool>>,
-}
-
-#[cfg(test)]
-impl Default for ProviderAvailabilityGate {
-    fn default() -> Self {
-        let (entered, _) = tokio::sync::watch::channel(false);
-        let (release, _) = tokio::sync::watch::channel(false);
-        Self {
-            armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            entered: Arc::new(entered),
-            release: Arc::new(release),
-        }
-    }
-}
-
-#[cfg(test)]
-impl ProviderAvailabilityGate {
-    /// Arms the next false provider update and resets the deterministic
-    /// entered/released observations.
-    pub(crate) fn arm(&self) {
-        self.armed.store(true, std::sync::atomic::Ordering::SeqCst);
-        self.entered.send_replace(false);
-        self.release.send_replace(false);
-    }
-
-    /// Waits until the child reader has received the false update and is
-    /// deliberately holding it before converting it into a child event.
-    pub(crate) async fn wait_entered(&self) {
-        let mut entered = self.entered.subscribe();
-        while !*entered.borrow_and_update() {
-            if entered.changed().await.is_err() {
-                return;
-            }
-        }
-    }
-
-    /// Releases the delayed provider update.
-    pub(crate) fn release(&self) {
-        self.release.send_replace(true);
-    }
-
-    fn should_delay(&self, available: bool) -> bool {
-        if available || !self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
-            return false;
-        }
-        self.entered.send_replace(true);
-        true
-    }
-
-    async fn wait_released(&self) {
-        let mut release = self.release.subscribe();
-        while !*release.borrow_and_update() {
-            if release.changed().await.is_err() {
-                return;
-            }
-        }
-    }
-}
-
 /// The started dispatcher: the handle every owner shares, the semantic
 /// control-event stream the driver consumes, and the three owned tasks.
 pub(crate) struct ChildControlDispatcher {
@@ -553,7 +484,7 @@ impl ChildControlDispatcher {
     ) -> Self {
         #[cfg(test)]
         {
-            Self::start_impl(control, observation, None, None, None)
+            Self::start_impl(control, observation, None, None)
         }
         #[cfg(not(test))]
         {
@@ -571,19 +502,7 @@ impl ChildControlDispatcher {
         writer_gate: Option<WriterGate>,
         observation_gate: Option<WriterGate>,
     ) -> Self {
-        Self::start_impl(control, observation, writer_gate, observation_gate, None)
-    }
-
-    /// Starts the dispatcher with a deterministic provider-detach delivery
-    /// gate. This is a test seam for proving that root admission, rather than
-    /// the child's cached availability bit, decides publication.
-    #[cfg(test)]
-    pub(crate) fn start_with_provider_gate(
-        control: tokio::net::UnixStream,
-        observation: tokio::net::UnixStream,
-        provider_gate: ProviderAvailabilityGate,
-    ) -> Self {
-        Self::start_impl(control, observation, None, None, Some(provider_gate))
+        Self::start_impl(control, observation, writer_gate, observation_gate)
     }
 
     #[allow(clippy::too_many_lines)] // one owner initializes both reliable/disposable lanes
@@ -592,7 +511,6 @@ impl ChildControlDispatcher {
         observation: tokio::net::UnixStream,
         #[cfg(test)] writer_gate: Option<WriterGate>,
         #[cfg(test)] observation_gate: Option<WriterGate>,
-        #[cfg(test)] provider_gate: Option<ProviderAvailabilityGate>,
     ) -> Self {
         let (read_half, write_half) = tokio::io::split(control);
         let (outbound_tx, outbound_rx) =
@@ -669,22 +587,6 @@ impl ChildControlDispatcher {
                         }
                     }
                     Ok(Some(ParentFrame::InteractionProviderAvailable { available })) => {
-                        #[cfg(test)]
-                        if let Some(gate) = &provider_gate
-                            && gate.should_delay(available)
-                        {
-                            let gate = gate.clone();
-                            let events_tx = events_tx.clone();
-                            tokio::spawn(async move {
-                                gate.wait_released().await;
-                                let _ = events_tx
-                                    .send(ChildControlEvent::InteractionProviderAvailable {
-                                        available,
-                                    })
-                                    .await;
-                            });
-                            continue;
-                        }
                         if events_tx
                             .send(ChildControlEvent::InteractionProviderAvailable { available })
                             .await

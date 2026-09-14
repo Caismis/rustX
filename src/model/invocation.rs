@@ -633,6 +633,7 @@ impl ResolvedModelInvocation {
 /// credential is never a request parameter.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct ModelInvocationView {
     /// The fully qualified model reference.
     pub model: ModelRef,

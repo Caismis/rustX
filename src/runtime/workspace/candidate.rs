@@ -47,6 +47,7 @@ impl InspectionInterrupt {
 /// Historical source identity. Possession of this value grants no access.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct CandidateReference {
     pub run: WorkflowRunId,
     pub version: u64,

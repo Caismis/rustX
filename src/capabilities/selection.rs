@@ -84,6 +84,7 @@ impl std::fmt::Display for ExactToolSelector {
 /// This is never a Workflow Tool leaf or a frozen child executable identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "origin", rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum AgentToolSelection {
     Builtin {
         name: String,
@@ -209,6 +210,7 @@ impl ToolSelectionDocument {
 /// Typed facts for admission owners; they choose their own failure policy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum SourceResolutionFailure {
     Undefined,
     Inactive(super::activation::SourceActivation),
@@ -232,6 +234,7 @@ impl std::fmt::Display for SourceResolutionFailure {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ToolSelectionError {
     SourceUnavailable {
         selector: String,

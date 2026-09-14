@@ -144,6 +144,7 @@ const DIGEST_HEX_CHARS: usize = 64;
 /// collapsed into one field.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct InteractionRequester {
     /// The canonical registry-resolved tool identity.
     pub tool_id: ToolId,
@@ -189,6 +190,7 @@ impl InteractionRequester {
 /// display string can never select a different underlying value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct OptionSpecification {
     /// The short option label shown in the selection list.
     pub label: String,
@@ -217,6 +219,7 @@ where
 /// silently unvalidated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum TextFormat {
     /// An exact `YYYY-MM-DD` calendar date.
     Date,
@@ -251,6 +254,7 @@ impl TextFormat {
 /// A bounded free-form text question.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct TextAnswerSpecification {
     /// The inclusive minimum Unicode scalar count, when the producer declares one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -371,8 +375,8 @@ pub struct TextAnswerSpecification {
 ///
 /// NaN and infinity are unrepresentable by construction, which is what makes
 /// [`Eq`] sound here: every value this type can hold is reflexive.
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-pub struct FiniteNumber(f64);
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, schemars::JsonSchema)]
+pub struct FiniteNumber(#[schemars(with = "String", pattern(r"^[0-9a-f]{16}$"))] f64);
 
 impl Eq for FiniteNumber {}
 
@@ -562,8 +566,8 @@ impl<'de> Deserialize<'de> for FiniteNumber {
 /// ```
 ///
 /// No stage converts through a binary64, so no stage can round.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
-pub struct ExactInteger(i64);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, schemars::JsonSchema)]
+pub struct ExactInteger(#[schemars(with = "String", pattern(r"^(0|-?[1-9][0-9]{0,18})$"))] i64);
 
 impl ExactInteger {
     /// The exact whole number.
@@ -643,6 +647,7 @@ impl<'de> Deserialize<'de> for ExactInteger {
 /// client that can hold a bound can always spell an answer at it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct NumberAnswerSpecification {
     /// The inclusive minimum, when the producer declares one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -658,6 +663,7 @@ pub struct NumberAnswerSpecification {
 /// as decimal text and never through a binary64.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct IntegerAnswerSpecification {
     /// The inclusive minimum, when the producer declares one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -670,6 +676,7 @@ pub struct IntegerAnswerSpecification {
 /// A pick-exactly-one question over declared options.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct SingleChoiceSpecification {
     /// The finite declared options, addressed by index.
     pub options: Vec<OptionSpecification>,
@@ -680,6 +687,7 @@ pub struct SingleChoiceSpecification {
 /// A pick-between-`min_selected`-and-`max_selected` question over declared options.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct MultiChoiceSpecification {
     /// The finite declared options, addressed by index.
     pub options: Vec<OptionSpecification>,
@@ -699,6 +707,7 @@ pub struct MultiChoiceSpecification {
 /// render and validate all of them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum AnswerSpecification {
     /// Bounded free-form text.
     Text(TextAnswerSpecification),
@@ -739,6 +748,7 @@ impl AnswerSpecification {
 /// One question in a questionnaire.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct QuestionSpecification {
     /// The full question shown above the answer surface.
     pub question: String,
@@ -751,6 +761,7 @@ pub struct QuestionSpecification {
 /// The complete immutable questionnaire shown to a client.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct QuestionnaireSpecification {
     /// One to four related blocking questions.
     pub questions: Vec<QuestionSpecification>,
@@ -759,6 +770,7 @@ pub struct QuestionnaireSpecification {
 /// A bounded free-form text answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct TextAnswer {
     /// The bounded user-entered text.
     pub value: String,
@@ -773,6 +785,7 @@ pub struct TextAnswer {
 /// a JSON number could not carry that identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct NumberAnswer {
     /// The typed value, exactly representable as a finite binary64.
     pub value: FiniteNumber,
@@ -785,6 +798,7 @@ pub struct NumberAnswer {
 /// round-trips exactly instead of being rounded by a client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct IntegerAnswer {
     /// The typed value.
     pub value: ExactInteger,
@@ -793,6 +807,7 @@ pub struct IntegerAnswer {
 /// A typed boolean answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct BooleanAnswer {
     /// The canonical business value, never a `Yes`/`No` display string.
     pub value: bool,
@@ -801,6 +816,7 @@ pub struct BooleanAnswer {
 /// One declared option selected for a single-choice question.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct OptionAnswer {
     /// The zero-based index into the question's declared options.
     pub option_index: usize,
@@ -809,6 +825,7 @@ pub struct OptionAnswer {
 /// A custom answer entered by the user.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct CustomAnswer {
     /// The bounded user-entered answer.
     pub answer: String,
@@ -817,6 +834,7 @@ pub struct CustomAnswer {
 /// Several declared options selected for a multi-choice question.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct OptionsAnswer {
     /// Zero-based option indices in ascending canonical order.
     pub option_indices: Vec<usize>,
@@ -826,6 +844,7 @@ pub struct OptionsAnswer {
 /// never a client-echoed copy of the request facts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct QuestionnaireAnswerEntry {
     /// Zero-based index into the immutable questionnaire.
     pub question_index: usize,
@@ -844,6 +863,7 @@ pub struct QuestionnaireAnswerEntry {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(schemars::JsonSchema)]
 pub enum QuestionnaireAnswer {
     /// Bounded free-form text for a [`AnswerSpecification::Text`] question.
     Text(TextAnswer),
@@ -865,6 +885,7 @@ pub enum QuestionnaireAnswer {
 /// intentionally allowed so a user may submit a partial questionnaire.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct QuestionnaireSubmission {
     /// At most one entry per answered question.
     pub answers: Vec<QuestionnaireAnswerEntry>,
@@ -883,6 +904,7 @@ pub struct QuestionnaireDeclined;
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(schemars::JsonSchema)]
 pub enum QuestionnaireResponse {
     /// The accepted, possibly partial answer set.
     Submitted(QuestionnaireSubmission),
@@ -893,6 +915,7 @@ pub enum QuestionnaireResponse {
 /// The bounded terminal answer facts used by all interaction layers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum InteractionSubject {
     Review {
         review: super::review::ReviewSpecification,
@@ -924,6 +947,7 @@ pub enum InteractionSubject {
 /// The distinct durable terminal settlements of one interaction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum InteractionSettlement {
     Reviewed {
         response: super::review::ReviewResponse,

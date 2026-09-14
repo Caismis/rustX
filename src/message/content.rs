@@ -9,14 +9,16 @@ use serde::{Deserialize, Serialize};
 use crate::runtime::identity::ArtifactId;
 
 /// A plain text content block.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TextBlock {
     /// The text content.
     pub text: String,
 }
 
 /// A reference to an image artifact.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ImageReference {
     /// Durable artifact identity of the image.
     pub artifact_id: ArtifactId,
@@ -26,7 +28,8 @@ pub struct ImageReference {
 }
 
 /// A reference to a file artifact.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FileReference {
     /// Durable artifact identity of the file.
     pub artifact_id: ArtifactId,

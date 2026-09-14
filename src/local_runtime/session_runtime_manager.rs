@@ -23,7 +23,9 @@ use crate::runtime::conversation_runtime::ConversationRuntime;
 use crate::runtime::identity::ConversationId;
 
 /// Process-local live composition identity. Never a durable or transport identity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+#[derive(schemars::JsonSchema)]
 pub struct RuntimeIncarnationId(u64);
 
 // Identity only, never a global active Session or runtime state. A stale handle
@@ -43,6 +45,7 @@ pub enum ResidencyState {
 /// A terminal operation error shared verbatim by every waiter in its flight.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RuntimeManagerError {
+    Client(crate::runtime_client::types::RuntimeClientError),
     SessionAlreadyResident {
         session_id: SessionId,
         resident_conversation: ConversationId,
@@ -54,6 +57,7 @@ pub enum RuntimeManagerError {
 impl std::fmt::Display for RuntimeManagerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Client(error) => write!(f, "{error:?}"),
             Self::SessionAlreadyResident {
                 session_id,
                 resident_conversation,
@@ -163,6 +167,31 @@ pub struct ManagedRuntimeClient {
     runtime: Weak<ManagedRuntime>,
 }
 impl ManagedRuntimeClient {
+    /// Reject use of an unloaded, unloading or replaced incarnation.
+    /// # Errors
+    /// Returns `StaleIncarnation` when residency has ended.
+    pub fn validate(&self) -> Result<(), RuntimeManagerError> {
+        self.current().map(|_| ())
+    }
+
+    /// Admit a non-owning controller and linearize its snapshot/subscription.
+    /// # Errors
+    /// Stale incarnations and conflicting controllers are rejected.
+    /// # Panics
+    /// Panics if a composition mutex is poisoned.
+    pub fn attach(
+        &self,
+    ) -> Result<crate::runtime_client::attachment::AttachedSnapshot, RuntimeManagerError> {
+        let runtime = self.current()?;
+        let composition = runtime.composition.lock().expect("composition mutex");
+        composition
+            .as_ref()
+            .ok_or(RuntimeManagerError::StaleIncarnation)?
+            .host()
+            .inner
+            .admit_attachment(false, true)
+            .map_err(RuntimeManagerError::Client)
+    }
     fn current(&self) -> Result<Arc<ResidentRuntime>, RuntimeManagerError> {
         let runtime = self
             .runtime
@@ -283,6 +312,11 @@ pub struct SessionRuntimeManager {
     dependencies: Arc<LocalRuntimeDependencies>,
 }
 impl SessionRuntimeManager {
+    /// Durable authority shared with connection routing; no runtime is loaded.
+    #[must_use]
+    pub fn session_controller(&self) -> SessionController {
+        self.sessions.clone()
+    }
     /// Allocate the process runtime owner once; clone it for request handlers.
     /// The durable controller retains only this allocation claim, never residency.
     /// # Errors
@@ -519,6 +553,40 @@ impl SessionRuntimeManager {
             }
         }
     }
+
+    /// Claim unload only for the explicitly addressed live incarnation.
+    /// # Errors
+    /// Stale identities fail before any residency transition; shutdown failures
+    /// retain the native fail-closed Unloading slot.
+    /// # Panics
+    /// Panics if the registry mutex is poisoned.
+    pub async fn unload_incarnation(
+        &self,
+        id: &ConversationId,
+        expected: RuntimeIncarnationId,
+    ) -> Result<(), RuntimeManagerError> {
+        let flight = {
+            let mut registry = self.registry.0.lock().expect("registry mutex");
+            let Some(Entry::Loaded(runtime)) = registry.entries.get(id) else {
+                return Err(RuntimeManagerError::StaleIncarnation);
+            };
+            if runtime.identity.incarnation != expected {
+                return Err(RuntimeManagerError::StaleIncarnation);
+            }
+            let runtime = runtime.clone();
+            let flight = Flight::new();
+            registry.entries.insert(
+                id.clone(),
+                Entry::Unloading {
+                    _runtime: runtime.clone(),
+                    flight: flight.clone(),
+                },
+            );
+            self.spawn_unload(id.clone(), runtime, flight.clone(), None);
+            flight
+        };
+        flight.wait().await.map(|_| ())
+    }
     /// Explicit targeted replacement. Old shutdown must succeed before cold
     /// resolution/composition; failure after that boundary leaves Unloaded.
     /// # Errors
@@ -592,6 +660,19 @@ impl SessionRuntimeManager {
                 return;
             }
             drop(live);
+            let host = runtime
+                .composition
+                .lock()
+                .expect("composition mutex")
+                .as_ref()
+                .expect("resident composition")
+                .host()
+                .clone();
+            if let Err(e) = host.inner.drain_projection().await {
+                terminal.finish(Err(error(format!("projection drain failed: {e}"))));
+                return;
+            }
+            drop(host);
             // Writer-transfer boundary: shutdown has permanently closed native
             // admission and proved settlement. Stale handles cannot reopen it.
             runtime

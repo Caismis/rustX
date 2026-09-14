@@ -47,6 +47,7 @@ pub enum SkillDiagnosticSeverity {
 /// no consumer can observe a filesystem-enumeration-dependent ordering.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum SkillDiagnostic {
     /// A configured automatic source root does not exist. This is the normal
     /// state of a machine without global Skills and is never a failure.
@@ -249,7 +250,17 @@ impl core::fmt::Display for SkillDiagnostic {
 /// This is generation/inspection metadata. It deliberately never enters the
 /// model-facing catalog: a Skill's instructions are not improved by knowing
 /// which root won it.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
 pub struct SkillProvenance {
     /// The effective logical Skill identity.
     pub name: String,
@@ -262,7 +273,17 @@ pub struct SkillProvenance {
 }
 
 /// One valid package that a higher-precedence source shadowed.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
 pub struct ShadowedSkill {
     /// The source whose package was shadowed.
     pub source: SkillSource,

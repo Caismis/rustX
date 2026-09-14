@@ -2499,3 +2499,5 @@ export type SessionDeletionRequest =
   | { method: "session_delete"; id: number; session_id: string; expected_target_revision: string }
   | { method: "session_delete_recover"; id: number; session_id: string };
 export type SessionDeletionResponse = { type: "session_deletion"; result: SessionDeleteResult };
+// Local stdio transcription pending #290; NOT the App Server schema authority.
+// Generated public client types live in protocol/app-server/v1.ts at repo root.

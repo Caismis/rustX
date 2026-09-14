@@ -217,6 +217,7 @@ pub struct AgentProfileAuthority<'a> {
 /// Typed native facts retained with the generation, never emitted per model turn.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum AgentProfileDiagnostic {
     /// A selected direct Tool excluded by the explicit host launch restriction.
     HostToolSuppressed {
@@ -247,6 +248,7 @@ pub enum AgentProfileDiagnostic {
 /// Closed scope-ineligible capability identities, requiring no string parsing.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", content = "identity", rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ScopeCapability {
     Agent(SubagentName),
     Workflow(WorkflowId),

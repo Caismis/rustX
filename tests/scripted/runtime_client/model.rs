@@ -759,7 +759,7 @@ async fn attempt_started_freezes_the_model_across_a_mid_attempt_switch() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn model_methods_require_an_admitted_attachment() {
     let (_model, host) = runtime(vec![one_turn_stop()]).await;
-    let endpoint = rustx::runtime_client::RuntimeClientEndpoint::new(host);
+    let endpoint = rustx::runtime_client::RuntimeClientEndpoint::new(&host);
     for request in [
         RuntimeClientRequest::ModelCatalogGet {
             id: RequestId::new(1),

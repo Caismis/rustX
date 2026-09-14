@@ -1057,6 +1057,7 @@ impl AttemptOutcome {
 /// Which attempt execution limit was exceeded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum AttemptLimit {
     /// The maximum turn count was exceeded.
     MaxTurns,

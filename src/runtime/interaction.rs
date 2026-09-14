@@ -78,6 +78,7 @@ pub use crate::events::interaction::{
 /// The bounded native interaction vocabulary of the 0.1 protocol.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum InteractionKind {
     /// Business acceptance of an immutable subject, never Tool permission.
     Review {
@@ -119,6 +120,7 @@ pub enum InteractionKind {
 /// One live interaction request projected to a Runtime Client.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct InteractionRequest {
     /// The non-reused runtime-owned interaction identity.
     pub id: InteractionId,
@@ -150,6 +152,7 @@ impl InteractionRequest {
 /// crosses a Runtime Client or parent/child routing boundary.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct InteractionRef {
     /// The conversation-owned semantic interaction domain.
     pub conversation_id: ConversationId,
@@ -184,6 +187,7 @@ impl core::fmt::Display for InteractionRef {
 /// and it is never copied into either conversation's canonical history.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum InteractionSource {
     /// The root runtime's primary conversation.
     Primary,
@@ -205,6 +209,7 @@ pub enum InteractionSource {
 /// answerable at the shared human-facing surface.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct RoutedInteraction {
     /// The stable address the human response must use.
     pub interaction: InteractionRef,
@@ -248,6 +253,7 @@ impl RoutedInteraction {
 /// The finite approval decision accepted from a client.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum ApprovalDecision {
     /// Continue with the exact `PreparedInvocation` that was already
     /// resolved by the Tool Registry.
@@ -263,6 +269,7 @@ pub enum ApprovalDecision {
 /// A typed response to one native interaction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum InteractionResponse {
     /// Only an exact subject/instance decision; no replacement content.
     Review {
@@ -282,9 +289,18 @@ pub enum InteractionResponse {
     },
 }
 
+/// Internal reliable control route. Cancellation is distinct from a response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum InteractionControl {
+    Respond { response: InteractionResponse },
+    Cancel,
+}
+
 /// The terminal outcome delivered to the semantic waiter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum InteractionOutcome {
     /// Native source interference invalidated the pending business subject.
     ReviewInvalidated,
@@ -1101,6 +1117,8 @@ struct CoordinatorState {
 
 /// The one conversation-owned native interaction coordinator.
 pub(crate) struct InteractionCoordinator {
+    #[cfg(test)]
+    pub(crate) pending_published: tokio::sync::Notify,
     conversation_id: ConversationId,
     lifecycle: ConversationLifecycle,
     /// The narrow durable audit capability. It carries no Ledger, Surface,
@@ -1232,6 +1250,8 @@ impl InteractionCoordinator {
             conversation_id,
             lifecycle,
             audit,
+            #[cfg(test)]
+            pending_published: tokio::sync::Notify::new(),
             state: Mutex::new(CoordinatorState::default()),
             observer: Mutex::new(None),
             route: Mutex::new(None),
@@ -1563,7 +1583,7 @@ impl InteractionCoordinator {
             })
             .map_err(|_| {
                 // The lifecycle refused the commit boundary. That is provider
-                // absence only when no capable provider is attached; an
+                // absence only when no capable publication provider is bound; an
                 // admitted provider makes this an internal publication
                 // failure (for example publication attempted after drain).
                 if publication_admitted || self.provider_available() {
@@ -2231,6 +2251,8 @@ impl InteractionCoordinator {
         {
             observer.on_pending(request, audit, transcript_cursor);
         }
+        #[cfg(test)]
+        self.pending_published.notify_one();
     }
 }
 

@@ -3722,16 +3722,47 @@ impl ConversationRuntime {
         interaction: &InteractionRef,
         response: crate::runtime::interaction::InteractionResponse,
     ) -> Result<(), RoutedInteractionError> {
+        self.control_interaction(
+            interaction,
+            crate::runtime::interaction::InteractionControl::Respond { response },
+        )
+        .await
+    }
+
+    #[cfg(test)]
+    pub(crate) fn interaction_test_owner(
+        &self,
+    ) -> Arc<crate::runtime::interaction::InteractionCoordinator> {
+        self.inner.interaction.clone()
+    }
+
+    pub(crate) async fn control_interaction(
+        &self,
+        interaction: &InteractionRef,
+        control: crate::runtime::interaction::InteractionControl,
+    ) -> Result<(), RoutedInteractionError> {
         if interaction.conversation_id == self.inner.conversation_id {
-            return self
-                .inner
-                .interaction
-                .respond_async(&interaction.interaction_id, response)
-                .await
-                .map_err(|error| route_error(interaction, error));
+            let result = match control {
+                crate::runtime::interaction::InteractionControl::Respond { response } => {
+                    self.inner
+                        .interaction
+                        .respond_async(&interaction.interaction_id, response)
+                        .await
+                }
+                crate::runtime::interaction::InteractionControl::Cancel => {
+                    self.inner
+                        .interaction
+                        .cancel_async(
+                            &interaction.interaction_id,
+                            CancellationReason::UserRequested,
+                        )
+                        .await
+                }
+            };
+            return result.map_err(|error| route_error(interaction, error));
         }
         if let Some(subagents) = &self.inner.subagents {
-            return subagents.respond_interaction(interaction, response).await;
+            return subagents.control_interaction(interaction, control).await;
         }
         Err(RoutedInteractionError::NotPending {
             interaction: interaction.clone(),
@@ -3747,7 +3778,7 @@ impl ConversationRuntime {
 
     /// Installs the root Runtime Client's synchronized publication-admission
     /// frontier for child interaction routes. The authority answers only
-    /// whether a capable root control attachment exists; the child
+    /// whether a capable root runtime projection exists; the child
     /// coordinator remains the semantic owner of every interaction.
     pub(crate) fn install_interaction_publication_authority(
         &self,
@@ -3759,7 +3790,7 @@ impl ConversationRuntime {
     }
 
     /// Publishes an early provider-availability hint for future interactions.
-    /// Runtime Client attachment state is the only production caller; the
+    /// Runtime Client host binding is the production caller; the
     /// root host's publication authority is the actual admission frontier,
     /// and existing pending work is intentionally unaffected.
     pub(crate) fn set_interaction_provider_available(&self, available: bool) {

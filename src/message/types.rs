@@ -28,6 +28,7 @@ use crate::tools::types::{ToolCall, ToolExecutionResult};
 /// No additional top-level role exists.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum MessageBlock {
     /// Inbound information supplied to the current agent.
     User(UserMessageBlock),
@@ -90,6 +91,7 @@ impl MessageBlock {
 /// exposing any provider-specific block id type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
+#[derive(schemars::JsonSchema)]
 pub struct ContentBlockIndex(u32);
 
 impl ContentBlockIndex {
@@ -120,7 +122,7 @@ impl core::fmt::Display for ContentBlockIndex {
 /// (with [`InboundKind::CompactionSummary`] kind). It
 /// must never become `AssistantMessageBlock` or `ToolMessageBlock`, which are
 /// reserved for output and actions of the current agent.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct UserMessageBlock {
     /// Durable message identity.
     pub id: MessageId,
@@ -151,6 +153,7 @@ pub struct UserMessageBlock {
 /// Provenance is metadata; it never changes the message role.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum UserSource {
     /// A human user.
     Human,
@@ -213,7 +216,7 @@ impl UserSource {
 ///     metadata.read_files = Vec::new();
 /// }
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct CompactionSummaryMetadata {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     read_files: Vec<String>,
@@ -393,6 +396,7 @@ fn validate_ordered_unique(paths: &[String]) -> Result<(), CompactionSummaryMeta
 /// Typed kind of inbound information.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum InboundKind {
     /// Ordinary autonomous inbound, tied to the pre-admission Goal revision.
     GoalContinuation(crate::goal::GoalRef),
@@ -434,6 +438,7 @@ impl InboundKind {
 /// closed enum rather than extension metadata or a generic key/value field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum AgentStatusModuleId {
     /// The Time module.
     Time,
@@ -524,7 +529,7 @@ impl std::error::Error for AgentStatusMetadataError {}
 ///     metadata.modules = Vec::new();
 /// }
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct AgentStatusGenerationMetadata {
     generated_at: DateTime<Utc>,
     modules: Vec<AgentStatusModuleId>,
@@ -603,6 +608,7 @@ impl AgentStatusGenerationMetadata {
 /// The semantic family of one admitted model-visible context fact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ContextKind {
     /// Frozen current Goal observation; objective text remains user data.
     GoalStatus(Box<crate::goal::GoalSnapshot>),
@@ -636,6 +642,7 @@ impl ContextKind {
 /// A content block inside a `UserMessageBlock`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum UserContentBlock {
     /// Plain text.
     Text(TextBlock),
@@ -652,7 +659,7 @@ pub enum UserContentBlock {
 /// belong to `ModelEvent` until the generation completes. `send_message`
 /// results and other inbound material from other agents never appear in this
 /// role.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AssistantMessageBlock {
     /// Durable message identity.
     pub id: MessageId,
@@ -663,6 +670,7 @@ pub struct AssistantMessageBlock {
 /// A content block inside an `AssistantMessageBlock`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum AssistantContentBlock {
     /// Generated text.
     Text(TextBlock),
@@ -682,7 +690,7 @@ pub enum AssistantContentBlock {
 /// state is never flattened into plain text: provider-specific opaque state
 /// survives on the [`ProviderContinuationState`] boundary for later
 /// continuation.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ReasoningBlock {
     /// The reasoning text, when the provider exposed it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -693,7 +701,7 @@ pub struct ReasoningBlock {
 }
 
 /// A refusal generated by the model.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RefusalBlock {
     /// The refusal explanation text.
     pub text: String,
@@ -707,7 +715,7 @@ pub struct RefusalBlock {
 /// acceptance/rejection acknowledgment; a later reply from the recipient
 /// arrives as a `UserMessageBlock` with agent provenance and is never nested
 /// here.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ToolMessageBlock {
     /// Durable message identity.
     pub id: MessageId,

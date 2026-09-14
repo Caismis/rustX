@@ -1,6 +1,7 @@
 //! Residency races at the real manager, native composition, provider and
 //! allocation boundaries. Timeouts are liveness guards, never race evidence.
 #![allow(clippy::too_many_lines)]
+mod protocol;
 use super::*;
 use crate::events::types::RuntimeEvent;
 use crate::local_runtime::configuration::SessionConfigInput;
@@ -82,10 +83,28 @@ struct Fixture {
 }
 impl Fixture {
     async fn new() -> Self {
+        Self::with_tool(None).await
+    }
+
+    async fn with_tool(tool: Option<&'static str>) -> Self {
         let gates = [HeaderGate::new(), HeaderGate::new()];
         let server_gates = gates.clone();
         let provider = FixtureServer::start_with_body(move |_, _, body| {
             let index = usize::from(body.contains("request-B"));
+            let request: serde_json::Value = serde_json::from_str(body).unwrap();
+            if let Some(name) = tool
+                && !request["messages"].as_array().unwrap().iter().any(|m| m["role"] == "tool") {
+                let arguments = if name == "ask_user" {
+                    serde_json::json!({"questions":[{"question":"Continue?", "header":"Decision", "options":[
+                        {"label":"Continue", "description":"Proceed with the test"},
+                        {"label":"Stop", "description":"Do not proceed"}]}]})
+                } else { serde_json::json!({"path":"rustx.toml"}) };
+                let chunk = serde_json::json!({"id":"interaction","object":"chat.completion.chunk","created":1,"model":"a",
+                    "choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"interaction-call","type":"function",
+                        "function":{"name":name,"arguments":arguments.to_string()}}]},"finish_reason":"tool_calls"}]});
+                return FixtureReply::body(200,"OK","text/event-stream",format!("data: {chunk}\n\ndata: [DONE]\n\n"))
+                    .with_header_gate(server_gates[index].clone());
+            }
             FixtureReply::body(200, "OK", "text/event-stream", concat!(
                 "data: {\"id\":\"response\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"a\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\n\n",
                 "data: {\"id\":\"response\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"a\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
@@ -1130,6 +1149,74 @@ async fn retained_client_and_identity_cannot_keep_unloaded_allocation_alive() {
             identity.client().snapshot().unwrap_err(),
             RuntimeManagerError::StaleIncarnation
         );
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stale_attachment_subscription_and_endpoint_do_not_own_residency() {
+    bounded(async {
+        use crate::runtime_client::host::EventDelivery;
+        use crate::runtime_client::{RequestId, RuntimeClientError, RuntimeClientRequest};
+        let f = Fixture::new().await;
+        let identity = f.load(0).await.unwrap().unwrap();
+        let client = identity.client();
+        let attachment = client.attach().unwrap().attachment;
+        let subscription = attachment.subscription().unwrap();
+        let (endpoint, weak_host) = {
+            let resident = identity.resident.upgrade().unwrap();
+            let composition = resident.composition.lock().unwrap();
+            let host = composition.as_ref().unwrap().host();
+            (host.endpoint(), host.weak_inner())
+        };
+        let weak_runtime = identity.inspect_runtime().unwrap().weak_inner();
+        f.manager.unload(identity.conversation_id()).await.unwrap();
+        assert!(
+            weak_host.upgrade().is_none(),
+            "passive handles retain no host"
+        );
+        assert!(
+            weak_runtime.upgrade().is_none(),
+            "runtime resources released"
+        );
+        assert!(
+            matches!(
+                f.manager.sessions.delete_preview(&f.sessions[0].id).await,
+                crate::local_runtime::session::deletion::SessionDeleteResult::Preview { .. }
+            ),
+            "native destructive preflight proves allocation access was released"
+        );
+        assert_eq!(subscription.next().await, EventDelivery::Closed);
+        assert_eq!(
+            attachment
+                .handle_request(RuntimeClientRequest::SnapshotGet {
+                    id: RequestId::new(1),
+                })
+                .error,
+            Some(RuntimeClientError::NotAttached)
+        );
+        let replacement = f.load(0).await.unwrap().unwrap();
+        assert_ne!(identity.incarnation_id(), replacement.incarnation_id());
+        assert_eq!(
+            client.validate(),
+            Err(RuntimeManagerError::StaleIncarnation)
+        );
+        assert_eq!(subscription.try_next(), EventDelivery::Closed);
+        assert_eq!(
+            endpoint
+                .handle_request(RuntimeClientRequest::Initialize {
+                    id: RequestId::new(2),
+                    protocol_version: crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
+                })
+                .error,
+            Some(RuntimeClientError::NotAttached)
+        );
+        let _new_attachment = replacement.client().attach().unwrap().attachment;
+        f.manager
+            .unload(replacement.conversation_id())
+            .await
+            .unwrap();
         f.close().await;
     })
     .await;

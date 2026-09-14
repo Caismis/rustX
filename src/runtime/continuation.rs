@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 /// full context instead of referencing a previous response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ProviderContinuationState {
     /// Continuation state for the `OpenAI` Responses protocol.
     #[serde(rename = "openai_responses")]
@@ -37,6 +38,7 @@ pub enum ProviderContinuationState {
 ///   later requests. This includes opaque encrypted reasoning content.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum OpenAiResponsesContinuation {
     /// Stateful continuation by reference to the stored previous response.
     Stored {
@@ -54,7 +56,7 @@ pub enum OpenAiResponsesContinuation {
 }
 
 /// Continuation state for the `Anthropic` Messages protocol.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AnthropicContinuation {
     /// Opaque provider state preserved verbatim by the adapter.
     pub opaque: serde_json::Value,

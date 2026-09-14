@@ -168,6 +168,7 @@ pub struct GoalExtensionDocument {
 /// Frozen Goal composition; domain bounds are native, not launch settings.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct GoalExtensionConfig {}
 
 /// The authored Agent Status extension.

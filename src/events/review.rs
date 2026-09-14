@@ -10,6 +10,7 @@ pub const MAX_REVIEW_FEEDBACK_CHARS: usize = 2_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum ReviewSubject {
     Plan {
         content: Value,
@@ -25,6 +26,7 @@ pub enum ReviewSubject {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct ReviewFact {
     pub value: Value,
     pub candidate: Option<CandidateReference>,
@@ -32,6 +34,7 @@ pub struct ReviewFact {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct ReviewSpecification {
     pub instance: Box<WorkflowNodeInstance>,
     pub subject: ReviewSubject,
@@ -40,6 +43,7 @@ pub struct ReviewSpecification {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum ReviewDecision {
     Accepted,
     Rejected { feedback: String },
@@ -47,6 +51,7 @@ pub enum ReviewDecision {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct ReviewResponse {
     pub instance: Box<WorkflowNodeInstance>,
     pub subject_digest: String,

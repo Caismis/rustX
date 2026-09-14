@@ -410,6 +410,7 @@ fn resolve(
 /// The redacted client-facing projection of the session model state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct SessionModelView {
     /// The authoritative desired configuration, exactly as a client would
     /// send it back through `model_set`.
@@ -435,6 +436,7 @@ impl SessionModelView {
 /// The redacted client-facing projection of a summary policy.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum SummaryModelView {
     /// The summary follows the primary model.
     Session,
@@ -449,6 +451,7 @@ pub enum SummaryModelView {
 /// unambiguous without a client inferring anything from event ordering.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct AttemptModelView {
     /// The attempt's frozen primary invocation.
     pub primary: ModelInvocationView,

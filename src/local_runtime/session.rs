@@ -100,6 +100,7 @@ macro_rules! session_id_type {
         $(#[$meta])*
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
         #[serde(transparent)]
+        #[derive(schemars::JsonSchema)]
         pub struct $name(String);
 
         impl $name {
@@ -137,6 +138,7 @@ session_id_type! {
 /// Why one `SessionNode` was created.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum SessionNodeOrigin {
     /// A new empty conversation lineage.
     New,
@@ -163,7 +165,7 @@ pub enum SessionNodeOrigin {
 }
 
 /// One node in the native Session graph.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SessionNode {
     /// Node identity.
     pub id: SessionNodeId,
@@ -180,7 +182,7 @@ pub struct SessionNode {
 /// The graph is deliberately not embedded here. Callers that need the graph
 /// use the bounded tree page seam below, so `/session`, switch results, and
 /// restart metadata never materialize every historical node.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SessionSnapshot {
     /// Session identity.
     pub id: SessionId,
@@ -233,7 +235,7 @@ pub struct SessionUserMessageBoundaryPage {
 }
 
 /// One bounded row in the `/resume` selector.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SessionSummary {
     /// Session identity.
     pub id: SessionId,
@@ -329,6 +331,7 @@ pub(crate) struct PreparedLineage {
 /// not. `None` is deliberately distinct from `Some(vec![])` for exact Tools.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct SessionPersistentState {
     pub cwd: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]

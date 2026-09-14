@@ -1,5 +1,6 @@
-//! The Runtime Client boundary (Issue #37): the one external observation
-//! boundary of rustX Runtime state.
+//! Runtime Client projection/control owners reused by the App Server boundary.
+//! The public multi-Session protocol is [`crate::app_server`]. The local TUI
+//! stdio envelope remains scoped to its current application until #290.
 //!
 //! # Architecture
 //!
@@ -13,7 +14,7 @@
 //!  RuntimeClientEvent / RuntimeClientSnapshot
 //!                 |
 //!                 v
-//!       Runtime Client Protocol
+//!       App Server protocol (client-neutral generated schemas)
 //! ```
 //!
 //! The governing invariant:
@@ -75,7 +76,7 @@
 //! - one control attachment per live runtime instance, plus explicitly
 //!   read-only observation attachments;
 //! - detach is never cancellation;
-//! - no capable attachment at interaction publication fails approval closed;
+//! - interaction availability follows runtime binding, not client presence;
 //! - live pending interactions are reconstructed from the snapshot/cursor
 //!   projection, never from TUI state or recovery logs;
 //! - bounded in-memory projection replay (the durable Event Journal and

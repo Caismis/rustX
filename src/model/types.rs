@@ -106,7 +106,7 @@ impl ModelRequest {
 ///
 /// Providers do not expose identical token metrics; this is the stable
 /// common core. Provider SDK usage objects never appear here.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ModelUsage {
     /// Input tokens consumed by the request.
     pub input_tokens: u64,
@@ -120,7 +120,7 @@ pub struct ModelUsage {
 }
 
 /// Optional normalized token details where providers expose them.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct UsageDetails {
     /// Tokens consumed by reasoning.
     #[serde(default, skip_serializing_if = "Option::is_none")]

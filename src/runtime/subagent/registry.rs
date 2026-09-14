@@ -508,6 +508,7 @@ struct RegistryState {
 /// The public lifecycle vocabulary of one subagent snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum SubagentState {
     /// Ownership committed; the delegation is in flight or running.
     Running,
@@ -555,6 +556,7 @@ impl SubagentState {
 /// through this bounded resource protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum SubagentWorkspaceResourceState {
     /// No retained isolated worktree exists for this child.
     None,
@@ -1188,7 +1190,7 @@ pub trait SubagentObserver: Send + Sync {
 /// The root Runtime Client's publication-admission authority.
 ///
 /// The authority is intentionally narrower than the interaction domain: it
-/// answers only whether a capable root human-facing control attachment exists
+/// answers only whether a capable root runtime projection is bound
 /// at the root host's synchronized admission frontier. It owns no child
 /// interaction state, waiter, audit, cancellation, settlement, or execution
 /// authority.
@@ -1289,6 +1291,8 @@ pub struct SubagentRegistry {
     config: SubagentRegistryConfig,
     state: Arc<Mutex<RegistryState>>,
     state_version: tokio::sync::watch::Sender<u64>,
+    #[cfg(test)]
+    pub(crate) interaction_published: Arc<tokio::sync::Notify>,
     /// An early root Runtime Client human-provider availability hint. Each
     /// child driver receives a reliable subscription for fast fail-closed
     /// behavior, but the publication authority below remains the admission
@@ -1428,6 +1432,8 @@ impl SubagentRegistry {
                 staged_overrides: std::collections::VecDeque::new(),
             })),
             state_version: tokio::sync::watch::Sender::new(0),
+            #[cfg(test)]
+            interaction_published: Arc::new(tokio::sync::Notify::new()),
             provider_available: tokio::sync::watch::channel(false).0,
             publication_authority: Arc::new(Mutex::new(None)),
             workspace_disposal_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -2646,6 +2652,8 @@ impl SubagentRegistry {
             config: self.config.clone(),
             state: Arc::clone(&self.state),
             state_version: self.state_version.clone(),
+            #[cfg(test)]
+            interaction_published: Arc::clone(&self.interaction_published),
             provider_available: self.provider_available.clone(),
             publication_authority: Arc::clone(&self.publication_authority),
             workspace_disposal_lock: Arc::clone(&self.workspace_disposal_lock),
@@ -2727,6 +2735,8 @@ impl SubagentRegistry {
         if let Some(observer) = state.observer.clone() {
             observer.on_interaction_pending(&routed);
         }
+        #[cfg(test)]
+        self.interaction_published.notify_one();
     }
 
     /// Applies one child-owned terminal interaction transition to the
@@ -2761,10 +2771,10 @@ impl SubagentRegistry {
     /// Forwards a root response to the live child identified by the routed
     /// conversation identity. The response id is transport correlation only;
     /// the child coordinator validates the semantic target and response.
-    pub(crate) async fn respond_interaction(
+    pub(crate) async fn control_interaction(
         &self,
         interaction: &InteractionRef,
-        response: crate::runtime::interaction::InteractionResponse,
+        response: crate::runtime::interaction::InteractionControl,
     ) -> Result<(), RoutedInteractionError> {
         let (control, response_id, result, receiver) = {
             let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);

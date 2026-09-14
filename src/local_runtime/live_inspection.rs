@@ -166,7 +166,7 @@ async fn run_listener(
                 let host = host.clone();
                 connections.spawn(async move {
                     let (reader, writer) = stream.into_split();
-                    let endpoint = RuntimeClientEndpoint::new_read_only(host);
+                    let endpoint = RuntimeClientEndpoint::new_read_only(&host);
                     let _ = serve_stdio_jsonl_with_io(endpoint, reader, writer).await;
                 });
             }

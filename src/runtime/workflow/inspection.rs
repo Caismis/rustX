@@ -71,7 +71,7 @@ pub struct AgentOverrideNode<'a> {
 }
 
 /// Static program facts. Literals and task text are deliberately not exported.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct WorkflowInspection {
     /// Projected once at the local report surface, including selected role policies.
     #[serde(skip)]
@@ -92,7 +92,7 @@ pub struct WorkflowInspection {
     pub profiles: BTreeSet<SubagentName>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct BlockInspection {
     pub entry: String,
     pub input_schema: Value,
@@ -109,14 +109,14 @@ pub struct BlockInspection {
 /// are exported — capability selectors, Skill names, and the composed
 /// extension names — never a Skill body, a prompt, a credential, or a
 /// materialization secret.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct AgentOverrideInspection {
     pub tools: Option<Vec<crate::capabilities::selection::AgentToolSelection>>,
     pub skills: Option<Vec<String>>,
     pub extensions: Option<Vec<&'static str>>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct NodeInspection {
     pub kind: &'static str,
     pub edges: Vec<(WorkflowPort, String)>,

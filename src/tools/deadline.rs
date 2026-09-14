@@ -200,6 +200,7 @@ pub enum ToolProgressCapability {
 /// executor's settlement evidence at the terminal result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ToolDeadlineKind {
     /// The total execution-lifetime bound expired.
     Hard,

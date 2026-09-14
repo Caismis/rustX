@@ -167,6 +167,7 @@ argument hints and interaction details.
 Normative detail remains in the owning documents:
 
 - [Architecture](docs/architecture.md)
+- [App Server protocol and generated clients](docs/app-server-protocol.md)
 - [Runtime Invariants](docs/invariants.md)
 - [Process-death conformance](docs/process-death-conformance.md)
 - [Development Plan](docs/development-plan.md)

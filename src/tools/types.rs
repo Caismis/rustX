@@ -81,6 +81,7 @@ pub struct ToolDefinition {
 /// ([`ToolConcurrencyPolicy`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ToolExecutionPolicy {
     /// Every invocation settles before the attempt continues; attempt-owned.
     ForegroundOnly,
@@ -98,6 +99,7 @@ pub enum ToolExecutionPolicy {
 /// ([`ToolExecutionPolicy`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ToolConcurrencyPolicy {
     /// Calls execute one at a time in the order issued.
     #[default]
@@ -154,6 +156,7 @@ impl ToolInvocationPolicy {
 /// a human decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ToolApprovalPolicy {
     /// Execute without an approval interaction.
     #[default]
@@ -172,6 +175,7 @@ pub enum ToolApprovalPolicy {
 /// inside executors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ToolInvocationMode {
     /// Attempt-owned execution: settles before the attempt continues.
     Foreground,
@@ -189,6 +193,7 @@ pub enum ToolInvocationMode {
 /// recovery policy, not permission to invent replay behavior in M8.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ToolReplayPolicy {
     /// Never automatically re-execute after an unknown outcome.
     #[default]
@@ -200,6 +205,7 @@ pub enum ToolReplayPolicy {
 /// Where a tool comes from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ToolOrigin {
     /// A tool built into the runtime. Platform communication tools such as
     /// future Fleet messaging are represented as built-in tools as well.
@@ -224,7 +230,7 @@ impl ToolOrigin {
 }
 
 /// One tool call issued by the current agent.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ToolCall {
     /// Identity of this specific call, referenced by the matching
     /// `ToolMessageBlock` and tool-result events.
@@ -243,7 +249,7 @@ pub struct ToolCall {
 /// Streaming protocols expose the call identity, tool identity, and name
 /// before any argument JSON is available. The fully assembled `ToolCall`
 /// (including `arguments`) is emitted only when the call completes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ToolCallStart {
     /// Identity of this specific call.
     pub id: ToolCallId,
@@ -257,6 +263,7 @@ pub struct ToolCallStart {
 /// independently represented by [`ToolOrigin`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(tag = "caller", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum ToolInvocationId {
     /// An accepted canonical Assistant call, owned by the Agent Loop.
     Agent { call_id: ToolCallId },
@@ -305,7 +312,7 @@ pub struct ToolInvocation {
 ///
 /// `ToolMessageBlock` composes this type instead of duplicating its fields,
 /// keeping one source of truth for tool results.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ToolExecutionResult {
     /// Immutable native Workflow identity on the existing outer result.
     /// Historical identity only: no execution state or continuation authority.
@@ -550,6 +557,7 @@ fn bounded_projection_text(text: &str, bound: usize, marker: &str) -> String {
 /// failure; `Partial`/`Unavailable` make output-storage failure explicit.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ManagedOutputContinuation {
     /// The complete textual output of the result is retained at the
     /// absolute managed-output locator; the bounded result content is a
@@ -748,6 +756,7 @@ fn bound_locator(locator: &std::path::Path, bound: usize, marker: &str) -> Strin
 /// translate that fact without inferring its phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ToolCancellationPhase {
     /// The accepted call had execution authority, but its owner's executor
     /// start frontier was never crossed.
@@ -773,6 +782,7 @@ pub enum ToolCancellationPhase {
 /// through [`Self::feedback_text`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ToolExecutionStatus {
     /// The tool completed successfully and the outcome is known.
     Success,
@@ -878,7 +888,7 @@ impl ToolExecutionStatus {
 }
 
 /// Truncation metadata for tool output.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TruncationState {
     /// Whether the result content was truncated.
     pub truncated: bool,
@@ -894,7 +904,7 @@ pub struct TruncationState {
 /// message text is bounded by [`MAX_PROGRESS_MESSAGE_BYTES`].
 ///
 /// [`MAX_PROGRESS_MESSAGE_BYTES`]: crate::tools::limits::MAX_PROGRESS_MESSAGE_BYTES
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ToolProgress {
     /// A short human-readable progress message, when there is one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -910,6 +920,7 @@ pub struct ToolProgress {
 /// A content block inside a tool result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ToolResultContent {
     /// Plain text output.
     Text(crate::message::content::TextBlock),

@@ -169,7 +169,7 @@ rollback to the old composition. Other Conversations remain unchanged.
 Conversation identity, Session identity, AttemptId, cursors and connection IDs.
 Replacement preserves ConversationId and changes incarnation. `is_current` is the
 semantic check also used by the native client façade; Unloading is no longer current.
-No JSON-RPC DTO or transport protocol is introduced here.
+The App Server protocol binds attachment controls to this incarnation identity.
 
 ## Allocation and deletion
 
@@ -185,11 +185,14 @@ lock. No catalog mutex remains held for runtime residency.
 The manager retains the existing projection host without any connected client.
 An attachment can start a turn, disconnect, and reconnect after completion without
 unloading, cancelling, settling an interaction, or deleting a Session. Attachment
-routing/control for App Server will build on this owned host. The local CLI's
+routing/control for App Server uses non-owning host handles. Stale attachment,
+subscription and endpoint handles cannot retain the resident composition or its
+allocation after successful unload. The local CLI's
 single-runtime adapter remains operational over the same semantic composition;
 it is not an alternate App Server residency path.
 
-This change does not implement #288 protocol, #36 WebSocket transport, #291 idle
+The [App Server protocol](app-server-protocol.md) defines the public connection
+boundary. Residency does not implement #36 WebSocket transport, #291 idle
 TTL/quotas/resource governance, or distributed/multi-process ownership.
 
 ## Deterministic evidence

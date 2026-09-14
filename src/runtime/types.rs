@@ -674,7 +674,7 @@ pub(crate) struct OwnershipCommitRefused {
 /// behavior that decides when a measurement is valid, but the measurement
 /// itself is shared by runtime events, context projections, and the Runtime
 /// Client read model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TokenMeasurement {
     /// The measured or estimated input token count.
     pub input_tokens: u64,
@@ -685,6 +685,7 @@ pub struct TokenMeasurement {
 /// Where a [`TokenMeasurement`] came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum TokenMeasurementSource {
     /// The provider reported usage for exactly this projection
     /// (`ModelUsage.input_tokens` of the completed request). Never
@@ -707,6 +708,7 @@ pub enum TokenMeasurementSource {
 /// Why an operation was cancelled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum CancellationReason {
     /// The user requested cancellation of the attempt or its work.
     UserRequested,
@@ -725,6 +727,7 @@ pub enum CancellationReason {
 /// normalized model errors (`ModelError`) and tool execution statuses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum RuntimeError {
     /// An unexpected internal failure with no further classification.
     Internal {

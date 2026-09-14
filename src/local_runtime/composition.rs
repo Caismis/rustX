@@ -2174,7 +2174,7 @@ impl LocalConversationRuntime {
     /// Creates the Runtime Client endpoint a transport wraps.
     #[must_use]
     pub fn endpoint(&self) -> RuntimeClientEndpoint {
-        RuntimeClientEndpoint::new(self.host.clone())
+        RuntimeClientEndpoint::new(&self.host)
     }
 }
 

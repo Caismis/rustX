@@ -72,6 +72,7 @@ pub trait InboundObserver: Send + Sync {
 /// acceptance of a conversation receives `1`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
+#[derive(schemars::JsonSchema)]
 pub struct InboundSequence(u64);
 
 impl InboundSequence {

@@ -1,0 +1,135 @@
+// Generated from serialized Rust DTOs.
+import type {ProtocolMessage} from './v1.js';
+export const fixtures = [
+  {
+    "jsonrpc": "2.0",
+    "id": "initialize-fixture",
+    "method": "initialize",
+    "params": {
+      "protocol_version": 1,
+      "client": {
+        "name": "fixture-client",
+        "version": "1"
+      },
+      "presentation": {
+        "images": false,
+        "questionnaires": false,
+        "reviews": false
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "result": {
+      "type": "initialized",
+      "protocol_version": 1,
+      "capabilities": {
+        "multi_session": true,
+        "single_writable_controller": true,
+        "headless_interactions": true,
+        "experimental_methods": []
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": null,
+    "error": {
+      "code": -32700,
+      "message": "Parse error"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": -3,
+    "method": "interaction/respond",
+    "params": {
+      "target": {
+        "session_id": "session-fixture",
+        "conversation_id": "conversation-fixture",
+        "runtime_incarnation": 1,
+        "attachment_id": "attachment-fixture"
+      },
+      "interaction": {
+        "conversation_id": "conversation-fixture",
+        "interaction_id": "interaction-fixture"
+      },
+      "response": {
+        "type": "questionnaire",
+        "response": {
+          "type": "submitted",
+          "value": {
+            "answers": [
+              {
+                "question_index": 0,
+                "answer": {
+                  "type": "integer",
+                  "value": {
+                    "value": "9007199254740993"
+                  }
+                }
+              },
+              {
+                "question_index": 1,
+                "answer": {
+                  "type": "number",
+                  "value": {
+                    "value": "3ff4000000000000"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/event",
+    "params": {
+      "target": {
+        "session_id": "session-fixture",
+        "conversation_id": "conversation-fixture",
+        "runtime_incarnation": 1,
+        "attachment_id": "attachment-fixture"
+      },
+      "cursor": 1,
+      "event": {
+        "type": "attempt_started",
+        "attempt_id": "attempt-fixture",
+        "model": null,
+        "execution_settings": null
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/closed",
+    "params": {
+      "target": {
+        "session_id": "session-fixture",
+        "conversation_id": "conversation-fixture",
+        "runtime_incarnation": 1,
+        "attachment_id": "attachment-fixture"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "read",
+    "result": {
+      "type": "session",
+      "session": {
+        "id": "session-fixture",
+        "name": null,
+        "created_at": "1970-01-01T00:00:00Z",
+        "updated_at": "1970-01-01T00:00:01Z",
+        "active_node": "node-fixture",
+        "active_conversation_id": "conversation-fixture",
+        "node_count": 1
+      }
+    }
+  }
+] satisfies ProtocolMessage[];

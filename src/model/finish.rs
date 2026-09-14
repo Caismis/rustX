@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 /// arbitrary strings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ModelFinishReason {
     /// The model stopped normally.
     Stop,

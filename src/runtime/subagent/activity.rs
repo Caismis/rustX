@@ -77,6 +77,7 @@ use crate::tools::types::ToolProgress;
 /// transition makes stale or reordered deliveries detectable and droppable.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct SubagentObservation {
     /// The child-owned projection revision; strictly increasing per applied
     /// transition.
@@ -379,6 +380,7 @@ impl SubagentObservationProjector {
 /// so a consumer can observe throughput without folding every transition.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct SubagentActivityCounters {
     /// Model requests started.
     pub model_requests: u64,
@@ -395,6 +397,7 @@ pub struct SubagentActivityCounters {
 /// `AwaitingActivity` (see the module documentation).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum SubagentActivity {
     /// No objective transition is in flight: the child is between a model
     /// request and its tool work, waiting on the provider response of an
@@ -438,6 +441,7 @@ pub enum SubagentActivity {
 /// Why the child is blocked on a native interaction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum SubagentWaitReason {
     Review,
     /// A tool invocation awaits an approval decision.
@@ -458,6 +462,7 @@ pub enum SubagentWaitReason {
 /// bindings, and every other binding internal are never projected.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct SubagentExecutionProfile {
     /// The effective fully qualified model reference (`provider/model`).
     pub model: String,

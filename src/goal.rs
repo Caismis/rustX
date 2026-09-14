@@ -25,6 +25,7 @@ pub struct GoalRef {
 /// Durable phase, independent of automatic continuation activation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum GoalPhase {
     Active,
     Paused,
@@ -35,6 +36,7 @@ pub enum GoalPhase {
 /// Trusted origin supplied by runtime, never by model arguments.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum GoalOrigin {
     HumanAttempt {
         message_id: MessageId,
@@ -46,6 +48,7 @@ pub enum GoalOrigin {
 /// Authoritative bounded durable record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct GoalSnapshot {
     pub reference: GoalRef,
     pub objective: String,
@@ -58,7 +61,7 @@ pub struct GoalSnapshot {
 }
 
 /// The current read model; observing it never arms continuation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GoalView {
     pub current: Option<GoalSnapshot>,
     pub armed: bool,
@@ -67,6 +70,7 @@ pub struct GoalView {
 /// Explicit user/control mutations. Model adapters expose only Block/Complete.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum GoalMutation {
     Pause,
     Resume,
@@ -79,6 +83,7 @@ pub enum GoalMutation {
 /// Typed Runtime Client control; an existing-state mutation always names its observation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum GoalControl {
     Show,
     Create {
