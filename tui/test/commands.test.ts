@@ -1513,6 +1513,21 @@ describe("CLI arguments", () => {
     assert.equal(parsed.sessionName, undefined);
   });
 
+  it("defaults only local Session cwd from the controlled client cwd", (t) => {
+    t.mock.method(process, "cwd", () => "/client/workspace");
+    assert.equal(parseArguments(["--binary", "rustx"]).sessionSettings.cwd, "/client/workspace");
+    assert.equal(parseArguments(["--binary", "rustx", "--cwd", "/explicit/local"]).sessionSettings.cwd, "/explicit/local");
+  });
+
+  it("requires an explicit absolute remote cwd without consulting client cwd", (t) => {
+    t.mock.method(process, "cwd", () => { throw new Error("remote parsing must not read client cwd"); });
+    const remote = ["--connect", "wss://server.test", "--token-file", "/client/token"];
+    for (const suffix of [[], ["--cwd", "relative/project"], ["--cwd", ""]]) {
+      assert.throws(() => parseArguments([...remote, ...suffix]), /remote Session cwd requires an explicit --cwd absolute path on the App Server host/);
+    }
+    assert.equal(parseArguments([...remote, "--cwd", "/server/work/../project"]).sessionSettings.cwd, "/server/work/../project");
+  });
+
   it("parses an existing/remote App Server connection", () => {
     const parsed = parseArguments([
       "--connect",
@@ -1586,7 +1601,7 @@ describe("CLI arguments", () => {
       );
     }
     assert.equal(
-      parseArguments(["--connect", "wss://example.test", "--token-file", "/t"])
+      parseArguments(["--connect", "wss://example.test", "--token-file", "/t", "--cwd", "/srv/project"])
         .mode.kind,
       "remote",
     );

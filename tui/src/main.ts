@@ -8,7 +8,7 @@
  * parse arguments
  *   -> bind a transport        (own a stdio child, or connect to a WebSocket)
  *   -> initialize              (AppServerClient: one protocol, both modes)
- *   -> open the first Session  (attach an existing one, or create one)
+ *   -> choose startup focus   (explicit attachment, new Session, or catalog picker)
  *   -> run the terminal        (RustxTuiApp)
  * ```
  *
@@ -25,7 +25,7 @@ import { readFile } from "node:fs/promises";
 
 import { ArgumentError, USAGE, parseArguments, type TuiArguments } from "./cli.ts";
 import { AppServerHost } from "./app-server/host.ts";
-import type { AppServerSession } from "./app-server/session.ts";
+import { prepareStartup, type StartupFocus } from "./startup.ts";
 import { RustxTuiApp } from "./ui/app.ts";
 import {
   configurationCommand,
@@ -46,35 +46,6 @@ async function connect(parsed: TuiArguments): Promise<AppServerHost> {
     endpoint: parsed.mode.endpoint,
     token,
   });
-}
-
-/**
- * Opens the Session the terminal starts on.
- *
- * `--session` attaches to that exact durable Session. `--resume` reuses the
- * most recently updated one so the picker opens over real content instead of
- * stranding a fresh empty Session beside it. Otherwise this launch creates one.
- */
-async function openInitialSession(
-  host: AppServerHost,
-  parsed: TuiArguments,
-): Promise<AppServerSession> {
-  const routing = parsed.routing;
-  if (routing.session !== undefined) {
-    return host.attach(routing.session, routing.node);
-  }
-  if (routing.openSessionSelector) {
-    const page = await host.listSessions(undefined, 0, 1);
-    const existing = page.sessions[0];
-    if (existing !== undefined) {
-      return host.attach(existing.id, existing.active_node);
-    }
-  }
-  const created = await host.createSession(parsed.sessionSettings);
-  if (parsed.sessionName !== undefined) {
-    await host.renameSession(created.session.id, parsed.sessionName);
-  }
-  return host.attach(created.session.id, created.session.active_node);
 }
 
 async function main(argv: readonly string[]): Promise<number> {
@@ -102,12 +73,9 @@ async function main(argv: readonly string[]): Promise<number> {
     return 1;
   }
 
-  let session: AppServerSession;
+  let focus: StartupFocus;
   try {
-    session = await openInitialSession(host, parsed);
-    if (parsed.routing.session !== undefined && parsed.sessionName !== undefined) {
-      await host.renameSession(parsed.routing.session, parsed.sessionName);
-    }
+    focus = await prepareStartup(host, parsed);
   } catch (error) {
     const stderr = host.stderrTail().text.trim();
     // A failed start still releases whatever this launch owns: an owned child
@@ -123,9 +91,8 @@ async function main(argv: readonly string[]): Promise<number> {
   const app = new RustxTuiApp({
     host,
     reconnect: parsed.mode.kind === "remote" ? () => connect(parsed) : undefined,
-    session,
+    ...focus,
     sessionSettings: parsed.sessionSettings,
-    openSessionSelector: parsed.routing.openSessionSelector,
     cwd: parsed.sessionSettings.cwd,
   });
   return app.run();

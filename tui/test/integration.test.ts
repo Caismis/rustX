@@ -33,6 +33,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 
+import { parseArguments } from "../src/cli.ts";
+import { prepareStartup } from "../src/startup.ts";
+
 import { AppServerHost } from "../src/app-server/host.ts";
 import { AppServerClient, UncertainOutcomeError } from "../src/app-server/client.ts";
 import { AppServerChild } from "../src/app-server/child-process.ts";
@@ -407,6 +410,39 @@ describe("existing/remote mode: WebSocket to an externally managed App Server", 
     await external?.stop();
     server?.cleanup();
     await provider?.finish();
+  });
+
+  it("resume bootstrap can browse while another real connection controls A, then attach only a chosen Session", { timeout: 90_000 }, async (t) => {
+    const owner = await AppServerHost.connectRemote({ endpoint: external.endpoint, token: TRANSPORT_TOKEN });
+    const browser = await AppServerHost.connectRemote({ endpoint: external.endpoint, token: TRANSPORT_TOKEN });
+    try {
+      const a = await openSession(owner, server.settings("resume-A"));
+      const settings = server.settings("resume-B");
+      const b = await owner.createSession(settings);
+      const attachments: string[] = [];
+      const attach = browser.attach.bind(browser);
+      t.mock.method(browser, "attach", (id: string, node?: string) => { attachments.push(id); return attach(id, node); });
+      const parsed = parseArguments(["--connect", external.endpoint, "--token-file", server.fixture.path("token"), "--cwd", settings.cwd, "--resume"]);
+      const focus = await prepareStartup(browser, parsed);
+      assert.equal(focus.session, undefined);
+      assert.deepEqual(attachments, []);
+      assert.equal(browser.attached.length, 0);
+      assert.ok(focus.resumePage?.sessions.some((s) => s.id === a.sessionId));
+      assert.ok(focus.resumePage?.sessions.some((s) => s.id === b.session.id));
+      await assert.rejects(browser.attach(a.sessionId), (error: unknown) =>
+        error instanceof Error && "kind" in error && error.kind === "controller_in_use");
+      const selected = await browser.attach(b.session.id);
+      assert.equal(selected.sessionId, b.session.id);
+      assert.deepEqual(attachments, [a.sessionId, b.session.id]);
+      assert.deepEqual(browser.attached.map((s) => s.sessionId), [b.session.id]);
+      assert.equal(owner.attachment(a.sessionId), a);
+      assert.equal(a.released, false);
+      await a.resync();
+      assert.equal(owner.client.closed, undefined);
+    } finally {
+      await browser.shutdown();
+      await owner.shutdown();
+    }
   });
 
   it("admits a credentialed client and refuses one without the token", { timeout: 90_000 }, async () => {

@@ -37,6 +37,8 @@
  * global active Session, and opening one never stops another.
  */
 
+import { posix, win32 } from "node:path";
+
 import type { AppServerLaunchOptions } from "./app-server/child-process.ts";
 import type { SessionSettings } from "./protocol/app-server.ts";
 
@@ -46,7 +48,7 @@ export const USAGE = `usage:
               [--runtime-root <dir>] [session options] [routing options]
 
   existing / remote App Server (WebSocket):
-    rustx-tui --connect <ws://host:port> --token-file <path> [session options] [routing options]
+    rustx-tui --connect <ws://host:port> --token-file <path> --cwd <server-absolute-dir> [session options] [routing options]
 
   session options (applied to Sessions this launch creates; paths resolve on the App Server host):
     [--cwd <dir>] [--config <rustx.toml>] [--model <provider/model>] [--name <text>]
@@ -203,6 +205,22 @@ export function parseArguments(argv: readonly string[]): TuiArguments {
     throw new ArgumentError("argument --node requires --session");
   }
 
+  // Only a self-hosted child shares the TUI's filesystem namespace. Never
+  // resolve, normalize, or default a remote path against the client machine.
+  let cwd: string;
+  if (mode.kind === "local") {
+    cwd = values.get("--cwd") ?? process.cwd();
+  } else {
+    const explicit = values.get("--cwd");
+    if (explicit === undefined || !(
+      posix.isAbsolute(explicit) ||
+      (win32.isAbsolute(explicit) && win32.parse(explicit).root.length > 1)
+    )) {
+      throw new ArgumentError("remote Session cwd requires an explicit --cwd absolute path on the App Server host");
+    }
+    cwd = explicit;
+  }
+
   const model = values.get("--model");
   const tools = values.get("--tools");
   const excludeTools = values.get("--exclude-tools");
@@ -210,9 +228,7 @@ export function parseArguments(argv: readonly string[]): TuiArguments {
   return {
     mode,
     sessionSettings: {
-      // A Session's cwd is a Session selection. The App Server's own launch
-      // directory is never substituted for it, in either mode.
-      cwd: values.get("--cwd") ?? process.cwd(),
+      cwd,
       config: values.get("--config") ?? null,
       model: model === undefined ? null : { model },
       skill_paths: skillPaths,

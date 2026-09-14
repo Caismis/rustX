@@ -140,7 +140,7 @@ export interface DispatcherContext {
   /** The connection and its durable Session catalog. */
   host: AppServerHost;
   /** The Session currently in focus. */
-  session: AppServerSession;
+  session: AppServerSession | undefined;
   /** `session/create` inputs for Sessions this client creates. */
   sessionSettings: SessionSettings;
   /** Bounded diagnostics the UI owns, surfaced by `/debug`. */
@@ -190,7 +190,7 @@ export class CommandDispatcher {
     this.#context.host = host;
   }
 
-  setSession(session: AppServerSession): void {
+  setSession(session: AppServerSession | undefined): void {
     this.#context.session = session;
   }
 
@@ -203,6 +203,7 @@ export class CommandDispatcher {
    */
   async submit(line: string): Promise<CommandOutcome> {
     const session = this.#context.session;
+    if (session === undefined) return transient("info", "choose a Session before submitting commands");
     const command = parseCommandLine(line);
     if (command === undefined) {
       const text = line.trim();
@@ -333,6 +334,7 @@ export class CommandDispatcher {
     boundary: SessionUserMessageBoundaryView,
   ): Promise<CommandOutcome> {
     const session = this.#context.session;
+    if (session === undefined) return transient("info", "choose a Session before submitting commands");
     try {
       const forked = await this.#context.host.forkSession(
         session.sessionId,
@@ -351,6 +353,7 @@ export class CommandDispatcher {
     boundary: SessionUserMessageBoundaryView,
   ): Promise<CommandOutcome> {
     const session = this.#context.session;
+    if (session === undefined) return transient("info", "choose a Session before submitting commands");
     try {
       const current = await this.#context.host.readSession(session.sessionId);
       const branched = await this.#context.host.branchSession(
@@ -585,6 +588,7 @@ export class CommandDispatcher {
    */
   async selectModel(model: CatalogModelView): Promise<CommandOutcome> {
     const session = this.#context.session;
+    if (session === undefined) return transient("info", "choose a Session before submitting commands");
     return this.#selectModel(session, model);
   }
 

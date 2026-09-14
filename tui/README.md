@@ -118,23 +118,29 @@ pnpm --dir tui start --binary "$PWD/target/debug/rustx" --cwd /path/to/project
 Connect to an externally managed App Server with:
 
 ```sh
-pnpm --dir tui start --connect ws://127.0.0.1:8080 --token-file /private/user/socket-token --session SESSION_ID
+pnpm --dir tui start --connect ws://127.0.0.1:8080 --token-file /private/user/socket-token --cwd /srv/project --session SESSION_ID
 ```
 
 Both modes use the same typed client and generated v1 DTOs. `--user-settings`,
 `--models`, and `--runtime-root` bind the local child process. Session settings
 such as `--cwd`, `--config`, and `--model` travel through `session/create`;
-paths resolve on the server. The TUI never reads runtime configuration or
+paths resolve on the server. Local mode may default `--cwd` from the TUI
+process cwd. Remote mode requires an explicit absolute server-side `--cwd`,
+even with `--session`, since `/new` can create Sessions later. The TUI never reads runtime configuration or
 provider credentials. `--name` calls `session/name` for the initial Session.
 
 By default, a launch creates a new Session. `--session ID` selects one explicitly;
-`--resume` opens the Session picker over the latest durable Session. There is no
-global active Session or restart-based selection.
+`--resume` browses the durable catalog without loading or attaching a Session.
+Only selecting a row acquires that Session's controller. A selection conflict
+leaves the picker available; another client's control cannot block browsing.
+An empty initial catalog explicitly creates and attaches one Session using the
+launch settings. There is no global active Session or restart-based selection.
 
 Normal local exit sends SIGTERM to the owned child and waits for its #291 drain
 result. Remote exit closes only this client's WebSocket. Remote disconnect
 reinitializes and reattaches the focused Session, including the selected node,
-from server state; unanswered mutations are never replayed. If recovery fails,
+from server state. Before any selection it reconnects only the host/catalog;
+unanswered mutations are never replayed. If recovery fails,
 Ctrl+R retries connection recovery and Ctrl+C exits. Unsubmitted editor text stays
 local. See [the complete client architecture](../docs/tui-app-server.md).
 

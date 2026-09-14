@@ -35,6 +35,7 @@
  * semantic: every collapsed band is restored from `PresentationState` alone.
  */
 
+import type { SessionCatalogPage } from "../startup.ts";
 import {
   Box,
   Container,
@@ -136,17 +137,12 @@ export interface RustxTuiAppOptions {
   host: AppServerHost;
   /** Reconnects to the externally managed server; never spawns a child. */
   reconnect?: () => Promise<AppServerHost>;
-  /** The Session the terminal opens on. */
-  session: AppServerSession;
+  /** Absent while browsing the resume catalog, before explicit selection. */
+  session?: AppServerSession;
   /** `session/create` inputs for Sessions this client creates. */
   sessionSettings: SessionSettings;
-  /**
-   * Open the `/resume` selector as soon as the first Session is visible.
-   *
-   * This is `--resume`: the picker is presentation over the Session already in
-   * focus, and choosing another simply moves focus.
-   */
-  openSessionSelector?: boolean;
+  /** A read-only catalog page acquired during resume bootstrap. */
+  resumePage?: SessionCatalogPage;
   /**
    * The directory Sessions this launch creates are rooted at.
    *
@@ -167,7 +163,7 @@ export interface RustxTuiAppOptions {
 interface PresentationLease {
   epoch: number;
   sessionListGeneration: number;
-  session: AppServerSession;
+  session: AppServerSession | undefined;
 }
 
 /** One submitted approval operation; object identity is its completion token. */
@@ -179,9 +175,9 @@ export class RustxTuiApp {
   #host: AppServerHost;
   readonly #reconnect: (() => Promise<AppServerHost>) | undefined;
   #recovering = false;
-  #session: AppServerSession;
+  #session: AppServerSession | undefined;
   readonly #dispatcher: CommandDispatcher;
-  readonly #openSessionSelectorAtStartup: boolean;
+  #initialResumePage: SessionCatalogPage | undefined;
   readonly #workspace: string | undefined;
 
   readonly #tui: TUI;
@@ -198,7 +194,7 @@ export class RustxTuiApp {
   readonly #todos = new Container();
   readonly #transient = new TransientFeedbackSurface();
   readonly #footer = new FooterView(() => ({
-    state: this.#session.state,
+    state: this.#session?.state,
     connection: this.#connectionLabel(),
     session: this.#sessionInfo,
     conversation: this.#conversationContext(),
@@ -255,7 +251,7 @@ export class RustxTuiApp {
     this.#host = options.host;
     this.#reconnect = options.reconnect;
     this.#session = options.session;
-    this.#openSessionSelectorAtStartup = options.openSessionSelector ?? false;
+    this.#initialResumePage = options.resumePage;
     this.#workspace = options.cwd;
 
     this.#tui = new TUI(new ProcessTerminal());
@@ -292,6 +288,7 @@ export class RustxTuiApp {
     this.#removeConnectionListener = host.client.onClose((error) => {
       if (this.#host !== host || this.#quitting || this.#finished) return;
       this.#deletion?.terminate();
+      this.#initialResumePage = undefined;
       this.#invalidatePresentation();
       this.#editor.disableSubmit = true;
       if (host.ownership === "external" && this.#reconnect !== undefined) {
@@ -309,13 +306,13 @@ export class RustxTuiApp {
     this.#recovering = true;
     this.#switching = true;
     const oldHost = this.#host;
-    const sessionId = this.#session.sessionId;
+    const focused = this.#session;
     let replacement: AppServerHost | undefined;
     this.#showTransient("info", "reconnecting; unanswered mutations have unknown outcomes and will not be resent…");
     try {
       await oldHost.shutdown();
       replacement = await this.#reconnect();
-      const session = await replacement.attach(sessionId, this.#session.nodeId);
+      const session = focused === undefined ? undefined : await replacement.attach(focused.sessionId, focused.nodeId);
       if (this.#quitting || this.#finished || this.#host !== oldHost) {
         await replacement.shutdown();
         return;
@@ -324,7 +321,8 @@ export class RustxTuiApp {
       this.#dispatcher.setHost(replacement);
       this.#bindSession(session);
       this.#watchConnection();
-      this.#renderState(session.state);
+      if (session !== undefined) this.#renderState(session.state);
+      else if (this.#started) await this.#openResumeSelector();
       this.#showTransient("info", "reconnected from server state; no unanswered mutations were resent");
     } catch (error) {
       await replacement?.shutdown();
@@ -332,7 +330,7 @@ export class RustxTuiApp {
     } finally {
       this.#recovering = false;
       this.#switching = false;
-      this.#editor.disableSubmit = this.#quitting || this.#host.client.closed !== undefined;
+      this.#editor.disableSubmit = this.#session === undefined || this.#quitting || this.#host.client.closed !== undefined;
     }
   }
 
@@ -348,7 +346,7 @@ export class RustxTuiApp {
    * feedback and in-flight continuations belong to the Session that started
    * them, so they are dropped rather than repainted over a different one.
    */
-  #bindSession(session: AppServerSession): void {
+  #bindSession(session: AppServerSession | undefined): void {
     this.#deletion?.terminate();
     this.#invalidatePresentation();
     this.#removeStateListener?.();
@@ -373,6 +371,8 @@ export class RustxTuiApp {
       this.#syncDeletionPresentation();
       this.#tui.requestRender();
     });
+    this.#editor.disableSubmit = session === undefined || this.#host.client.closed !== undefined;
+    if (session === undefined) return;
     this.#removeSnapshotListener = session.onSnapshot(() => {
       // A resync is an authoritative replacement within this attachment. It
       // invalidates local inspection, picker, and transient ownership, while
@@ -417,7 +417,7 @@ export class RustxTuiApp {
     confirmedNodeChange = false,
   ): Promise<void> {
     if (!this.#isCurrentPresentationLease(lease) || this.#switching) return;
-    if (sessionId === this.#session.sessionId && editorContent === undefined &&
+    if (this.#session !== undefined && sessionId === this.#session.sessionId && editorContent === undefined &&
         (nodeId === undefined || nodeId === this.#session.nodeId) && !this.#session.serverClosed) {
       await this.#session.resync();
       if (notice !== undefined) this.#showTransient("info", notice);
@@ -443,12 +443,14 @@ export class RustxTuiApp {
     this.#switching = true;
     this.#editor.disableSubmit = true;
     const host = this.#host;
+    let installed: AppServerSession | undefined;
     try {
       const next = changingNode && nodeId !== undefined
         ? await this.#host.openNode(sessionId, nodeId)
         : await this.#host.attach(sessionId, nodeId);
       if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
       this.#bindSession(next);
+      installed = next;
       // A returning attachment may have folded events while it was off screen,
       // and the server is the only thing entitled to say what it holds now.
       if (this.#session === next) {
@@ -461,15 +463,16 @@ export class RustxTuiApp {
       this.#showTransient("info", notice ?? `showing session ${sessionId}`);
       this.#renderState(next.state);
     } catch (error: unknown) {
-      if (this.#finished) return;
+      if (this.#finished || this.#quitting || this.#host !== host ||
+          (installed === undefined ? !this.#isCurrentPresentationLease(lease) : this.#session !== installed)) return;
       this.#showTransient(
         "error",
-        `could not open that Session: ${compactDiagnostic(error)}`,
+        `could not open Session ${sessionId}: ${compactDiagnostic(error)}`,
       );
     } finally {
-      this.#switching = false;
+      if (this.#host === host && !this.#recovering) this.#switching = false;
       if (!this.#finished) {
-        this.#editor.disableSubmit = this.#quitting || this.#recovering || this.#host.client.closed !== undefined;
+        this.#editor.disableSubmit = this.#switching || this.#session === undefined || this.#quitting || this.#recovering || this.#host.client.closed !== undefined;
       }
     }
   }
@@ -477,6 +480,7 @@ export class RustxTuiApp {
   /** Reads the visible Session's durable metadata for the footer. */
   #refreshSessionInfo(): void {
     const session = this.#session;
+    if (session === undefined) return;
     void this.#host.readSession(session.sessionId).then(
       (info) => {
         if (this.#session !== session || this.#finished) return;
@@ -509,34 +513,15 @@ export class RustxTuiApp {
       this.#started = true;
       this.#tui.start();
       this.#tui.setFocus(this.#editor);
-      const state = this.#session.state;
+      const state = this.#session?.state;
       if (state !== undefined) {
         this.#renderState(state);
       }
-      // `--resume` is the same selection `/resume` performs, asked for on the
-      // command line: the runtime is already attached to the Session the
-      // launch bound, and the picker is opened over it. Cancelling therefore
-      // leaves that Session bound and publishes nothing.
-      if (this.#openSessionSelectorAtStartup) {
-        const selectorLease = this.#presentationLease();
-        void this.#host
-          .listSessions()
-          .then((page) => {
-            if (!this.#isCurrentPresentationLease(selectorLease)) return;
-            this.#showSessionSelector(
-              page.sessions,
-              page.nextOffset,
-              "",
-              selectorLease,
-            );
-          })
-          .catch((error: unknown) => {
-            if (!this.#isCurrentPresentationLease(selectorLease)) return;
-            this.#showTransient(
-              "error",
-              `session list unavailable: ${compactDiagnostic(error)}`,
-            );
-          });
+      if (this.#session === undefined) {
+        this.#startup.addChild(new Text("Choose a Session to resume. Enter reopens the picker; Ctrl+C exits.", 1, 0));
+        const page = this.#initialResumePage;
+        this.#initialResumePage = undefined;
+        void this.#openResumeSelector(page);
       }
       this.#tui.addInputListener((data) => {
         // Any user input acknowledges the one current transient feedback item.
@@ -545,6 +530,12 @@ export class RustxTuiApp {
         if (this.#host.client.closed !== undefined && this.#reconnect !== undefined) {
           if (matchesKey(data, "ctrl+r")) void this.#recoverConnection();
           if (matchesKey(data, "ctrl+c")) void this.quit();
+          return { consume: true };
+        }
+        if (this.#session === undefined) {
+          if (matchesKey(data, "ctrl+c")) { void this.quit(); return { consume: true }; }
+          if (this.#overlay !== undefined) return undefined;
+          if (matchesKey(data, "ctrl+r") || matchesKey(data, "enter")) void this.#openResumeSelector();
           return { consume: true };
         }
         // The subagent list is an explicit presentation focus. Ctrl+Up/Down
@@ -576,6 +567,7 @@ export class RustxTuiApp {
             return undefined;
           }
           const lease = this.#presentationLease();
+          if (lease.session === undefined) return { consume: true };
           void lease.session.loadOlderTranscript().then((loaded) => {
             if (!this.#isCurrentPresentationLease(lease) || !loaded) return;
             this.#showTransient("info", "loaded older transcript history");
@@ -609,7 +601,7 @@ export class RustxTuiApp {
         if (matchesKey(data, "ctrl+g")) {
           if (this.#hitlOverlay === undefined) {
             this.#hitlDismissed = undefined;
-            const state = this.#session.state;
+            const state = this.#session?.state;
             if (state.pendingInteractions.length > 0) {
               this.#renderState(state);
             }
@@ -625,7 +617,7 @@ export class RustxTuiApp {
         if (matchesKey(data, "escape")) {
           // Focused popup components own cancellation and nested presentation state.
           if (this.#overlay !== undefined && this.#hitlOverlay === undefined) return undefined;
-          const state = this.#session.state;
+          const state = this.#session?.state;
           const attempt = state?.attempt;
           const acted = this.#overlay !== undefined || (
             this.#subagentListFocused ||
@@ -652,7 +644,7 @@ export class RustxTuiApp {
   }
 
   async #onSubmit(text: string): Promise<void> {
-    if (this.#switching || this.#finished) return;
+    if (this.#session === undefined || this.#switching || this.#finished) return;
     const lease = this.#presentationLease();
     const line = text.trim();
     if (line.length === 0) {
@@ -679,7 +671,7 @@ export class RustxTuiApp {
 
   /** Moves the presentation focus through the authoritative child rows. */
   #moveSubagentSelection(direction: -1 | 1): void {
-    const state = this.#session.state;
+    const state = this.#session?.state;
     if (state === undefined) return;
     const selected = cycleSubagentSelection(
       state.subagents,
@@ -713,9 +705,11 @@ export class RustxTuiApp {
       return;
     }
     const lease = this.#presentationLease();
+    const attachedSession = lease.session;
+    if (attachedSession === undefined) return;
     const subagentId = this.#selectedSubagentId;
     try {
-      const subagent = await lease.session.subagentStatus(subagentId);
+      const subagent = await attachedSession.subagentStatus(subagentId);
       if (!this.#isCurrentPresentationLease(lease)) return;
       this.#showInspection(
         `Subagent ${subagent.agent}`,
@@ -740,7 +734,8 @@ export class RustxTuiApp {
     ) {
       return;
     }
-    const state = this.#session.state;
+    const state = this.#session?.state;
+    if (state === undefined) return;
     const selected = state.subagents.find(
       (subagent) => subagent.subagent_id === this.#selectedSubagentId,
     );
@@ -783,8 +778,10 @@ export class RustxTuiApp {
     subagentId: string,
     lease: PresentationLease,
   ): Promise<void> {
+    const attachedSession = lease.session;
+    if (attachedSession === undefined) return;
     try {
-      const result = await lease.session.disposeSubagent(subagentId);
+      const result = await attachedSession.disposeSubagent(subagentId);
       if (!this.#isCurrentPresentationLease(lease)) return;
       const subject = `subagent ${subagentId}`;
       switch (result.outcome) {
@@ -890,11 +887,13 @@ export class RustxTuiApp {
     if (this.#subagentListFocused) {
       this.#subagentListFocused = false;
       this.#selectedSubagentId = undefined;
-      this.#renderState(this.#session.state);
+      const state = this.#session?.state;
+      if (state !== undefined) this.#renderState(state);
       return;
     }
     if (this.#switching) return;
-    const state = this.#session.state;
+    const state = this.#session?.state;
+    if (state === undefined) return;
     const attempt = state.attempt;
     if (state.pendingInteractions.length > 0 ||
       (attempt !== undefined && attempt.phase.type !== "settled")) {
@@ -915,7 +914,8 @@ export class RustxTuiApp {
   async #onInterrupt(): Promise<void> {
     this.#acknowledgeTransient();
     if (this.#switching) return;
-    const state = this.#session.state;
+    const state = this.#session?.state;
+    if (state === undefined) { await this.quit(); return; }
     if (state.pendingInteractions.length > 0 ||
       (state.attempt !== undefined && state.attempt.phase.type !== "settled")) {
       const lease = this.#presentationLease();
@@ -1027,6 +1027,8 @@ export class RustxTuiApp {
    * editor on select or cancel, so the editor is never left unfocused.
    */
   #showApprovalSelector(lease: PresentationLease): void {
+    const attachedSession = lease.session;
+    if (attachedSession === undefined) return;
     const ownerCurrent = () => this.#isCurrentPresentationLease(lease);
     const ownerPending = () => this.#pendingApprovalRequest !== undefined &&
       this.#isCurrentPresentationLease(this.#pendingApprovalRequest.owner);
@@ -1038,7 +1040,7 @@ export class RustxTuiApp {
     let handle: OverlayHandle;
     const overlayAlive = () => ownerCurrent() && this.#overlay === handle;
     const selector = new ApprovalSelector({
-      state: () => lease.session.state,
+      state: () => attachedSession.state,
       change: () => { if (overlayAlive()) this.#tui.requestRender(); },
       close: () => { if (overlayAlive()) this.#closeOverlay(); },
       submit: async (mode) => {
@@ -1046,11 +1048,11 @@ export class RustxTuiApp {
         const request: PendingApprovalRequest = { owner: lease };
         this.#pendingApprovalRequest = request;
         try {
-          const result = await lease.session.approvalModeSet(mode);
+          const result = await attachedSession.approvalModeSet(mode);
           // Esc ends the popup, not the submitted operation. Feedback belongs
           // to its presentation owner even when that owner's popup is closed.
           if (!ownerCurrent()) return;
-          const latest = lease.session.state;
+          const latest = attachedSession.state;
           const fact = latest && latest.approvalModeRevision > result.revision ? latest : result;
           this.#showTransient("info", `Approval request accepted: effective ${approvalLabel(fact.effectiveApprovalMode)}${fact.pendingApprovalMode == null ? "" : ` · next attempt ${approvalLabel(fact.pendingApprovalMode)}`}`);
         } catch (error) {
@@ -1066,8 +1068,10 @@ export class RustxTuiApp {
   }
 
   #showModelSelector(models: CatalogModelView[], lease: PresentationLease): void {
+    const attachedSession = lease.session;
+    if (attachedSession === undefined) return;
     if (!this.#isCurrentPresentationLease(lease)) return;
-    const state = lease.session.state;
+    const state = attachedSession.state;
     if (state === undefined || state.sessionModel === null) {
       return;
     }
@@ -1102,6 +1106,19 @@ export class RustxTuiApp {
     };
   }
 
+  async #openResumeSelector(page?: SessionCatalogPage): Promise<void> {
+    const lease = this.#presentationLease();
+    try {
+      const catalog = page ?? await this.#host.listSessions();
+      if (!this.#isCurrentPresentationLease(lease)) return;
+      this.#showSessionSelector(catalog.sessions, catalog.nextOffset, "", lease);
+    } catch (error) {
+      if (this.#isCurrentPresentationLease(lease)) {
+        this.#showTransient("error", `session list unavailable: ${compactDiagnostic(error)}. Enter retries; Ctrl+C exits.`);
+      }
+    }
+  }
+
   #showSessionSelector(
     sessions: SessionSummaryView[] | undefined,
     nextOffset: number | undefined,
@@ -1113,7 +1130,7 @@ export class RustxTuiApp {
     const workflow = this.#deletion;
     // Initial /resume command responses obey the same mutation boundary as pages.
     if (lease.sessionListGeneration !== workflow.generation) return;
-    if (sessions?.length === 0 && workflow.state.kind === "idle") {
+    if (this.#session !== undefined && sessions?.length === 0 && workflow.state.kind === "idle") {
       this.#showTransient("info", "no persisted sessions are available");
       return;
     }
@@ -1132,7 +1149,6 @@ export class RustxTuiApp {
     };
     selector.onSelect = (session) => {
       if (!this.#isCurrentPresentationLease(lease)) return;
-      this.#closeOverlay();
       void this.#handleOutcome(
         this.#dispatcher.selectSession(session.id),
         lease,
@@ -1166,6 +1182,8 @@ export class RustxTuiApp {
     lease: PresentationLease,
     nextOffset?: number,
   ): void {
+    const attachedSession = lease.session;
+    if (attachedSession === undefined) return;
     if (!this.#isCurrentPresentationLease(lease)) return;
     if (boundaries.length === 0) {
       this.#showTransient(
@@ -1188,7 +1206,7 @@ export class RustxTuiApp {
     selector.onLoadMore = () => {
       const offset = currentNextOffset;
       if (offset === undefined) return;
-      void lease.session.boundaries(offset).then((page) => {
+      void attachedSession.boundaries(offset).then((page) => {
         if (!this.#isCurrentPresentationLease(lease)) return;
         currentNextOffset = page.nextOffset;
         selector.appendPage(page.boundaries, page.nextOffset);
@@ -1222,6 +1240,8 @@ export class RustxTuiApp {
     nextHistoryOffset: number | undefined,
     lease: PresentationLease,
   ): void {
+    const attachedSession = lease.session;
+    if (attachedSession === undefined) return;
     if (!this.#isCurrentPresentationLease(lease)) return;
     const selector = new TreeSelector({
       session,
@@ -1245,7 +1265,7 @@ export class RustxTuiApp {
       // The graph page and the boundary page come from their own owners.
       void Promise.all([
         this.#host.sessionTree(session.id, request.nodeOffset),
-        lease.session.boundaries(request.historyOffset),
+        attachedSession.boundaries(request.historyOffset),
       ]).then(([tree, page]) => {
         if (!this.#isCurrentPresentationLease(lease)) return;
         selector.appendPage({
@@ -1327,7 +1347,7 @@ export class RustxTuiApp {
       default:
         break;
     }
-    const state = this.#session.state;
+    const state = this.#session?.state;
     if (state !== undefined) {
       this.#renderState(state);
     }
@@ -1346,7 +1366,7 @@ export class RustxTuiApp {
    * seeds a preference for something already settled.
    */
   #expandTarget(target: ExpandTarget): PresentationPreferences {
-    const state = this.#session.state;
+    const state = this.#session?.state;
     if (target === "none" || state === undefined) {
       return withAllCollapsed(this.#preferences);
     }
@@ -1632,7 +1652,7 @@ export class RustxTuiApp {
         this.#hitlDismissed = {
           interaction,
           known: new Set(
-            (this.#session.state?.pendingInteractions ?? []).map((entry) =>
+            (this.#session?.state?.pendingInteractions ?? []).map((entry) =>
               interactionKey(entry.interaction),
             ),
           ),
@@ -1645,7 +1665,7 @@ export class RustxTuiApp {
       onNavigate: (interaction) => {
         // Navigation is presentation-only: it moves the focus and redraws.
         this.#interactionFocus = interaction;
-        const current = this.#session.state;
+        const current = this.#session?.state;
         if (current !== undefined) this.#renderState(current);
       },
       onToggleExpand: (interaction) => {
@@ -1675,7 +1695,9 @@ export class RustxTuiApp {
     interaction: InteractionRef,
     response: InteractionResponse,
   ): void {
-    void lease.session
+    const attachedSession = lease.session;
+    if (attachedSession === undefined) return;
+    void attachedSession
       .respondInteraction(interaction, response)
       .catch((error: unknown) => {
         if (!this.#isCurrentPresentationLease(lease)) return;
@@ -1693,13 +1715,13 @@ export class RustxTuiApp {
 
   /** Builds the footer's current-conversation label from attachment identity. */
   #conversationContext(): ConversationContext | undefined {
-    return { conversationId: this.#session.target.conversation_id };
+    return this.#session === undefined ? undefined : { conversationId: this.#session.target.conversation_id };
   }
 
   #diagnostics(): DebugDiagnostics {
     const stderr = this.#host.stderrTail();
     const exit = this.#host.childExit;
-    const target = this.#session.target;
+    const target = this.#session?.target;
     return {
       connection: this.#host.describe(),
       // Ownership is established by who spawned the process, never inferred
@@ -1708,11 +1730,11 @@ export class RustxTuiApp {
         this.#host.ownership === "owned_child"
           ? "this client owns the App Server process and ends it on exit"
           : "an external owner runs the App Server; exiting only disconnects",
-      sessionId: target.session_id,
-      attachmentId: target.attachment_id,
-      conversationId: target.conversation_id,
-      runtimeIncarnation: target.runtime_incarnation,
-      cursor: this.#session.state.cursor,
+      sessionId: target?.session_id,
+      attachmentId: target?.attachment_id,
+      conversationId: target?.conversation_id,
+      runtimeIncarnation: target?.runtime_incarnation,
+      cursor: this.#session?.state.cursor,
       attachedSessions: this.#host.attached.length,
       connectionState: this.#connectionLabel(),
       childStatus:
@@ -1724,7 +1746,7 @@ export class RustxTuiApp {
       stderrTail: stderr.text,
       stderrTruncatedBytes: stderr.truncatedBytes,
       pendingRequests: this.#host.client.pendingCount,
-      resyncCount: this.#session.resyncCount,
+      resyncCount: this.#session?.resyncCount ?? 0,
     };
   }
 

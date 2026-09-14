@@ -27,7 +27,7 @@ rustx-tui --binary /usr/local/bin/rustx \
 
 # existing / remote: the TUI connects to a server someone else runs
 rustx-tui --connect ws://127.0.0.1:8080 --token-file /private/user/socket-token \
-          [--cwd /srv/project]
+          --cwd /srv/project
 ```
 
 Local mode spawns exactly one `rustx app-server --listen stdio` child and speaks
@@ -51,11 +51,16 @@ Three groups, deliberately not mixed:
 | Process bindings | `--user-settings`, `--models`, `--runtime-root` | the App Server **process**; local mode only |
 | Session settings | `--cwd`, `--config`, `--model`, `--name`, `--skill`, `--no-automatic-skills`, `--no-builtin-tools`, `--no-direct-tools`, `--tools`, `--exclude-tools` | `session/create` inputs |
 
-A Session's cwd is a Session selection. The App Server's own launch directory is
-never substituted for it, in either mode. Process bindings are rejected against
-`--connect`: a remote App Server was launched by someone else and already has its
-own, and a flag that pretends to configure a server it cannot reach is worse than
-no flag.
+A Session cwd belongs to the App Server's filesystem namespace. In local
+self-hosted mode, omitted `--cwd` defaults to the TUI process cwd because the
+owned child shares that filesystem. Every remote launch requires an explicit
+absolute `--cwd` on the **server host**, including launches using `--session`
+since `/new` can create Sessions later. The client passes that path unchanged;
+it never supplies its own cwd, home directory, or token-file location as a
+remote default. Missing or relative remote cwd fails before connecting.
+
+Process bindings are rejected against `--connect`: the external server already
+owns its process configuration.
 
 Routing (`--session <id> [--node <id>]`, `--resume`) selects which Session the
 terminal opens on. It is client focus and nothing more; the App Server has no
@@ -95,6 +100,24 @@ method. Reads fail with the connection; side-effecting requests have unknown
 outcomes and are never replayed. Initialize and subscription changes are
 connection-local and must be established anew after reconnecting. New protocol
 methods cannot compile until their response-loss semantics are classified.
+
+## Resume bootstrap
+
+`--resume` reads the durable Session catalog and shows the picker with no
+focused Session and no attachment. Catalog order is deterministic Session-id
+order, not recency. Browsing does not load, control, cancel, or unload a Session.
+Selecting a row acquires only that Session's attachment/controller; a conflict
+is reported for that explicit selection and leaves the picker available to
+choose again. An unrelated controlled Session cannot block browsing.
+
+If the initial catalog is empty, startup explicitly creates one Session with
+the launch's Session settings, attaches it, and opens normal presentation.
+Ordinary startup also creates/attaches one Session; `--session ID` attaches that
+exact identity directly. During unfocused browsing there is no transcript or
+runtime interaction/model/footer projection and runtime input is disabled.
+Esc closes the picker; Enter reopens it and Ctrl+C exits. Reconnecting before
+selection refreshes the host/catalog without attaching anything. Reconnecting
+after focus reattaches the known Session/node and repairs from server state.
 
 ## Session switching is focus
 
