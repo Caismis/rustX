@@ -1153,14 +1153,16 @@ mod interactive_tests {
         let denied = fixture.path("denied");
         let escaped = fixture.path("escaped");
         // The server records that it reached the syscall, then classifies the
-        // outcome: PermissionError (EPERM from the inherited fixed-membership
+        // outcome: exact errno.EPERM (EPERM from the inherited fixed-membership
         // seccomp filter) versus a successful escape.
         let program = format!(
-            "import os\n\
+            "import errno, os\n\
              open({reached:?}, 'w').close()\n\
              try:\n\
              \x20   os.{call}\n\
-             except PermissionError:\n\
+             except OSError as error:\n\
+             \x20   if error.errno != errno.EPERM:\n\
+             \x20       raise\n\
              \x20   open({denied:?}, 'w').close()\n\
              else:\n\
              \x20   open({escaped:?}, 'w').close()\n",
@@ -1169,9 +1171,15 @@ mod interactive_tests {
             escaped = escaped.display().to_string(),
         );
         let script = format!("python3 -c {}", shell_single_quote(&program));
-        let mut process = fixture.spawn(&script, Vec::new()).expect("spawn");
-        wait_for_file(&reached, "escape attempt reached marker");
-        settle(&mut process).await;
+        let process = fixture.spawn(&script, Vec::new()).expect("spawn");
+        // The reached marker precedes the syscall. Requesting shutdown there
+        // races with classification and can kill a correctly contained child.
+        // Natural process settlement is the barrier after the result is written.
+        tokio::time::timeout(DEADLINE, process.wait_for_settlement())
+            .await
+            .expect("escape classifier exits")
+            .expect("classifier settles");
+        assert!(reached.exists(), "escape attempt must actually execute");
         assert!(
             denied.exists(),
             "{call} must be rejected with EPERM by the inherited membership filter"
