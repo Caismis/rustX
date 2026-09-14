@@ -1,9 +1,7 @@
-//! The spawnable `rustx` local conversation runtime process.
+//! The rustX process entry point.
 //!
-//! The binary is a thin async bootstrap over
-//! [`rustx::local_runtime`]: it parses the bounded startup arguments,
-//! composes the one conversation runtime, and serves its Runtime Client
-//! endpoint over the stdio/JSONL transport.
+//! `rustx app-server` composes a multi-Session App Server over stdio or WebSocket.
+//! Ordinary `rustx` retains the local Runtime Client path until the TUI migration.
 //!
 //! In the normal runtime mode stdout carries Runtime Client protocol
 //! records and nothing else — there is no banner, no progress text, and

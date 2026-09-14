@@ -4,3 +4,6 @@ pub mod connection;
 pub mod protocol;
 pub mod schema;
 mod wire;
+
+pub mod process;
+pub mod transport;

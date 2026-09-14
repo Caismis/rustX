@@ -229,13 +229,17 @@ impl ManagedRuntimeClient {
                 .get(&identity.conversation)
                 .cloned()
         };
+        // Capture native authority synchronously after residency admission. The
+        // caller can serialize this cut with connection close; only execution
+        // of the resulting future moves to the server-owned task.
+        let operation = operation();
         let (sender, receiver) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             #[cfg(test)]
             if let Some(probe) = probe {
                 probe.before_operation.park().await;
             }
-            let result = operation().await;
+            let result = operation.await;
             drop(lease);
             let _ = sender.send(result);
         });

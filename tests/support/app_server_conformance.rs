@@ -19,6 +19,7 @@ pub trait AppServerConformanceDriver: Sync {
 }
 
 /// Direct baseline; future stdio/WebSocket drivers exchange the same DTOs.
+#[allow(dead_code)] // Transport-only integration targets use the concrete drivers.
 pub struct DirectDriver<'a>(pub &'a AppServerConnection);
 
 impl AppServerConformanceDriver for DirectDriver<'_> {

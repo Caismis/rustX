@@ -4,8 +4,7 @@ use crate::app_server::connection::AppServerConnection;
 use crate::app_server::protocol::*;
 use crate::runtime_client::event::RuntimeClientEvent;
 
-#[path = "../../support/app_server_conformance.rs"]
-mod conformance;
+use super::app_server_conformance as conformance;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn direct_connection_runs_shared_transport_neutral_conformance() {
@@ -24,7 +23,7 @@ async fn direct_connection_runs_shared_transport_neutral_conformance() {
     .await;
 }
 
-struct AskPolicy;
+pub(super) struct AskPolicy;
 impl crate::agent::PreToolPolicy for AskPolicy {
     fn evaluate<'a>(
         &'a self,
@@ -1225,6 +1224,122 @@ async fn attach_snapshot_and_subscription_share_the_publication_cut() {
                 .is_current(replacement.conversation_id(), replacement.incarnation_id())
         );
         drop(connection);
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn explicit_close_is_idempotent_and_revokes_claims_despite_retained_arc() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = std::sync::Arc::new(AppServerConnection::new(f.manager.clone()));
+        initialize(&connection).await;
+        let old = attach(&connection, &f, 0).await;
+        let retained = connection.clone();
+        connection.close();
+        assert_eq!(connection.attachment_counts(), (0, 0));
+        let replacement = AppServerConnection::new(f.manager.clone());
+        initialize(&replacement).await;
+        let new = attach(&replacement, &f, 0).await;
+        assert_eq!(old.runtime_incarnation, new.runtime_incarnation);
+        assert_ne!(old.attachment_id, new.attachment_id);
+        retained.close();
+        assert_eq!(
+            rejected(&retained, Method::SessionDetach { target: old }).await,
+            ErrorData::StaleAttachment
+        );
+        call(&replacement, 2, Method::SessionSnapshot { target: new }).await;
+        replacement.close();
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn close_linearizes_before_pending_attach_commit() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let probe = f.manager.probe(&f.id(0).await);
+        probe.before_compose.arm();
+        let connection = std::sync::Arc::new(AppServerConnection::new(f.manager.clone()));
+        initialize(&connection).await;
+        let pending = connection.clone();
+        let session_id = f.sessions[0].id.clone();
+        let request = tokio::spawn(async move {
+            rejected(
+                &pending,
+                Method::SessionAttach {
+                    session_id,
+                    node_id: None,
+                },
+            )
+            .await
+        });
+        probe.before_compose.entered().await;
+        assert_eq!(connection.attachment_counts(), (0, 1));
+        connection.close();
+        probe.before_compose.release();
+        assert_eq!(request.await.unwrap(), ErrorData::StaleAttachment);
+        assert_eq!(connection.attachment_counts(), (0, 0));
+        let replacement = AppServerConnection::new(f.manager.clone());
+        initialize(&replacement).await;
+        attach(&replacement, &f, 0).await;
+        replacement.close();
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn admitted_mutation_survives_close_before_native_dispatch() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = std::sync::Arc::new(AppServerConnection::new(f.manager.clone()));
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let probe = f.manager.probe(&target.conversation_id);
+        probe.before_operation.arm();
+        let worker = connection.clone();
+        let pending = tokio::spawn(async move {
+            call(
+                &worker,
+                10,
+                Method::ApprovalModeSet {
+                    target,
+                    mode: crate::runtime::ApprovalMode::FullAccess,
+                },
+            )
+            .await
+        });
+        probe.before_operation.entered().await; // manager lease acquired, native call not executed
+        connection.close();
+        assert_eq!(connection.attachment_counts(), (0, 0));
+        let replacement = AppServerConnection::new(f.manager.clone());
+        initialize(&replacement).await;
+        let new = attach(&replacement, &f, 0).await;
+        probe.before_operation.release();
+        assert!(matches!(
+            pending.await.unwrap(),
+            MethodResult::ApprovalMode {
+                effective_approval_mode: crate::runtime::ApprovalMode::FullAccess,
+                ..
+            }
+        ));
+        let MethodResult::Snapshot { snapshot, .. } =
+            call(&replacement, 11, Method::SessionSnapshot { target: new }).await
+        else {
+            panic!("snapshot");
+        };
+        assert_eq!(
+            snapshot.effective_approval_mode,
+            crate::runtime::ApprovalMode::FullAccess
+        );
+        assert!(matches!(
+            rejected(&connection, Method::ServerInfo {}).await,
+            ErrorData::StaleAttachment
+        ));
+        replacement.close();
         f.close().await;
     })
     .await;

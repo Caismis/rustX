@@ -250,6 +250,22 @@ impl UserConfigManager {
         manager.catalog_required = catalog_required;
         Ok(manager)
     }
+    /// User-scoped product root, independent of any Session or process cwd.
+    #[must_use]
+    pub fn runtime_root(&self) -> &Path {
+        &self.sources.runtime_root
+    }
+
+    /// Validate the selected model catalog before publishing a server listener.
+    /// Uses the canonical model authoring parser, without Session resolution.
+    /// # Errors
+    /// Returns an error for unreadable or invalid model authoring.
+    pub fn validate_catalog(&self) -> Result<(), String> {
+        let bytes = read_bounded(&self.sources.models)?;
+        ModelCatalog::from_toml_slice(&bytes).map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
     /// Resolve only locations; no configuration, credentials, or runtime creation.
     /// # Errors
     /// Invalid explicit paths and Tool restrictions are rejected.

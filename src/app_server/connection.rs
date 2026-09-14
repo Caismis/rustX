@@ -25,6 +25,7 @@ fn valid_request_id(id: &RequestId) -> bool {
 
 #[derive(Default)]
 struct RouteTable {
+    closed: bool,
     active: BTreeMap<SessionId, Arc<Route>>,
     reserved: std::collections::BTreeSet<SessionId>,
 }
@@ -38,6 +39,9 @@ struct AttachReservation {
 impl AttachReservation {
     fn new(table: &Arc<Mutex<RouteTable>>, session: &SessionId) -> Result<Self, RpcError> {
         let mut routes = table.lock().expect("routes mutex");
+        if routes.closed {
+            return Err(domain(ErrorData::StaleAttachment));
+        }
         if routes.active.contains_key(session) || routes.reserved.contains(session) {
             return Err(domain(ErrorData::ControllerInUse));
         }
@@ -52,11 +56,21 @@ impl AttachReservation {
         })
     }
 
-    fn commit(mut self, route: Arc<Route>) {
+    fn commit<T>(
+        mut self,
+        attach: impl FnOnce() -> Result<(Arc<Route>, T), RpcError>,
+    ) -> Result<T, RpcError> {
         let mut routes = self.table.lock().expect("routes mutex");
         routes.reserved.remove(&self.session);
+        if routes.closed {
+            return Err(domain(ErrorData::StaleAttachment));
+        }
+        // Claim and publish under the same close boundary: a closed connection
+        // must never acquire even a temporary external attachment. No await.
+        let (route, result) = attach()?;
         routes.active.insert(self.session.clone(), route);
         self.committed = true;
+        Ok(result)
     }
 }
 
@@ -121,6 +135,21 @@ impl AppServerConnection {
             reader: tokio::sync::Mutex::new(()),
             next_route: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    /// Permanently release this connection's external claims, even while callers
+    /// retain references. The route-table lock linearizes close against attach
+    /// reservation/commit. Already admitted runtime operations remain server-owned.
+    /// Calling close again has no effect; it never unloads or cancels a runtime.
+    /// # Panics
+    /// Panics if the routing mutex is poisoned.
+    pub fn close(&self) {
+        let mut routes = self.routes.lock().expect("routes mutex");
+        routes.closed = true;
+        for (_, route) in std::mem::take(&mut routes.active) {
+            route.attachment.detach();
+        }
+        self.changed.notify_one();
     }
 
     /// Decode a strict JSON-RPC request before performing any semantic action.
@@ -198,6 +227,9 @@ impl AppServerConnection {
 
     #[allow(clippy::too_many_lines)]
     async fn dispatch(&self, method: Method) -> Result<MethodResult, RpcError> {
+        if self.routes.lock().expect("routes mutex").closed {
+            return Err(domain(ErrorData::StaleAttachment));
+        }
         if let Method::Initialize(params) = method {
             if params.protocol_version != APP_SERVER_PROTOCOL_VERSION {
                 return Err(domain(ErrorData::UnsupportedVersion {
@@ -228,11 +260,33 @@ impl AppServerConnection {
             let route = self.route(target)?;
             let client = route.client.clone();
             let changed = self.changed.clone();
-            let receiver = client
-                .start_operation(
-                    move || async move { dispatch_runtime(method, route, changed).await },
-                )
-                .map_err(manager_error)?;
+            let receiver = {
+                let routes = self.routes.lock().expect("routes mutex");
+                if routes.closed
+                    || !routes
+                        .active
+                        .get(&target.session_id)
+                        .is_some_and(|active| Arc::ptr_eq(active, &route))
+                {
+                    return Err(domain(ErrorData::StaleAttachment));
+                }
+                // Close cannot revoke authority after operation admission. The
+                // captured native owner lives only inside the manager-owned task.
+                client
+                    .start_operation(move || {
+                        let authority = route.attachment.operation_authority();
+                        async move {
+                            dispatch_runtime(
+                                method,
+                                route,
+                                authority.map_err(client_error)?,
+                                changed,
+                            )
+                            .await
+                        }
+                    })
+                    .map_err(manager_error)?
+            };
             return receiver
                 .await
                 .map_err(|_| domain(ErrorData::OperationFailed))?;
@@ -394,29 +448,34 @@ impl AppServerConnection {
                     .load(&session_id, node_id.as_ref())
                     .await
                     .map_err(manager_error)?;
-                let client = runtime.client();
-                let crate::runtime_client::attachment::AttachedSnapshot {
-                    attachment,
-                    snapshot,
-                    cursor,
-                } = client.attach().map_err(manager_error)?;
-                let target = AttachmentTarget {
-                    session_id: session_id.clone(),
-                    conversation_id: runtime.conversation_id().clone(),
-                    runtime_incarnation: runtime.incarnation_id(),
-                    attachment_id: attachment.attachment_id().clone(),
-                };
-                reservation.commit(Arc::new(Route {
-                    target: target.clone(),
-                    client,
-                    attachment,
-                }));
+                let result = reservation.commit(|| {
+                    let client = runtime.client();
+                    let crate::runtime_client::attachment::AttachedSnapshot {
+                        attachment,
+                        snapshot,
+                        cursor,
+                    } = client.attach().map_err(manager_error)?;
+                    let target = AttachmentTarget {
+                        session_id: session_id.clone(),
+                        conversation_id: runtime.conversation_id().clone(),
+                        runtime_incarnation: runtime.incarnation_id(),
+                        attachment_id: attachment.attachment_id().clone(),
+                    };
+                    Ok((
+                        Arc::new(Route {
+                            target: target.clone(),
+                            client,
+                            attachment,
+                        }),
+                        MethodResult::Attached {
+                            target,
+                            snapshot: Box::new(snapshot),
+                            cursor,
+                        },
+                    ))
+                })?;
                 self.changed.notify_one();
-                Ok(MethodResult::Attached {
-                    target,
-                    snapshot: Box::new(snapshot),
-                    cursor,
-                })
+                Ok(result)
             }
             _ => unreachable!("runtime methods admitted above"),
         }
@@ -512,9 +571,7 @@ impl AppServerConnection {
 
 impl Drop for AppServerConnection {
     fn drop(&mut self) {
-        for route in self.routes.lock().expect("routes mutex").active.values() {
-            route.attachment.detach();
-        }
+        self.close();
     }
 }
 
@@ -551,11 +608,12 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
 async fn dispatch_runtime(
     method: Method,
     route: Arc<Route>,
+    authority: Arc<crate::runtime_client::host::ClientInner>,
     changed: Arc<tokio::sync::Notify>,
 ) -> Result<MethodResult, RpcError> {
     match method {
         Method::DefaultsRead { target: _, scope } => {
-            native_result(route.attachment.defaults_read(scope).await)
+            native_result(authority.defaults_read(scope).await)
         }
         Method::DefaultSave {
             target: _,
@@ -563,57 +621,49 @@ async fn dispatch_runtime(
             expected_revision,
             setting,
         } => native_result(
-            route
-                .attachment
+            authority
                 .defaults_save(scope, expected_revision, setting)
                 .await,
         ),
-        Method::ModelGet { target: _ } => native_result(route.attachment.model_get()),
-        Method::ModelCatalog { target: _ } => native_result(route.attachment.model_catalog()),
-        Method::ModelSet { target: _, config } => {
-            native_result(route.attachment.model_set(*config))
-        }
+        Method::ModelGet { target: _ } => native_result(authority.model_get()),
+        Method::ModelCatalog { target: _ } => native_result(authority.model_catalog()),
+        Method::ModelSet { target: _, config } => native_result(authority.model_set(*config)),
         Method::ApprovalModeSet { target: _, mode } => {
-            native_result(route.attachment.approval_mode_set(mode))
+            native_result(authority.approval_mode_set(mode))
         }
-        Method::Capability { target: _ } => native_result(route.attachment.capability()),
+        Method::Capability { target: _ } => native_result(authority.capability()),
         Method::Transcript {
             target: _,
             before,
             limit,
-        } => native_result(route.attachment.transcript_page(before, limit)),
-        Method::Goal { target: _, control } => {
-            native_result(route.attachment.goal_control(control))
-        }
+        } => native_result(authority.transcript_page(before, limit)),
+        Method::Goal { target: _, control } => native_result(authority.goal_control(control)),
         Method::BackgroundStatus {
             target: _,
             execution_id,
-        } => native_result(route.attachment.background_status(&execution_id)),
+        } => native_result(authority.background_status(&execution_id)),
         Method::BackgroundCancel {
             target: _,
             execution_id,
-        } => native_result(route.attachment.background_cancel(&execution_id)),
+        } => native_result(authority.background_cancel(&execution_id)),
         Method::SubagentStatus {
             target: _,
             subagent_id,
-        } => native_result(route.attachment.subagent_status(&subagent_id)),
+        } => native_result(authority.subagent_status(&subagent_id)),
         Method::SubagentCancel {
             target: _,
             subagent_id,
-        } => native_result(route.attachment.subagent_cancel(&subagent_id)),
+        } => native_result(authority.subagent_cancel(&subagent_id)),
         Method::SubagentDispose {
             target: _,
             subagent_id,
-        } => native_result(
-            route
-                .attachment
-                .subagent_workspace_dispose(&subagent_id)
-                .await,
+        } => native_result(authority.subagent_workspace_dispose(&subagent_id).await),
+        Method::CompactContext { target: _ } => native_result(authority.compact_context().await),
+        Method::SessionSnapshot { target: _ } => native_result(
+            authority
+                .snapshot()
+                .map(|(snapshot, cursor)| RuntimeClientResult::Snapshot { snapshot, cursor }),
         ),
-        Method::CompactContext { target: _ } => {
-            native_result(route.attachment.compact_context().await)
-        }
-        Method::SessionSnapshot { target: _ } => native_result(route.attachment.snapshot()),
         Method::SessionSubscribe {
             target: _,
             after_cursor,
@@ -626,28 +676,19 @@ async fn dispatch_runtime(
             Ok(MethodResult::Subscribed { after_cursor })
         }
         Method::TurnStart { target: _, content } | Method::TurnSteer { target: _, content } => {
-            native_result(route.attachment.submit_inbound(content))
+            native_result(authority.submit_inbound(content))
         }
-        Method::TurnCancel { target: _ } => {
-            native_result(route.attachment.cancel_current_attempt())
-        }
+        Method::TurnCancel { target: _ } => native_result(authority.cancel_current_attempt()),
         Method::InteractionRespond {
             target: _,
             interaction,
             response,
-        } => native_result(
-            route
-                .attachment
-                .respond_interaction(&interaction, response)
-                .await,
-        ),
+        } => native_result(authority.respond_interaction(&interaction, response).await),
         Method::InteractionCancel {
             target: _,
             interaction,
-        } => native_result(route.attachment.cancel_interaction(&interaction).await),
-        Method::ResourcesReload { target: _ } => {
-            native_result(route.attachment.reload_resources().await)
-        }
+        } => native_result(authority.cancel_interaction(&interaction).await),
+        Method::ResourcesReload { target: _ } => native_result(authority.reload_resources().await),
         _ => unreachable!("only admitted runtime methods"),
     }
 }

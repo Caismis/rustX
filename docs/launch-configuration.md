@@ -26,8 +26,14 @@ explicit `doctor --probe`, including output, exit codes and effect guarantees.
 bindings and the single configuration resolution path.
 `UserConfigManager::new` accepts fully specified source paths and one durable
 runtime root. `bootstrap` additionally reads user-authored `models` and
-`runtime_root` once, with explicit host overrides taking precedence. The CLI
-computes its workspace-derived default runtime root before this bootstrap.
+`runtime_root` once, with explicit host overrides taking precedence. Ordinary
+local Runtime Client launch computes its workspace-derived default root first.
+`rustx app-server` instead uses one user root (default
+`$XDG_STATE_HOME/rustx/app-server`) for all Sessions; its launch cwd is not a
+Session cwd. Its `--user-settings <settings.toml>` selects the canonical process
+source directly; omission retains the XDG default. Relative CLI paths use launch
+cwd, while authored paths use the selected document parent. This is distinct
+from ordinary `--config` Session/project selection. See [App Server startup and transports](app-server-protocol.md#standalone-startup).
 Neither constructor retains cwd. Every Session resolved by one manager uses the
 same bound runtime root and model catalog path.
 
