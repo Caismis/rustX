@@ -19,7 +19,9 @@ or catalog visibility.
 
 Runtime residency is a separate lifetime. `SessionRuntimeManager` owns single-flight
 load/unload, multiple resident runtimes, and one writable live incarnation per
-Conversation. See [runtime residency](runtime-residency.md) for synchronization and
+Conversation. In v1, one Session may have only one resident Conversation/node;
+different Sessions remain concurrent. Successful unload releases composition and
+allocation even when stale client handles remain. See [runtime residency](runtime-residency.md) for synchronization and
 client lifetime contracts.
 `SessionAccess` provides the Session snapshot, selected node, explicit settings
 and revision, plus retained Conversation allocation access. Different

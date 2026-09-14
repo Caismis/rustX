@@ -2,8 +2,10 @@
 
 Durable Session lifetime, runtime residency, and client attachment lifetime are
 independent. One user process can load and execute different Conversations at the
-same time, but one durable `ConversationId` has at most one writable live
-`ConversationRuntime` in that process.
+same time. One durable `ConversationId` has at most one writable live
+`ConversationRuntime` in that process. In v1, one durable Session also has at most
+one writable resident Conversation/node. Different Sessions remain concurrently
+resident; there is no process-global active Session or automatic branch switch.
 
 ```text
 SessionController                         UserConfigManager
@@ -16,7 +18,7 @@ SessionController                         UserConfigManager
                                   SessionRuntimeManager
                                   per-Conversation residency
                                              |
-                                      ManagedRuntime
+                                      ResidentRuntime
                                   live incarnation + composition
                                   retained allocation + projection host
                                              |
@@ -24,8 +26,8 @@ SessionController                         UserConfigManager
                                   execution / admission / settlement
                                              ^
                                              |
-                                external client attachments
-                                independent, disposable connections
+                                ManagedRuntimeClient
+                                weak incarnation handle; owned facts only
 ```
 
 `SessionRuntimeManager` reuses `LocalConversationCore::compose_with_access`, the
@@ -46,9 +48,18 @@ root. This is process-local ownership, not a multi-process lease design.
 ## State and synchronization
 
 Absence from the registry represents `Unloaded`. Entries are `Loading(flight)`,
-`Loaded(ManagedRuntime)`, or `Unloading(retained runtime, flight)`. There is no
+`Loaded(ResidentRuntime)`, or `Unloading(retained runtime, flight)`. There is no
 Running/Idle/Waiting mirror. Replacement uses the same `Unloading -> Loading`
 transition after quiescence, with one shared operation result across the handoff.
+
+The registry mutex protects Conversation entries and a small `by_session` ownership
+index (`SessionId -> ConversationId`). The index is not a second state machine:
+it covers Loading, Loaded, Unloading and replacement handoff for the same entry.
+Session ownership and the initial Loading flight are installed atomically under
+this mutex. Same-Session/same-Conversation callers join/reuse that entry; a different
+Conversation returns typed `SessionAlreadyResident`, without composing, switching
+nodes, or draining the resident. Terminal removal clears both indexes atomically.
+Failed shutdown retains both; replacement retains the Session claim throughout.
 
 The registry mutex protects map membership. A process-local atomic counter
 allocates incarnation identities, including across controller reopen. Every
@@ -58,10 +69,21 @@ preparation, provider work or shutdown is awaited under it. Long work belongs to
 a Conversation's transition task and watch channel. Different Conversations do
 not wait for each other's flights.
 
-The composition mutex belongs to one `ManagedRuntime`. It protects the optional
-host/core retained by that incarnation. It never spans an await. Unload removes
-the composition only after shutdown; retained `ManagedRuntime` handles then
-identify the old incarnation but cannot recreate its core or endpoint.
+The composition mutex belongs to one private `ResidentRuntime`, the sole strong
+owner of its optional host/core. It never spans an await. The registry and its
+transition machinery retain that owner. Public `ManagedRuntime` identities contain
+only metadata and weak registry/resident references. Flight results retain these
+identities, never the resident owner. `ManagedRuntimeClient` holds only a weak
+identity reference. Neither handle can extend composition/allocation lifetime.
+
+Client control resolves ConversationId plus RuntimeIncarnationId against Loaded,
+then uses the Conversation-local composition slot for a bounded synchronous
+operation. No registry guard is held during runtime work. Unload takes this slot
+after native shutdown, so any operation that resolved just before unload either
+finishes before resource release or observes the empty slot. Operations return
+owned facts, never runtime, host, subscription or allocation handles. The native
+seam currently offers inbound submission and existing-host projection snapshots;
+transport/attachment routing is left to its later owner.
 
 A flight's watch sender retains exactly one terminal result. Waiters clone that
 result and never retain a watch borrow across an await. `send_replace` also
@@ -77,7 +99,8 @@ same completion, not an empty notification or a second composition attempt.
    composition and passed into the tool/storage/workspace owners.
 2. Installing `Loading(flight)` under the registry mutex is the same-id load
    claim linearization point. Other callers observing that entry join its result.
-   Only the claimant starts composition.
+   The Session claim is installed in that same critical section. Only the claimant
+   starts composition.
 3. The manager resolves current sources using `UserConfigManager`, converts the
    acquired persisted selections to `SessionConfigInput`, and performs ordinary
    trust/credential admission. Effective configuration is never durable authority.
@@ -94,8 +117,8 @@ mutate composition, or transfer residency ownership to its caller. Existing safe
 runtime-owned live updates retain their existing semantics. Composition changes
 require explicit replacement.
 
-Failed composition removes `Loading` before broadcasting its error. Every waiter
-receives the same error and the next load can retry. The operation is a supervised
+Failed composition removes `Loading` and its Session claim before broadcasting
+its error. Every waiter receives the same error and the next load can retry. The operation is a supervised
 flight rather than work owned by the first request: callers receive no task abort
 handle. Cancelling the claimant or any waiter does not cancel composition. Each
 transition task owns a `TerminalGuard`; panic or executor destruction publishes a
@@ -115,13 +138,13 @@ same lock. Acceptance either wins first and is settled by the runtime, or sees
 the closed gate and commits nothing. The manager adds no execution gate.
 
 Unload commits only after native shutdown returns success and proves quiescence.
-The manager releases its host/core and retained allocation, removes the entry,
-and publishes success. Durable Session and Conversation data remains. A later
-load performs ordinary cold recovery. Already-issued low-level runtime, storage
-or endpoint clones remain closed by the native lifecycle and may conservatively
-retain resources/allocation until their holders release them; they never preserve
-writer or current-incarnation authority. Merely retaining a `ManagedRuntime`
-identity does not retain a removed composition.
+The manager releases its host/core and retained allocation, removes the entry
+and its Session claim, and publishes success. Durable Session and Conversation
+data remains. A later load performs ordinary cold recovery. Previously issued
+client/identity handles remain values, but are non-owning and fail explicitly with
+`StaleIncarnation`. They cannot keep the runtime or allocation alive, prevent
+native deletion, or reopen residency. No owning runtime/endpoint API escapes the
+manager. Narrow test-only inspection clones are used solely for native gate tests.
 
 A shutdown failure leaves `Unloading` with the old composition and its exact
 terminal diagnostic. Load, unload and replacement observers receive that failure;
@@ -145,7 +168,7 @@ rollback to the old composition. Other Conversations remain unchanged.
 `RuntimeIncarnationId` identifies a live composition, distinct from durable
 Conversation identity, Session identity, AttemptId, cursors and connection IDs.
 Replacement preserves ConversationId and changes incarnation. `is_current` is the
-semantic seam for future stale-control rejection; Unloading is no longer current.
+semantic check also used by the native client façade; Unloading is no longer current.
 No JSON-RPC DTO or transport protocol is introduced here.
 
 ## Allocation and deletion
@@ -179,3 +202,16 @@ panic cleanup, both admission winners, load/unload ordering, replacement writer
 transfer, native load/delete exclusion, failure isolation, disconnected clients,
 completed-work recovery and unknown external tool outcomes. Timeouts bound test
 liveness only; elapsed time is never evidence for a race outcome.
+
+The Session-branch regression creates two real durable graph nodes, parks the first
+node at post-claim/pre-compose and pre-shutdown watches, and proves the second node
+is rejected before composition. A different Session remains in its provider gate
+and completes normally. Successful unload then permits the other node to claim.
+Lifetime regressions retain production client and identity handles across native
+unload and deletion; real delete preflight/commit succeeds while those handles
+remain stale. Runtime weak references prove old execution ownership is gone after
+both unload and replacement, while the new incarnation's client can read its host.
+
+A separate replacement test parks new composition after old shutdown, verifies
+that the Session claim still rejects another node, and injects a composition panic.
+The terminal guard clears both indexes, allowing the other node to load.

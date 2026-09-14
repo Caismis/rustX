@@ -8,7 +8,7 @@
 //! caller (including the claimant) leaves the flight running to terminal settlement.
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use tokio::sync::watch;
 
@@ -21,7 +21,6 @@ use super::session_controller::{SessionAccess, SessionController};
 use crate::credentials::CredentialSnapshot;
 use crate::runtime::conversation_runtime::ConversationRuntime;
 use crate::runtime::identity::ConversationId;
-use crate::runtime_client::endpoint::RuntimeClientEndpoint;
 
 /// Process-local live composition identity. Never a durable or transport identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -43,18 +42,38 @@ pub enum ResidencyState {
 
 /// A terminal operation error shared verbatim by every waiter in its flight.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RuntimeManagerError(pub String);
+pub enum RuntimeManagerError {
+    SessionAlreadyResident {
+        session_id: SessionId,
+        resident_conversation: ConversationId,
+        requested_conversation: ConversationId,
+    },
+    StaleIncarnation,
+    TransitionFailed(String),
+}
 impl std::fmt::Display for RuntimeManagerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
+        match self {
+            Self::SessionAlreadyResident {
+                session_id,
+                resident_conversation,
+                requested_conversation,
+            } => write!(
+                f,
+                "Session {session_id:?} already owns {resident_conversation:?}; cannot load {requested_conversation:?}"
+            ),
+            Self::StaleIncarnation => f.write_str("runtime incarnation is no longer current"),
+            Self::TransitionFailed(message) => message.fmt(f),
+        }
     }
 }
 impl std::error::Error for RuntimeManagerError {}
 fn error(e: impl std::fmt::Display) -> RuntimeManagerError {
-    RuntimeManagerError(e.to_string())
+    RuntimeManagerError::TransitionFailed(e.to_string())
 }
 
 type Outcome = Result<Option<Arc<ManagedRuntime>>, RuntimeManagerError>;
+type CompositionOutcome = Result<Option<Arc<ResidentRuntime>>, RuntimeManagerError>;
 
 #[derive(Debug)]
 struct Flight {
@@ -78,15 +97,16 @@ impl Flight {
     }
 }
 
-/// Manager-owned host/composition. Retained handles identify an incarnation even
-/// after unload; they cannot resurrect its composition. Existing runtime/endpoint
-/// clones are permanently closed by the runtime's own shutdown admission gate.
+/// Non-owning incarnation identity. Only manager transitions own composition.
+/// Holding this identity never prevents successful unload from releasing resources.
+/// No production API lends or clones its runtime, host, or allocation authority.
 #[derive(Debug)]
 pub struct ManagedRuntime {
     conversation: ConversationId,
     incarnation: RuntimeIncarnationId,
     workspace_identity: String,
-    composition: Mutex<Option<LocalConversationRuntime>>,
+    resident: Weak<ResidentRuntime>,
+    registry: Weak<RuntimeRegistry>,
 }
 impl ManagedRuntime {
     #[must_use]
@@ -101,45 +121,152 @@ impl ManagedRuntime {
     pub fn workspace_identity(&self) -> &str {
         &self.workspace_identity
     }
-    /// Obtain a runtime handle. Its native admission gate remains authoritative
-    /// when this call races unload; retaining it never retains current residency.
+    /// Create a non-owning native client handle for this incarnation.
     #[must_use]
-    /// # Panics
-    /// Panics if an internal residency mutex was poisoned.
-    pub fn runtime(&self) -> Option<ConversationRuntime> {
+    pub fn client(self: &Arc<Self>) -> ManagedRuntimeClient {
+        ManagedRuntimeClient {
+            runtime: Arc::downgrade(self),
+        }
+    }
+
+    /// Test-only inspection for parking real native admission/settlement gates.
+    #[cfg(test)]
+    fn inspect_runtime(&self) -> Option<ConversationRuntime> {
+        self.resident.upgrade()?.shutdown_runtime()
+    }
+}
+
+/// Sole strong composition owner, retained only by registry/transition machinery.
+#[derive(Debug)]
+struct ResidentRuntime {
+    identity: Arc<ManagedRuntime>,
+    composition: Mutex<Option<LocalConversationRuntime>>,
+}
+impl ResidentRuntime {
+    // Shutdown alone may clone execution authority. Never exposed to clients.
+    fn shutdown_runtime(&self) -> Option<ConversationRuntime> {
         self.composition
             .lock()
             .expect("composition mutex")
             .as_ref()
             .map(|c| c.runtime().clone())
     }
-    /// Attach to the already-bound host. Endpoint drop does not unload or cancel.
-    #[must_use]
+}
+
+/// Non-owning control/observation seam. Dropping it has no runtime side effects.
+/// Operations return owned facts, never runtime/host/storage handles. The local
+/// composition mutex covers each bounded synchronous operation, without await;
+/// unload takes the same slot after native shutdown and cannot leave a borrowed
+/// operation retaining resources. No global registry lock covers runtime work.
+#[derive(Clone, Debug)]
+pub struct ManagedRuntimeClient {
+    runtime: Weak<ManagedRuntime>,
+}
+impl ManagedRuntimeClient {
+    fn current(&self) -> Result<Arc<ResidentRuntime>, RuntimeManagerError> {
+        let runtime = self
+            .runtime
+            .upgrade()
+            .ok_or(RuntimeManagerError::StaleIncarnation)?;
+        let registry = runtime
+            .registry
+            .upgrade()
+            .ok_or(RuntimeManagerError::StaleIncarnation)?;
+        let current = matches!(registry.0.lock().expect("registry mutex").entries.get(&runtime.conversation),
+            Some(Entry::Loaded(resident)) if resident.identity.incarnation == runtime.incarnation);
+        if current {
+            runtime
+                .resident
+                .upgrade()
+                .ok_or(RuntimeManagerError::StaleIncarnation)
+        } else {
+            Err(RuntimeManagerError::StaleIncarnation)
+        }
+    }
+
+    /// Submit through the existing native admission gate.
+    /// # Errors
+    /// Rejects stale incarnations and native admission failures.
     /// # Panics
     /// Panics if an internal residency mutex was poisoned.
-    pub fn endpoint(&self) -> Option<RuntimeClientEndpoint> {
-        self.composition
-            .lock()
-            .expect("composition mutex")
+    pub fn submit_inbound(
+        &self,
+        content: Vec<crate::message::types::UserContentBlock>,
+    ) -> Result<crate::runtime::conversation_runtime::InboundAdmission, RuntimeManagerError> {
+        let runtime = self.current()?;
+        let composition = runtime.composition.lock().expect("composition mutex");
+        composition
             .as_ref()
-            .map(LocalConversationRuntime::endpoint)
+            .ok_or(RuntimeManagerError::StaleIncarnation)?
+            .runtime()
+            .submit_inbound(content)
+            .map_err(|e| error(format!("{e:?}")))
+    }
+
+    /// Read owned projection facts from the existing Runtime Client host.
+    /// # Errors
+    /// Rejects stale incarnations and projection failures.
+    /// # Panics
+    /// Panics if an internal residency mutex was poisoned.
+    pub fn snapshot(
+        &self,
+    ) -> Result<
+        (
+            crate::runtime_client::snapshot::RuntimeClientSnapshot,
+            crate::runtime_client::types::RuntimeClientCursor,
+        ),
+        RuntimeManagerError,
+    > {
+        let runtime = self.current()?;
+        let composition = runtime.composition.lock().expect("composition mutex");
+        composition
+            .as_ref()
+            .ok_or(RuntimeManagerError::StaleIncarnation)?
+            .host()
+            .snapshot()
+            .map_err(|e| error(format!("{e:?}")))
     }
 }
 
 #[derive(Debug)]
 enum Entry {
     Loading(Arc<Flight>),
-    Loaded(Arc<ManagedRuntime>),
+    Loaded(Arc<ResidentRuntime>),
     Unloading {
-        _runtime: Arc<ManagedRuntime>,
+        _runtime: Arc<ResidentRuntime>,
         flight: Arc<Flight>,
     },
 }
 #[derive(Debug, Default)]
 struct RegistryState {
     entries: HashMap<ConversationId, Entry>,
+    // Ownership index only, not a second state machine. Covers every entry,
+    // including replacement handoff and failed (unproven) shutdown.
+    by_session: HashMap<SessionId, ConversationId>,
     #[cfg(test)]
     probes: HashMap<ConversationId, Arc<tests::Probe>>,
+}
+impl RegistryState {
+    fn check_session(
+        &self,
+        session: &SessionId,
+        conversation: &ConversationId,
+    ) -> Result<(), RuntimeManagerError> {
+        if let Some(resident) = self.by_session.get(session)
+            && resident != conversation
+        {
+            return Err(RuntimeManagerError::SessionAlreadyResident {
+                session_id: session.clone(),
+                resident_conversation: resident.clone(),
+                requested_conversation: conversation.clone(),
+            });
+        }
+        Ok(())
+    }
+    fn remove(&mut self, id: &ConversationId) {
+        self.entries.remove(id);
+        self.by_session.retain(|_, resident| resident != id);
+    }
 }
 /// Owned only by the process runtime manager and its in-progress flights.
 #[derive(Debug, Default)]
@@ -201,7 +328,7 @@ impl SessionRuntimeManager {
     /// Panics if an internal residency mutex was poisoned.
     pub fn is_current(&self, id: &ConversationId, incarnation: RuntimeIncarnationId) -> bool {
         matches!(self.registry.0.lock().expect("registry mutex").entries.get(id),
-            Some(Entry::Loaded(runtime)) if runtime.incarnation == incarnation)
+            Some(Entry::Loaded(runtime)) if runtime.identity.incarnation == incarnation)
     }
     /// Warm loads reuse the current incarnation. Loads racing unload wait for
     /// its terminal result, then cold load; failed unload remains a closed slot.
@@ -227,13 +354,16 @@ impl SessionRuntimeManager {
             let id_for_probe = id.clone();
             let flight = {
                 let mut registry = self.registry.0.lock().expect("registry mutex");
+                registry.check_session(session, &id)?;
                 match registry.entries.get(&id) {
-                    Some(Entry::Loaded(runtime)) => return Ok(runtime.clone()),
+                    Some(Entry::Loaded(runtime)) => return Ok(runtime.identity.clone()),
                     Some(Entry::Loading(flight) | Entry::Unloading { flight, .. }) => {
                         flight.clone()
                     }
                     None => {
                         let flight = Flight::new();
+                        // Session claim and Conversation flight publish atomically.
+                        registry.by_session.insert(session.clone(), id.clone());
                         // Same-id load linearization: exactly one claimant can
                         // install this Loading flight before releasing the lock.
                         registry
@@ -264,7 +394,7 @@ impl SessionRuntimeManager {
     async fn compose(
         &self,
         access: SessionAccess,
-    ) -> Result<Arc<ManagedRuntime>, RuntimeManagerError> {
+    ) -> Result<Arc<ResidentRuntime>, RuntimeManagerError> {
         #[cfg(test)]
         {
             let probe = self.probe(&access.node.conversation_id);
@@ -335,10 +465,14 @@ impl SessionRuntimeManager {
                 })
                 .expect("process incarnation identity exhausted"),
         );
-        Ok(Arc::new(ManagedRuntime {
-            conversation: access.node.conversation_id,
-            incarnation,
-            workspace_identity: identity,
+        Ok(Arc::new_cyclic(|resident| ResidentRuntime {
+            identity: Arc::new(ManagedRuntime {
+                conversation: access.node.conversation_id,
+                incarnation,
+                workspace_identity: identity,
+                resident: resident.clone(),
+                registry: Arc::downgrade(&self.registry),
+            }),
             composition: Mutex::new(Some(composition)),
         }))
     }
@@ -405,9 +539,11 @@ impl SessionRuntimeManager {
             let id = access.node.conversation_id.clone();
             let (flight, claimed) = {
                 let mut registry = self.registry.0.lock().expect("registry mutex");
+                registry.check_session(session, &id)?;
                 match registry.entries.get(&id) {
                     None => {
                         let flight = Flight::new();
+                        registry.by_session.insert(session.clone(), id.clone());
                         registry
                             .entries
                             .insert(id.clone(), Entry::Loading(flight.clone()));
@@ -441,7 +577,7 @@ impl SessionRuntimeManager {
     fn spawn_unload(
         &self,
         id: ConversationId,
-        runtime: Arc<ManagedRuntime>,
+        runtime: Arc<ResidentRuntime>,
         flight: Arc<Flight>,
         replacement: Option<SessionAccess>,
     ) {
@@ -450,7 +586,7 @@ impl SessionRuntimeManager {
         tokio::spawn(async move {
             #[cfg(test)]
             owner.probe(&id).before_shutdown.park().await;
-            let live = runtime.runtime().expect("resident composition");
+            let live = runtime.shutdown_runtime().expect("resident composition");
             if let Err(e) = live.shutdown().await {
                 terminal.finish(Err(error(format!("{e:?}"))));
                 return;
@@ -499,7 +635,7 @@ struct TerminalGuard {
     id: ConversationId,
     flight: Arc<Flight>,
     finished: bool,
-    candidate: Option<Arc<ManagedRuntime>>,
+    candidate: Option<Arc<ResidentRuntime>>,
 }
 impl TerminalGuard {
     fn new(owner: &SessionRuntimeManager, id: ConversationId, flight: Arc<Flight>) -> Self {
@@ -511,7 +647,7 @@ impl TerminalGuard {
             candidate: None,
         }
     }
-    fn finish(mut self, result: Outcome) {
+    fn finish(mut self, result: CompositionOutcome) {
         if let Ok(Some(runtime)) = &result {
             // Install the incarnation in the flight owner while Loading still
             // excludes all other claimants. Activation can synchronously admit
@@ -529,7 +665,7 @@ impl TerminalGuard {
         self.publish(result);
         self.finished = true;
     }
-    fn publish(&self, result: Outcome) {
+    fn publish(&self, result: CompositionOutcome) {
         let mut registry = self.registry.0.lock().expect("registry mutex");
         match &result {
             Ok(Some(runtime)) => {
@@ -540,14 +676,16 @@ impl TerminalGuard {
                     .insert(self.id.clone(), Entry::Loaded(runtime.clone()));
             }
             Ok(None) => {
-                registry.entries.remove(&self.id);
+                registry.remove(&self.id);
             }
             Err(_) if matches!(registry.entries.get(&self.id), Some(Entry::Loading(_))) => {
-                registry.entries.remove(&self.id);
+                registry.remove(&self.id);
             }
             Err(_) => {} // Retain Unloading and the actual shutdown diagnostic.
         }
-        self.flight.result.send_replace(Some(result));
+        self.flight.result.send_replace(Some(
+            result.map(|runtime| runtime.map(|r| r.identity.clone())),
+        ));
     }
 }
 impl Drop for TerminalGuard {
