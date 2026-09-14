@@ -186,6 +186,10 @@ export class CommandDispatcher {
    * attachment through all awaited phases, so an admitted command cannot
    * retarget a newer attachment.
    */
+  setHost(host: AppServerHost): void {
+    this.#context.host = host;
+  }
+
   setSession(session: AppServerSession): void {
     this.#context.session = session;
   }
@@ -255,6 +259,14 @@ export class CommandDispatcher {
           return await this.#newSession();
         case "/resume":
           return await this.#resume(session, argument);
+        case "/unload": {
+          if (!argument || /\s/.test(argument)) return usage("/unload <session-id>");
+          if (argument === session.sessionId) return transient("error", "switch focus to another Session before unloading this one");
+          const background = this.#context.host.attachment(argument);
+          if (background === undefined) return transient("error", "this client has no attachment for that Session");
+          await background.unload();
+          return transient("info", `server unloaded Session ${argument}; its durable history remains available`);
+        }
         case "/session":
           return await this.#sessionInfo(session);
         case "/name":
@@ -326,6 +338,7 @@ export class CommandDispatcher {
         session.sessionId,
         boundary.surface_revision,
         boundary.message.id,
+        session.nodeId,
       );
       return focusTransition(forked, "forked");
     } catch (error) {
@@ -342,7 +355,7 @@ export class CommandDispatcher {
       const current = await this.#context.host.readSession(session.sessionId);
       const branched = await this.#context.host.branchSession(
         session.sessionId,
-        current.active_node,
+        session.nodeId ?? current.active_node,
         boundary.surface_revision,
         boundary.message.id,
       );
@@ -372,6 +385,8 @@ export class CommandDispatcher {
     const cloned = await this.#context.host.forkSession(
       session.sessionId,
       head.surfaceRevision,
+      undefined,
+      session.nodeId,
     );
     return focusTransition(cloned, "cloned");
   }

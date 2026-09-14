@@ -191,6 +191,11 @@ export class AppServerChild {
     }
   }
 
+  /** Explicit owner shutdown; the server owns its drain deadline and settlement. */
+  requestShutdown(): void {
+    if (this.#exit === undefined) this.#child.kill("SIGTERM");
+  }
+
   /** Resolves when the process exits. */
   wait(): Promise<ChildExit> {
     return this.#exited;

@@ -134,6 +134,8 @@ import type { InteractionResponse } from "../protocol/app-server.ts";
 export interface RustxTuiAppOptions {
   /** The App Server connection, its Session catalog, and who owns its process. */
   host: AppServerHost;
+  /** Reconnects to the externally managed server; never spawns a child. */
+  reconnect?: () => Promise<AppServerHost>;
   /** The Session the terminal opens on. */
   session: AppServerSession;
   /** `session/create` inputs for Sessions this client creates. */
@@ -174,7 +176,9 @@ interface PendingApprovalRequest {
 }
 
 export class RustxTuiApp {
-  readonly #host: AppServerHost;
+  #host: AppServerHost;
+  readonly #reconnect: (() => Promise<AppServerHost>) | undefined;
+  #recovering = false;
   #session: AppServerSession;
   readonly #dispatcher: CommandDispatcher;
   readonly #openSessionSelectorAtStartup: boolean;
@@ -242,13 +246,14 @@ export class RustxTuiApp {
   #removeStateListener: (() => void) | undefined;
   #removeSnapshotListener: (() => void) | undefined;
   #removeClosedListener: (() => void) | undefined;
-  readonly #removeConnectionListener: () => void;
+  #removeConnectionListener: () => void = () => {};
   /** The durable metadata of the visible Session, refreshed authoritatively. */
   #sessionInfo: SessionView | undefined;
   #resolveExit: ((code: number) => void) | undefined;
 
   constructor(options: RustxTuiAppOptions) {
     this.#host = options.host;
+    this.#reconnect = options.reconnect;
     this.#session = options.session;
     this.#openSessionSelectorAtStartup = options.openSessionSelector ?? false;
     this.#workspace = options.cwd;
@@ -277,18 +282,58 @@ export class RustxTuiApp {
     this.#tui.addChild(this.#editor);
     this.#tui.addChild(this.#footer);
 
-    // The connection is the one thing every Session shares. Losing it ends
-    // observation of all of them at once — and says nothing about any of them.
-    this.#removeConnectionListener = this.#host.client.onClose((error) => {
-      this.#deletion?.terminate();
-      if (this.#quitting || this.#terminalFinishStarted || this.#finished) return;
-      this.#editor.disableSubmit = true;
-      void this.#showTerminalFailureAndFinish(
-        `${compactDiagnostic(error)}\nThe App Server is no longer reachable from this client. Work it already accepted is unaffected; this client can no longer observe it.`,
-        1,
-      );
-    });
+    this.#watchConnection();
     this.#bindSession(this.#session);
+  }
+
+  #watchConnection(): void {
+    this.#removeConnectionListener();
+    const host = this.#host;
+    this.#removeConnectionListener = host.client.onClose((error) => {
+      if (this.#host !== host || this.#quitting || this.#finished) return;
+      this.#deletion?.terminate();
+      this.#invalidatePresentation();
+      this.#editor.disableSubmit = true;
+      if (host.ownership === "external" && this.#reconnect !== undefined) {
+        void this.#recoverConnection();
+      } else {
+        void host.shutdown().finally(() => this.#showTerminalFailureAndFinish(
+          `${compactDiagnostic(error)}\nApp Server connection/process failure. Runtime outcomes are unknown.`, 1,
+        ));
+      }
+    });
+  }
+
+  async #recoverConnection(): Promise<void> {
+    if (this.#recovering || this.#reconnect === undefined || this.#quitting || this.#finished) return;
+    this.#recovering = true;
+    this.#switching = true;
+    const oldHost = this.#host;
+    const sessionId = this.#session.sessionId;
+    let replacement: AppServerHost | undefined;
+    this.#showTransient("info", "reconnecting; unanswered mutations have unknown outcomes and will not be resent…");
+    try {
+      await oldHost.shutdown();
+      replacement = await this.#reconnect();
+      const session = await replacement.attach(sessionId, this.#session.nodeId);
+      if (this.#quitting || this.#finished || this.#host !== oldHost) {
+        await replacement.shutdown();
+        return;
+      }
+      this.#host = replacement;
+      this.#dispatcher.setHost(replacement);
+      this.#bindSession(session);
+      this.#watchConnection();
+      this.#renderState(session.state);
+      this.#showTransient("info", "reconnected from server state; no unanswered mutations were resent");
+    } catch (error) {
+      await replacement?.shutdown();
+      this.#showTransient("error", `reconnect failed: ${compactDiagnostic(error)}. Ctrl+R retries; Ctrl+C exits. Unanswered mutations remain unknown.`);
+    } finally {
+      this.#recovering = false;
+      this.#switching = false;
+      this.#editor.disableSubmit = this.#quitting || this.#host.client.closed !== undefined;
+    }
   }
 
   /**
@@ -369,25 +414,47 @@ export class RustxTuiApp {
     editorContent: UserContentBlock[] | undefined,
     notice: string | undefined,
     lease: PresentationLease,
+    confirmedNodeChange = false,
   ): Promise<void> {
     if (!this.#isCurrentPresentationLease(lease) || this.#switching) return;
-    if (sessionId === this.#session.sessionId && editorContent === undefined) {
-      // Already the visible Session. Repair rather than re-attach, so the
-      // picker's "choose the current one" is still an authoritative refresh.
+    if (sessionId === this.#session.sessionId && editorContent === undefined &&
+        (nodeId === undefined || nodeId === this.#session.nodeId) && !this.#session.serverClosed) {
+      await this.#session.resync();
       if (notice !== undefined) this.#showTransient("info", notice);
+      return;
+    }
+    const existing = this.#host.attachment(sessionId);
+    const changingNode = nodeId !== undefined && existing !== undefined &&
+      !existing.released && !existing.serverClosed && nodeId !== existing.nodeId;
+    if (changingNode && !confirmedNodeChange) {
+      const confirmation = new ConfirmationView({
+        title: "Change conversation node", subject: `Session ${sessionId}`,
+        confirmLabel: "Unload and open node", permanent: false,
+        warning: "The server supports one live node per Session. This explicitly unloads this Session's current runtime before opening the selected node. Other Sessions keep running.",
+        onConfirm: () => {
+          this.#closeOverlay();
+          void this.#focusSession(sessionId, nodeId, editorContent, notice, lease, true);
+        },
+        onCancel: () => this.#closeOverlay(),
+      });
+      this.#showPopup(confirmation, { width: "80%", minWidth: 48, heightPercent: 38 });
       return;
     }
     this.#switching = true;
     this.#editor.disableSubmit = true;
+    const host = this.#host;
     try {
-      const next = await this.#host.attach(sessionId, nodeId);
+      const next = changingNode && nodeId !== undefined
+        ? await this.#host.openNode(sessionId, nodeId)
+        : await this.#host.attach(sessionId, nodeId);
+      if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
       this.#bindSession(next);
       // A returning attachment may have folded events while it was off screen,
       // and the server is the only thing entitled to say what it holds now.
-      if (next.resyncCount === 0 && this.#session === next) {
+      if (this.#session === next) {
         await next.resync();
       }
-      if (this.#session !== next) return;
+      if (this.#session !== next || this.#host.client.closed !== undefined) return;
       if (editorContent !== undefined) {
         this.#editor.setText(editorText(editorContent));
       }
@@ -402,7 +469,7 @@ export class RustxTuiApp {
     } finally {
       this.#switching = false;
       if (!this.#finished) {
-        this.#editor.disableSubmit = this.#quitting;
+        this.#editor.disableSubmit = this.#quitting || this.#recovering || this.#host.client.closed !== undefined;
       }
     }
   }
@@ -475,6 +542,11 @@ export class RustxTuiApp {
         // Any user input acknowledges the one current transient feedback item.
         // A later command or lifecycle result may replace it explicitly.
         this.#acknowledgeTransient();
+        if (this.#host.client.closed !== undefined && this.#reconnect !== undefined) {
+          if (matchesKey(data, "ctrl+r")) void this.#recoverConnection();
+          if (matchesKey(data, "ctrl+c")) void this.quit();
+          return { consume: true };
+        }
         // The subagent list is an explicit presentation focus. Ctrl+Up/Down
         // enters that focus so ordinary editor Enter remains ordinary message
         // submission until the user has selected a row.
@@ -867,11 +939,9 @@ export class RustxTuiApp {
    *
    * ```text
    * local self-hosted            existing / remote
-   *   close the child's stdin      close this socket
-   *   the child sees EOF,          the server keeps running, every
-   *   detaches and exits           Session stays loaded, accepted
-   *   (SIGTERM/SIGKILL only if     work keeps executing, pending
-   *    it overstays its grace)     interactions stay pending
+   *   SIGTERM + close stdin       close this socket
+   *   server-owned drain          server and accepted work continue
+   *   wait for process exit       pending interactions stay pending
    * ```
    *
    * The local path may end work that was in flight. That happens because the

@@ -183,6 +183,43 @@ pub async fn representative_scenario(
     ));
     let cursor_a = cursor;
 
+    // Park the fan-in on the old registration before replacing it. A closed
+    // subscription here means resubscribe, never Session residency ending.
+    let parked = driver.next_notification();
+    futures_util::pin_mut!(parked);
+    assert!(futures_util::poll!(parked.as_mut()).is_pending());
+    assert!(matches!(
+        call(
+            driver,
+            40,
+            Method::SessionSubscribe {
+                target: a.clone(),
+                after_cursor: cursor_a,
+            }
+        )
+        .await,
+        MethodResult::Subscribed { .. }
+    ));
+    let MethodResult::Boundaries {
+        boundaries,
+        next_offset,
+        ..
+    } = call(
+        driver,
+        41,
+        Method::SessionBoundaries {
+            target: a.clone(),
+            offset: 0,
+            limit: 32,
+        },
+    )
+    .await
+    else {
+        panic!("boundary page")
+    };
+    assert!(boundaries.is_empty());
+    assert!(next_offset.is_none());
+
     let (changed_a, changed_b) = tokio::join!(
         call(
             driver,
@@ -216,12 +253,17 @@ pub async fn representative_scenario(
         }
     ));
     let mut seen = std::collections::BTreeSet::new();
-    for _ in 0..2 {
+    for index in 0..2 {
+        let next = if index == 0 {
+            parked.as_mut().await
+        } else {
+            driver.next_notification().await
+        };
         let NotificationMethod::Event {
             target,
             cursor,
             event,
-        } = driver.next_notification().await.notification
+        } = next.notification
         else {
             panic!("routed event")
         };

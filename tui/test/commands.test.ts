@@ -121,7 +121,8 @@ describe("command registry", () => {
         "/resume",
         "/session",
         "/name",
-        "/clone",
+        "/unload",
+      "/clone",
         "/fork",
         "/tree",
         "/tools",
@@ -612,6 +613,15 @@ describe("CommandDispatcher", () => {
       ],
     });
 
+    const diagnostics = await nextRequest(h, "server/diagnostics");
+    h.transport.respond(diagnostics.id, { type: "diagnostics", snapshot: {
+      lifecycle: "Accepting", policy: {}, loaded: 0, loading: 0, unloading: 0,
+      active_roots: 0, external_attachments: 0, sessions: [], admission_refusals: {},
+      shutdown_failures: "0", shutdown_timeouts: "0", unload_failures: "0",
+      transport: { websocket_connections: 1, stdio_connections: 0, connection_refusals: "0",
+        delivery_failures: "0", max_message_bytes: 1048576, outbound_queue_messages: 32,
+        outbound_queue_bytes: 33554432, in_flight_requests: 16, write_deadline_ms: "10000" },
+    } });
     const outcome = await resuming;
     assert.equal(outcome.kind, "choose_session");
     if (outcome.kind === "choose_session") {
@@ -1652,4 +1662,18 @@ describe("CLI arguments", () => {
     assert.match(USAGE, /--connect/);
     assert.match(USAGE, /--token-file/);
   });
+});
+
+it("unload is an explicit background-Session command, never focus or delete", async () => {
+  const h = await harness();
+  const current = await h.dispatcher.submit("/unload session-1");
+  assert.equal(current.kind, "transient");
+  assert.equal(h.transport.log.count("session/unload"), 0);
+  let unloads = 0;
+  const background = { unload: async () => { unloads++; } } as unknown as AppServerSession;
+  h.host.attachment = (id) => id === "background" ? background : h.session;
+  const result = await h.dispatcher.submit("/unload background");
+  assert.equal(result.kind, "transient");
+  assert.equal(unloads, 1);
+  assert.equal(h.transport.log.count("session/delete"), 0);
 });

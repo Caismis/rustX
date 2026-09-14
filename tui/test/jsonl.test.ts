@@ -187,7 +187,7 @@ describe("JSONL framing", () => {
     assert.deepEqual(decoder.push(encodeRecord(value)), [value]);
   });
 
-  it("shares the Runtime Client record limit with the Rust transport", () => {
-    assert.equal(JSONL_MAX_RECORD_BYTES, 8 * 1024 * 1024);
+  it("shares the App Server record limit with the Rust transport", () => {
+    assert.equal(JSONL_MAX_RECORD_BYTES, 1024 * 1024);
   });
 });

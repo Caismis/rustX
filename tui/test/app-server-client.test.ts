@@ -601,3 +601,33 @@ describe("typed results", () => {
     await assert.rejects(pending, /returned detached instead of server_info/);
   });
 });
+
+it("a newer repair fences an older snapshot even when responses arrive out of order", async () => {
+  const { client, transport } = await initialized();
+  const session = await attached(client, transport);
+  const older = session.resync();
+  const newer = session.resync();
+  const requests = await transport.log.awaitMethod("session/snapshot", 2);
+  transport.respond(requests[1]!.id, { type: "snapshot", snapshot: snapshot(), cursor: "20" });
+  const subscribe = (await transport.log.awaitMethod("session/subscribe"))[0]!;
+  transport.respond(subscribe.id, { type: "subscribed", after_cursor: "20" });
+  await newer;
+  transport.respond(requests[0]!.id, { type: "snapshot", snapshot: snapshot({ shutting_down: true }), cursor: "10" });
+  await older;
+  assert.equal(session.state.cursor, "20");
+  assert.equal(session.state.runtimeShutdown, false);
+  assert.equal(transport.log.count("session/subscribe"), 1);
+});
+
+it("server closure fences pending snapshots and all later observations", async () => {
+  const { client, transport } = await initialized();
+  const session = await attached(client, transport);
+  const pending = session.resync();
+  const request = (await transport.log.awaitMethod("session/snapshot"))[0]!;
+  session.applyNotification({ jsonrpc: "2.0", method: "session/closed", params: { target: session.target } });
+  transport.respond(request.id, { type: "snapshot", snapshot: snapshot({ shutting_down: true }), cursor: "99" });
+  await pending;
+  session.applyNotification(notification("session/event", { target: session.target, cursor: "100", event: { type: "runtime_shutdown" } }));
+  assert.equal(session.state.cursor, "5");
+  assert.equal(session.state.runtimeShutdown, false);
+});

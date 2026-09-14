@@ -15,9 +15,8 @@ one client connection → AppServerConnection (initialize once)
 
 The host's projection, attachment admission, replay ring and native controls
 are reused. Clients do not initialize or wrap an inner Runtime Client protocol.
-The existing local TUI stdio endpoint and handwritten `tui/src/protocol/types.ts`
-remain tied to the current TUI application until #290; they are not an App
-Server schema or a second supported App Server client contract.
+The TUI consumes these generated DTOs through one typed App Server client, with
+stdio and WebSocket adapters. See [TUI architecture](tui-app-server.md).
 
 ## One protocol, multiple transports
 
@@ -27,12 +26,11 @@ semantic conformance. #36 binds the same `AppServerConnection` endpoint to
 concrete stdio JSONL and WebSocket transports. Neither transport defines Session,
 execution, interaction, cancellation, history, residency, or replay semantics.
 
-After #290, ordinary local TUI mode uses first-class App Server stdio JSONL to a
+Ordinary local TUI mode uses first-class App Server stdio JSONL to a
 TUI-owned child; browser and existing/remote TUI clients use WebSocket to an
 externally managed server. The ordinary local TUI does not need a loopback
 WebSocket merely to consume the unified App Server protocol. This App Server stdio
-binding is not the old Runtime Client wire protocol currently carried by the TUI's
-pipes: #290 replaces those temporary semantics with the generated App Server DTOs.
+binding and the remote WebSocket binding carry the same generated App Server DTOs.
 
 ### Connection lifetime versus process ownership
 
@@ -40,7 +38,7 @@ For either transport, connection EOF/close releases that connection's external
 attachments. It does not fabricate turn cancellation, interaction settlement,
 Session unload/delete, or server shutdown. Explicit detach has the same separation.
 
-In the planned local self-hosted mode, `rustx-tui` owns
+In local self-hosted mode, `rustx-tui` owns
 `rustx app-server --listen stdio`. Normal TUI exit explicitly shuts down that child
 through the process lifecycle seam. This is owner-driven process shutdown,
 not transport EOF semantically cancelling work. Persistent execution across TUI
@@ -85,10 +83,9 @@ and configuration admission rules. Neither cwd nor transport authentication is a
 Exactly one transport is selected. `ws://IP:PORT` accepts numeric IPv4/IPv6 socket
 addresses, including port 0 for host-assigned ports. The server advertises the bound
 address on stderr only after bootstrap succeeds. Stdio readiness is the response to
-`initialize`; no banner is emitted. Stdio requires pipes on stdin/stdout, as supplied
+`initialize`; no banner is emitted. Stdio accepts pipes or Unix socketpairs on stdin/stdout, as supplied
 by a child-process launcher. The command does not daemonize or reconnect orphaned pipes.
-The existing ordinary `rustx` Runtime Client and internal `--subagent-child` paths
-remain in use until #290.
+The internal `--subagent-child` path remains separate from the public client transport.
 
 ## Transport framing and admission
 
@@ -244,7 +241,7 @@ explicitly rejected as an invalid request before any action occurs.
 | `session/deletePreview`, `session/delete`, `session/recoverDeletion` | Native revision-confirmed deletion/recovery; no client-supplied cleanup workset |
 | `session/attach`, `session/detach` | Load/reuse a runtime and acquire/release its external control attachment |
 | `session/unload` | Explicit incarnation-checked native shutdown/unload; waits for settlement, preserves durable Session state |
-| `session/snapshot`, `session/subscribe`, `session/transcript` | Authoritative projection, bounded replay and durable transcript pages |
+| `session/snapshot`, `session/subscribe`, `session/transcript`, `session/boundaries` | Authoritative projection, bounded replay, durable transcript and revision-bound user-message pages |
 | `turn/start`, `turn/steer`, `turn/cancel` | Native inbound and attempt-cancellation owners; acceptance is not terminal execution |
 | `interaction/respond`, `interaction/cancel` | Originating runtime/coordinator, including routed child interactions |
 | `settings/read`, `settings/replace` | Explicit durable Session selections with revision CAS; cold composition consumes them |

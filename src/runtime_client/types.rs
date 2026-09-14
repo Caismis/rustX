@@ -1409,35 +1409,6 @@ mod tests {
         assert!(encoded["sessions"][0].get("active").is_none());
     }
 
-    /// Issue #259 blocker 3: the Rust and TypeScript protocol constants are
-    /// one number.
-    ///
-    /// The reference client mirrors this contract in its own source, so the
-    /// two constants are two literals describing one wire schema. Reading the
-    /// TypeScript one here makes them impossible to bump apart: a Rust bump
-    /// that forgets `tui/src/protocol/types.ts` fails in Rust, before any
-    /// client ever negotiates against a version that means two things.
-    #[test]
-    fn ext259_the_typescript_protocol_constant_mirrors_this_one() {
-        let mirror = include_str!("../../tui/src/protocol/types.ts");
-        let declaration = mirror
-            .lines()
-            .find_map(|line| {
-                line.trim()
-                    .strip_prefix("export const RUNTIME_CLIENT_PROTOCOL_VERSION = ")
-            })
-            .expect("the reference client declares the protocol version");
-        let declared: u16 = declaration
-            .trim_end_matches(';')
-            .trim()
-            .parse()
-            .expect("the declared version is a number");
-        assert_eq!(
-            declared, RUNTIME_CLIENT_PROTOCOL_VERSION,
-            "the TypeScript mirror must carry the same protocol version as this crate"
-        );
-    }
-
     /// The Runtime Client protocol version is a distinct constant from the
     /// internal event schema version: representing or changing one never
     /// implies anything about the other.

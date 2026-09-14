@@ -1463,8 +1463,8 @@ Agent Status observation, a context message, or the Event Journal.
 a root host and a subagent-child host alike; there is no later mutation seam.
 
 The wire vocabulary is closed and typed — `EffectiveNativeAgentExtensions` with
-one named member per native extension, mirrored in
-`tui/src/protocol/types.ts` — never `serde_json::Value`, a
+one named member per native extension, generated in
+`protocol/app-server/v1.ts` — never `serde_json::Value`, a
 `HashMap<String, Value>`, generic extension metadata, a plugin descriptor, or a
 dynamic registry view. It grows only when a native extension is deliberately
 added to it. The projection reports what was *already* successfully composed

@@ -196,7 +196,8 @@ export class SessionSelector implements PopupContent, Focusable {
     for (let index = window.start; index < window.end; index += 1) {
       const session = visible[index]!;
       const marker = index === this.#selected ? role.accent("❯") : " ";
-      const label = sessionRowLabel(session);
+      const status = session.residency === undefined ? "" : ` · ${session.residency.toLowerCase()}${session.activeRoot ? "/active" : ""}`;
+      const label = sessionRowLabel(session) + status;
       lines.push(`${marker} ${index === this.#selected ? style.bold(label) : label}`);
       lines.push(`    ${role.meta(`${session.id} · node ${session.active_node}`)}`);
     }

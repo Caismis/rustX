@@ -32,7 +32,7 @@ import {
   type SessionNodeId,
   type SessionPersistentState,
   type SessionSnapshot,
-  type SessionSummary,
+  type SessionSummaryView,
   type SessionNode,
   type SessionDeleteResult,
   type SessionId,
@@ -43,7 +43,6 @@ import {
 import { AppServerClient } from "./client.ts";
 import {
   AppServerChild,
-  DEFAULT_TERMINATION_GRACE_MS,
   type AppServerChildOptions,
   type ChildExit,
 } from "./child-process.ts";
@@ -101,12 +100,11 @@ export class AppServerHost {
   readonly client: AppServerClient;
   readonly ownership: ProcessOwnership;
   readonly #child: AppServerChild | undefined;
-  readonly #terminationGraceMs: number;
   readonly #sessions = new Map<string, AppServerSession>();
   #shuttingDown = false;
 
   constructor(composition: AppServerHostComposition) {
-    const { client, ownership, child, terminationGraceMs } = composition;
+    const { client, ownership, child } = composition;
     if ((ownership === "owned_child") !== (child !== undefined)) {
       throw new Error(
         "an owned App Server host has a child process and an external one does not",
@@ -115,7 +113,6 @@ export class AppServerHost {
     this.client = client;
     this.ownership = ownership;
     this.#child = child;
-    this.#terminationGraceMs = terminationGraceMs ?? DEFAULT_TERMINATION_GRACE_MS;
 
     // One subscription routes every notification. A notification names its full
     // attachment target; each attachment decides whether that target is its
@@ -225,7 +222,8 @@ export class AppServerHost {
   ): Promise<AppServerSession> {
     const existing = this.#sessions.get(sessionId);
     if (existing !== undefined && !existing.released && !existing.serverClosed) {
-      return existing;
+      if (nodeId === undefined || nodeId === existing.nodeId) return existing;
+      throw new Error("changing a Session node requires explicit unload confirmation");
     }
     const session = await AppServerSession.attach(this.client, sessionId, nodeId);
     this.#sessions.set(sessionId, session);
@@ -237,6 +235,16 @@ export class AppServerHost {
       }
     });
     return session;
+  }
+
+  /** User-confirmed node change: native unload settles this Session only. */
+  async openNode(sessionId: SessionId, nodeId: SessionNodeId): Promise<AppServerSession> {
+    const existing = this.#sessions.get(sessionId);
+    if (existing !== undefined && !existing.released && !existing.serverClosed) {
+      await existing.unload();
+      this.#sessions.delete(sessionId);
+    }
+    return this.attach(sessionId, nodeId);
   }
 
   /** The attachment this connection holds for a Session, if any. */
@@ -272,7 +280,7 @@ export class AppServerHost {
     query?: string,
     offset = 0,
     limit = SESSION_PROJECTION_PAGE_LIMIT,
-  ): Promise<{ sessions: SessionSummary[]; nextOffset?: number }> {
+  ): Promise<{ sessions: SessionSummaryView[]; nextOffset?: number }> {
     const page = await this.client.call(
       "session/list",
       {
@@ -282,7 +290,15 @@ export class AppServerHost {
       },
       "sessions",
     );
-    return { sessions: page.sessions, nextOffset: page.next_offset ?? undefined };
+    const diagnostics = await this.client.call("server/diagnostics", {}, "diagnostics");
+    const residency = new Map(diagnostics.snapshot.sessions.map((entry) => [entry.session_id, entry]));
+    return {
+      sessions: page.sessions.map((session) => ({ ...session,
+        residency: residency.get(session.id)?.residency ?? "Unloaded",
+        activeRoot: residency.get(session.id)?.active_root ?? false,
+      })),
+      nextOffset: page.next_offset ?? undefined,
+    };
   }
 
   async readSession(sessionId: SessionId): Promise<SessionSnapshot> {
@@ -449,8 +465,7 @@ export class AppServerHost {
    * Ends this TUI's relationship with the App Server, according to ownership.
    *
    * For an **owned child** this is a process shutdown: the client closes the
-   * child's stdin, the child sees EOF, detaches its connection and exits, and
-   * the owner escalates only if it overstays its grace. Work in flight may be
+   * child's stdin and sends SIGTERM, then waits for server-owned drain and exit. Work in flight may be
    * lost — because the process the TUI owns is intentionally ending, not
    * because a transport detach is execution authority.
    *
@@ -467,12 +482,13 @@ export class AppServerHost {
     this.#sessions.clear();
 
     if (this.ownership === "external" || this.#child === undefined) {
-      this.client.close();
+      await this.client.close();
       return undefined;
     }
 
+    this.#child.requestShutdown();
     this.#child.closeStdin();
-    const exit = await this.#child.waitOrTerminate(this.#terminationGraceMs);
+    const exit = await this.#child.wait();
     this.client.close();
     return exit;
   }

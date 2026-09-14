@@ -483,6 +483,12 @@ export function describeRpcError(error: RpcError): string {
     return `${error.message} (code ${error.code})`;
   }
   switch (data.kind) {
+    case "request_capacity":
+    case "residency_capacity":
+    case "attachment_capacity":
+      return `the App Server reached ${data.kind.replaceAll("_", " ")}`;
+    case "server_draining":
+      return "the App Server is shutting down and no longer accepts work";
     case "unknown_session":
       return `unknown session ${data.session_id}`;
     case "unknown_node":
@@ -546,6 +552,10 @@ export function sameSession(
 
 export type { SessionNode as SessionNodeView };
 export type { SessionSnapshot as SessionView };
-export type { SessionSummary as SessionSummaryView };
+/** Terminal catalog row; residency comes from server diagnostics, never local scheduling. */
+export type SessionSummaryView = SessionSummary & {
+  residency?: import("../../../protocol/app-server/v1.ts").ResidencyState;
+  activeRoot?: boolean;
+};
 export type { SessionUserMessageBoundary as SessionUserMessageBoundaryView };
 export type { SessionPersistentState as SessionSettings };

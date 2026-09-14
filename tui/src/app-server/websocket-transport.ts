@@ -20,14 +20,15 @@
  * nothing else.
  *
  * One complete text message is one protocol message. The library reassembles
- * fragments, validates UTF-8 and enforces the message bound before the message
- * reaches this class, so there is no framing work left here.
+ * fragments and validates UTF-8. This adapter checks the App Server payload
+ * bound before JSON parsing.
  *
  * Disconnect is a transport fact. The server keeps running, accepted work keeps
  * executing, pending interactions stay pending, and this client simply stops
  * observing until it reconnects and re-reads authoritative state.
  */
 
+import { JSONL_MAX_RECORD_BYTES } from "../protocol/jsonl.ts";
 import {
   BaseTransport,
   TransportClosedError,
@@ -59,11 +60,13 @@ export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 5_000;
 export class WebSocketTransport extends BaseTransport {
   readonly #socket: WebSocket;
   readonly #endpoint: string;
+  readonly #ended: Promise<void>;
 
   private constructor(socket: WebSocket, endpoint: string) {
     super();
     this.#socket = socket;
     this.#endpoint = endpoint;
+    this.#ended = new Promise((resolve) => socket.addEventListener("close", () => resolve(), { once: true }));
 
     socket.addEventListener("message", (event: MessageEvent) => {
       this.#onMessage(event.data);
@@ -184,6 +187,11 @@ export class WebSocketTransport extends BaseTransport {
     });
   }
 
+  override async close(): Promise<void> {
+    super.close();
+    await this.#ended;
+  }
+
   override describe(): string {
     return this.#endpoint;
   }
@@ -211,6 +219,10 @@ export class WebSocketTransport extends BaseTransport {
           "the App Server sent a non-text WebSocket message",
         ),
       );
+      return;
+    }
+    if (Buffer.byteLength(data, "utf8") > JSONL_MAX_RECORD_BYTES) {
+      this.terminate(new TransportClosedError("framing_error", "the App Server message exceeds the payload limit"));
       return;
     }
     let record: unknown;

@@ -122,6 +122,7 @@ async function main(argv: readonly string[]): Promise<number> {
 
   const app = new RustxTuiApp({
     host,
+    reconnect: parsed.mode.kind === "remote" ? () => connect(parsed) : undefined,
     session,
     sessionSettings: parsed.sessionSettings,
     openSessionSelector: parsed.routing.openSessionSelector,

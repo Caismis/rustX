@@ -86,7 +86,7 @@ export interface AppServerTransport {
    * process is a different operation with a different owner — see
    * `./host.ts`.
    */
-  close(): void;
+  close(): void | Promise<void>;
 }
 
 /**

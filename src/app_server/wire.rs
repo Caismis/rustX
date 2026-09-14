@@ -326,6 +326,19 @@ pub(super) fn protocol_schema() -> Value {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn referenced_and_nested_defaults_use_the_public_exact_domain() {
+        let public = super::protocol_schema();
+        assert_eq!(
+            public["$defs"]["RuntimeClientResourcesView"]["properties"]["revision"]["default"],
+            "0"
+        );
+        assert_eq!(
+            public["$defs"]["RuntimeClientSnapshot"]["properties"]["resources"]["default"]["revision"],
+            "0"
+        );
+    }
     use super::*;
 
     #[test]

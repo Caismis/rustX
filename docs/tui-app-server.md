@@ -86,6 +86,10 @@ neither knows what a Session, a Turn, an approval or a retry is.
 
 ## Session switching is focus
 
+The Session picker reads `server/diagnostics` alongside the durable catalog and
+shows loaded/loading/unloading/unloaded state plus native root activity. These
+are server observations, not a client scheduler.
+
 Showing a different Session attaches to it, or reuses the attachment this
 connection already holds. That is all it does.
 
@@ -107,8 +111,13 @@ One local App Server child keeps many Sessions loaded and running at once. The
 `restart_required` / one-active-process model is gone: there is no client path
 that replaces a process because the visible Session changed.
 
-Detach and `session/unload` still exist as deliberate product actions. Neither is
-what navigation does.
+The server permits one live conversation node per Session. Tree navigation to
+another node requires an explicit **Unload and open node** confirmation. That
+user action invokes native `session/unload` for this Session, then attaches the
+selected node. It never unloads another Session. Ordinary A/B focus changes
+retain both attachments and never offer or perform unload. `/unload <session-id>`
+is an explicit command for an attached background Session, including when the
+user wants to release it before native deletion. Durable history remains.
 
 ## Process ownership
 
@@ -119,20 +128,21 @@ type.
 | | local self-hosted | existing / remote |
 | --- | --- | --- |
 | Spawned by | this TUI | someone else |
-| On exit | closes the child's stdin; the child sees EOF, detaches and exits; SIGTERM/SIGKILL only if it overstays its grace | closes this socket |
+| On exit | signals SIGTERM, closes stdin, and waits for server-owned drain and exit | closes this socket |
 | Effect on the server | the process this TUI owns ends | none |
 | Effect on other Sessions | they end with the process | none |
-| Work in flight | may be lost, because the owned process is deliberately ending | continues |
+| Work in flight | settled by native drain; forced termination reports unproven settlement | continues |
 
-Losing in-flight work on a normal local exit happens because the process ends,
-not because detaching a transport is execution authority. Persistent execution
+Local exit requests the server-owned drain before the process ends. Transport
+detach has no execution authority. Persistent execution
 across TUI exit is what an externally managed App Server is for — and that is the
 same server the Developer Web Console (#289) connects to, so both can be pointed
 at one `rustx app-server --listen ws://…` for dogfooding.
 
-#291 owns graceful runtime drain and residency policy for that owned process.
-This client integrates with the shutdown boundary that exists today and defines
-no second shutdown state machine.
+#291 is merged: the App Server owns runtime drain, its deadline, and residency
+policy. The TUI sends the owner signal and observes exit; it defines no second
+semantic shutdown state machine. A failed startup uses bounded process termination
+to avoid leaving its child behind.
 
 ## Losing a response
 
@@ -152,7 +162,12 @@ Recovery is always the same shape, and never a resend:
 
 ```text
 new transport -> initialize -> attach -> authoritative snapshot -> repair
+recovery failure -> Ctrl+R retries recovery; Ctrl+C exits
 ```
+
+The terminal attempts remote recovery once automatically, preserving the focused
+Session/node and unsubmitted editor text. A failed attempt leaves input disabled
+until explicit recovery. Pending mutations are never copied to the new client.
 
 A disconnect cancels no turn, settles no interaction, answers no approval or
 Questionnaire, unloads no Session and edits no history. Accepted work continues

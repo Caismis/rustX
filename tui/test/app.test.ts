@@ -2134,3 +2134,57 @@ for (const sameAttachment of [false, true]) {
     });
   }
 }
+
+it("remote recovery installs a fresh attachment and fences old callbacks without replay", async () => {
+  let close!: (error: TransportClosedError) => void;
+  const old = fakeSession(emptyPresentationState(sessionModel("alpha/model-a")));
+  const next = fakeSession(emptyPresentationState(sessionModel("beta/model-b")));
+  const pending = deferred<{ messageId: string; sequence: string }>();
+  let submissions = 0;
+  old.submitInbound = () => { submissions++; return pending.promise; };
+  next.submitInbound = async () => { submissions++; return { messageId: "new", sequence: "2" }; };
+  const first = fakeHost({ ownership: "external", onClose: (listener) => { close = listener; } });
+  let attachments = 0;
+  const second = fakeHost({ ownership: "external", attach: async (id) => {
+    assert.equal(id, old.sessionId); attachments++; return next;
+  } });
+  let connects = 0;
+  const app = new RustxTuiApp({ host: first, session: old, sessionSettings: SESSION_SETTINGS,
+    reconnect: async () => { connects++; return second; } });
+  const running = app.run();
+  await waitForApplicationContinuation();
+  process.stdin.emit("data", "first submission\r");
+  await waitForApplicationContinuation();
+  const error = new TransportClosedError("input_eof", "lost connection");
+  Object.defineProperty(first.client, "closed", { value: error });
+  close(error);
+  await waitForApplicationContinuation();
+  pending.reject(new UncertainOutcomeError("turn/start", error));
+  await waitForApplicationContinuation();
+  assert.equal(connects, 1);
+  assert.equal(attachments, 1);
+  assert.equal(submissions, 1, "the uncertain turn was not replayed");
+  close(error);
+  await waitForApplicationContinuation();
+  assert.equal(connects, 1, "an old connection callback cannot replace recovery");
+  process.stdin.emit("data", "new intentional submission\r");
+  await waitForApplicationContinuation();
+  assert.equal(submissions, 2, "new input uses the replacement attachment");
+  await app.quit();
+  await running;
+});
+
+it("quitting while remote recovery is pending closes the late connection", async () => {
+  let close!: (error: TransportClosedError) => void;
+  const connection = deferred<AppServerHost>();
+  const first = fakeHost({ ownership: "external", onClose: (listener) => { close = listener; } });
+  const log: string[] = [];
+  const second = fakeHost({ ownership: "external", log });
+  const app = new RustxTuiApp({ host: first, session: fakeSession(), sessionSettings: SESSION_SETTINGS,
+    reconnect: () => connection.promise });
+  close(new TransportClosedError("input_eof", "lost connection"));
+  await app.quit();
+  connection.resolve(second);
+  await waitForApplicationContinuation();
+  assert.deepEqual(log, ["disconnect"]);
+});

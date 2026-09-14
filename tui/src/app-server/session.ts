@@ -108,6 +108,7 @@ export interface BoundaryPage {
 }
 
 export class AppServerSession {
+  readonly nodeId: SessionNodeId | undefined;
   readonly #client: AppServerClient;
   #target: AttachmentTarget;
   #state: PresentationState;
@@ -126,10 +127,16 @@ export class AppServerSession {
     client: AppServerClient,
     target: AttachmentTarget,
     state: PresentationState,
+    nodeId?: SessionNodeId,
   ) {
+    this.nodeId = nodeId;
     this.#client = client;
     this.#target = target;
     this.#state = state;
+    client.onClose(() => {
+      this.#released = true;
+      this.#epoch += 1;
+    });
   }
 
   /**
@@ -153,6 +160,7 @@ export class AppServerSession {
       client,
       attached.target,
       replaceFromSnapshot(attached.snapshot, attached.cursor),
+      nodeId,
     );
   }
 
@@ -221,7 +229,7 @@ export class AppServerSession {
    * projection that replaced it.
    */
   applyNotification(notification: Notification): boolean {
-    if (!sameTarget(notification.params.target, this.#target)) {
+    if (this.#released || this.#serverClosed || !sameTarget(notification.params.target, this.#target)) {
       return false;
     }
     switch (notification.method) {
@@ -235,6 +243,7 @@ export class AppServerSession {
         return true;
       case "session/closed":
         this.#serverClosed = true;
+        this.#epoch += 1;
         // Residency ended. That is a statement about this attachment's
         // observability, not a runtime outcome: nothing here fabricates a
         // settled attempt, an answered interaction, or a completed tool.
@@ -563,7 +572,8 @@ export class AppServerSession {
    * snapshot or arrives after that cursor.
    */
   async resync(): Promise<void> {
-    const epoch = this.#epoch;
+    if (this.#released || this.#serverClosed) return;
+    const epoch = ++this.#epoch;
     const snapshot = await this.#client.call(
       "session/snapshot",
       { target: this.#target },
@@ -664,6 +674,7 @@ export class AppServerSession {
   }
 
   #install(snapshot: RuntimeClientSnapshot, cursor: RuntimeClientCursor): void {
+    this.#epoch += 1;
     this.#state = replaceFromSnapshot(snapshot, cursor);
     for (const listener of [...this.#snapshotListeners]) {
       listener();

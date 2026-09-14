@@ -2,13 +2,13 @@
 
 `/goal` shows authoritative Goal state. `/goal create <objective>` creates and
 arms with the native default budget; `/goal pause`, `/goal resume`,
-`/goal edit <objective>`, and `/goal budget <rounds>` use typed Runtime Client
+`/goal edit <objective>`, and `/goal budget <rounds>` use typed App Server
 controls with the observed GoalRef. Stale controls fail without retry. Disabled
 Goal gives a feature-disabled response. The TUI owns no timer, admission loop,
 state transition, or accounting. See [Goal extension](../docs/goal-extension.md).
 
 The rustX reference terminal client: a Pi-TUI presentation layer over the
-Runtime Client protocol.
+App Server protocol.
 
 Configuration commands can also be forwarded without starting the interactive UI:
 
@@ -26,9 +26,9 @@ arguments (including `init` declarations). Streams and exit status are forwarded
 All [configuration semantics](../docs/configuration-diagnostics.md) stay in Rust.
 
 Foreground Workflow Tool cards expose expandable native execution details under
-protocol 23. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
+App Server protocol v1. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
 execution settlement, business checks and human Review are separate. Responses
-use the root HITL queue and children use the read-only inspector. See the
+use the root HITL queue and children expose authoritative subagent status. See the
 [native projection contract](../docs/workflow-run-projection.md).
 
 ## The one architectural rule
@@ -43,13 +43,13 @@ source of conversation truth.
 user keyboard                          rustX Runtime
      |                                       |
      v                                       v
-Pi Editor / controls              Runtime Client snapshot/events
+Pi Editor / controls              App Server snapshot/events
      |                                       |
      v                                       v
 rustX intent/command layer        rustX presentation projection
      |                                       |
      v                                       v
-Runtime Client request            rustX presentation components
+App Server request            rustX presentation components
      |                                       |
      v                                       v
 rustX Runtime                         Pi rendering primitives
@@ -63,7 +63,7 @@ direction is never reversed:
 
 ```text
 rustX Runtime semantics
-        -> Runtime Client Protocol
+        -> App Server Protocol
         -> rustX TypeScript projection
         -> rustX TUI presentation
         -> @earendil-works/pi-tui primitives
@@ -72,12 +72,12 @@ rustX Runtime semantics
 ### The test for the layering
 
 > If `@earendil-works/pi-tui` were replaced tomorrow with another terminal
-> rendering library, would rustX Runtime Client semantics, protocol handling,
+> rendering library, would rustX App Server semantics, protocol handling,
 > presentation reduction, model state, tool state, background state, and
 > command semantics remain valid?
 
 Yes. Pi-TUI dependencies are confined to TUI presentation and input
-components. Runtime Client protocol handling, projection semantics, Session
+components. App Server protocol handling, projection semantics, Session
 semantics, and execution semantics do not depend on Pi. Everything below
 `src/ui/` is plain TypeScript over protocol values.
 
@@ -106,42 +106,37 @@ dependency graph and lockfile are owned by pnpm.
 
 ## Running
 
-The TUI owns the lifecycle of the `rustx` child process and nothing else. Build
-the binary first, configure the host model as described in the
-[launch contract](../docs/launch-configuration.md), and grant project trust:
+Local mode owns one `rustx app-server --listen stdio` child. Build the binary,
+configure the host model through Rust, and grant project trust:
 
 ```sh
 cargo build --bin rustx
 ./target/debug/rustx --workspace /path/to/project --trust grant
-
-pnpm --dir tui start \
-  --binary "$PWD/target/debug/rustx" \
-  --workspace /path/to/project
+pnpm --dir tui start --binary "$PWD/target/debug/rustx" --cwd /path/to/project
 ```
 
-All path flags are optional overrides passed straight through. `--config`
-replaces the project-config slot without bypassing trust. After startup the native
-SessionCatalog/SessionGraph under `--runtime-root` owns durable user sessions
-and lineages. **The client never opens,
-parses, or interprets any of them** — `models.toml` is a runtime-owned model
-authority, and reading it here would create a second one. Provider credentials
-are resolved by the Rust process from the environment it inherits. For the
-complete copyable configuration and Python-tool example, see
-[`examples/local-runtime/README.md`](../examples/local-runtime/README.md).
+Connect to an externally managed App Server with:
 
-`--model provider/model` forwards explicit model selection. `--trust grant` and
-`--trust revoke` run the host-owned operation in Rust and exit before TUI/runtime
-composition. From a resolved project directory, no path flags are necessary.
+```sh
+pnpm --dir tui start --connect ws://127.0.0.1:8080 --token-file /private/user/socket-token --session SESSION_ID
+```
 
-Starting the client is not resuming a Session. Every launch begins on an
-empty Session, and the Sessions of earlier launches stay reachable through
-`/resume`. `--continue` starts on the Session the last launch left active
-instead. Rust owns that selection; the client only forwards the flag.
+Both modes use the same typed client and generated v1 DTOs. `--user-settings`,
+`--models`, and `--runtime-root` bind the local child process. Session settings
+such as `--cwd`, `--config`, and `--model` travel through `session/create`;
+paths resolve on the server. The TUI never reads runtime configuration or
+provider credentials. `--name` calls `session/name` for the initial Session.
 
-`--name <text>` names the Session the launch bound, whichever one that is —
-the startup form of `/name`. It is metadata, not a Session request: it
-combines with `--continue`, `--session`, and neither, and a replacement spawn
-drops it so a later Session cannot inherit the label.
+By default, a launch creates a new Session. `--session ID` selects one explicitly;
+`--resume` opens the Session picker over the latest durable Session. There is no
+global active Session or restart-based selection.
+
+Normal local exit sends SIGTERM to the owned child and waits for its #291 drain
+result. Remote exit closes only this client's WebSocket. Remote disconnect
+reinitializes and reattaches the focused Session, including the selected node,
+from server state; unanswered mutations are never replayed. If recovery fails,
+Ctrl+R retries connection recovery and Ctrl+C exits. Unsubmitted editor text stays
+local. See [the complete client architecture](../docs/tui-app-server.md).
 
 The TUI may also forward the runtime's bounded startup controls:
 `--skill <path>` (repeatable), `--no-automatic-skills`, `--no-builtin-tools`,
@@ -174,26 +169,22 @@ model's own frozen registry. See the
 ## Startup sequence
 
 ```text
-spawn rustx
-        -> initialize (protocol negotiation)
-  -> authoritative snapshot + cursor
-  -> install the presentation projection
-  -> subscribe_events(after cursor)
+bind stdio child or external WebSocket
+  -> initialize (App Server protocol v1)
+  -> session/create or choose a durable Session
+  -> session/attach (authoritative snapshot, cursor, subscription)
   -> interactive
 ```
 
-Session replacement is also native-owned. A successful `/new`, `/resume`,
-`/clone`, `/fork`, or `/tree` result may require replacing the child process;
-the TUI closes the old attachment and the restarted Rust process re-reads the
-authoritative catalog. A replacement spawn always passes `--continue`, because
-it completes a transition Rust has already published — that is the difference
-between replacing the process and launching the client, which starts on an
-empty Session. A committed-but-durability-uncertain fork/tree result
-also carries the selected user content as transient editor data. The TUI
-restores it only after `session_get` confirms the restarted Session/node, and
-it is not canonical until submitted. Tree node and history pages have
-independent bounded continuations; an exhausted stream is never restarted
-from an earlier offset while the other stream continues.
+`/new`, `/resume`, `/clone`, `/fork`, and `/tree` use App Server operations.
+Changing Sessions only changes client focus; other attachments and running
+Sessions remain live in the same server process. Returning to a Session reads an
+authoritative snapshot and repairs its subscription. The server supports one live
+node per Session: selecting another node requires explicit **Unload and open
+node** confirmation. Native unload affects only that Session. A/B Session focus
+changes never unload either runtime. Fork/branch editor
+content remains transient until submitted. Tree and history pages have separate
+bounded continuations.
 
 Before the first real transcript turn, the screen includes a compact welcome
 block with the published effective model, protocol/provider display label,
@@ -202,42 +193,22 @@ Session read is available, and the basic keyboard hints. Once a real turn or
 durably accepted transcript content exists, that block is reclaimed and the
 compact footer carries the durable Session metadata and live status instead.
 
-### Conversation inspection
+### Subagent inspection
 
-The parent subagent section is a navigation source, not a child-history
-cache. It shows every known child with its `child_conversation_id`; active
-rows may also show the disposable live observation from the parent Runtime
-Client projection. Use `Ctrl+Up`/`Ctrl+Down` to select a row and `Enter` to
-open that exact identity in the ordinary Runtime Client conversation view.
-The child view is explicitly read-only and the footer identifies the current
-conversation. `Esc` detaches the child inspection and restores the existing
-parent attachment; the parent process and its execution continue throughout.
-Direct `--inspect-conversation <id>` launches the same read-only view without a
-parent frame and exits on `Ctrl+C`.
-
-The child's own conversation is the durable authority for its full transcript
-and execution history. The inspector reads the normal child Message Ledger,
-transcript ordering, Request Snapshots, and Event Journal projection; it does
-not receive or accumulate a subagent transcript payload. Live observation is
-disposable, and navigation state is presentation-only. For a running child,
-the same `child_conversation_id` first attaches read-only to the child's live
-Runtime Client projection, so current model/attempt state and foreground tool
-progress are visible before durable settlement. Once the live child endpoint
-is gone, reopening the identity uses the durable conversation authorities;
-the durable fallback does not reconstruct the disposable #181 observation
-plane. If a child exits while an inspection is attached, that local view
-closes cleanly and reopening the same identity shows the durable terminal
-state. Inspecting a child is not parent-model context transfer: it does not
-modify the parent transcript or the next parent model request.
+Ctrl+Up/Ctrl+Down selects a subagent row; Enter reads `subagent/status` for that
+exact identity. The detail view uses server-published state and offers the
+existing explicit cancellation/workspace controls. The App Server does not
+expose non-Session child transcript attachments; the old process inspector is
+removed. No child process is spawned for inspection.
 
 ## Owners
 
 | Module | Owns | Does not own |
 | --- | --- | --- |
-| `runtime/child-process.ts` | spawn, stdio, bounded stderr tail, stdin close, wait, fallback termination | anything semantic; it never reads stdout |
-| `protocol/jsonl.ts` | LF framing, CRLF, the 8 MiB bound in encoded bytes | protocol meaning |
-| `runtime/connection.ts` | request ids, the pending RPC map, correlation, event delivery, ordered writes, terminal settlement | conversation state |
-| `runtime/attachment.ts` | attach, snapshot install, subscribe, resync repair, shutdown | agent/session semantics |
+| `app-server/child-process.ts` | spawn, stdio, bounded stderr tail, stdin close, wait, fallback termination | anything semantic; it never reads stdout |
+| `protocol/jsonl.ts` | LF framing, CRLF, the 1 MiB bound in encoded bytes | protocol meaning |
+| `app-server/client.ts` | request ids, the pending RPC map, correlation, event delivery, ordered writes, terminal settlement | conversation state |
+| `app-server/session.ts` | attach, snapshot install, subscribe, resync repair, detach | agent/session semantics |
 | `presentation/projection.ts` | the ephemeral render cache and bounded transcript page | canonical history, authority of any kind |
 | `presentation/tools.ts` | the `ToolCallId` correlation used for display | tool lifecycle, which it only reads |
 | `presentation/todos.ts` | reading the runtime's task-list projection and folding newly committed `todo` results into it | task identity, status, and dependencies, which the runtime owns |
@@ -251,7 +222,7 @@ modify the parent transcript or the next parent model request.
 
 The dispatcher classifies client information by presentation intent before it
 reaches Pi. The app owns the rendering mechanics; none of these client-side
-surfaces are Runtime Client facts or canonical conversation history.
+surfaces are App Server facts or canonical conversation history.
 
 | Surface | Semantics and lifetime |
 | --- | --- |
@@ -261,7 +232,7 @@ surfaces are Runtime Client facts or canonical conversation history.
 | **Local scrollback** | Deliberately not implemented. These client events have no honest interleaving point with runtime conversation history, so they use the finite transient surface instead of a second local event store. |
 | **Task panel** | The task list the runtime published, drawn between the conversation and the editor because it answers a question the reader has while typing the next message. It is derived from the runtime's own snapshot projection and the committed `todo` results observed since, holds no state of its own, is bounded so a long plan cannot push the conversation off screen, and disappears entirely when the list is empty or when the attached runtime composes no Todo Agent Extension. Task text is sanitized before it is drawn, so one task is always one physical row and no model-written escape sequence reaches the terminal. |
 | **Preference** | Reasoning visibility and expansion choices stay in client display preferences and never become runtime messages. |
-| **Control** | Canonical commands still go through the Runtime Client. Their short acknowledgement is transient; runtime status and settlement remain authoritative runtime projection. |
+| **Control** | Canonical commands still go through the App Server. Their short acknowledgement is transient; runtime status and settlement remain authoritative runtime projection. |
 | **Quit** | Shutdown is a control intent. Lifecycle failures are committed in a final Pi frame before the TUI stops, and are never turned into fake transcript messages. |
 
 The command-to-surface classification is:
@@ -293,14 +264,14 @@ before the destination projection is shown.
 The app owns a presentation epoch tied to the current attachment. Async
 command, search, pagination, and selector continuations capture that lease
 and may update local presentation only while the epoch and attachment still
-match. Binding a replacement attachment, accepting a Session restart, or
+match. Binding a replacement attachment, changing Session focus, or
 installing an authoritative snapshot invalidates the old lease. The canonical
 transcript remains reconstructed only from runtime-published durable message
 and audit facts; client output never becomes a `MessageBlock`, a model request
-payload, or a Runtime Client protocol event. User input is rendered as
+payload, or a App Server protocol event. User input is rendered as
 transcript content only after durable acceptance. The snapshot contains only
 the newest bounded transcript page; PageUp requests older pages with
-`transcript_page_get` and merges them by durable transcript cursor. Entry
+`session/transcript` and merges them by durable transcript cursor. Entry
 identity only detects the same durable fact; it never supplies ordering. The
 transcript cursor is separate from the live event cursor, so loading older
 history cannot disturb event resynchronization.
@@ -331,6 +302,7 @@ Sessions afterwards.
 - `/new` — create a new independent local Session.
 - `/resume [session-id]` — search persisted Sessions, or activate the given
   Session directly.
+- `/unload <session-id>` — explicitly unload an attached background Session through the server, for example before deleting it. Switch focus away first.
 - `/session` — show active Session metadata: name, id, node, conversation, and
   node count.
 - `/name [text]` — show the active Session's name, or give it one. Sessions
@@ -344,8 +316,8 @@ Sessions afterwards.
   historical user message within the Session.
 
 These operations use the runtime-owned Session catalog and graph through the
-canonical Runtime Client operations. They may replace the attached `rustx`
-process; the TUI reattaches and reprojects the authoritative result. The TUI
+canonical App Server operations. They change focus and reproject the authoritative
+result while retaining the App Server process. The TUI
 does not implement a parallel Session system.
 
 ### Model and capability inspection
@@ -369,7 +341,7 @@ does not implement a parallel Session system.
 - `/cancel [execution-id]` — request cancellation of the current attempt, or
   a background execution by id.
 - `/compact` — ask the runtime to compact the canonical context while idle;
-  progress and completion remain authoritative Runtime Client facts.
+  progress and completion remain authoritative App Server facts.
 - `/approval` — open the focused approval picker. Policy respects per-tool
   approval policy. Full access requires a second, safe-default confirmation.
 - `/debug` — show bounded presentation and protocol diagnostics.
@@ -384,9 +356,9 @@ does not implement a parallel Session system.
 - `/quit` — shut down the runtime and exit cleanly.
 
 Each either renders projection state, changes a client display preference, or
-invokes exactly one canonical Runtime Client operation. `/model` opens the
+invokes exactly one canonical App Server operation. `/model` opens the
 searchable selector over `model_catalog_get` and applies a choice through
-`model_set`, while `/model show` renders the projection's own model view;
+`settings/setModel`, while `/model show` renders the projection's own model view;
 `/tools`, `/skills`, and `/todos` read the projection the client already
 holds; `/status` prints the
 runtime's own Agent Status rendering; `/compact` invokes one
@@ -427,9 +399,8 @@ input is interpreted.
 There is deliberately **no** `!bash`, no `@file` attachment, no client-side
 file read, and no client-side Skill execution. Shell, file, and Skill
 behaviour must travel through the real rustX tool and capability path. The
-conversation inspection capability is a read-only attachment to a known
-conversation identity; it does not grant the TUI a filesystem or capability
-authority.
+subagent detail view reads the addressed server projection; it grants no
+filesystem or capability authority.
 
 ## Native HITL
 
@@ -442,7 +413,7 @@ snapshot. The renderer shows the immutable tool identity, mode, reason, and
 validated arguments for Approval, and the bounded questionnaire facts, option
 descriptions, previews, review tab, and client-owned custom row. Every
 response — an Approval decision or one typed whole-questionnaire submission —
-is sent through the same `interaction_respond` path with the exact routed
+is sent through the same `interaction/respond` path with the exact routed
 `InteractionRef` it was collected for. Neither kind invokes a Tool, mutates
 arguments, infers an outcome from detach/EOF, or callbacks into the Agent
 Loop.
@@ -536,8 +507,8 @@ limits. It preserves configured, effective, and attempt-frozen identities and
 shows the highlighted row's effective facts exactly as published. The client
 does not read `models.toml`, infer provider behavior from a model prefix, or
 invent a reasoning scale. Selecting a row calls the canonical dispatcher
-`model_set` path; a `replacement_required` result is interpreted by the same
-`#handleOutcome` flow as `/model` and Session commands.
+`settings/setModel` path; subsequent events publish the effective model without
+process replacement.
 
 The footer shows stable operating context, in retention order: current/frozen
 model, effective approval and any next-attempt transition, exceptional transport/
@@ -710,7 +681,7 @@ Write — so a shell call reads as `$ cargo test --all` instead of argument JSON
 A renderer formats already-authoritative facts and is never handed the
 lifecycle, so it cannot express an opinion about it: running, success, failure,
 denial, cancellation, timeout, interruption, progress, duration, exit code, and
-truncation all come from the Runtime Client. Nothing reads a status out of
+truncation all come from the App Server. Nothing reads a status out of
 output text, infers running from an absent result, or infers cancellation from
 missing output. A renderer that does not recognise a shape returns nothing and
 the generic renderer takes over, so unknown and MCP tools (including managed
@@ -842,13 +813,13 @@ no reasoning scale is invented for a capable model that declares no profiles.
 
 ### Reasoning visibility is not reasoning configuration
 
-The TUI consumes only canonical Runtime Client reasoning blocks. Provider
+The TUI consumes only canonical App Server reasoning blocks. Provider
 spellings such as `reasoning` and `reasoning_content` never enter the
 TypeScript protocol or presentation layer. Whether reasoning is *drawn* is a
 client preference (`/show-reasoning`, `ctrl+t`); when hidden it collapses to a
 `Thinking…` marker rather than becoming assistant text. What rustX *asks a
 provider for* is `SessionModelConfig.reasoningProfile` / `reasoningEnabled`,
-which only `model_set` changes.
+which only `settings/setModel` changes.
 
 ### Working status is proven, never timed
 
@@ -868,15 +839,15 @@ Everything is deterministic: scripted byte and record sequences, a data
 barrier rather than a delay for readiness, and no elapsed-time wait used to
 establish rustX semantic ordering. The one isolated parser-boundary helper in
 `app.test.ts` waits for pi-tui's bare-Esc disambiguation window; it does not
-synchronize Runtime Client or Session behavior. The presentation suites drive
+synchronize App Server or Session behavior. The presentation suites drive
 projection facts directly and assert on normalized strings — `transcript.test.ts`,
 `tool-correlation.test.ts`, `tool-card.test.ts`, `model-selector.test.ts`,
 `status.test.ts`, `identity-domains.test.ts`, and `reconstruction.test.ts`,
 which rebuilds the whole visible UI from one fresh snapshot.
 
 `test/integration.test.ts` drives the **real** `rustx` binary over the real
-stdio/JSONL transport against a local SSE provider fixture (no credentials, no
-network). It skips itself with a clear reason when `target/debug/rustx` has not
+stdio/JSONL and WebSocket transports against the shared local provider emulator
+(no external service credentials). It skips itself with a clear reason when `target/debug/rustx` has not
 been built; set `RUSTX_BINARY` to point elsewhere.
 
 ## Licensing

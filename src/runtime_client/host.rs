@@ -1028,11 +1028,10 @@ impl ClientInner {
             .ok_or_else(|| RuntimeClientError::InvalidState {
                 message: "no live Surface in historical inspection".to_owned(),
             })?;
-        let failed = |error: crate::durable::ConversationStoreError| {
-            RuntimeClientError::RuntimeFailure {
+        let failed =
+            |error: crate::durable::ConversationStoreError| RuntimeClientError::RuntimeFailure {
                 message: format!("durable user-message boundary page failed: {error}"),
-            }
-        };
+            };
         let revision = runtime.historical_head_revision().map_err(failed)?;
         let page = runtime
             .historical_user_message_boundaries_page(revision, offset, limit)

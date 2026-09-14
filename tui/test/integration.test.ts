@@ -37,6 +37,7 @@ import { AppServerHost } from "../src/app-server/host.ts";
 import { AppServerClient, UncertainOutcomeError } from "../src/app-server/client.ts";
 import { AppServerChild } from "../src/app-server/child-process.ts";
 import { StdioTransport } from "../src/app-server/stdio-transport.ts";
+import { WebSocketTransport } from "../src/app-server/websocket-transport.ts";
 import { TransportClosedError } from "../src/app-server/transport.ts";
 import type { AppServerSession } from "../src/app-server/session.ts";
 import type { SessionSettings } from "../src/protocol/app-server.ts";
@@ -211,7 +212,7 @@ describe("local self-hosted mode: one owned App Server child over stdio", { skip
   });
   after(async () => {
     server?.cleanup();
-    await provider?.stop();
+    await provider?.finish();
   });
 
   it("keeps one child across every Session, and never replaces it", { timeout: 90_000 }, async () => {
@@ -243,7 +244,7 @@ describe("local self-hosted mode: one owned App Server child over stdio", { skip
       assert.deepEqual(returned.target, a.target);
 
       const exit = await host.shutdown();
-      assert.equal(exit?.code, 0, "the owned child exited cleanly on EOF");
+      assert.equal(exit?.code, 0, "the owned child completed explicit owner drain");
     } finally {
       await host.shutdown();
     }
@@ -300,6 +301,20 @@ describe("local self-hosted mode: one owned App Server child over stdio", { skip
       assert.equal(returned.state.attempt?.phase.type, "settled");
       assert.ok(returned.resyncCount >= 1);
       assert.equal(host.childExit, undefined, "one child served both Sessions");
+      const page = await a.boundaries();
+      assert.equal(page.boundaries.length, 1, "the committed user boundary is available for tree navigation");
+      const original = await host.readSession(a.sessionId);
+      const branched = await host.branchSession(a.sessionId, original.active_node,
+        page.surfaceRevision, page.boundaries[0]!.message.id);
+      await assert.rejects(host.attach(a.sessionId, branched.session.active_node), /explicit unload confirmation/);
+      const branch = await host.openNode(a.sessionId, branched.session.active_node);
+      assert.notEqual(branch.target.conversation_id, a.target.conversation_id);
+      assert.equal(branch.nodeId, branched.session.active_node);
+      const back = await host.openNode(a.sessionId, original.active_node);
+      assert.equal(back.target.conversation_id, a.target.conversation_id);
+      assert.notEqual(back.target.runtime_incarnation, a.target.runtime_incarnation,
+        "confirmed node changes use server-owned unload/recovery");
+      assert.equal(b.released, false, "another Session's attachment is untouched");
       stop();
     } finally {
       await host.shutdown();
@@ -384,14 +399,14 @@ describe("existing/remote mode: WebSocket to an externally managed App Server", 
   let external: ExternalAppServer;
 
   before(async () => {
-    provider = await ProviderEmulator.start("tui_integration");
+    provider = await ProviderEmulator.start("tui_multi_session");
     server = ServerFixture.create("rustx-tui-ws-", provider.url("/v1"));
     external = await ExternalAppServer.start(server);
   });
   after(async () => {
     await external?.stop();
     server?.cleanup();
-    await provider?.stop();
+    await provider?.finish();
   });
 
   it("admits a credentialed client and refuses one without the token", { timeout: 90_000 }, async () => {
@@ -433,11 +448,8 @@ describe("existing/remote mode: WebSocket to an externally managed App Server", 
     const incarnation = session.target.runtime_incarnation;
     const stop = first.client.onNotification((m) => session.applyNotification(m));
 
-    await session.submitInbound([{ type: "text", text: "hello from the tui" }]);
-    await until(
-      () => session.state.attempt !== undefined,
-      "the remote runtime admitted the turn",
-    );
+    await session.submitInbound([{ type: "text", text: "tui multi-session: session A long task" }]);
+    await provider.awaitGate("session-a-holding");
 
     // Exiting a remote TUI is a disconnect and nothing more.
     stop();
@@ -466,7 +478,13 @@ describe("existing/remote mode: WebSocket to an externally managed App Server", 
       // The Session's accepted work survived the disconnect: the projection
       // this client reads is the server's, not the previous client's.
       assert.equal(reattached.state.conversationId, session.state.conversationId);
-      assert.ok(reattached.state.transcript.length >= 0);
+      assert.equal(reattached.state.attempt?.phase.type, "running");
+      const b = await openSession(second, server.settings("remote-b"));
+      await b.submitInbound([{ type: "text", text: "tui multi-session: session B quick task" }]);
+      await until(() => b.state.attempt?.phase.type === "settled", "B completes while disconnected A remains held");
+      await provider.releaseGate("session-a-holding");
+      await until(() => reattached.state.attempt?.phase.type === "settled", "accepted remote work finishes after reconnect");
+      assert.equal((await provider.requests()).length, 2, "one admission per Session, no replay");
     } finally {
       await second.shutdown();
     }
@@ -474,30 +492,40 @@ describe("existing/remote mode: WebSocket to an externally managed App Server", 
   });
 
   it("never replays an uncertain mutation when the socket dies", { timeout: 90_000 }, async () => {
-    const host = await AppServerHost.connectRemote({
-      endpoint: external.endpoint,
-      token: TRANSPORT_TOKEN,
-    });
+    const transport = await WebSocketTransport.connect({ endpoint: external.endpoint, token: TRANSPORT_TOKEN });
+    let loseResponse = false;
+    let sentMutations = 0;
+    const client = await AppServerClient.initialize({ transport: {
+      get closed() { return transport.closed; },
+      describe: () => transport.describe(),
+      close: () => transport.close(),
+      onClose: (listener) => transport.onClose(listener),
+      send: async (message) => {
+        if ((message as { method?: string }).method === "session/name") sentMutations++;
+        await transport.send(message);
+      },
+      onMessage: (listener) => transport.onMessage((message) => {
+        if (loseResponse && "result" in message && (message.result as { type: string }).type === "session") {
+          transport.close(); // The server committed the rename; drop its response.
+          return;
+        }
+        listener(message);
+      }),
+    } });
+    const host = new AppServerHost({ client, ownership: "external" });
     const session = await openSession(host, server.settings("replay-session"));
-
-    // Submit, then lose the connection before the response can arrive.
-    const submitted = session.submitInbound([
-      { type: "text", text: "hello from the tui" },
-    ]);
-    host.client.close();
-
-    const failure = await submitted.then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    if (failure !== undefined) {
-      assert.ok(failure instanceof UncertainOutcomeError, String(failure));
-      assert.equal(failure.method, "turn/start");
+    loseResponse = true;
+    await assert.rejects(host.renameSession(session.sessionId, "accepted-once"), UncertainOutcomeError);
+    const recovered = await AppServerHost.connectRemote({ endpoint: external.endpoint, token: TRANSPORT_TOKEN });
+    try {
+      assert.equal((await recovered.readSession(session.sessionId)).name, "accepted-once");
+      assert.equal(sentMutations, 1);
+      await recovered.attach(session.sessionId);
+    } finally {
+      await recovered.shutdown();
+      await host.shutdown();
     }
-    // Whether it was accepted or not, the client sent it exactly once and the
-    // server is still standing.
     assert.ok(external.running);
-    await host.shutdown();
   });
 });
 

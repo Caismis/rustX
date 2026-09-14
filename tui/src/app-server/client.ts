@@ -283,8 +283,8 @@ export class AppServerClient {
    * attachment on the server's behalf, cancel work, or stop a process — see
    * `./host.ts` for the operation that ends an owned child.
    */
-  close(): void {
-    this.#transport.close();
+  close(): void | Promise<void> {
+    return this.#transport.close();
   }
 
   #request(method: MethodName, params: unknown): Promise<unknown> {

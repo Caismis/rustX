@@ -122,6 +122,8 @@ export class StdioTransport extends BaseTransport {
 
   protected override disposeTransport(): void {
     this.#input.removeAllListeners("data");
+    this.#input.destroy();
+    this.#output.destroy();
   }
 
   #onChunk(chunk: Buffer): void {
