@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { CorrelatedTool } from "../src/presentation/tools.ts";
-import type { ToolExecutionResult } from "../src/protocol/types.ts";
+import type { ToolExecutionResult } from "../src/protocol/app-server.ts";
 import {
   formatDuration,
   renderToolCard,
@@ -403,7 +403,8 @@ describe("progressive disclosure bounds call details too", () => {
       lifecycle: settled({
         content: Array.from({ length: 40 }, (_, index) => ({
           type: "file" as const,
-          path: `out-${index}.txt`,
+          artifact_id: `artifact-${index}`,
+          name: `out-${index}.txt`,
         })),
       }),
     });
@@ -473,8 +474,8 @@ describe("the generic fallback", () => {
     const rendered = card({
       lifecycle: settled({
         content: [
-          { type: "file", path: "out.txt" },
-          { type: "image", url: "x" },
+          { type: "file", artifact_id: "artifact-1", name: "out.txt" },
+          { type: "image", artifact_id: "artifact-2" },
         ],
       }),
     });

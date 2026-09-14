@@ -18,7 +18,7 @@ import type {
   QuestionnaireAnswerEntry,
   QuestionnaireResponse,
   QuestionnaireSpecification,
-} from "../../protocol/types.ts";
+} from "../../protocol/app-server.ts";
 import {
   finiteNumberDecimal,
   finiteNumberFromWire,
@@ -255,10 +255,10 @@ export function scalarValidationError(
   switch (answer.type) {
     case "text": {
       const length = [...draft].length;
-      if (answer.min_length !== undefined && length < answer.min_length) {
+      if (answer.min_length != null && length < answer.min_length) {
         return `Enter at least ${answer.min_length} characters.`;
       }
-      if (answer.max_length !== undefined && length > answer.max_length) {
+      if (answer.max_length != null && length > answer.max_length) {
         return `Enter at most ${answer.max_length} characters.`;
       }
       if (answer.format === "date" && !isCalendarDate(draft)) {
@@ -289,8 +289,8 @@ export function scalarValidationError(
       // the domain both sides belong to. Comparing the wire spellings as
       // strings would be a lexical comparison of bit patterns, which is not
       // the numeric order.
-      const minimum = numberBound(answer.minimum);
-      const maximum = numberBound(answer.maximum);
+      const minimum = numberBound(answer.minimum ?? undefined);
+      const maximum = numberBound(answer.maximum ?? undefined);
       if (minimum !== undefined && parsed < minimum) {
         return `Enter a number at least ${minimum}.`;
       }
@@ -310,10 +310,10 @@ export function scalarValidationError(
       if (parsed < I64_MIN || parsed > I64_MAX) {
         return "Enter a whole number inside the 64-bit range.";
       }
-      if (answer.minimum !== undefined && parsed < BigInt(answer.minimum)) {
+      if (answer.minimum != null && parsed < BigInt(answer.minimum)) {
         return `Enter a whole number at least ${answer.minimum}.`;
       }
-      if (answer.maximum !== undefined && parsed > BigInt(answer.maximum)) {
+      if (answer.maximum != null && parsed > BigInt(answer.maximum)) {
         return `Enter a whole number at most ${answer.maximum}.`;
       }
       return undefined;
@@ -766,13 +766,13 @@ export class QuestionnaireOverlay implements PopupContent {
       case "multi_choice":
         return selectionBoundsLabel(answer.min_selected, answer.max_selected);
       case "integer":
-        return boundsSentence("Whole number", answer.minimum, answer.maximum);
+        return boundsSentence("Whole number", answer.minimum ?? undefined, answer.maximum ?? undefined);
       case "number":
         // A human reads decimals, never the protocol's bit pattern.
         return boundsSentence(
           "Number",
-          numberBoundLabel(answer.minimum),
-          numberBoundLabel(answer.maximum),
+          numberBoundLabel(answer.minimum ?? undefined),
+          numberBoundLabel(answer.maximum ?? undefined),
         );
       case "text":
         return textGuidance(answer);
@@ -923,7 +923,7 @@ export class QuestionnaireOverlay implements PopupContent {
   #focusedPreview(question: QuestionSpecification): string | undefined {
     const row = rowsOf(question)[this.#row];
     if (row === undefined || row.kind !== "option") return undefined;
-    return choiceOptions(question)[row.optionIndex]?.preview;
+    return choiceOptions(question)[row.optionIndex]?.preview ?? undefined;
   }
 
   /**

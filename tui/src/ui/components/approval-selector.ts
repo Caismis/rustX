@@ -2,7 +2,7 @@
 import { matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { approvalLabel } from "../../presentation/selectors.ts";
 import { isAttemptActive, type PresentationState } from "../../presentation/state.ts";
-import type { ApprovalMode } from "../../protocol/types.ts";
+import type { ApprovalMode } from "../../protocol/app-server.ts";
 import { role } from "../theme.ts";
 import type { PopupContent } from "./popup-frame.ts";
 

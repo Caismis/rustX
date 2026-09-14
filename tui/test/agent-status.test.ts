@@ -27,7 +27,7 @@ import type { PresentationState } from "../src/presentation/state.ts";
 import type {
   AgentStatusView,
   RuntimeClientEvent,
-} from "../src/protocol/types.ts";
+} from "../src/protocol/app-server.ts";
 import {
   agentStatusFacets,
   agentStatusSummary,
@@ -49,6 +49,7 @@ import {
   toolMessage,
   transcriptCursor,
   userMessage,
+  nextCursor,
 } from "./support/fixtures.ts";
 import { stateOf, transcriptText } from "./support/render.ts";
 import { renderTranscript } from "../src/ui/components/transcript.ts";
@@ -65,7 +66,7 @@ function fold(
   let current = state;
   let cursor = current.cursor;
   for (const event of events) {
-    cursor = runtimeCursor(cursor + 1);
+    cursor = nextCursor(cursor);
     current = reduce(current, { cursor, event });
   }
   return current;
@@ -599,7 +600,7 @@ describe("typed Agent Status sections", () => {
       sections: [
         todoSection({
           current: {
-            id: 7,
+            id: "7",
             subject: "Review cancellation boundary",
             active_form: "Reviewing cancellation boundary",
             status: "in_progress",
@@ -658,7 +659,7 @@ describe("typed Agent Status sections", () => {
       sections: [
         todoSection({
           current: {
-            id: 1,
+            id: "1",
             subject: `${long}\n${long}`,
             status: "pending",
             blocked: false,

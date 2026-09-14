@@ -44,8 +44,8 @@ import type {
   RuntimeClientBackgroundExecution,
   RuntimeClientSubagent,
   RuntimeClientSubagentActivity,
-} from "../../protocol/types.ts";
-import { SUBAGENT_TERMINAL_STATES } from "../../protocol/types.ts";
+} from "../../protocol/app-server.ts";
+import { SUBAGENT_TERMINAL_STATES } from "../../protocol/app-server.ts";
 import type { PresentationState } from "../../presentation/state.ts";
 import { interactionRefLabel } from "../../presentation/interaction-focus.ts";
 import type { ToolCorrelation } from "../../presentation/tools.ts";
@@ -134,7 +134,7 @@ export function renderBackground(
   if (progress !== undefined) {
     lines.push(`  ${role.meta(progress)}`);
   }
-  if (execution.result !== undefined) {
+  if (execution.result != null) {
     const result = execution.result;
     // One disclosure context for the whole execution. Keyed by
     // `ToolExecutionId`, in its own preference domain: a foreground
@@ -180,7 +180,7 @@ export function renderBackground(
     if (result.truncation?.truncated === true) {
       const original = result.truncation.original_bytes;
       lines.push(
-        `  ${role.meta(`⚠ runtime-truncated result${original === undefined ? "" : ` (from ${original} bytes)`}`)}`,
+        `  ${role.meta(`⚠ runtime-truncated result${original == null ? "" : ` (from ${original} bytes)`}`)}`,
       );
     }
   }
@@ -215,6 +215,7 @@ export function renderSubagentSection(
   const active = activeSubagents(state);
   const retained = state.subagents.filter(
     (subagent) =>
+      subagent.workspace != null &&
       subagent.workspace.resource_state !== "none" &&
       subagent.workspace.resource_state !== "disposed",
   ).length;
@@ -233,6 +234,59 @@ export function renderSubagentSection(
   ].join("\n");
 }
 
+/**
+ * The authoritative detail of one subagent, as `subagent/status` returns it.
+ *
+ * This is a read of the child's projected identity, lifecycle, activity,
+ * execution profile and workspace. It is deliberately not an attachment to the
+ * child's conversation: the App Server exposes no such method, and composing a
+ * second conversation client here would make this TUI an owner of semantics it
+ * is a client of.
+ */
+export function renderSubagentDetail(subagent: RuntimeClientSubagent): string {
+  const workspace = subagent.workspace;
+  const observation = subagent.observation;
+  const profile = subagent.execution_profile;
+  const lines = [
+    `- agent: \`${subagent.agent}\``,
+    `- subagent: \`${subagent.subagent_id}\``,
+    `- child conversation: \`${subagent.child_conversation_id}\``,
+    `- state: ${subagent.state}`,
+    `- started: ${subagent.started_at}`,
+    `- definition digest: \`${subagent.definition_digest}\``,
+    `- profile digest: \`${subagent.profile_digest}\``,
+  ];
+  if (subagent.detail != null) {
+    lines.push(`- detail: ${subagent.detail}`);
+  }
+  if (profile != null) {
+    lines.push(
+      `- model: \`${profile.model}\`${profile.reasoning_profile == null ? "" : ` · reasoning ${profile.reasoning_profile}`}`,
+    );
+  }
+  if (observation != null) {
+    lines.push(
+      `- activity: ${activityLine(observation.activity)} (revision ${observation.revision})`,
+    );
+    if (observation.last_activity_at != null) {
+      lines.push(`- last activity: ${observation.last_activity_at}`);
+    }
+    const counters = observation.counters;
+    if (counters != null) {
+      lines.push(
+        `- counters: ${counters.model_requests} model requests · ${counters.model_retries} retries · ${counters.tool_executions} tool executions`,
+      );
+    }
+  }
+  if (workspace != null) {
+    lines.push(`- workspace resource state: ${workspace.resource_state}`);
+    if (workspace.handoff != null) {
+      lines.push(`- workspace handoff: retained`);
+    }
+  }
+  return ["### Subagent", ...lines].join("\n");
+}
+
 /** One compact row for a subagent identity and its optional live observation. */
 function renderSubagent(
   subagent: RuntimeClientSubagent,
@@ -249,18 +303,21 @@ function renderSubagent(
   if (terminal) {
     return lines.join("\n");
   }
-  lines.push(`  ${role.meta(activityLine(subagent.observation.activity))}`);
-  const lastActivityAt = subagent.observation.last_activity_at;
-  if (lastActivityAt !== undefined) {
-    lines.push(
-      `  ${role.meta(`last activity ${formatElapsed(now, lastActivityAt)} ago`)}`,
-    );
+  const observation = subagent.observation;
+  if (observation != null) {
+    lines.push(`  ${role.meta(activityLine(observation.activity))}`);
+    const lastActivityAt = observation.last_activity_at;
+    if (lastActivityAt != null) {
+      lines.push(
+        `  ${role.meta(`last activity ${formatElapsed(now, lastActivityAt)} ago`)}`,
+      );
+    }
   }
   const profile = subagent.execution_profile;
-  if (profile !== undefined) {
+  if (profile != null) {
     const reasoning = profile.reasoning_profile;
     lines.push(
-      `  ${role.meta(bounded(reasoning === undefined ? profile.model : `${profile.model} · ${reasoning}`))}`,
+      `  ${role.meta(bounded(reasoning == null ? profile.model : `${profile.model} · ${reasoning}`))}`,
     );
   }
   return lines.join("\n");

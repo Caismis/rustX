@@ -6,74 +6,84 @@
  *
  * ```text
  * parse arguments
- *   -> spawn the rustx binary        (ChildRuntimeProcess)
- *   -> open the JSONL transport      (RuntimeClientConnection)
- *   -> initialize + snapshot + subscribe (RuntimeClientAttachment)
- *   -> run the terminal projection   (RustxTuiApp)
+ *   -> bind a transport        (own a stdio child, or connect to a WebSocket)
+ *   -> initialize              (AppServerClient: one protocol, both modes)
+ *   -> open the first Session  (attach an existing one, or create one)
+ *   -> run the terminal        (RustxTuiApp)
  * ```
  *
  * A startup failure is reported on stderr with a bounded diagnostic and a
  * non-zero exit. The client resolves no credential and reads no runtime
- * configuration file of its own.
+ * configuration file of its own; the one file it does read is the dedicated
+ * WebSocket transport token, which is a transport secret and nothing else.
  *
- * The first spawn creates a fresh Session or attaches to the explicit CLI
- * Session identity. Later spawns receive the client's chosen Session/node.
- * The single-subprocess adapter owns shutdown and focus; the durable catalog
- * never selects a Session or requests shutdown for ordinary navigation.
- * `--resume` opens the client picker after the initial attachment.
+ * Opening the first Session is an ordinary client operation. Nothing here
+ * publishes a global active Session, because the App Server has none.
  */
 
+import { readFile } from "node:fs/promises";
+
+import { ArgumentError, USAGE, parseArguments, type TuiArguments } from "./cli.ts";
+import { AppServerHost } from "./app-server/host.ts";
+import type { AppServerSession } from "./app-server/session.ts";
+import { RustxTuiApp } from "./ui/app.ts";
 import {
-  ArgumentError,
-  USAGE,
-  parseArguments,
-  replacementArguments,
-} from "./cli.ts";
-import { ChildRuntimeProcess } from "./runtime/child-process.ts";
-import { RuntimeClientConnection } from "./runtime/connection.ts";
-import { RuntimeClientAttachment } from "./runtime/attachment.ts";
-import { RustxTuiApp, type RuntimeAttachmentHandle } from "./ui/app.ts";
-import type { TuiArguments } from "./cli.ts";
-import type { RuntimeStartupOptions } from "./runtime/child-process.ts";
-import { configurationCommand, forwardConfigurationCommand } from "./configuration-command.ts";
+  configurationCommand,
+  forwardConfigurationCommand,
+} from "./configuration-command.ts";
 
-async function startRuntime(
-  parsed: TuiArguments,
-  startup: RuntimeStartupOptions = parsed.startup,
-): Promise<RuntimeAttachmentHandle> {
-  const child = ChildRuntimeProcess.spawn({
-    binary: parsed.binary,
-    paths: parsed.paths,
-    startup,
-  });
-
-  const connection = new RuntimeClientConnection({
-    input: child.stdout,
-    output: child.stdin,
-  });
-  void child.wait().then((exit) => {
-    connection.reportProcessExit(exit.code, exit.signal, exit.spawnError);
-  });
-
-  const session = new RuntimeClientAttachment({ connection });
-  try {
-    await session.attach();
-  } catch (error) {
-    const stderr = child.stderrTail().text.trim();
-    child.closeStdin();
-    await child.waitOrTerminate();
-    const detail = stderr.length > 0 ? `\n${stderr}` : "";
-    throw new Error(
-      `could not attach to the runtime: ${(error as Error).message}${detail}`,
-    );
+async function connect(parsed: TuiArguments): Promise<AppServerHost> {
+  if (parsed.mode.kind === "local") {
+    return AppServerHost.spawnLocal({
+      binary: parsed.mode.binary,
+      launch: parsed.mode.launch,
+    });
   }
-  return { session, connection, child };
+  // At most one trailing newline, exactly as the server's own token file
+  // contract allows. Nothing else about the value is interpreted here.
+  const token = (await readFile(parsed.mode.tokenFile, "utf8")).replace(/\n$/, "");
+  return AppServerHost.connectRemote({
+    endpoint: parsed.mode.endpoint,
+    token,
+  });
+}
+
+/**
+ * Opens the Session the terminal starts on.
+ *
+ * `--session` attaches to that exact durable Session. `--resume` reuses the
+ * most recently updated one so the picker opens over real content instead of
+ * stranding a fresh empty Session beside it. Otherwise this launch creates one.
+ */
+async function openInitialSession(
+  host: AppServerHost,
+  parsed: TuiArguments,
+): Promise<AppServerSession> {
+  const routing = parsed.routing;
+  if (routing.session !== undefined) {
+    return host.attach(routing.session, routing.node);
+  }
+  if (routing.openSessionSelector) {
+    const page = await host.listSessions(undefined, 0, 1);
+    const existing = page.sessions[0];
+    if (existing !== undefined) {
+      return host.attach(existing.id, existing.active_node);
+    }
+  }
+  const created = await host.createSession(parsed.sessionSettings);
+  if (parsed.sessionName !== undefined) {
+    await host.renameSession(created.session.id, parsed.sessionName);
+  }
+  return host.attach(created.session.id, created.session.active_node);
 }
 
 async function main(argv: readonly string[]): Promise<number> {
   const configuration = configurationCommand(argv);
-  if (configuration !== undefined) return forwardConfigurationCommand(configuration);
-  let parsed;
+  if (configuration !== undefined) {
+    return forwardConfigurationCommand(configuration);
+  }
+
+  let parsed: TuiArguments;
   try {
     parsed = parseArguments(argv);
   } catch (error) {
@@ -84,44 +94,38 @@ async function main(argv: readonly string[]): Promise<number> {
     throw error;
   }
 
-  let runtime: RuntimeAttachmentHandle;
-  if (parsed.startup.trust !== undefined) {
-    const child = ChildRuntimeProcess.spawn({ binary: parsed.binary, paths: parsed.paths, startup: parsed.startup });
-    child.closeStdin();
-    const exit = await child.wait();
-    process.stderr.write(child.stderrTail().text);
-    return exit.code ?? 1;
-  }
+  let host: AppServerHost;
   try {
-    runtime = await startRuntime(parsed);
+    host = await connect(parsed);
   } catch (error) {
     process.stderr.write(`rustx-tui: ${(error as Error).message}\n`);
     return 1;
   }
 
-  const replacement = replacementArguments(parsed);
+  let session: AppServerSession;
+  try {
+    session = await openInitialSession(host, parsed);
+    if (parsed.routing.session !== undefined && parsed.sessionName !== undefined) {
+      await host.renameSession(parsed.routing.session, parsed.sessionName);
+    }
+  } catch (error) {
+    const stderr = host.stderrTail().text.trim();
+    // A failed start still releases whatever this launch owns: an owned child
+    // is shut down, and an external server is only disconnected from.
+    await host.shutdown();
+    const detail = stderr.length > 0 ? `\n${stderr}` : "";
+    process.stderr.write(
+      `rustx-tui: could not open a Session: ${(error as Error).message}${detail}\n`,
+    );
+    return 1;
+  }
+
   const app = new RustxTuiApp({
-    ...runtime,
-    openSessionSelector: parsed.openSessionSelector,
-    readOnly: parsed.startup.inspectConversation !== undefined,
-    workspace: parsed.paths.workspace,
-    restartRuntime: (target) => {
-      if (target === undefined) throw new Error("Session routing requires an explicit identity");
-      return startRuntime(replacement, { ...replacement.startup, continueActiveSession: false, session: target.id, node: target.active_node });
-    },
-    openConversation: (conversationId) => startRuntime(parsed, {
-      continueActiveSession: false,
-      inspectConversation: conversationId,
-      session: undefined,
-      node: undefined,
-      sessionName: undefined,
-      skillPaths: [],
-      noAutomaticSkills: false,
-      noBuiltinTools: false,
-      noDirectTools: false,
-      tools: undefined,
-      excludeTools: undefined,
-    }),
+    host,
+    session,
+    sessionSettings: parsed.sessionSettings,
+    openSessionSelector: parsed.routing.openSessionSelector,
+    cwd: parsed.sessionSettings.cwd,
   });
   return app.run();
 }

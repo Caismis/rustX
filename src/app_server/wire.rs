@@ -34,6 +34,39 @@ fn pattern() -> String {
     format!("^({})$(?![\\s\\S])", alternatives.join("|"))
 }
 
+/// Re-encodes schema `default` annotations into the domains they annotate.
+///
+/// Schemars copies a Rust `Default` verbatim, so an exact `u64` domain is
+/// annotated with the JSON number `0` while its own type is canonical decimal
+/// text. That default is then invalid against the very schema it documents, and
+/// a client generator that infers a type from it produces an impossible one.
+///
+/// Encoding defaults through the same codec real values use keeps exactly one
+/// rule for what an exact domain looks like. A default that does not match its
+/// schema is left untouched rather than corrupted: `default` is an annotation,
+/// and silently rewriting one we cannot interpret would be worse than leaving
+/// the inconsistency visible.
+fn encode_defaults(node: &mut Value, root: &Value) {
+    match node {
+        Value::Object(object) => {
+            if let Some(mut default) = object.remove("default") {
+                let subschema = Value::Object(object.clone());
+                let _ = convert(&mut default, &subschema, root, true);
+                object.insert("default".to_owned(), default);
+            }
+            for value in object.values_mut() {
+                encode_defaults(value, root);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                encode_defaults(item, root);
+            }
+        }
+        _ => {}
+    }
+}
+
 pub(super) fn schema(mut schema: Value) -> Value {
     fn transform(node: &mut Value, pattern: &str) {
         let is_exact = exact(node);
@@ -59,11 +92,6 @@ pub(super) fn schema(mut schema: Value) -> Value {
             object.remove("format");
             object.remove("minimum");
             object.remove("maximum");
-            if let Some(value) = object.get_mut("default")
-                && let Some(number) = value.as_u64()
-            {
-                *value = Value::from(number.to_string());
-            }
         } else if let Some(format) = object.get("format").and_then(Value::as_str) {
             let bounds = match format {
                 "uint" | "uint64" => Some((0_i64, SAFE)),
@@ -85,6 +113,10 @@ pub(super) fn schema(mut schema: Value) -> Value {
             transform(value, pattern);
         }
     }
+    // Defaults are encoded against the untransformed schema, where exact
+    // domains are still identifiable by their `uint64` format.
+    let root = schema.clone();
+    encode_defaults(&mut schema, &root);
     transform(&mut schema, &pattern());
     schema
 }

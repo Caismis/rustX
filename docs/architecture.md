@@ -1192,7 +1192,7 @@ authority. Resource discovery and reload likewise produce no transcript item;
 old RequestSnapshots retain their exact System/resource bytes, while a cold
 reopen loads a fresh resource generation for future requests.
 
-The TUI therefore sends user input through the Runtime Client and renders it
+The TUI therefore sends user input through the App Server and renders it
 only after durable acceptance. It does not maintain an optimistic semantic
 echo or a parallel transcript. Page-up reads older durable pages and merges
 live and historical entries by their durable transcript cursors without
@@ -5228,9 +5228,11 @@ See [App Server protocol v1](app-server-protocol.md) for the method vocabulary,
 generated client schemas, connection multiplexing, weak attachment lifetime and
 headless interaction ownership. #36 binds the same endpoint to stdio JSONL for a
 local TUI-owned child and WebSocket for browser/remote/existing-server clients;
-it does not introduce another semantic endpoint. #290 consumes those bindings,
-without requiring a loopback WebSocket for local TUI use. No REST or AG-UI frontend
-protocol is implemented.
+it does not introduce another semantic endpoint. #290 consumes those bindings:
+`rustx-tui` is now an App Server client in both modes, and the ordinary local
+mode uses stdio JSONL to a TUI-owned child rather than a loopback WebSocket. See
+[TUI App Server client](tui-app-server.md). No REST or AG-UI frontend protocol is
+implemented.
 
 #### Runtime Client protocol implementation (Issue #37, revised by Issues #131, #130, #136, #140, and #144)
 
@@ -5263,9 +5265,11 @@ JSONL and WebSocket in #36 bind App Server, including its standalone process ent
 point. Neither binding owns domain semantics. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; it is not a frontend protocol.
 
-The following version history describes the existing local TUI stdio contract,
-retained until #290 migrates that application. App Server clients never negotiate
-or nest it. Its local version is `RUNTIME_CLIENT_PROTOCOL_VERSION`.
+The following version history describes the local Runtime Client stdio contract,
+which after #290 has no external client: `rustx-tui` speaks App Server v1, and
+`src/runtime_client` is an internal projection foundation the App Server reuses.
+App Server clients never negotiate or nest it. Its local version is
+`RUNTIME_CLIENT_PROTOCOL_VERSION`.
 
 Runtime Client protocol 34 removes the obsolete global `SessionSummaryView.active`
 field. Strict initialization rejects v33 clients; Session route changes report
@@ -5489,7 +5493,7 @@ RuntimeClientProjection (translation, fold, cursor, replay, subscribers)
 RuntimeClientHost (attachment / control adapter)
         |
         v
-RuntimeClientEndpoint -> transports -> TUI
+RuntimeClientEndpoint -> AppServerConnection -> stdio JSONL / WebSocket -> clients
 ```
 
 The runtime never emits Runtime Client projection types: the observation

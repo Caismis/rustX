@@ -14,7 +14,7 @@ import {
 import type {
   SessionSummaryView,
   SessionUserMessageBoundaryView,
-} from "../../protocol/types.ts";
+} from "../../protocol/app-server.ts";
 import { sessionRowLabel } from "../../presentation/selectors.ts";
 import { role, style } from "../theme.ts";
 import {

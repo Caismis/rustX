@@ -17,8 +17,8 @@
  *
  * The currently executing attempt must never visually mutate to B. This is
  * proven twice — once through the pure reducer, once end to end through the
- * transport and session owner against a scripted protocol peer — and neither
- * proof uses a timer.
+ * typed App Server client and its Session owner against a scripted peer — and
+ * neither proof uses a timer.
  */
 
 import assert from "node:assert/strict";
@@ -27,20 +27,25 @@ import { describe, it } from "node:test";
 import { reduce } from "../src/presentation/projection.ts";
 import { replaceFromSnapshot } from "../src/presentation/projection.ts";
 import type { PresentationState } from "../src/presentation/state.ts";
-import { RuntimeClientConnection } from "../src/runtime/connection.ts";
-import { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
+import {
+  APP_SERVER_PROTOCOL_VERSION,
+  AppServerClient,
+} from "../src/app-server/client.ts";
+import { AppServerSession } from "../src/app-server/session.ts";
 import type {
+  AttachmentTarget,
   RuntimeClientEvent,
-  RuntimeClientProtocolEvent,
-} from "../src/protocol/types.ts";
+} from "../src/protocol/app-server.ts";
+import type { ProjectedEvent } from "../src/presentation/projection.ts";
 import { runtimeCursor, transcriptCursor } from "./support/fixtures.ts";
 import {
   attemptModel,
   inboundBlock,
   sessionModel,
   snapshot,
+  nextCursor,
 } from "./support/fixtures.ts";
-import { ScriptedPeer, until } from "./support/scripted-peer.ts";
+import { FakeTransport, paramsOf, tick } from "./support/app-server-peer.ts";
 
 const MODEL_A = "alpha/model-a";
 const MODEL_B = "beta/model-b";
@@ -52,8 +57,8 @@ function fold(
   let current = state;
   let cursor = current.cursor;
   for (const event of events) {
-    cursor = runtimeCursor(cursor + 1);
-    const protocolEvent: RuntimeClientProtocolEvent = { cursor, event };
+    cursor = nextCursor(cursor);
+    const protocolEvent: ProjectedEvent = { cursor, event };
     current = reduce(current, protocolEvent);
   }
   return current;
@@ -144,10 +149,10 @@ describe("session model A -> B invariant", () => {
         tool_call_id: "c1",
         tool_id: "tool-bash",
       },
-      { type: "capability_updated", capabilities: { revision: 9 } },
+      { type: "capability_updated", capabilities: { revision: "9" } },
       {
         type: "inbound_enqueued",
-        sequence: 1,
+        sequence: "1",
         message: inboundBlock("m2", "queued"),
         transcript_cursor: transcriptCursor(1),
       },
@@ -164,90 +169,103 @@ describe("session model A -> B invariant", () => {
     assert.equal(state.sessionModel!.configured.model, MODEL_B);
   });
 
-  it("proves the invariant end to end over the transport", async () => {
-    const peer = new ScriptedPeer();
-    const connection = new RuntimeClientConnection({
-      input: peer.runtimeOutput,
-      output: peer.clientOutput,
-    });
-    const session = new RuntimeClientAttachment({ connection });
-
-    const attaching = session.attach();
-    await peer.awaitRequests(1);
-    peer.respond(1, {
+  it("proves the invariant end to end through the App Server client", async () => {
+    const transport = new FakeTransport();
+    const connecting = AppServerClient.initialize({ transport });
+    const initialize = (await transport.log.awaitMethod("initialize")).at(-1)!;
+    transport.respond(initialize.id, {
       type: "initialized",
-      attachment_id: "att-1",
+      protocol_version: APP_SERVER_PROTOCOL_VERSION,
+      capabilities: {
+        multi_session: true,
+        single_writable_controller: true,
+        headless_interactions: true,
+        experimental_methods: [],
+      },
+    });
+    const client = await connecting;
+
+    const target: AttachmentTarget = {
+      session_id: "session-model",
       conversation_id: "conv-1",
-      agent_id: "agent-1",
+      runtime_incarnation: "1",
+      attachment_id: "att-1",
+    };
+    const attaching = AppServerSession.attach(client, target.session_id);
+    const attach = (await transport.log.awaitMethod("session/attach")).at(-1)!;
+    // Attach is one cut: snapshot, cursor and subscription together.
+    transport.respond(attach.id, {
+      type: "attached",
+      target,
       snapshot: snapshot({ model: sessionModel(MODEL_A) }),
       cursor: runtimeCursor(0),
     });
-    await peer.awaitRequests(2); // subscribe_events
-    peer.respond(2, { type: "subscribed", after_cursor: runtimeCursor(0) });
-    await attaching;
+    const session = await attaching;
+    const stop = client.onNotification((message) =>
+      session.applyNotification(message),
+    );
 
-    assert.equal(session.state?.sessionModel!.configured.model, MODEL_A);
+    assert.equal(session.state.sessionModel!.configured.model, MODEL_A);
 
     // The runtime admits an attempt on A. The start event is self-contained:
-    // the client learns the frozen model without a second snapshot_get.
-    peer.emit(1, {
-      type: "attempt_started", execution_settings: null,
+    // the client learns the frozen model without a second snapshot read.
+    transport.emit(target, runtimeCursor(1), {
+      type: "attempt_started",
+      execution_settings: null,
       attempt_id: "a1",
       model: attemptModel(MODEL_A),
     });
-    await until(
-      () => session.state?.attempt?.attemptId === "a1",
-      "attempt observed",
-    );
-    assert.equal(session.state?.attempt?.model!.primary.model, MODEL_A);
+    await tick();
+    assert.equal(session.state.attempt?.attemptId, "a1");
+    assert.equal(session.state.attempt?.model!.primary.model, MODEL_A);
 
     // The client requests B while the attempt runs; the runtime accepts.
     const setting = session.modelSet({ model: MODEL_B });
-    const requests = await peer.awaitRequests(3);
-    const modelSet = requests[2];
-    assert.equal(modelSet?.method, "model_set");
-    peer.respond(3, { type: "model_set", model: sessionModel(MODEL_B) });
+    const modelSet = (await transport.log.awaitMethod("settings/setModel")).at(-1)!;
+    assert.deepEqual(paramsOf(modelSet, "settings/setModel").target, target);
+    transport.respond(modelSet.id, {
+      type: "model",
+      model: sessionModel(MODEL_B),
+    });
     await setting;
 
     // The authoritative change arrives on the same observation stream.
-    peer.emit(2, {
+    transport.emit(target, runtimeCursor(2), {
       type: "session_model_changed",
       model: sessionModel(MODEL_B),
     });
-    await until(
-      () => session.state?.sessionModel!.configured.model === MODEL_B,
-      "session model change observed",
-    );
+    await tick();
+    assert.equal(session.state.sessionModel!.configured.model, MODEL_B);
 
     assert.equal(
-      session.state?.attempt?.model!.primary.model,
+      session.state.attempt?.model!.primary.model,
       MODEL_A,
       "the executing attempt did not visually mutate to B",
     );
-    assert.equal(session.state?.attempt?.phase.type, "running");
+    assert.equal(session.state.attempt?.phase.type, "running");
 
     // Settle, then admit the next attempt.
-    peer.emit(3, {
+    transport.emit(target, runtimeCursor(3), {
       type: "attempt_settled",
       attempt_id: "a1",
       outcome: { type: "completed", finish_reason: { type: "stop" } },
     });
-    peer.emit(4, {
-      type: "attempt_started", execution_settings: null,
+    transport.emit(target, runtimeCursor(4), {
+      type: "attempt_started",
+      execution_settings: null,
       attempt_id: "a2",
       model: attemptModel(MODEL_B),
     });
-    await until(
-      () => session.state?.attempt?.attemptId === "a2",
-      "next attempt observed",
-    );
+    await tick();
 
+    assert.equal(session.state.attempt?.attemptId, "a2");
     assert.equal(
-      session.state?.attempt?.model!.primary.model,
+      session.state.attempt?.model!.primary.model,
       MODEL_B,
       "the next attempt uses B",
     );
-    connection.close();
+    stop();
+    client.close();
   });
 
   it("presents runtime-published reasoning support without inventing profiles", () => {

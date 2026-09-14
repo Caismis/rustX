@@ -21,8 +21,12 @@
  * only through operations this file calls.
  */
 
-import type { RuntimeClientAttachment, SessionSwitch } from "../runtime/attachment.ts";
-import { RuntimeRequestError } from "../runtime/connection.ts";
+import type { AppServerHost } from "../app-server/host.ts";
+import type { AppServerSession } from "../app-server/session.ts";
+import {
+  AppServerRequestError,
+  UncertainOutcomeError,
+} from "../app-server/client.ts";
 import {
   activeBackground,
   capabilitySummary,
@@ -46,12 +50,14 @@ import type {
   CatalogModelView,
   InteractionRef,
   SessionNodeView,
+  SessionSettings,
   SessionSummaryView,
   SessionUserMessageBoundaryView,
   SessionView,
   ToolCallId,
   ToolExecutionId,
-} from "../protocol/types.ts";
+  UserContentBlock,
+} from "../protocol/app-server.ts";
 
 /** What the dispatcher wants the UI to do next. */
 export type CommandOutcome =
@@ -79,8 +85,21 @@ export type CommandOutcome =
       boundaries: SessionUserMessageBoundaryView[];
       nextHistoryOffset?: number;
     }
-  | { kind: "session_switch"; change: SessionSwitch }
-  | { kind: "replacement_required"; message: string }
+  /**
+   * Show a different Session.
+   *
+   * This is client focus and nothing else. The App Server keeps every other
+   * Session exactly as it was: loaded, attached, and running.
+   */
+  | {
+      kind: "focus_session";
+      sessionId: string;
+      nodeId?: string;
+      /** Fork/tree content selected before publication; never history. */
+      editorContent?: UserContentBlock[];
+      /** A bounded note about how this Session came to exist. */
+      notice?: string;
+    }
   | {
       /** A client display preference. Never a runtime request. */
       kind: "preference";
@@ -118,7 +137,12 @@ export type PreferenceChange =
 export type ExpandTarget = "all" | "none" | "latest";
 
 export interface DispatcherContext {
-  session: RuntimeClientAttachment;
+  /** The connection and its durable Session catalog. */
+  host: AppServerHost;
+  /** The Session currently in focus. */
+  session: AppServerSession;
+  /** `session/create` inputs for Sessions this client creates. */
+  sessionSettings: SessionSettings;
   /** Bounded diagnostics the UI owns, surfaced by `/debug`. */
   diagnostics: () => DebugDiagnostics;
 }
@@ -130,11 +154,16 @@ export interface DispatcherContext {
  * here, and no field is composed from anything but observed state.
  */
 export interface DebugDiagnostics {
+  sessionId?: string;
   attachmentId?: string;
   conversationId?: string;
-  agentId?: string;
-  cursor?: number;
+  runtimeIncarnation?: string;
+  cursor?: string;
+  /** How this client reaches the App Server, and who owns that process. */
+  connection: string;
+  ownership: string;
   connectionState: string;
+  attachedSessions: number;
   childStatus: string;
   stderrTail: string;
   stderrTruncatedBytes: number;
@@ -150,14 +179,14 @@ export class CommandDispatcher {
   }
 
   /**
-   * Rebinds admission routing after a native process-boundary session switch.
+   * Rebinds admission routing after the visible Session changed.
    *
    * This only affects invocations admitted after the rebind. Every public
    * operation captures the attachment at its start and passes that exact
    * attachment through all awaited phases, so an admitted command cannot
    * retarget a newer attachment.
    */
-  setSession(session: RuntimeClientAttachment): void {
+  setSession(session: AppServerSession): void {
     this.#context.session = session;
   }
 
@@ -187,14 +216,11 @@ export class CommandDispatcher {
   }
 
   async #dispatch(
-    session: RuntimeClientAttachment,
+    session: AppServerSession,
     name: string,
     argument: string,
   ): Promise<CommandOutcome> {
     const state = session.state;
-    if (state === undefined) {
-      return transient("error", "not attached yet");
-    }
 
     try {
       switch (name) {
@@ -226,7 +252,7 @@ export class CommandDispatcher {
         case "/model":
           return await this.#model(session, state, argument);
         case "/new":
-          return { kind: "session_switch", change: await session.newSession() };
+          return await this.#newSession();
         case "/resume":
           return await this.#resume(session, argument);
         case "/session":
@@ -234,7 +260,7 @@ export class CommandDispatcher {
         case "/name":
           return await this.#name(session, argument);
         case "/clone":
-          return { kind: "session_switch", change: await session.cloneSession() };
+          return await this.#clone(session);
         case "/fork":
           return await this.#fork(session);
         case "/tree":
@@ -276,96 +302,86 @@ export class CommandDispatcher {
     }
   }
 
-  /** Selection seams used by the native-data overlays. */
-  async selectSession(sessionId: string): Promise<CommandOutcome> {
-    const session = this.#context.session;
-    return this.#selectSession(session, sessionId);
+  /**
+   * Selection seams used by the native-data overlays.
+   *
+   * Every one of them ends in a focus change. None of them replaces a process,
+   * detaches another Session, or asks the server to stop anything.
+   */
+  selectSession(sessionId: string): CommandOutcome {
+    return { kind: "focus_session", sessionId };
   }
 
-  async #selectSession(
-    session: RuntimeClientAttachment,
-    sessionId: string,
-  ): Promise<CommandOutcome> {
-    try {
-      return {
-        kind: "session_switch",
-        change: await session.selectSession(sessionId),
-      };
-    } catch (error) {
-      return failure(error);
-    }
+  selectTreeNode(sessionId: string, nodeId: string): CommandOutcome {
+    return { kind: "focus_session", sessionId, nodeId };
   }
 
-  async selectTreeNode(sessionId: string, nodeId: string): Promise<CommandOutcome> {
-    const session = this.#context.session;
-    return this.#selectTreeNode(session, sessionId, nodeId);
-  }
-
-  async #selectTreeNode(
-    session: RuntimeClientAttachment,
-    sessionId: string,
-    nodeId: string,
-  ): Promise<CommandOutcome> {
-    try {
-      return {
-        kind: "session_switch",
-        change: await session.selectSession(sessionId, nodeId),
-      };
-    } catch (error) {
-      return failure(error);
-    }
-  }
-
-  async forkAt(boundary: SessionUserMessageBoundaryView): Promise<CommandOutcome> {
-    const session = this.#context.session;
-    return this.#forkAt(session, boundary);
-  }
-
-  async #forkAt(
-    session: RuntimeClientAttachment,
+  /** Creates an independent Session from an exact historical boundary. */
+  async forkAt(
     boundary: SessionUserMessageBoundaryView,
   ): Promise<CommandOutcome> {
+    const session = this.#context.session;
     try {
-      return {
-        kind: "session_switch",
-        change: await session.forkSession(
-          boundary.surface_revision,
-          boundary.message.id,
-        ),
-      };
+      const forked = await this.#context.host.forkSession(
+        session.sessionId,
+        boundary.surface_revision,
+        boundary.message.id,
+      );
+      return focusTransition(forked, "forked");
     } catch (error) {
       return failure(error);
     }
   }
 
-  async branchAt(boundary: SessionUserMessageBoundaryView): Promise<CommandOutcome> {
-    const session = this.#context.session;
-    return this.#branchAt(session, boundary);
-  }
-
-  async #branchAt(
-    session: RuntimeClientAttachment,
+  /** Creates a branch node inside the same Session graph. */
+  async branchAt(
     boundary: SessionUserMessageBoundaryView,
   ): Promise<CommandOutcome> {
+    const session = this.#context.session;
     try {
-      return {
-        kind: "session_switch",
-        change: await session.branchTree(
-          boundary.surface_revision,
-          boundary.message.id,
-        ),
-      };
+      const current = await this.#context.host.readSession(session.sessionId);
+      const branched = await this.#context.host.branchSession(
+        session.sessionId,
+        current.active_node,
+        boundary.surface_revision,
+        boundary.message.id,
+      );
+      return focusTransition(branched, "branched");
     } catch (error) {
       return failure(error);
     }
+  }
+
+  /** Creates a fresh Session from this client's Session settings. */
+  async #newSession(): Promise<CommandOutcome> {
+    const created = await this.#context.host.createSession(
+      this.#context.sessionSettings,
+    );
+    return focusTransition(created, "created");
+  }
+
+  /**
+   * Clones the exact committed current canonical head.
+   *
+   * The head revision is read authoritatively first, so the copy means one
+   * exact conversation cut even if the Session commits again immediately
+   * afterwards.
+   */
+  async #clone(session: AppServerSession): Promise<CommandOutcome> {
+    const head = await session.boundaries(0, 1);
+    const cloned = await this.#context.host.forkSession(
+      session.sessionId,
+      head.surfaceRevision,
+    );
+    return focusTransition(cloned, "cloned");
   }
 
   async #resume(
-    session: RuntimeClientAttachment,
+    session: AppServerSession,
     argument: string,
   ): Promise<CommandOutcome> {
-    if (argument.length > 0) return this.#selectSession(session, argument);
-    const page = await session.listSessions();
+    if (argument.length > 0) return this.selectSession(argument);
+    const page = await this.#context.host.listSessions();
     return {
       kind: "choose_session",
       sessions: page.sessions,
@@ -374,14 +390,14 @@ export class CommandDispatcher {
     };
   }
 
-  async #sessionInfo(session: RuntimeClientAttachment): Promise<CommandOutcome> {
-    const refreshed = await session.refreshSession();
+  async #sessionInfo(session: AppServerSession): Promise<CommandOutcome> {
+    const refreshed = await this.#context.host.readSession(session.sessionId);
     return inspect(
       "Session",
       [
         // An unnamed Session has no name line rather than a placeholder one:
         // the identity below is what it is actually known by.
-        ...(refreshed.name === undefined ? [] : [`name ${refreshed.name}`]),
+        ...(refreshed.name == null ? [] : [`name ${refreshed.name}`]),
         `session ${refreshed.id}`,
         `active node ${refreshed.active_node}`,
         `conversation ${refreshed.active_conversation_id}`,
@@ -391,7 +407,7 @@ export class CommandDispatcher {
   }
 
   async #compact(
-    session: RuntimeClientAttachment,
+    session: AppServerSession,
     argument: string,
   ): Promise<CommandOutcome> {
     if (argument.length > 0) {
@@ -399,7 +415,7 @@ export class CommandDispatcher {
     }
     const context = await session.compactContext();
     const latest = context.latest_compaction;
-    if (latest === undefined) {
+    if (latest == null) {
       return transient("info", "context compacted");
     }
     return transient(
@@ -408,7 +424,7 @@ export class CommandDispatcher {
     );
   }
 
-  async #goal(session: RuntimeClientAttachment, argument: string): Promise<CommandOutcome> {
+  async #goal(session: AppServerSession, argument: string): Promise<CommandOutcome> {
     const [action = "show", ...words] = argument.trim().split(/\s+/);
     const text = words.join(" ");
     if (action === "create") {
@@ -419,7 +435,7 @@ export class CommandDispatcher {
     const view = await session.goal({ action: "show" });
     if (!action || action === "show") return inspect("Goal", JSON.stringify(view, null, 2));
     if (!view.current) return transient("error", "No current Goal. Use /goal create <objective>.");
-    let mutation: import("../protocol/types.ts").GoalMutation;
+    let mutation: import("../protocol/app-server.ts").GoalMutation;
     if ((action === "pause" || action === "resume") && !text) mutation = { action };
     else if (action === "edit" && text) mutation = { action: "edit", objective: text };
     else if (action === "budget" && /^\d+$/.test(text)) mutation = { action: "budget", rounds: Number(text) };
@@ -429,7 +445,7 @@ export class CommandDispatcher {
   }
 
   async #reload(
-    session: RuntimeClientAttachment,
+    session: AppServerSession,
     argument: string,
   ): Promise<CommandOutcome> {
     if (argument.length > 0) {
@@ -450,40 +466,48 @@ export class CommandDispatcher {
    * the fact the user is asking about, not a syntax mistake to correct.
    */
   async #name(
-    session: RuntimeClientAttachment,
+    session: AppServerSession,
     argument: string,
   ): Promise<CommandOutcome> {
+    const host = this.#context.host;
     if (argument.trim().length === 0) {
-      const current = await session.refreshSession();
+      const current = await host.readSession(session.sessionId);
       return transient(
         "info",
-        current.name === undefined
+        current.name == null
           ? `session ${current.id} is unnamed; use /name <text> to name it`
           : `session name: ${current.name}`,
       );
     }
-    const named = await session.nameSession(argument);
+    const named = await host.renameSession(session.sessionId, argument);
     return transient("info", `session named ${sessionLabel(named)}`);
   }
 
-  async #fork(session: RuntimeClientAttachment): Promise<CommandOutcome> {
-    const tree = await session.sessionTree();
+  async #fork(session: AppServerSession): Promise<CommandOutcome> {
+    const page = await session.boundaries();
     return {
       kind: "choose_fork",
-      boundaries: tree.branchableMessages,
-      nextOffset: tree.nextHistoryOffset,
+      boundaries: page.boundaries,
+      nextOffset: page.nextOffset,
     };
   }
 
-  async #tree(session: RuntimeClientAttachment): Promise<CommandOutcome> {
-    const tree = await session.sessionTree();
+  async #tree(session: AppServerSession): Promise<CommandOutcome> {
+    // The graph is a durable catalog read and the boundaries are a live Surface
+    // read: two owners, two requests, and no third place that could disagree.
+    const host = this.#context.host;
+    const [current, tree, page] = await Promise.all([
+      host.readSession(session.sessionId),
+      host.sessionTree(session.sessionId),
+      session.boundaries(),
+    ]);
     return {
       kind: "choose_tree",
-      session: tree.session,
+      session: current,
       nodes: tree.nodes,
-      nextNodeOffset: tree.nextNodeOffset,
-      boundaries: tree.branchableMessages,
-      nextHistoryOffset: tree.nextHistoryOffset,
+      nextNodeOffset: tree.nextOffset,
+      boundaries: page.boundaries,
+      nextHistoryOffset: page.nextOffset,
     };
   }
 
@@ -499,7 +523,7 @@ export class CommandDispatcher {
    * an API key.
    */
   async #model(
-    session: RuntimeClientAttachment,
+    session: AppServerSession,
     state: PresentationState,
     argument: string,
   ): Promise<CommandOutcome> {
@@ -550,7 +574,7 @@ export class CommandDispatcher {
   }
 
   async #selectModel(
-    session: RuntimeClientAttachment,
+    session: AppServerSession,
     model: CatalogModelView,
   ): Promise<CommandOutcome> {
     try {
@@ -598,7 +622,7 @@ export class CommandDispatcher {
   }
 
   async #cancel(
-    session: RuntimeClientAttachment,
+    session: AppServerSession,
     argument: string,
   ): Promise<CommandOutcome> {
     if (argument.length > 0) {
@@ -727,11 +751,35 @@ function transient(
   return { kind: "transient", level, text };
 }
 
+/** Turns one committed durable transition into a focus change. */
+function focusTransition(
+  transition: import("../app-server/host.ts").SessionTransition,
+  verb: string,
+): CommandOutcome {
+  const label = sessionLabel(transition.session);
+  return {
+    kind: "focus_session",
+    sessionId: transition.session.id,
+    nodeId: transition.session.active_node,
+    editorContent: transition.editorContent,
+    notice:
+      transition.durabilityDiagnostic === undefined
+        ? `${verb} session ${label}`
+        : `${verb} session ${label}, but its durability became uncertain: ${compactDiagnostic(transition.durabilityDiagnostic)}`,
+  };
+}
+
 function failure(error: unknown): CommandOutcome {
-  if (error instanceof RuntimeRequestError) {
-    if (error.error.type === "session_restart_required") {
-      return { kind: "replacement_required", message: error.error.message };
-    }
+  if (error instanceof UncertainOutcomeError) {
+    // The response was lost, which is not evidence that the server refused
+    // the request. Saying "failed" here would be a claim this client cannot
+    // support, and resending would risk doing the work twice.
+    return transient(
+      "error",
+      `${compactDiagnostic(error.message)} · reconnect and check the authoritative state before retrying`,
+    );
+  }
+  if (error instanceof AppServerRequestError) {
     return transient("error", compactDiagnostic(error.message));
   }
   return transient("error", compactDiagnostic(error));
@@ -874,7 +922,7 @@ export function renderTools(state: PresentationState): string {
 function appendToolGroups(
   lines: string[],
   heading: string,
-  groups: Array<{ origin: string; tools: import("../protocol/types.ts").RuntimeClientTool[] }>,
+  groups: Array<{ origin: string; tools: import("../protocol/app-server.ts").RuntimeClientTool[] }>,
 ): void {
   lines.push("", `### ${heading}`);
   if (groups.length === 0) {
@@ -953,10 +1001,14 @@ export function renderDebug(
 ): string {
   const lines = [
     "### Client diagnostics",
+    `- App Server: ${diagnostics.connection}`,
+    `- process ownership: ${diagnostics.ownership}`,
+    `- session: \`${diagnostics.sessionId ?? "none"}\``,
     `- attachment: \`${diagnostics.attachmentId ?? "none"}\``,
     `- conversation: \`${diagnostics.conversationId ?? "none"}\``,
-    `- agent: \`${diagnostics.agentId ?? "none"}\``,
+    `- runtime incarnation: \`${diagnostics.runtimeIncarnation ?? "none"}\``,
     `- cursor: ${diagnostics.cursor ?? state.cursor}`,
+    `- attached sessions: ${diagnostics.attachedSessions}`,
     `- connection: ${diagnostics.connectionState}`,
     `- child: ${diagnostics.childStatus}`,
     `- pending requests: ${diagnostics.pendingRequests}`,
@@ -1007,7 +1059,7 @@ function attemptDiagnosticsLines(state: PresentationState): string[] {
 
 function lastDrainLines(state: PresentationState): string[] {
   const drain = state.inbound.last_drain;
-  return drain === undefined
+  return drain == null
     ? []
     : [`- last drain: watermark ${drain.watermark}, ${drain.count} item(s)`];
 }
@@ -1015,7 +1067,7 @@ function lastDrainLines(state: PresentationState): string[] {
 function contextDiagnosticsLines(state: PresentationState): string[] {
   const context = state.context;
   const latest = context.latest_compaction;
-  if (latest === undefined) {
+  if (latest == null) {
     return [`- context compactions: ${context.compaction_count}`];
   }
   return [
@@ -1024,14 +1076,14 @@ function contextDiagnosticsLines(state: PresentationState): string[] {
   ];
 }
 
-function lifetime(state: PresentationState, field: keyof import("../protocol/types.ts").SettingsLifetimes): string {
+function lifetime(state: PresentationState, field: keyof import("../protocol/app-server.ts").SettingsLifetimes): string {
   const boundary = state.settingsLifetimes?.[field];
   if (boundary === undefined) return "lifetime unavailable";
   return boundaryLabel(boundary);
 }
 
-function boundaryLabel(boundary: import("../protocol/types.ts").SettingsBoundary): string {
-  const labels: Record<import("../protocol/types.ts").SettingsBoundary, string> = {
+function boundaryLabel(boundary: import("../protocol/app-server.ts").SettingsBoundary): string {
+  const labels: Record<import("../protocol/app-server.ts").SettingsBoundary, string> = {
     launch_capture: "launch capture", next_admission: "next eligible admission",
     safe_boundary: "safe boundary", resource_publication: "resource publication",
     frozen_admission: "frozen at admission", client_local: "immediate, client-local",
@@ -1077,7 +1129,7 @@ function renderExtensions(state: PresentationState): string[] {
   const heading = `### Native Agent Extensions (${lifetime(state, "extensions")})`;
   const status = effective.agent_status;
   const agentStatusLines =
-    status === null
+    status == null
       ? ["- Agent Status: disabled (not composed for this Agent)"]
       : [
           "- Agent Status: enabled",
@@ -1109,7 +1161,7 @@ export function renderSettings(state: PresentationState): string {
   }
 
   const launch = state.launchSettings;
-  const source = (value: import("../protocol/types.ts").SettingOrigin) =>
+  const source = (value: import("../protocol/app-server.ts").SettingOrigin) =>
     "document" in value ? `${value.kind}: ${value.document}` : value.kind;
   const admitted = state.attempt?.executionSettings;
   return [

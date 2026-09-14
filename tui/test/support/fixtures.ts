@@ -33,15 +33,33 @@ import type {
   ToolExecutionResult,
   UserMessageBlock,
   RoutedInteraction,
-} from "../../src/protocol/types.ts";
+} from "../../src/protocol/app-server.ts";
 
-/** Test-only constructors for the two numeric wire cursor domains. */
-export function runtimeCursor(value: number): RuntimeClientCursor {
-  return value as RuntimeClientCursor;
+/**
+ * Test-only constructors for the two exact cursor domains.
+ *
+ * Cursors are `u64` on the wire and therefore canonical decimal **text**. The
+ * constructors take a JavaScript number because that is what a fixture wants to
+ * write, and produce the canonical spelling the protocol actually carries.
+ */
+export function runtimeCursor(value: number | bigint): RuntimeClientCursor {
+  return value.toString();
 }
 
-export function transcriptCursor(value: number): RuntimeClientTranscriptCursor {
-  return value as RuntimeClientTranscriptCursor;
+export function transcriptCursor(
+  value: number | bigint,
+): RuntimeClientTranscriptCursor {
+  return value.toString();
+}
+
+/** The next position in an exact cursor domain, without leaving that domain. */
+export function nextCursor(cursor: RuntimeClientCursor): RuntimeClientCursor {
+  return (BigInt(cursor) + 1n).toString();
+}
+
+/** An exact `u64` domain value, spelled the way the wire spells it. */
+export function exact(value: number | bigint): string {
+  return value.toString();
 }
 
 export function approvalInteraction(
@@ -225,7 +243,7 @@ export function capabilities(revision: number): CapabilityView {
     },
   ];
   return {
-    revision,
+    revision: revision.toString(),
     tools,
     available_tools: tools,
     skills: [
@@ -260,11 +278,11 @@ export function snapshot(
     effective_extensions: { goal: null, agent_status: { time: { enabled: true, timezone: null }, background: { enabled: true } }, todo: {} },
     settings_evidence: "live_session",
     settings_lifetimes: { launch: "launch_capture", model: "next_admission", approval: "safe_boundary", resources: "resource_publication", attempt: "frozen_admission", presentation: "client_local", saved_defaults: "next_launch", extensions: "launch_capture" },
-    workflows: { revision: 0, runs: [], omitted_runs: 0 },
+    workflows: { revision: "0", runs: [], omitted_runs: 0 },
     conversation_id: "conv-test",
     shutting_down: false,
     effective_approval_mode: "policy",
-    approval_mode_revision: 0,
+    approval_mode_revision: "0",
     messages,
     transcript,
     inbound: { pending: [] },
@@ -442,7 +460,7 @@ export function subagentObservation(
   overrides: Partial<RuntimeClientSubagentObservation> = {},
 ): RuntimeClientSubagentObservation {
   return {
-    revision: 0,
+    revision: "0",
     activity,
     counters: { model_requests: 0, model_retries: 0, tool_executions: 0 },
     ...overrides,
@@ -482,7 +500,7 @@ export function toolCallBlock(
   callId: string,
   toolId: string,
   name: string,
-  args: unknown,
+  args: Record<string, unknown>,
 ) {
   return {
     type: "tool_call" as const,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { SessionDeleteResult, SessionDeletionRequest } from "../src/protocol/types.ts";
+import type { MethodParams, SessionDeleteResult } from "../src/protocol/app-server.ts";
 const target = { session_id: "session-1", target_revision: "a".repeat(64) };
 const variants = {
   preview: { status: "preview", preview: { session_id: target.session_id, name: null, target_revision: target.target_revision, owned_node_count: 1, owned_conversation_count: 2, owned_child_count: 1 } },
@@ -25,13 +25,26 @@ for (const result of Object.values(variants)) test(`deletion ${result.status} is
   assert.deepEqual(JSON.parse(JSON.stringify(result)), result);
   assert.equal(typeof classify(result), "string");
 });
-test("requests carry native identity and revision only", () => {
-  const requests: SessionDeletionRequest[] = [
-    { method: "session_delete_preview", id: 1, session_id: target.session_id },
-    { method: "session_delete", id: 2, session_id: target.session_id, expected_target_revision: target.target_revision },
-    { method: "session_delete_recover", id: 3, session_id: target.session_id },
-  ];
-  assert.equal(new Set(requests.map((r) => r.method)).size, 3);
+test("deletion requests carry native identity and revision only", () => {
+  // No client-supplied cleanup workset and no filesystem path: the three
+  // deletion methods address a Session by identity, and `session/delete` adds
+  // exactly the revision it is confirming.
+  const preview: MethodParams<"session/deletePreview"> = {
+    session_id: target.session_id,
+  };
+  const remove: MethodParams<"session/delete"> = {
+    session_id: target.session_id,
+    expected_target_revision: target.target_revision,
+  };
+  const recover: MethodParams<"session/recoverDeletion"> = {
+    session_id: target.session_id,
+  };
+  assert.deepEqual(Object.keys(preview), ["session_id"]);
+  assert.deepEqual(Object.keys(remove).sort(), [
+    "expected_target_revision",
+    "session_id",
+  ]);
+  assert.deepEqual(Object.keys(recover), ["session_id"]);
 });
 
 test("Rust and TypeScript use the same complete result fixtures", async () => {
@@ -45,7 +58,7 @@ test("all blocker reasons and finalization uncertainty remain discriminated", ()
     { kind: "current_session" }, { kind: "in_use" },
     { kind: "workspace", resource_count: 1 },
     { kind: "invalid_ownership" },
-  ] satisfies import("../src/protocol/types.ts").DeletionBlocker[];
+  ] satisfies import("../src/protocol/app-server.ts").DeletionBlocker[];
   assert.equal(new Set(reasons.map((r) => r.kind)).size, 4);
   const final: SessionDeleteResult = { status: "committed_durability_uncertain", session_id: target.session_id };
   assert.equal(final.status, "committed_durability_uncertain");

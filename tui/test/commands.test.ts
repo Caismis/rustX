@@ -2,8 +2,10 @@
  * The command layer, tested without a terminal.
  *
  * Every command either renders projection state or invokes exactly one
- * canonical Runtime Client operation. These cases assert both halves: what
- * the user sees, and which protocol request (if any) reached the wire.
+ * canonical App Server operation. These cases assert both halves: what the user
+ * sees, and which protocol request (if any) reached the wire.
+ *
+ * Nothing here sleeps: each case awaits the exact request it expects.
  */
 
 import assert from "node:assert/strict";
@@ -13,10 +15,8 @@ import { SlashCommandAutocompleteProvider, commandPrefix } from "../src/commands
 import { CommandDispatcher, renderTools } from "../src/commands/dispatcher.ts";
 import { COMMANDS, parseCommandLine } from "../src/commands/registry.ts";
 import { emptyPresentationState } from "../src/presentation/projection.ts";
-import { RuntimeClientConnection } from "../src/runtime/connection.ts";
-import { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
 import { TransientFeedbackSurface } from "../src/ui/components/transient-feedback.ts";
-import { ArgumentError, parseArguments, replacementArguments } from "../src/cli.ts";
+import { ArgumentError, USAGE, parseArguments } from "../src/cli.ts";
 import {
   agentStatus,
   attemptModel,
@@ -31,16 +31,14 @@ import {
   todoSection,
   transcriptCursor,
 } from "./support/fixtures.ts";
-import { ScriptedPeer } from "./support/scripted-peer.ts";
-
-const NO_DIAGNOSTICS = () => ({
-  connectionState: "connected",
-  childStatus: "running (pid 1)",
-  stderrTail: "",
-  stderrTruncatedBytes: 0,
-  pendingRequests: 0,
-  resyncCount: 0,
-});
+import { paramsOf } from "./support/app-server-peer.ts";
+import {
+  NO_DIAGNOSTICS,
+  SESSION_SETTINGS,
+  harness,
+  nextRequest,
+} from "./support/app-server-harness.ts";
+import type { AppServerSession } from "../src/app-server/session.ts";
 
 function deferred<T>(): {
   promise: Promise<T>;
@@ -53,59 +51,58 @@ function deferred<T>(): {
   return { promise, resolve };
 }
 
-async function harness(initial = snapshot()) {
-  const peer = new ScriptedPeer();
-  const connection = new RuntimeClientConnection({
-    input: peer.runtimeOutput,
-    output: peer.clientOutput,
-  });
-  const session = new RuntimeClientAttachment({ connection });
-  const attaching = session.attach();
-  await peer.awaitRequests(1);
-  peer.respond(1, {
-    type: "initialized",
-    attachment_id: "att-1",
-    conversation_id: initial.conversation_id,
-    agent_id: "agent-1",
-    snapshot: initial,
-    cursor: runtimeCursor(0),
-  });
-  await peer.awaitRequests(2);
-  peer.respond(2, { type: "subscribed", after_cursor: runtimeCursor(0) });
-  await attaching;
-
-  const dispatcher = new CommandDispatcher({
-    session,
-    diagnostics: NO_DIAGNOSTICS,
-  });
-  return { peer, connection, session, dispatcher };
-}
-
 describe("Goal commands", () => {
   it("creates through the typed control without an inbound turn", async () => {
-    const { peer, dispatcher } = await harness();
-    const creating = dispatcher.submit("/goal create finish delivery");
-    await peer.awaitRequests(3);
-    assert.deepEqual(peer.requests[2], { method: "goal", id: 3, control: { action: "create", objective: "finish delivery", budget: 10 } });
-    peer.respond(3, { type: "goal", view: { current: null, armed: true } });
+    const h = await harness();
+    const creating = h.dispatcher.submit("/goal create finish delivery");
+    const control = await nextRequest(h, "goal/control");
+    assert.deepEqual(paramsOf(control, "goal/control"), {
+      target: h.target,
+      control: { action: "create", objective: "finish delivery", budget: 10 },
+    });
+    h.transport.respond(control.id, {
+      type: "goal",
+      view: { current: null, armed: true },
+    });
     assert.equal((await creating).kind, "inspect");
-    assert.equal(peer.requests.length, 3);
+    // Creating a Goal is a typed control, never a conversation message.
+    assert.equal(h.transport.log.count("turn/start"), 0);
   });
 
   it("uses the observed revision for pause and never retries stale state", async () => {
-    const { peer, dispatcher } = await harness();
-    const pausing = dispatcher.submit("/goal pause");
-    await peer.awaitRequests(3);
-    const current = { reference: { id: "goal-1", revision: 7 }, objective: "deliver", phase: "active" as const,
-      autonomous_round_budget: 10, autonomous_rounds_consumed: 2, blocked_reason: null,
-      origin: { kind: "runtime_control" as const }, last_round_message_id: null };
-    peer.respond(3, { type: "goal", view: { current, armed: true } });
-    await peer.awaitRequests(4);
-    assert.deepEqual(peer.requests[3], { method: "goal", id: 4, control: { action: "mutate", expected: current.reference, mutation: { action: "pause" } } });
-    peer.respondError(4, { type: "invalid_request", message: "Stale GoalRef; current revision is 8" });
+    const h = await harness();
+    const pausing = h.dispatcher.submit("/goal pause");
+    const read = await nextRequest(h, "goal/control");
+    const current = {
+      reference: { id: "goal-1", revision: "7" },
+      objective: "deliver",
+      phase: "active" as const,
+      autonomous_round_budget: 10,
+      autonomous_rounds_consumed: 2,
+      blocked_reason: null,
+      origin: { kind: "runtime_control" as const },
+      last_round_message_id: null,
+    };
+    h.transport.respond(read.id, {
+      type: "goal",
+      view: { current, armed: true },
+    });
+
+    const mutate = await nextRequest(h, "goal/control");
+    assert.deepEqual(paramsOf(mutate, "goal/control").control, {
+      action: "mutate",
+      expected: current.reference,
+      mutation: { action: "pause" },
+    });
+    h.transport.respondError(mutate.id, {
+      code: -32000,
+      message: "Stale GoalRef; current revision is 8",
+      data: { kind: "invalid_state" },
+    });
     const outcome = await pausing;
     assert.equal(outcome.kind, "transient");
-    assert.equal(peer.requests.length, 4);
+    // A stale expectation is reported, not retried with a guessed revision.
+    assert.equal(h.transport.log.count("goal/control"), 2);
   });
 });
 
@@ -223,100 +220,97 @@ describe("slash-command autocomplete", () => {
 
 describe("CommandDispatcher", () => {
   it("submits plain text as one inbound message", async () => {
-    const { peer, dispatcher } = await harness();
-    const submitting = dispatcher.submit("hello runtime");
-    const requests = await peer.awaitRequests(3);
+    const h = await harness();
+    const submitting = h.dispatcher.submit("hello runtime");
+    const start = await nextRequest(h, "turn/start");
+    const params = paramsOf(start, "turn/start");
 
-    const submit = requests[2];
-    assert.equal(submit?.method, "submit_inbound");
-    assert.deepEqual(submit?.method === "submit_inbound" ? submit.content : null, [
-      { type: "text", text: "hello runtime" },
-    ]);
+    // Inbound content is carried verbatim, addressed at the full attachment
+    // target. The client composes nothing and interprets nothing.
+    assert.deepEqual(params.target, h.target);
+    assert.deepEqual(params.content, [{ type: "text", text: "hello runtime" }]);
 
-    peer.respond(3, {
+    h.transport.respond(start.id, {
       type: "inbound_accepted",
       message_id: "m1",
-      inbound_sequence: 1,
+      inbound_sequence: "1",
     });
     assert.deepEqual(await submitting, { kind: "none" });
   });
 
   it("keeps ordinary editor text as inbound while a questionnaire is pending", async () => {
-    const { peer, dispatcher } = await harness(
+    const h = await harness(
       snapshot({ pending_interactions: [questionnaireInteraction()] }),
     );
-    const responding = dispatcher.submit("production");
-    await peer.awaitRequests(3);
+    const responding = h.dispatcher.submit("production");
+    const start = await nextRequest(h, "turn/start");
 
-    assert.equal(peer.requests[2]?.method, "submit_inbound");
-    assert.deepEqual(
-      peer.requests[2]?.method === "submit_inbound"
-        ? peer.requests[2].content
-        : null,
-      [{ type: "text", text: "production" }],
-    );
-    peer.respond(3, {
+    // A pending Questionnaire never captures the editor: only the focused
+    // human-input surface answers one, and it does so with a typed response.
+    assert.deepEqual(paramsOf(start, "turn/start").content, [
+      { type: "text", text: "production" },
+    ]);
+    assert.equal(h.transport.log.count("interaction/respond"), 0);
+    h.transport.respond(start.id, {
       type: "inbound_accepted",
       message_id: "m-question-text",
-      inbound_sequence: 1,
+      inbound_sequence: "1",
     });
     assert.deepEqual(await responding, { kind: "none" });
   });
 
   it("keeps questionnaire answers out of shell parsing", async () => {
-    const openQuestion = questionnaireInteraction("attempt-1-interaction-question-open");
-    const { peer, dispatcher } = await harness(
+    const h = await harness(
       snapshot({
-        pending_interactions: [openQuestion],
+        pending_interactions: [
+          questionnaireInteraction("attempt-1-interaction-question-open"),
+        ],
       }),
     );
-    const responding = dispatcher.submit("a private environment");
-    await peer.awaitRequests(3);
-    assert.deepEqual(
-      peer.requests[2]?.method === "submit_inbound"
-        ? peer.requests[2].content
-        : null,
-      [{ type: "text", text: "a private environment" }],
-    );
-    peer.respond(3, {
+    const responding = h.dispatcher.submit("a private environment");
+    const start = await nextRequest(h, "turn/start");
+    assert.deepEqual(paramsOf(start, "turn/start").content, [
+      { type: "text", text: "a private environment" },
+    ]);
+    h.transport.respond(start.id, {
       type: "inbound_accepted",
       message_id: "m-free-text",
-      inbound_sequence: 1,
+      inbound_sequence: "1",
     });
     assert.deepEqual(await responding, { kind: "none" });
   });
 
   it("does not route ordinary text to any pending questionnaire", async () => {
-    const first = questionnaireInteraction("attempt-1-interaction-z");
-    const second = questionnaireInteraction("attempt-1-interaction-a");
-    const { peer, dispatcher } = await harness(
-      snapshot({ pending_interactions: [first, second] }),
+    const h = await harness(
+      snapshot({
+        pending_interactions: [
+          questionnaireInteraction("attempt-1-interaction-z"),
+          questionnaireInteraction("attempt-1-interaction-a"),
+        ],
+      }),
     );
-    const responding = dispatcher.submit("production");
-    await peer.awaitRequests(3);
-    assert.equal(
-      peer.requests[2]?.method,
-      "submit_inbound",
-    );
-    peer.respond(3, {
+    const responding = h.dispatcher.submit("production");
+    const start = await nextRequest(h, "turn/start");
+    assert.equal(h.transport.log.count("interaction/respond"), 0);
+    h.transport.respond(start.id, {
       type: "inbound_accepted",
       message_id: "m-question-text",
-      inbound_sequence: 1,
+      inbound_sequence: "1",
     });
     assert.deepEqual(await responding, { kind: "none" });
   });
 
   it("keeps questionnaire decisions inside the overlay protocol", async () => {
-    const { peer, dispatcher } = await harness(
+    const h = await harness(
       snapshot({ pending_interactions: [questionnaireInteraction()] }),
     );
-    const submitting = dispatcher.submit("custom environment");
-    await peer.awaitRequests(3);
-    assert.equal(peer.requests[2]?.method, "submit_inbound");
-    peer.respond(3, {
+    const submitting = h.dispatcher.submit("custom environment");
+    const start = await nextRequest(h, "turn/start");
+    assert.equal(h.transport.log.count("interaction/respond"), 0);
+    h.transport.respond(start.id, {
       type: "inbound_accepted",
       message_id: "m-custom-text",
-      inbound_sequence: 1,
+      inbound_sequence: "1",
     });
     assert.deepEqual(await submitting, { kind: "none" });
   });
@@ -383,7 +377,7 @@ describe("CommandDispatcher", () => {
       request_params: { summary_tag: "keep" },
       max_output_tokens: 300,
     };
-    const { peer, dispatcher } = await harness(
+    const h = await harness(
       snapshot({
         model: {
           ...sessionModel("alpha/model-a"),
@@ -404,16 +398,12 @@ describe("CommandDispatcher", () => {
         },
       }),
     );
-    const changing = dispatcher.submit("/model beta/model-b");
+    const changing = h.dispatcher.submit("/model beta/model-b");
 
-    const afterCatalog = await peer.awaitRequests(3);
-    assert.equal(
-      afterCatalog[2]?.method,
-      "model_catalog_get",
-      "the client reads the runtime catalog, never models.toml",
-    );
-    peer.respond(3, {
-      type: "model_catalog",
+    // The client reads the runtime's own catalog. It never opens models.toml.
+    const catalog = await nextRequest(h, "settings/models");
+    h.transport.respond(catalog.id, {
+      type: "models",
       catalog: {
         models: [
           {
@@ -440,18 +430,19 @@ describe("CommandDispatcher", () => {
       },
     });
 
-    const afterSet = await peer.awaitRequests(4);
-    const modelSet = afterSet[3];
-    assert.equal(modelSet?.method, "model_set");
+    const modelSet = await nextRequest(h, "settings/setModel");
     // A deliberate whole-state replacement: primary overrides reset, while
     // the independent summary policy survives exactly.
-    assert.deepEqual(modelSet?.method === "model_set" ? modelSet.config : null, {
+    assert.deepEqual(paramsOf(modelSet, "settings/setModel").config, {
       model: "beta/model-b",
       reasoningProfile: "off",
       requestParams: {},
       summaryModel: summaryPolicy,
     });
-    peer.respond(4, { type: "model_set", model: sessionModel("beta/model-b") });
+    h.transport.respond(modelSet.id, {
+      type: "model",
+      model: sessionModel("beta/model-b"),
+    });
 
     const outcome = await changing;
     assert.equal(outcome.kind, "transient");
@@ -488,16 +479,18 @@ describe("CommandDispatcher", () => {
         aModelSet += 1;
         return sessionModel("beta/model-b");
       },
-    } as unknown as RuntimeClientAttachment;
+    } as unknown as AppServerSession;
     const sessionB = {
       state: emptyPresentationState(sessionModel("alpha/model-a")),
       modelSet: async () => {
         bModelSet += 1;
         return sessionModel("beta/model-b");
       },
-    } as unknown as RuntimeClientAttachment;
+    } as unknown as AppServerSession;
     const dispatcher = new CommandDispatcher({
+      host: {} as never,
       session: sessionA,
+      sessionSettings: SESSION_SETTINGS,
       diagnostics: NO_DIAGNOSTICS,
     });
 
@@ -517,10 +510,10 @@ describe("CommandDispatcher", () => {
   });
 
   it("rejects a model the runtime catalog does not offer", async () => {
-    const { peer, dispatcher } = await harness();
-    const changing = dispatcher.submit("/model made/up");
-    await peer.awaitRequests(3);
-    peer.respond(3, { type: "model_catalog", catalog: { models: [] } });
+    const h = await harness();
+    const changing = h.dispatcher.submit("/model made/up");
+    const catalog = await nextRequest(h, "settings/models");
+    h.transport.respond(catalog.id, { type: "models", catalog: { models: [] } });
 
     const outcome = await changing;
     assert.equal(outcome.kind, "transient");
@@ -528,21 +521,17 @@ describe("CommandDispatcher", () => {
       assert.equal(outcome.level, "error");
       assert.match(outcome.text, /not in the runtime's catalog/);
     }
-    // No model_set was attempted for an unknown reference.
-    assert.equal(peer.requests.length, 3);
+    // No mutation was attempted for an unknown reference.
+    assert.equal(h.transport.log.count("settings/setModel"), 0);
   });
 
   it("opens the model selector from the runtime catalog", async () => {
-    const { peer, dispatcher } = await harness();
-    const choosing = dispatcher.submit("/model");
-    await peer.awaitRequests(3);
-    assert.equal(
-      peer.requests[2]?.method,
-      "model_catalog_get",
-      "the selector reads the runtime catalog, never models.toml",
-    );
-    peer.respond(3, {
-      type: "model_catalog",
+    const h = await harness();
+    const choosing = h.dispatcher.submit("/model");
+    // The selector reads the runtime catalog, never models.toml.
+    const catalog = await nextRequest(h, "settings/models");
+    h.transport.respond(catalog.id, {
+      type: "models",
       catalog: {
         models: [
           {
@@ -576,16 +565,19 @@ describe("CommandDispatcher", () => {
         ["beta/model-b"],
       );
     }
-    // Opening the selector sends no model_set.
-    assert.equal(peer.requests.length, 3);
+    // Opening the selector mutates nothing.
+    assert.equal(h.transport.log.count("settings/setModel"), 0);
   });
 
   it("reads authoritative Session metadata for /session", async () => {
-    const { peer, dispatcher } = await harness();
-    const reading = dispatcher.submit("/session");
-    await peer.awaitRequests(3);
-    assert.equal(peer.requests[2]?.method, "session_get");
-    peer.respond(3, { type: "session", session: sessionView({ name: "review" }) });
+    const h = await harness();
+    const reading = h.dispatcher.submit("/session");
+    const read = await nextRequest(h, "session/read");
+    assert.equal(paramsOf(read, "session/read").session_id, "session-1");
+    h.transport.respond(read.id, {
+      type: "session",
+      session: sessionView({ name: "review" }),
+    });
 
     const outcome = await reading;
     assert.equal(outcome.kind, "inspect");
@@ -599,26 +591,23 @@ describe("CommandDispatcher", () => {
   });
 
   it("lists persisted Sessions for /resume and does not choose in the client", async () => {
-    const { peer, dispatcher } = await harness();
-    const resuming = dispatcher.submit("/resume");
-    await peer.awaitRequests(3);
-    assert.equal(peer.requests[2]?.method, "session_list");
-    peer.respond(3, {
-      type: "session_list",
+    const h = await harness();
+    const resuming = h.dispatcher.submit("/resume");
+    const list = await nextRequest(h, "session/list");
+    h.transport.respond(list.id, {
+      type: "sessions",
       sessions: [
         {
           id: "session-1",
           name: "current",
           updated_at: "2026-08-21T00:00:00Z",
           active_node: "node-1",
-
         },
         {
           id: "session-2",
           name: "saved review",
           updated_at: "2026-08-20T00:00:00Z",
           active_node: "node-2",
-
         },
       ],
     });
@@ -631,12 +620,34 @@ describe("CommandDispatcher", () => {
         "session-2",
       ]);
     }
+    // The durable list is a read: choosing is the user's, and focusing is a
+    // separate step that this command does not take.
+    assert.equal(h.transport.log.count("session/attach"), 1);
   });
 
-  it("turns native Session selection failures into error outcomes", async () => {
-    const { peer, connection, dispatcher } = await harness();
+  it("selecting a Session is a focus intent, with no request of its own", async () => {
+    const h = await harness();
+    const before = h.transport.log.requests.length;
+
+    // Choosing a row in the picker names the Session to show. It does not
+    // detach, cancel, unload, or replace anything, so it writes nothing here:
+    // the app performs the attach when it changes focus.
+    assert.deepEqual(h.dispatcher.selectSession("session-2"), {
+      kind: "focus_session",
+      sessionId: "session-2",
+    });
+    assert.deepEqual(h.dispatcher.selectTreeNode("session-2", "node-9"), {
+      kind: "focus_session",
+      sessionId: "session-2",
+      nodeId: "node-9",
+    });
+    assert.equal(h.transport.log.requests.length, before);
+  });
+
+  it("turns durable Session failures into error outcomes without ending the connection", async () => {
+    const h = await harness();
     const boundary = {
-      surface_revision: 4,
+      surface_revision: "4",
       message: {
         id: "user-c",
         content: [{ type: "text" as const, text: "try again" }],
@@ -645,67 +656,90 @@ describe("CommandDispatcher", () => {
       },
     };
 
-    const selecting = dispatcher.selectSession("missing");
-    await peer.awaitRequests(3);
-    peer.respondError(3, { type: "session_failure", message: "unknown session" });
-    assert.deepEqual(await selecting, {
-      kind: "transient",
-      level: "error",
-      text: "session operation failed: unknown session",
+    const forking = h.dispatcher.forkAt(boundary);
+    const fork = await nextRequest(h, "session/fork");
+    h.transport.respondError(fork.id, {
+      code: -32000,
+      message: "stale boundary",
+      data: { kind: "invalid_state" },
     });
-
-    const selectingNode = dispatcher.selectTreeNode("session-1", "missing-node");
-    await peer.awaitRequests(4);
-    peer.respondError(4, { type: "session_failure", message: "unknown node" });
-    assert.equal((await selectingNode).kind, "transient");
-
-    const forking = dispatcher.forkAt(boundary);
-    await peer.awaitRequests(5);
-    peer.respondError(5, { type: "session_failure", message: "stale boundary" });
     assert.equal((await forking).kind, "transient");
 
-    const branching = dispatcher.branchAt(boundary);
-    await peer.awaitRequests(6);
-    peer.respondError(6, { type: "session_failure", message: "catalog failure" });
+    const branching = h.dispatcher.branchAt(boundary);
+    const read = await nextRequest(h, "session/read");
+    h.transport.respond(read.id, { type: "session", session: sessionView() });
+    const branch = await nextRequest(h, "session/branch");
+    h.transport.respondError(branch.id, {
+      code: -32000,
+      message: "catalog failure",
+      data: { kind: "operation_failed" },
+    });
     assert.equal((await branching).kind, "transient");
 
-    // A semantic Session failure is a healthy protocol response, so the TUI
+    // A semantic Session failure is a healthy protocol response, so the
     // connection remains usable for the next overlay request.
-    assert.equal(connection.closed, undefined);
+    assert.equal(h.client.closed, undefined);
   });
 
-  it("creates a new Session through the native control request", async () => {
-    const { peer, dispatcher } = await harness();
-    const creating = dispatcher.submit("/new");
-    await peer.awaitRequests(3);
-    assert.equal(peer.requests[2]?.method, "session_new");
-    peer.respond(3, {
-      type: "session_changed",
+  it("creates a new Session from this client's Session settings", async () => {
+    const h = await harness();
+    const creating = h.dispatcher.submit("/new");
+    const create = await nextRequest(h, "session/create");
+    // The Session's cwd is a Session selection, supplied here. The App Server
+    // process's own launch directory is never substituted for it.
+    assert.deepEqual(paramsOf(create, "session/create").settings, SESSION_SETTINGS);
+    h.transport.respond(create.id, {
+      type: "session_transition",
       session: sessionView({ id: "session-2", name: "New session" }),
-      restart_required: true,
     });
 
     const outcome = await creating;
-    assert.equal(outcome.kind, "session_switch");
-    if (outcome.kind === "session_switch") {
-      assert.equal(outcome.change.session.id, "session-2");
-      assert.equal(outcome.change.restartRequired, true);
+    assert.equal(outcome.kind, "focus_session");
+    if (outcome.kind === "focus_session") {
+      assert.equal(outcome.sessionId, "session-2");
+      assert.match(outcome.notice ?? "", /created session/);
     }
+    // Creating a Session replaces no process and stops nothing.
+    const methods = h.transport.log.requests.map((request) => request.method);
+    assert.ok(!methods.includes("session/unload"));
+    assert.ok(!methods.includes("turn/cancel"));
+  });
+
+  it("clones the exact committed head, read authoritatively first", async () => {
+    const h = await harness();
+    const cloning = h.dispatcher.submit("/clone");
+    const head = await nextRequest(h, "session/boundaries");
+    h.transport.respond(head.id, {
+      type: "boundaries",
+      surface_revision: "17",
+      boundaries: [],
+      next_offset: null,
+    });
+    const fork = await nextRequest(h, "session/fork");
+    const params = paramsOf(fork, "session/fork");
+    // A clone is a fork with no boundary, at the exact revision just read.
+    assert.equal(params.surface_revision, "17");
+    assert.equal(params.boundary, null);
+    h.transport.respond(fork.id, {
+      type: "session_transition",
+      session: sessionView({ id: "session-3" }),
+    });
+
+    const outcome = await cloning;
+    assert.equal(outcome.kind, "focus_session");
   });
 
   it("names the Session as metadata without emitting a conversation message", async () => {
-    const { peer, dispatcher } = await harness();
-    const naming = dispatcher.submit("/name design review");
-    await peer.awaitRequests(3);
-    assert.deepEqual(peer.requests[2], {
-      method: "session_name",
-      id: peer.requests[2]?.id,
+    const h = await harness();
+    const naming = h.dispatcher.submit("/name design review");
+    const rename = await nextRequest(h, "session/name");
+    assert.deepEqual(paramsOf(rename, "session/name"), {
+      session_id: "session-1",
       name: "design review",
     });
-    peer.respond(3, {
-      type: "session_changed",
+    h.transport.respond(rename.id, {
+      type: "session",
       session: sessionView({ name: "design review" }),
-      restart_required: false,
     });
 
     const outcome = await naming;
@@ -713,20 +747,16 @@ describe("CommandDispatcher", () => {
     if (outcome.kind === "transient") {
       assert.match(outcome.text, /session named design review/);
     }
-    assert.equal(
-      peer.requests.some((request) => request.method === "submit_inbound"),
-      false,
-    );
+    assert.equal(h.transport.log.count("turn/start"), 0);
   });
 
   // A Session is unnamed until someone names it, so a bare `/name` answers
   // with the fact rather than a usage error, and it never writes metadata.
   it("reports the active Session name instead of naming it", async () => {
-    const { peer, dispatcher } = await harness();
-    const asking = dispatcher.submit("/name");
-    await peer.awaitRequests(3);
-    assert.equal(peer.requests[2]?.method, "session_get");
-    peer.respond(3, { type: "session", session: sessionView() });
+    const h = await harness();
+    const asking = h.dispatcher.submit("/name");
+    const read = await nextRequest(h, "session/read");
+    h.transport.respond(read.id, { type: "session", session: sessionView() });
 
     const unnamed = await asking;
     assert.equal(unnamed.kind, "transient");
@@ -734,9 +764,9 @@ describe("CommandDispatcher", () => {
       assert.match(unnamed.text, /session-1 is unnamed/);
     }
 
-    const again = dispatcher.submit("/name");
-    await peer.awaitRequests(4);
-    peer.respond(4, {
+    const again = h.dispatcher.submit("/name");
+    const second = await nextRequest(h, "session/read");
+    h.transport.respond(second.id, {
       type: "session",
       session: sessionView({ name: "design review" }),
     });
@@ -745,24 +775,22 @@ describe("CommandDispatcher", () => {
     if (named.kind === "transient") {
       assert.match(named.text, /session name: design review/);
     }
-    assert.equal(
-      peer.requests.some((request) => request.method === "session_name"),
-      false,
-    );
+    assert.equal(h.transport.log.count("session/name"), 0);
   });
 
-  it("returns native fork boundaries for the Pi-style picker", async () => {
-    const { peer, dispatcher } = await harness();
-    const forking = dispatcher.submit("/fork");
-    await peer.awaitRequests(3);
-    assert.equal(peer.requests[2]?.method, "session_tree_get");
-    peer.respond(3, {
-      type: "session_tree",
-      session: sessionView(),
-      nodes: [],
-      branchable_messages: [
+  it("returns native fork boundaries for the picker", async () => {
+    const h = await harness();
+    const forking = h.dispatcher.submit("/fork");
+    const boundaries = await nextRequest(h, "session/boundaries");
+    // Boundaries are a live Surface read against the attached target, so the
+    // revision a selection carries is the one the reader is looking at.
+    assert.deepEqual(paramsOf(boundaries, "session/boundaries").target, h.target);
+    h.transport.respond(boundaries.id, {
+      type: "boundaries",
+      surface_revision: "3",
+      boundaries: [
         {
-          surface_revision: 3,
+          surface_revision: "3",
           message: {
             id: "user-c",
             content: [{ type: "text", text: "C" }],
@@ -771,6 +799,7 @@ describe("CommandDispatcher", () => {
           },
         },
       ],
+      next_offset: null,
     });
 
     const outcome = await forking;
@@ -778,7 +807,7 @@ describe("CommandDispatcher", () => {
       kind: "choose_fork",
       boundaries: [
         {
-          surface_revision: 3,
+          surface_revision: "3",
           message: {
             id: "user-c",
             content: [{ type: "text", text: "C" }],
@@ -792,127 +821,188 @@ describe("CommandDispatcher", () => {
   });
 
   it("treats /show-reasoning and /expand as client display preferences", async () => {
-    const { peer, dispatcher } = await harness();
+    const h = await harness();
+    const before = h.transport.log.requests.length;
 
-    assert.deepEqual(await dispatcher.submit("/show-reasoning"), {
+    assert.deepEqual(await h.dispatcher.submit("/show-reasoning"), {
       kind: "preference",
       preference: { type: "reasoning" },
     });
-    assert.deepEqual(await dispatcher.submit("/show-reasoning off"), {
+    assert.deepEqual(await h.dispatcher.submit("/show-reasoning off"), {
       kind: "preference",
       preference: { type: "reasoning", visible: false },
     });
-    assert.deepEqual(await dispatcher.submit("/show-reasoning on"), {
+    assert.deepEqual(await h.dispatcher.submit("/show-reasoning on"), {
       kind: "preference",
       preference: { type: "reasoning", visible: true },
     });
-    assert.deepEqual(await dispatcher.submit("/expand"), {
+    assert.deepEqual(await h.dispatcher.submit("/expand"), {
       kind: "preference",
       preference: { type: "expand", target: "latest" },
     });
-    assert.deepEqual(await dispatcher.submit("/expand all"), {
+    assert.deepEqual(await h.dispatcher.submit("/expand all"), {
       kind: "preference",
       preference: { type: "expand", target: "all" },
     });
-    assert.deepEqual(await dispatcher.submit("/expand none"), {
+    assert.deepEqual(await h.dispatcher.submit("/expand none"), {
       kind: "preference",
       preference: { type: "expand", target: "none" },
     });
-    assert.deepEqual(await dispatcher.submit("/expand call-7"), {
+    assert.deepEqual(await h.dispatcher.submit("/expand call-7"), {
       kind: "preference",
       preference: { type: "expand_call", callId: "call-7" },
     });
 
-    // Not one of them reached the runtime: display is not a request.
-    assert.equal(peer.requests.length, 2);
+    // Not one of them reached the server: display is not a request.
+    assert.equal(h.transport.log.requests.length, before);
   });
 
   it("CFG238 rejects obsolete /reasoning and keeps display toggles out of semantic state", async () => {
-    const { peer, session, dispatcher } = await harness();
-    const before = structuredClone(session.state);
+    const h = await harness();
+    const before = structuredClone(h.session.state);
+    const written = h.transport.log.requests.length;
     for (const command of ["/show-reasoning on", "/show-reasoning off"]) {
-      assert.equal((await dispatcher.submit(command)).kind, "preference");
-      assert.deepEqual(session.state, before);
+      assert.equal((await h.dispatcher.submit(command)).kind, "preference");
+      assert.deepEqual(h.session.state, before);
     }
-    const obsolete = await dispatcher.submit("/reasoning on");
+    const obsolete = await h.dispatcher.submit("/reasoning on");
     assert.equal(obsolete.kind, "transient");
     if (obsolete.kind === "transient") assert.match(obsolete.text, /unknown command/);
-    assert.deepEqual(session.state, before);
-    assert.equal(peer.requests.length, 2, "no model, tool, history, or save mutation reaches Rust");
-    assert.ok(!COMMANDS.some(command => command.name === "/reasoning"));
+    assert.deepEqual(h.session.state, before);
+    assert.equal(
+      h.transport.log.requests.length,
+      written,
+      "no model, tool, history, or save mutation reaches the server",
+    );
+    assert.ok(!COMMANDS.some((command) => command.name === "/reasoning"));
   });
 
   for (const profile of ["default", "clear", "off", "set", "on", null]) {
-    it(`CFG238 profile grammar selects ${profile ?? "catalog default"} through whole-state model_set`, async () => {
-      const { peer, session, dispatcher } = await harness();
-      const before = structuredClone(session.state);
-      const command = dispatcher.submit(profile === null ? "/model profile clear" : `/model profile set ${profile}`);
-      await peer.awaitRequests(3);
-      assert.equal(peer.requests[2]?.method, "model_get");
+    it(`CFG238 profile grammar selects ${profile ?? "catalog default"} through a whole-state replacement`, async () => {
+      const h = await harness();
+      const before = structuredClone(h.session.state);
+      const command = h.dispatcher.submit(
+        profile === null ? "/model profile clear" : `/model profile set ${profile}`,
+      );
+      const read = await nextRequest(h, "settings/model");
       const current = sessionModel("alpha/model-a");
       current.configured.reasoningProfile = "previous";
       current.configured.requestParams = { temperature: 0.5 };
       current.configured.maxOutputTokens = 2048;
-      current.configured.summaryModel = { mode: "explicit", model: "alpha/summary", request_params: { temperature: 0.2 } };
-      peer.respond(3, { type: "model", model: current });
-      await peer.awaitRequests(4);
-      const request = peer.requests[3];
-      assert.equal(request?.method, "model_set");
+      current.configured.summaryModel = {
+        mode: "explicit",
+        model: "alpha/summary",
+        request_params: { temperature: 0.2 },
+      };
+      h.transport.respond(read.id, { type: "model", model: current });
+
+      const set = await nextRequest(h, "settings/setModel");
       const expected = { ...current.configured };
       if (profile === null) delete expected.reasoningProfile;
       else expected.reasoningProfile = profile;
-      if (request?.method === "model_set") assert.deepEqual(request.config, expected);
-      peer.respond(4, { type: "model_set", model: { ...current, configured: expected } });
+      assert.deepEqual(paramsOf(set, "settings/setModel").config, expected);
+      h.transport.respond(set.id, {
+        type: "model",
+        model: { ...current, configured: expected },
+      });
       assert.equal((await command).kind, "transient");
-      assert.equal(peer.requests.length, 4);
-      assert.deepEqual(session.state, before, "responses never mutate the semantic projection");
+      assert.equal(h.transport.log.count("settings/setModel"), 1);
+      assert.deepEqual(
+        h.session.state,
+        before,
+        "responses never mutate the semantic projection",
+      );
     });
   }
 
   it("CFG238 rejects obsolete ambiguous profile syntax without a native operation", async () => {
-    const { peer, dispatcher } = await harness();
-    for (const text of ["/model profile default", "/model profile off", "/model profile set", "/model profile", "/model profile clear extra"]) {
-      const result = await dispatcher.submit(text);
+    const h = await harness();
+    const before = h.transport.log.requests.length;
+    for (const text of [
+      "/model profile default",
+      "/model profile off",
+      "/model profile set",
+      "/model profile",
+      "/model profile clear extra",
+    ]) {
+      const result = await h.dispatcher.submit(text);
       assert.equal(result.kind, "transient");
-      if (result.kind === "transient") assert.equal(result.text, "usage: /model profile set <id> | /model profile clear");
+      if (result.kind === "transient")
+        assert.equal(
+          result.text,
+          "usage: /model profile set <id> | /model profile clear",
+        );
     }
-    assert.equal(peer.requests.length, 2);
+    assert.equal(h.transport.log.requests.length, before);
   });
 
   it("CFG238 save declares user scope, fields and caller revision without live mutation", async () => {
-    const { peer, session, dispatcher } = await harness();
-    const before = structuredClone(session.state);
-    const command = dispatcher.submit("/save-default user model sha256:reviewed");
-    await peer.awaitRequests(3);
-    const request = peer.requests[2];
-    assert.equal(request?.method, "default_save");
-    if (request?.method !== "default_save") throw new Error("default save");
-    assert.equal(request.scope, "user");
-    assert.equal(request.expected_revision, "sha256:reviewed");
-    assert.equal(request.target, "model_selection");
-    assert.ok(!("value" in request));
-    peer.respond(3, { type: "default_saved", result: { scope: "user", document: "/config/settings.toml", revision: "sha256:new", changed: { field: "model_selection", selection: { model: "alpha/model-b", reasoning_profile: null } }, live_unchanged: true, applies_at: "next_launch" } });
+    const h = await harness();
+    const before = structuredClone(h.session.state);
+    const command = h.dispatcher.submit("/save-default user model sha256:reviewed");
+    const save = await nextRequest(h, "settings/saveDefault");
+    const params = paramsOf(save, "settings/saveDefault");
+    assert.equal(params.scope, "user");
+    assert.equal(params.expected_revision, "sha256:reviewed");
+    assert.equal(params.setting, "model_selection");
+    assert.ok(!("value" in params), "the client never supplies the saved value");
+    h.transport.respond(save.id, {
+      type: "default_saved",
+      result: {
+        scope: "user",
+        document: "/config/settings.toml",
+        revision: "sha256:new",
+        changed: {
+          field: "model_selection",
+          selection: { model: "alpha/model-b", reasoning_profile: null },
+        },
+        live_unchanged: true,
+        applies_at: "next_launch",
+      },
+    });
     const result = await command;
     assert.equal(result.kind, "transient");
     if (result.kind === "transient") assert.match(result.text, /Live Session unchanged/);
-    assert.deepEqual(session.state, before);
-    assert.equal(peer.requests.length, 3);
+    assert.deepEqual(h.session.state, before);
   });
 
-  it("CFG238 save after model response never consumes the lagging A projection", async () => {
-    const { peer, session, dispatcher } = await harness(snapshot({ model: sessionModel("alpha/model-a") }));
-    const setting = session.modelSet(sessionModel("alpha/model-b").configured);
-    await peer.awaitRequests(3);
-    peer.respond(3, { type: "model_set", model: sessionModel("alpha/model-b") });
+  it("CFG238 save after a model response never consumes the lagging A projection", async () => {
+    const h = await harness(snapshot({ model: sessionModel("alpha/model-a") }));
+    const setting = h.session.modelSet(sessionModel("alpha/model-b").configured);
+    const set = await nextRequest(h, "settings/setModel");
+    h.transport.respond(set.id, {
+      type: "model",
+      model: sessionModel("alpha/model-b"),
+    });
     await setting;
-    // Deliberately deliver no SessionModelChanged notification.
-    assert.equal(session.state?.sessionModel?.configured.model, "alpha/model-a");
-    const saving = dispatcher.submit("/save-default user model sha256:reviewed");
-    await peer.awaitRequests(4);
-    assert.deepEqual(peer.requests[3], { method: "default_save", id: 4, scope: "user", expected_revision: "sha256:reviewed", target: "model_selection" });
-    peer.respond(4, { type: "default_saved", result: { scope: "user", document: "/config/settings.toml", revision: "sha256:B", changed: { field: "model_selection", selection: { model: "alpha/model-b", reasoning_profile: null } }, live_unchanged: true, applies_at: "next_launch" } });
+    // Deliberately deliver no session_model_changed observation: a response is
+    // not an observation, and the projection follows the observation stream.
+    assert.equal(h.session.state.sessionModel?.configured.model, "alpha/model-a");
+
+    const saving = h.dispatcher.submit("/save-default user model sha256:reviewed");
+    const save = await nextRequest(h, "settings/saveDefault");
+    assert.deepEqual(paramsOf(save, "settings/saveDefault"), {
+      target: h.target,
+      scope: "user",
+      expected_revision: "sha256:reviewed",
+      setting: "model_selection",
+    });
+    h.transport.respond(save.id, {
+      type: "default_saved",
+      result: {
+        scope: "user",
+        document: "/config/settings.toml",
+        revision: "sha256:B",
+        changed: {
+          field: "model_selection",
+          selection: { model: "alpha/model-b", reasoning_profile: null },
+        },
+        live_unchanged: true,
+        applies_at: "next_launch",
+      },
+    });
     await saving;
-    assert.equal(session.state?.sessionModel?.configured.model, "alpha/model-a");
+    assert.equal(h.session.state.sessionModel?.configured.model, "alpha/model-a");
   });
 
   it("rejects an unusable /show-reasoning argument instead of guessing", async () => {
@@ -1051,7 +1141,7 @@ describe("CommandDispatcher", () => {
         inbound: {
           pending: [
             {
-              sequence: 3,
+              sequence: "3",
               message: {
                 id: "m2",
                 content: [{ type: "text", text: "queued" }],
@@ -1060,7 +1150,7 @@ describe("CommandDispatcher", () => {
               },
             },
           ],
-          last_drain: { watermark: 2, count: 2 },
+          last_drain: { watermark: "2", count: 2 },
         },
       }),
     );
@@ -1076,20 +1166,20 @@ describe("CommandDispatcher", () => {
     assert.match(outcome.body, /attempt: none/);
   });
 
-  it("runs /compact through one canonical Runtime Client operation", async () => {
-    const { peer, dispatcher } = await harness();
-    const compacting = dispatcher.submit("/compact");
-    await peer.awaitRequests(3);
-    assert.equal(peer.requests[2]?.method, "compact_context");
-    peer.respond(3, {
-      type: "context_compacted",
+  it("runs /compact through one canonical App Server operation", async () => {
+    const h = await harness();
+    const compacting = h.dispatcher.submit("/compact");
+    const compact = await nextRequest(h, "context/compact");
+    assert.deepEqual(paramsOf(compact, "context/compact").target, h.target);
+    h.transport.respond(compact.id, {
+      type: "context",
       context: {
         compaction_in_progress: false,
         compaction_count: 1,
         latest_compaction: {
-          generation: 1,
+          generation: "1",
           summary_message_id: "conv-test-compaction-summary-1",
-          surface_revision: 4,
+          surface_revision: "4",
           tokens_before: { input_tokens: 8_400, source: "estimated" },
           estimated_tokens_after: 1_900,
         },
@@ -1105,84 +1195,82 @@ describe("CommandDispatcher", () => {
     }
   });
 
-  it("rejects /compact arguments without reaching the runtime", async () => {
-    const { peer, dispatcher } = await harness();
-    const outcome = await dispatcher.submit("/compact custom instructions");
+  it("rejects /compact arguments without reaching the server", async () => {
+    const h = await harness();
+    const before = h.transport.log.requests.length;
+    const outcome = await h.dispatcher.submit("/compact custom instructions");
     assert.equal(outcome.kind, "transient");
     if (outcome.kind === "transient") {
       assert.equal(outcome.level, "error");
       assert.match(outcome.text, /usage: \/compact/);
     }
-    assert.equal(peer.requests.length, 2);
+    assert.equal(h.transport.log.requests.length, before);
   });
 
-  it("runs /reload through one canonical Runtime Client operation", async () => {
-    const { peer, dispatcher } = await harness();
-    const reloading = dispatcher.submit("/reload");
-    await peer.awaitRequests(3);
-    assert.equal(peer.requests[2]?.method, "reload_resources");
-    peer.respond(3, {
+  it("runs /reload through one canonical App Server operation", async () => {
+    const h = await harness();
+    const reloading = h.dispatcher.submit("/reload");
+    const reload = await nextRequest(h, "resources/reload");
+    h.transport.respond(reload.id, {
       type: "resources_reloaded",
-      resource_revision: 2,
-      capability_revision: 4,
+      resource_revision: "2",
+      capability_revision: "4",
     });
-    const outcome = await reloading;
-    assert.deepEqual(outcome, {
+    assert.deepEqual(await reloading, {
       kind: "transient",
       level: "info",
       text: "runtime resources reloaded to generation 2 (capabilities 4)",
     });
   });
 
-  it("rejects /reload arguments without reaching the runtime", async () => {
-    const { peer, dispatcher } = await harness();
-    const outcome = await dispatcher.submit("/reload now");
+  it("rejects /reload arguments without reaching the server", async () => {
+    const h = await harness();
+    const before = h.transport.log.requests.length;
+    const outcome = await h.dispatcher.submit("/reload now");
     assert.equal(outcome.kind, "transient");
     if (outcome.kind === "transient") {
       assert.equal(outcome.level, "error");
       assert.match(outcome.text, /usage: \/reload/);
     }
-    assert.equal(peer.requests.length, 2);
+    assert.equal(h.transport.log.requests.length, before);
   });
 
-  it("presents a typed busy refusal from /reload", async () => {
-    const { peer, dispatcher } = await harness();
-    const reloading = dispatcher.submit("/reload");
-    await peer.awaitRequests(3);
-    peer.respondError(3, { type: "resource_reload_busy", reason: "attempt" });
-    assert.deepEqual(await reloading, {
-      kind: "transient",
-      level: "error",
-      text: "runtime resources are busy: attempt",
+  it("presents a typed refusal from /reload", async () => {
+    const h = await harness();
+    const reloading = h.dispatcher.submit("/reload");
+    const reload = await nextRequest(h, "resources/reload");
+    h.transport.respondError(reload.id, {
+      code: -32000,
+      message: "runtime resources are busy: attempt",
+      data: { kind: "invalid_state" },
     });
-  });
-
-  it("presents a bounded reload preparation failure", async () => {
-    const { peer, dispatcher } = await harness();
-    const reloading = dispatcher.submit("/reload");
-    await peer.awaitRequests(3);
-    peer.respondError(3, {
-      type: "runtime_failure",
-      message: "runtime resource reload failed: malformed Skill metadata",
-    });
-    assert.deepEqual(await reloading, {
-      kind: "transient",
-      level: "error",
-      text: "runtime failure: runtime resource reload failed: malformed Skill metadata",
-    });
+    const outcome = await reloading;
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") {
+      assert.equal(outcome.level, "error");
+      assert.match(outcome.text, /busy/);
+    }
+    // A typed refusal is an answer, so the connection stays usable.
+    assert.equal(h.client.closed, undefined);
   });
 
   it("renders bounded /debug diagnostics without any credential", async () => {
-    const { session } = await harness();
+    const h = await harness();
     const dispatcher = new CommandDispatcher({
-      session,
+      host: h.host,
+      session: h.session,
+      sessionSettings: SESSION_SETTINGS,
       diagnostics: () => ({
+        connection: "external App Server at ws://127.0.0.1:8080",
+        ownership: "an external owner runs the App Server; exiting only disconnects",
+        sessionId: "session-1",
         attachmentId: "att-1",
         conversationId: "conv-test",
-        agentId: "agent-1",
+        runtimeIncarnation: "9007199254740993",
         cursor: runtimeCursor(0),
+        attachedSessions: 2,
         connectionState: "connected",
-        childStatus: "running (pid 42)",
+        childStatus: "not applicable (external App Server)",
         stderrTail: "rustx: warning: something bounded",
         stderrTruncatedBytes: 1_024,
         pendingRequests: 0,
@@ -1196,18 +1284,22 @@ describe("CommandDispatcher", () => {
       return;
     }
     assert.match(outcome.body, /attachment: `att-1`/);
+    // The identity domains are reported separately, because they are separate.
+    assert.match(outcome.body, /runtime incarnation: `9007199254740993`/);
+    assert.match(outcome.body, /attached sessions: 2/);
+    assert.match(outcome.body, /process ownership: an external owner/);
     assert.match(outcome.body, /authoritative repairs \(resync\): 2/);
     assert.match(outcome.body, /1024 dropped/);
     assert.ok(!/sk-|api[_-]?key|secret/i.test(outcome.body));
   });
 
   it("treats attempt cancellation as acceptance", async () => {
-    const { peer, dispatcher } = await harness();
-    const cancelling = dispatcher.submit("/cancel");
-    await peer.awaitRequests(3);
-    assert.equal(peer.requests[2]?.method, "cancel_current_attempt");
-    peer.respond(3, {
-      type: "attempt_cancellation_accepted",
+    const h = await harness();
+    const cancelling = h.dispatcher.submit("/cancel");
+    const cancel = await nextRequest(h, "turn/cancel");
+    assert.deepEqual(paramsOf(cancel, "turn/cancel").target, h.target);
+    h.transport.respond(cancel.id, {
+      type: "cancellation_accepted",
       attempt_id: "a1",
     });
 
@@ -1220,8 +1312,9 @@ describe("CommandDispatcher", () => {
   });
 
   it("removed /approve: a stale spelling is an unknown command off the wire", async () => {
-    const { peer, dispatcher } = await harness();
-    const outcome = await dispatcher.submit(
+    const h = await harness();
+    const before = h.transport.log.requests.length;
+    const outcome = await h.dispatcher.submit(
       "/approve conv-test::attempt-1-interaction-1 allow",
     );
     assert.equal(outcome.kind, "transient");
@@ -1229,33 +1322,36 @@ describe("CommandDispatcher", () => {
       assert.equal(outcome.level, "error");
       assert.match(outcome.text, /unknown command/);
     }
-    // Only the attach handshake happened; no interaction_respond was sent.
-    assert.equal(peer.requests.length, 2);
+    assert.equal(h.transport.log.requests.length, before);
+    assert.equal(h.transport.log.count("interaction/respond"), 0);
   });
 
   it("opens approval selection without a native mutation and rejects raw arguments", async () => {
-    const { peer, dispatcher } = await harness();
-    assert.deepEqual(await dispatcher.submit("/approval"), { kind: "choose_approval" });
+    const h = await harness();
+    const before = h.transport.log.requests.length;
+    assert.deepEqual(await h.dispatcher.submit("/approval"), {
+      kind: "choose_approval",
+    });
     for (const argument of ["policy", "full_access"]) {
-      assert.deepEqual(await dispatcher.submit(`/approval ${argument}`), {
-        kind: "transient", level: "error", text: "usage: /approval",
+      assert.deepEqual(await h.dispatcher.submit(`/approval ${argument}`), {
+        kind: "transient",
+        level: "error",
+        text: "usage: /approval",
       });
     }
-    assert.equal(peer.requests.length, 2);
+    assert.equal(h.transport.log.requests.length, before);
   });
 
   it("cancels one background execution by its runtime identity", async () => {
-    const { peer, dispatcher } = await harness();
-    const cancelling = dispatcher.submit("/cancel exec-7");
-    await peer.awaitRequests(3);
-    const request = peer.requests[2];
-    assert.equal(request?.method, "background_cancel");
+    const h = await harness();
+    const cancelling = h.dispatcher.submit("/cancel exec-7");
+    const cancel = await nextRequest(h, "background/cancel");
     assert.equal(
-      request?.method === "background_cancel" ? request.execution_id : null,
+      paramsOf(cancel, "background/cancel").execution_id,
       "exec-7",
     );
-    peer.respond(3, {
-      type: "background_cancel_accepted",
+    h.transport.respond(cancel.id, {
+      type: "background",
       execution: {
         execution_id: "exec-7",
         tool_id: "tool-background",
@@ -1272,10 +1368,14 @@ describe("CommandDispatcher", () => {
   });
 
   it("surfaces a typed protocol error as an error message", async () => {
-    const { peer, dispatcher } = await harness();
-    const cancelling = dispatcher.submit("/cancel");
-    await peer.awaitRequests(3);
-    peer.respondError(3, { type: "no_current_attempt" });
+    const h = await harness();
+    const cancelling = h.dispatcher.submit("/cancel");
+    const cancel = await nextRequest(h, "turn/cancel");
+    h.transport.respondError(cancel.id, {
+      code: -32000,
+      message: "no attempt is currently cancellable",
+      data: { kind: "invalid_state" },
+    });
 
     const outcome = await cancelling;
     assert.equal(outcome.kind, "transient");
@@ -1285,243 +1385,271 @@ describe("CommandDispatcher", () => {
     }
   });
 
+  it("reports an uncertain cancellation without claiming it failed", async () => {
+    const h = await harness();
+    const cancelling = h.dispatcher.submit("/cancel");
+    await nextRequest(h, "turn/cancel");
+    // The response is lost. Cancellation may well have been accepted.
+    h.transport.fail("input_eof", "the connection dropped");
+
+    const outcome = await cancelling;
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") {
+      assert.equal(outcome.level, "error");
+      assert.match(outcome.text, /whether the server accepted it is unknown/);
+      assert.match(outcome.text, /check the authoritative state/);
+    }
+    assert.equal(
+      h.transport.log.count("turn/cancel"),
+      1,
+      "the uncertain mutation was never resent",
+    );
+  });
+
   it("reports /quit as a quit intent rather than acting itself", async () => {
-    const { dispatcher } = await harness();
-    assert.deepEqual(await dispatcher.submit("/quit"), { kind: "quit" });
+    const h = await harness();
+    assert.deepEqual(await h.dispatcher.submit("/quit"), { kind: "quit" });
   });
 
   it("rejects an unknown command without reaching the wire", async () => {
-    const { peer, dispatcher } = await harness();
-    const outcome = await dispatcher.submit("/definitely-not-a-command");
+    const h = await harness();
+    const before = h.transport.log.requests.length;
+    const outcome = await h.dispatcher.submit("/definitely-not-a-command");
     assert.equal(outcome.kind, "transient");
     if (outcome.kind === "transient") {
       assert.equal(outcome.level, "error");
     }
-    assert.equal(peer.requests.length, 2, "no request was issued");
+    assert.equal(h.transport.log.requests.length, before, "no request was issued");
   });
 });
 
 describe("CLI arguments", () => {
-  const complete = [
+  const localArgv = [
     "--binary",
     "/usr/bin/rustx",
+    "--user-settings",
+    "/private/user/settings.toml",
     "--models",
-    "/m.json",
-    "--config",
-    "/rustx.toml",
-    "--workspace",
-    "/ws",
+    "/m.toml",
     "--runtime-root",
-    "/private",
+    "/private/state",
+    "--cwd",
+    "/work/project",
+    "--config",
+    "/work/project/rustx.toml",
+    "--model",
+    "local/dev",
+    "--name",
+    "auth refactor",
+    "--skill",
+    "/skills/first",
+    "--skill",
+    "relative/second",
+    "--no-automatic-skills",
+    "--no-builtin-tools",
+    "--no-direct-tools",
+    "--tools",
+    "read,search",
+    "--exclude-tools",
+    " search , ",
   ];
 
-  it("parses the complete argument set", () => {
-    const parsed = parseArguments(complete);
-    assert.equal(parsed.binary, "/usr/bin/rustx");
-    assert.deepEqual(parsed.paths, {
-      models: "/m.json",
-      config: "/rustx.toml",
-      workspace: "/ws",
-      runtimeRoot: "/private",
+  it("parses the complete local self-hosted argument set", () => {
+    const parsed = parseArguments(localArgv);
+
+    assert.equal(parsed.mode.kind, "local");
+    if (parsed.mode.kind !== "local") throw new Error("local mode");
+    assert.equal(parsed.mode.binary, "/usr/bin/rustx");
+    // Process-level source bindings configure the App Server process.
+    assert.deepEqual(parsed.mode.launch, {
+      userSettings: "/private/user/settings.toml",
+      models: "/m.toml",
+      runtimeRoot: "/private/state",
     });
-    assert.equal(parsed.openSessionSelector, false);
-    assert.deepEqual(parsed.startup, {
-      model: undefined,
-      trust: undefined,
-      continueActiveSession: false,
-      inspectConversation: undefined,
+    // Session settings are `session/create` inputs, and stay separate.
+    assert.deepEqual(parsed.sessionSettings, {
+      cwd: "/work/project",
+      config: "/work/project/rustx.toml",
+      model: { model: "local/dev" },
+      skill_paths: ["/skills/first", "relative/second"],
+      no_automatic_skills: true,
+      no_builtin_tools: true,
+      no_direct_tools: true,
+      tools: ["read", "search"],
+      exclude_tools: ["search"],
+    });
+    assert.equal(parsed.sessionName, "auth refactor");
+    assert.deepEqual(parsed.routing, {
       session: undefined,
       node: undefined,
-      sessionName: undefined,
-      skillPaths: [],
-      noAutomaticSkills: false,
-      noBuiltinTools: false,
-      noDirectTools: false,
-      tools: undefined,
-      excludeTools: undefined,
+      openSessionSelector: false,
     });
   });
 
-  it("preserves minimal launch, model selection and trust intent without defaults", () => {
-    const minimal = parseArguments(["--binary", "/rustx"]);
-    assert.deepEqual(minimal.paths, { models: undefined, config: undefined, workspace: undefined, runtimeRoot: undefined });
-    assert.equal(minimal.startup.continueActiveSession, false);
-    const trust = parseArguments(["--binary", "/rustx", "--trust", "grant", "--workspace", "../project"]);
-    assert.equal(trust.startup.trust, "grant");
-    assert.equal(trust.paths.workspace, "../project");
-    assert.equal(parseArguments(["--binary", "/rustx", "--model", "host/model"]).startup.model, "host/model");
+  it("parses a minimal local launch without inventing defaults", () => {
+    const parsed = parseArguments(["--binary", "/usr/bin/rustx"]);
+    assert.equal(parsed.mode.kind, "local");
+    if (parsed.mode.kind !== "local") throw new Error("local mode");
+    // Every omitted binding keeps the App Server's canonical default; the
+    // client never fabricates a path, and never reads one.
+    assert.deepEqual(parsed.mode.launch, {
+      userSettings: undefined,
+      models: undefined,
+      runtimeRoot: undefined,
+    });
+    assert.equal(parsed.sessionSettings.config, null);
+    assert.equal(parsed.sessionSettings.model, null);
+    assert.deepEqual(parsed.sessionSettings.skill_paths, []);
+    assert.equal(parsed.sessionName, undefined);
   });
 
-  it("parses repeatable Skills and forwards startup controls without interpretation", () => {
+  it("parses an existing/remote App Server connection", () => {
     const parsed = parseArguments([
-      ...complete,
-      "--skill",
-      "/user/skills/one",
-      "--skill",
-      "relative/skills/two",
-      "--no-automatic-skills",
-      "--no-builtin-tools",
-      "--no-direct-tools",
-      "--tools",
-      "read,search",
-      "--exclude-tools",
-      "search",
+      "--connect",
+      "ws://127.0.0.1:8080",
+      "--token-file",
+      "/private/user/socket-token",
+      "--cwd",
+      "/srv/project",
     ]);
-    assert.deepEqual(parsed.startup, {
-      model: undefined,
-      trust: undefined,
-      continueActiveSession: false,
-      inspectConversation: undefined,
-      session: undefined,
-      node: undefined,
-      sessionName: undefined,
-      skillPaths: ["/user/skills/one", "relative/skills/two"],
-      noAutomaticSkills: true,
-      noBuiltinTools: true,
-      noDirectTools: true,
-      tools: "read,search",
-      excludeTools: "search",
-    });
+    assert.equal(parsed.mode.kind, "remote");
+    if (parsed.mode.kind !== "remote") throw new Error("remote mode");
+    assert.equal(parsed.mode.endpoint, "ws://127.0.0.1:8080");
+    assert.equal(parsed.mode.tokenFile, "/private/user/socket-token");
+    // Session settings still apply: they are resolved by the server host.
+    assert.equal(parsed.sessionSettings.cwd, "/srv/project");
   });
 
-  it("replacement leaves the destination to explicit client routing", () => {
-    // A launch starts on an empty Session; the spawn that completes a
-    // published Session transition asks for the catalog's active selection
-    // instead, and changes nothing else about the startup contract.
-    const launch = parseArguments(complete);
-    assert.equal(launch.startup.continueActiveSession, false);
-
-    const replacement = replacementArguments(launch);
-    assert.equal(replacement.startup.continueActiveSession, false);
-    assert.deepEqual(replacement.paths, launch.paths);
-    assert.equal(replacement.binary, launch.binary);
-    assert.deepEqual(
-      { ...replacement.startup, continueActiveSession: false },
-      launch.startup,
+  it("requires exactly one mode", () => {
+    assert.throws(() => parseArguments([]), ArgumentError);
+    assert.throws(
+      () =>
+        parseArguments([
+          "--binary",
+          "/usr/bin/rustx",
+          "--connect",
+          "ws://127.0.0.1:8080",
+        ]),
+      /cannot be combined/,
     );
+  });
+
+  it("refuses process-level bindings against an external App Server", () => {
+    // These configure a *process*. A remote App Server was launched by someone
+    // else and already has its own; accepting them would be a flag that
+    // pretends to configure a server it cannot reach.
+    for (const flag of ["--user-settings", "--models", "--runtime-root"]) {
+      assert.throws(
+        () =>
+          parseArguments([
+            "--connect",
+            "ws://127.0.0.1:8080",
+            "--token-file",
+            "/t",
+            flag,
+            "/value",
+          ]),
+        /configures an App Server process/,
+        flag,
+      );
+    }
+  });
+
+  it("requires a transport credential for WebSocket and refuses one for stdio", () => {
+    assert.throws(
+      () => parseArguments(["--connect", "ws://127.0.0.1:8080"]),
+      /requires --token-file/,
+    );
+    assert.throws(
+      () =>
+        parseArguments(["--binary", "/usr/bin/rustx", "--token-file", "/t"]),
+      /applies only to --connect/,
+    );
+  });
+
+  it("rejects an endpoint that is not a WebSocket URL", () => {
+    for (const endpoint of ["http://127.0.0.1:8080", "127.0.0.1:8080", "stdio"]) {
+      assert.throws(
+        () => parseArguments(["--connect", endpoint, "--token-file", "/t"]),
+        /ws:\/\/ or wss:\/\/ endpoint/,
+        endpoint,
+      );
+    }
     assert.equal(
-      launch.startup.continueActiveSession,
-      false,
-      "the launch arguments are not mutated",
-    );
-
-    assert.throws(() => parseArguments([...complete, "--continue"]), /explicit|--session/);
-
-  });
-
-  it("parses a durable conversation inspection target without Session controls", () => {
-    const parsed = parseArguments([
-      ...complete,
-      "--inspect-conversation",
-      "conversation-1-subagent-1",
-    ]);
-    assert.equal(parsed.startup.inspectConversation, "conversation-1-subagent-1");
-    assert.equal(parsed.startup.continueActiveSession, false);
-    assert.equal(parsed.startup.session, undefined);
-    assert.equal(parsed.startup.node, undefined);
-    assert.equal(parsed.startup.sessionName, undefined);
-    assert.equal(parsed.openSessionSelector, false);
-
-    assert.throws(
-      () => parseArguments([...complete, "--inspect-conversation", "child", "--continue"]),
-      /cannot be combined|--session/,
-    );
-    assert.throws(
-      () => parseArguments([...complete, "--inspect-conversation", "child", "--name", "parent"]),
-      /cannot be combined|--session/,
+      parseArguments(["--connect", "wss://example.test", "--token-file", "/t"])
+        .mode.kind,
+      "remote",
     );
   });
 
-  it("names a startup Session, or asks for the selector, but never both", () => {
-    // Naming a Session is forwarded verbatim: the catalog is the only thing
-    // that can resolve an identity, so the client neither validates nor
-    // defaults it.
-    const named = parseArguments([...complete, "--session", "session-3"]);
-    assert.equal(named.startup.session, "session-3");
-    assert.equal(named.startup.node, undefined);
-    assert.equal(named.startup.continueActiveSession, false);
-    assert.equal(named.openSessionSelector, false);
-
-    const node = parseArguments([
-      ...complete,
+  it("routes to one Session, or opens the picker, but never both", () => {
+    const explicit = parseArguments([
+      "--binary",
+      "/usr/bin/rustx",
       "--session",
       "session-3",
       "--node",
       "node-7",
     ]);
-    assert.equal(node.startup.node, "node-7");
+    assert.deepEqual(explicit.routing, {
+      session: "session-3",
+      node: "node-7",
+      openSessionSelector: false,
+    });
+    const picker = parseArguments(["--binary", "/usr/bin/rustx", "--resume"]);
+    assert.equal(picker.routing.openSessionSelector, true);
+    assert.equal(picker.routing.session, undefined);
 
-    // `--resume` is presentation over the continued Session: it publishes
-    // nothing of its own, so the runtime is asked to continue and the picker
-    // decides the rest.
-    const resumed = parseArguments([...complete, "--resume"]);
-    assert.equal(resumed.openSessionSelector, true);
-    assert.equal(resumed.startup.continueActiveSession, false);
-    assert.equal(resumed.startup.session, undefined);
-
-    // A replacement completes a transition the runtime already published, so
-    // it drops both the launch-time name and the launch-time picker rather
-    // than re-selecting what the user just switched away from.
-    const replacement = replacementArguments(node);
-    assert.equal(replacement.startup.session, undefined);
-    assert.equal(replacement.startup.node, undefined);
-    assert.equal(replacement.startup.continueActiveSession, false);
-    assert.equal(replacementArguments(resumed).openSessionSelector, false);
-    assert.equal(node.startup.session, "session-3", "the launch arguments are not mutated");
-  });
-
-  it("forwards a launch name and drops it from a replacement", () => {
-    // A name labels the Session the launch bound; it never chooses one, so
-    // it combines with every startup Session request and with none of them.
-    const alone = parseArguments([...complete, "--name", "auth refactor"]);
-    assert.equal(alone.startup.sessionName, "auth refactor");
-    assert.equal(alone.startup.session, undefined);
-    assert.equal(alone.startup.continueActiveSession, false);
-
-    const beside = parseArguments([
-      ...complete,
-      "--session",
-      "session-3",
-      "--name",
-      "auth refactor",
-    ]);
-    assert.equal(beside.startup.sessionName, "auth refactor");
-    assert.equal(beside.startup.session, "session-3");
-
-    // A replacement continues a Session the user has already switched to;
-    // carrying the launch name over would relabel that Session instead.
-    assert.equal(replacementArguments(alone).startup.sessionName, undefined);
-    assert.equal(
-      alone.startup.sessionName,
-      "auth refactor",
-      "the launch arguments are not mutated",
+    assert.throws(
+      () =>
+        parseArguments([
+          "--binary",
+          "/usr/bin/rustx",
+          "--session",
+          "s",
+          "--resume",
+        ]),
+      /cannot be combined/,
+    );
+    assert.throws(
+      () => parseArguments(["--binary", "/usr/bin/rustx", "--node", "node-7"]),
+      /--node requires --session/,
     );
   });
 
-  it("fails explicitly on malformed arguments", () => {
-    const cases: string[][] = [
-      [],
-      ["--models"],
-      ["--future", "x"],
-      [...complete, "--models", "/again.json"],
-      [...complete, "--tools", "read", "--tools", "search"],
-      [...complete, "--no-direct-tools", "--no-direct-tools"],
-      [...complete, "--continue", "--continue"],
-      [...complete, "--continue", "--session", "session-3"],
-      [...complete, "--resume", "--session", "session-3"],
-      [...complete, "--continue", "--resume"],
-      [...complete, "--node", "node-7"],
-      [...complete, "--session", "a", "--session", "b"],
-      [...complete, "--session"],
-      [...complete, "--name"],
-      [...complete, "--name", "one", "--name", "two"],
-    ];
-    for (const argv of cases) {
+  it("removes the obsolete global-active and inspection flags", () => {
+    // There is no global active Session to continue, and conversation
+    // inspection was a Runtime Client process capability with no App Server
+    // method behind it. Both are unknown arguments rather than aliases.
+    for (const flag of ["--continue", "--inspect-conversation", "--workspace", "--trust"]) {
       assert.throws(
-        () => parseArguments(argv),
-        ArgumentError,
-        JSON.stringify(argv),
+        () => parseArguments(["--binary", "/usr/bin/rustx", flag, "x"]),
+        /unknown argument/,
+        flag,
       );
     }
+  });
+
+  it("fails explicitly on malformed arguments", () => {
+    assert.throws(
+      () => parseArguments(["--binary"]),
+      /--binary requires a value/,
+    );
+    assert.throws(
+      () => parseArguments(["--binary", "a", "--binary", "b"]),
+      /supplied more than once/,
+    );
+    assert.throws(
+      () => parseArguments(["--binary", "a", "--resume", "--resume"]),
+      /supplied more than once/,
+    );
+    assert.throws(() => parseArguments(["nonsense"]), /unknown argument/);
+  });
+
+  it("documents both modes in its usage text", () => {
+    assert.match(USAGE, /local self-hosted/);
+    assert.match(USAGE, /existing \/ remote App Server/);
+    assert.match(USAGE, /--connect/);
+    assert.match(USAGE, /--token-file/);
   });
 });

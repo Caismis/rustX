@@ -26,7 +26,7 @@
  * names the exact `InteractionRef`.
  */
 
-import type { InteractionRef, RoutedInteraction } from "../protocol/types.ts";
+import type { InteractionRef, RoutedInteraction } from "../protocol/app-server.ts";
 
 /**
  * Total order over routed identities: conversation first, then interaction.

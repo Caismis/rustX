@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
-import type { RuntimeClientSubagentWorkspace } from "../src/protocol/types.ts";
+import type { RuntimeClientSubagentWorkspace } from "../src/protocol/app-server.ts";
 
 function fixture(name: string): unknown {
   return JSON.parse(

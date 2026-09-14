@@ -106,6 +106,58 @@ fn compose(options: &Options) -> Result<SessionRuntimeManager, String> {
     .map_err(|error| error.to_string())
 }
 
+/// The kind of descriptor a launcher inherited to this process.
+///
+/// A child-process launcher supplies whatever its platform layer creates. Rust's
+/// own `Command` creates anonymous pipes; libuv — and therefore Node, Electron
+/// and everything built on them — creates `AF_UNIX` socket pairs. Both are
+/// ordinary byte streams the owner reads and writes; refusing one of them would
+/// make the transport unusable from a whole class of hosts for no semantic
+/// reason.
+fn descriptor_kind(fd: std::os::fd::BorrowedFd<'_>) -> io::Result<nix::sys::stat::SFlag> {
+    let status = nix::sys::stat::fstat(fd)?;
+    Ok(nix::sys::stat::SFlag::from_bits_truncate(status.st_mode)
+        .intersection(nix::sys::stat::SFlag::S_IFMT))
+}
+
+fn unix_stream(fd: std::os::fd::OwnedFd) -> io::Result<tokio::net::UnixStream> {
+    let stream = std::os::unix::net::UnixStream::from(fd);
+    stream.set_nonblocking(true)?;
+    tokio::net::UnixStream::from_std(stream)
+}
+
+fn unsupported(kind: nix::sys::stat::SFlag) -> io::Error {
+    io::Error::other(format!(
+        "stdio requires a pipe or a socket on stdin and stdout, not {kind:?}"
+    ))
+}
+
+/// Binds the inherited protocol input to the reactor.
+fn inherited_reader(
+    fd: std::os::fd::OwnedFd,
+) -> io::Result<Box<dyn tokio::io::AsyncRead + Unpin + Send>> {
+    match descriptor_kind(fd.as_fd())? {
+        nix::sys::stat::SFlag::S_IFIFO => Ok(Box::new(
+            tokio::net::unix::pipe::Receiver::from_owned_fd(fd)?,
+        )),
+        nix::sys::stat::SFlag::S_IFSOCK => Ok(Box::new(unix_stream(fd)?)),
+        kind => Err(unsupported(kind)),
+    }
+}
+
+/// Binds the inherited protocol output to the reactor.
+fn inherited_writer(
+    fd: std::os::fd::OwnedFd,
+) -> io::Result<Box<dyn tokio::io::AsyncWrite + Unpin + Send>> {
+    match descriptor_kind(fd.as_fd())? {
+        nix::sys::stat::SFlag::S_IFIFO => {
+            Ok(Box::new(tokio::net::unix::pipe::Sender::from_owned_fd(fd)?))
+        }
+        nix::sys::stat::SFlag::S_IFSOCK => Ok(Box::new(unix_stream(fd)?)),
+        kind => Err(unsupported(kind)),
+    }
+}
+
 async fn run(options: Options) -> Result<(), String> {
     // All user-scoped owners and signal listeners exist before readiness.
     let manager = compose(&options)?;
@@ -117,11 +169,9 @@ async fn run(options: Options) -> Result<(), String> {
     let serving = async {
         if options.listen == "stdio" {
             // Tokio's io::stdin uses an uncancellable blocking read. Reactor-owned
-            // pipe FDs instead let disconnect/shutdown drop every pending I/O.
-            let input = std::io::stdin().as_fd().try_clone_to_owned()?;
-            let output = std::io::stdout().as_fd().try_clone_to_owned()?;
-            let reader = tokio::net::unix::pipe::Receiver::from_owned_fd(input)?;
-            let writer = tokio::net::unix::pipe::Sender::from_owned_fd(output)?;
+            // descriptors instead let disconnect/shutdown drop every pending I/O.
+            let reader = inherited_reader(std::io::stdin().as_fd().try_clone_to_owned()?)?;
+            let writer = inherited_writer(std::io::stdout().as_fd().try_clone_to_owned()?)?;
             stdio::serve(
                 Arc::new(AppServerConnection::new(manager)),
                 reader,

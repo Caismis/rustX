@@ -63,7 +63,8 @@ import type {
   AgentStatusView,
   AnswerSpecification,
   RuntimeClientOutcome,
-} from "../../protocol/types.ts";
+  RuntimeError,
+} from "../../protocol/app-server.ts";
 import {
   type AgentStatusPlacement,
   agentStatusPlacement,
@@ -213,12 +214,25 @@ function describeOutcome(
       }
       return {
         heading: `runtime failed · ${outcome.error.error.type}`,
-        detail: outcome.error.error.message ?? outcome.error.error.name,
+        detail: runtimeErrorDetail(outcome.error.error),
         colour: role.error,
       };
     default:
       return { heading: "request settled", colour: role.meta };
   }
+}
+
+/**
+ * The one runtime-published sentence explaining a runtime failure.
+ *
+ * Every variant of the closed vocabulary carries exactly one prose field, and
+ * they are not all called `message`. Reading the right one keeps the client
+ * from silently drawing an empty detail line for the variants that are not.
+ */
+function runtimeErrorDetail(error: RuntimeError): string {
+  if ("message" in error) return error.message;
+  if ("reason" in error) return error.reason;
+  return error.name;
 }
 
 const OUTCOME_DETAIL_LIMIT = 512;

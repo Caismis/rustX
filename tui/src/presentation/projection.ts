@@ -32,17 +32,30 @@ import type {
   MessageId,
   RoutedInteraction,
   RuntimeClientCursor,
-  RuntimeClientProtocolEvent,
+  RuntimeClientEvent,
   RuntimeClientSnapshot,
   RuntimeClientTranscriptEntry,
   RuntimeClientTranscriptPage,
   SessionModelView,
   ToolExecutionResult,
-} from "../protocol/types.ts";
+} from "../protocol/app-server.ts";
+import { EXACT_ZERO, compareExact } from "../protocol/app-server.ts";
 import {
   isHiddenContextMessage,
   validateTranscriptCursorContract,
-} from "../protocol/types.ts";
+} from "./wire-contract.ts";
+
+/**
+ * One routed observation, exactly as `session/event` carries it.
+ *
+ * The attachment target is not part of the fold: routing and stale fencing
+ * happen above this layer, so the reducer only ever sees an observation that
+ * already belongs to this projection.
+ */
+export interface ProjectedEvent {
+  cursor: RuntimeClientCursor;
+  event: RuntimeClientEvent;
+}
 import { parseSnapshot, publishedTodos } from "./todos.ts";
 import { compareInteractionRefs } from "./interaction-focus.ts";
 import type {
@@ -59,8 +72,8 @@ export function emptyPresentationState(
 ): PresentationState {
   return {
     conversationId: "",
-    workflows: { revision: 0, runs: [], omitted_runs: 0 },
-    cursor: 0 as RuntimeClientCursor,
+    workflows: { revision: EXACT_ZERO, runs: [], omitted_runs: 0 },
+    cursor: EXACT_ZERO,
     transcript: [],
     inbound: { pending: [], last_drain: undefined },
     pendingInteractions: [],
@@ -68,8 +81,8 @@ export function emptyPresentationState(
     subagents: [],
     statuses: [],
     context: { compaction_in_progress: false, compaction_count: 0 },
-    capabilities: { revision: 0, tools: [], skills: [] },
-    resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] }, revision: 0, context_files: [], agent_profile: false },
+    capabilities: { revision: EXACT_ZERO, tools: [], skills: [] },
+    resources: emptyResources(),
     sessionModel,
     launchSettings: null,
     effectiveExtensions: null,
@@ -78,9 +91,27 @@ export function emptyPresentationState(
     todos: undefined,
     goal: null,
     runtimeShutdown: false,
+    durabilityFailure: null,
     effectiveApprovalMode: "policy",
     pendingApprovalMode: undefined,
-    approvalModeRevision: 0,
+    approvalModeRevision: EXACT_ZERO,
+  };
+}
+
+/** The resource projection of a runtime that has published none yet. */
+function emptyResources(): PresentationState["resources"] {
+  return {
+    inspection: {
+      main: null,
+      agents: {},
+      workflows: {},
+      sources: {},
+      skills: [],
+      skill_diagnostics: [],
+    },
+    revision: EXACT_ZERO,
+    context_files: [],
+    agent_profile: false,
   };
 }
 
@@ -98,20 +129,24 @@ export function replaceFromSnapshot(
   cursor: RuntimeClientCursor,
 ): PresentationState {
   const transcript: TranscriptEntry[] = orderTranscript(
-    snapshot.transcript.entries.map(transcriptEntryFromWire),
+    (snapshot.transcript.entries ?? []).map(transcriptEntryFromWire),
   );
 
-  const attempt = snapshot.attempt;
-  if (attempt?.in_flight !== undefined) {
+  // Every section below is normalized exactly once, here. The wire omits an
+  // empty collection and spells "absent" as `null`; the projection carries one
+  // shape so no renderer has to ask the same question twice.
+  const attempt = snapshot.attempt ?? undefined;
+  const inFlight = attempt?.in_flight ?? undefined;
+  if (attempt !== undefined && inFlight !== undefined) {
     // A snapshot taken mid-stream carries every accumulated delta through its
     // cursor, so the streaming message is rebuilt exactly as it would have
     // been observed incrementally.
     transcript.push({
       kind: "streaming",
-      key: `streaming:${attempt.attempt_id}:${attempt.in_flight.message_id}`,
+      key: `streaming:${attempt.attempt_id}:${inFlight.message_id}`,
       attemptId: attempt.attempt_id,
-      messageId: attempt.in_flight.message_id,
-      blocks: (attempt.in_flight.blocks ?? []).map(
+      messageId: inFlight.message_id,
+      blocks: (inFlight.blocks ?? []).map(
         (block): StreamingBlock =>
           block.type === "tool_call"
             ? {
@@ -133,11 +168,11 @@ export function replaceFromSnapshot(
 
   return {
     conversationId: snapshot.conversation_id,
-    goal: snapshot.goal,
+    goal: snapshot.goal ?? null,
     workflows: snapshot.workflows,
     cursor,
     transcript: orderTranscript(transcript),
-    transcriptNextCursor: snapshot.transcript.next_cursor,
+    transcriptNextCursor: snapshot.transcript.next_cursor ?? undefined,
     attempt:
       attempt === undefined
         ? undefined
@@ -145,16 +180,16 @@ export function replaceFromSnapshot(
             attemptId: attempt.attempt_id,
             phase: attempt.phase,
             turn: attempt.turn,
-            lastUsage: attempt.last_usage,
-            model: attempt.model,
-            executionSettings: attempt.execution_settings,
+            lastUsage: attempt.last_usage ?? undefined,
+            model: attempt.model ?? undefined,
+            executionSettings: attempt.execution_settings ?? undefined,
             foreground: [...(attempt.foreground ?? [])],
           },
     inbound: {
       pending: [...(snapshot.inbound.pending ?? [])],
-      last_drain: snapshot.inbound.last_drain,
+      last_drain: snapshot.inbound.last_drain ?? undefined,
     },
-    pendingInteractions: [...snapshot.pending_interactions],
+    pendingInteractions: [...(snapshot.pending_interactions ?? [])],
     background: [...(snapshot.background ?? [])],
     subagents: [...(snapshot.subagents ?? [])],
     // The runtime's bounded composition window, verbatim. Every annotation
@@ -162,14 +197,12 @@ export function replaceFromSnapshot(
     // facts each status carries, so a repair never has to consult — or
     // carry over — the state it replaces.
     statuses: dedupeStatuses(snapshot.statuses ?? []),
-    context: snapshot.context,
-    capabilities: snapshot.capabilities,
-    resources: snapshot.resources ?? {
-      inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] },
-      revision: 0,
-      context_files: [],
-      agent_profile: false,
+    context: snapshot.context ?? {
+      compaction_in_progress: false,
+      compaction_count: 0,
     },
+    capabilities: snapshot.capabilities,
+    resources: snapshot.resources ?? emptyResources(),
     // The runtime derives the list from the whole Ledger, so this is the
     // one repair path for it too: an attach, a resume, and a reload after
     // compaction all open on exactly the list canonical history holds,
@@ -181,16 +214,17 @@ export function replaceFromSnapshot(
     todos:
       snapshot.todos === null || snapshot.todos === undefined
         ? undefined
-        : (parseSnapshot(snapshot.todos) ?? { tasks: [], next_id: 1 }),
-    sessionModel: snapshot.model,
-    launchSettings: snapshot.launch_settings,
-    effectiveExtensions: snapshot.effective_extensions,
+        : (parseSnapshot(snapshot.todos) ?? { tasks: [], next_id: "1" }),
+    sessionModel: snapshot.model ?? null,
+    launchSettings: snapshot.launch_settings ?? null,
+    effectiveExtensions: snapshot.effective_extensions ?? null,
     settingsEvidence: snapshot.settings_evidence,
     settingsLifetimes: snapshot.settings_lifetimes,
     runtimeShutdown: snapshot.shutting_down,
+    durabilityFailure: snapshot.durability_failure ?? null,
     effectiveApprovalMode: snapshot.effective_approval_mode,
-    pendingApprovalMode: snapshot.pending_approval_mode,
-    approvalModeRevision: snapshot.approval_mode_revision,
+    pendingApprovalMode: snapshot.pending_approval_mode ?? undefined,
+    approvalModeRevision: snapshot.approval_mode_revision ?? EXACT_ZERO,
   };
 }
 
@@ -199,12 +233,12 @@ export function mergeTranscriptPage(
   state: PresentationState,
   page: RuntimeClientTranscriptPage,
 ): PresentationState {
-  const older = page.entries.map(transcriptEntryFromWire);
+  const older = (page.entries ?? []).map(transcriptEntryFromWire);
   const merged = deduplicateTranscript([...state.transcript, ...older]);
   return {
     ...state,
     transcript: orderTranscript(merged),
-    transcriptNextCursor: page.next_cursor,
+    transcriptNextCursor: page.next_cursor ?? undefined,
   };
 }
 
@@ -216,7 +250,7 @@ export function mergeTranscriptPage(
  */
 export function reduce(
   state: PresentationState,
-  protocolEvent: RuntimeClientProtocolEvent,
+  protocolEvent: ProjectedEvent,
 ): PresentationState {
   const event = protocolEvent.event;
   const transcriptCursor =
@@ -322,7 +356,7 @@ export function reduce(
 
     case "approval_mode_changed":
       next.effectiveApprovalMode = event.effective_approval_mode;
-      next.pendingApprovalMode = event.pending_approval_mode;
+      next.pendingApprovalMode = event.pending_approval_mode ?? undefined;
       next.approvalModeRevision = event.revision;
       return next;
 
@@ -524,16 +558,19 @@ export function reduce(
         );
       }
       const messageId = messageIdOf(event.message);
+      // The wire spells "no committing attempt" as `null`; the projection
+      // spells it as absent, once, here.
+      const committingAttempt = event.attempt_id ?? undefined;
       const transcript =
-        event.message.role === "assistant" && event.attempt_id !== undefined
-          ? dropStreaming(state.transcript, event.attempt_id)
+        event.message.role === "assistant" && committingAttempt !== undefined
+          ? dropStreaming(state.transcript, committingAttempt)
           : state.transcript;
       next.transcript = appendTranscriptEntry(transcript, {
         kind: "committed",
         key: `committed:${messageId}`,
         messageId,
         cursor: transcriptCursor,
-        attemptId: event.attempt_id,
+        attemptId: committingAttempt,
         message: event.message,
       });
       // A committed `todo` result *is* the list moving, so the panel follows
@@ -558,9 +595,9 @@ export function reduce(
       // message, so this update is idempotent and also keeps the reducer safe
       // when the commit is the first fact it sees. The result is copied from
       // the typed message; phase is never inferred by the TUI.
-      if (event.message.role === "tool" && event.attempt_id !== undefined) {
+      if (event.message.role === "tool" && committingAttempt !== undefined) {
         const toolMessage = event.message;
-        withForeground(next, state, event.attempt_id, (foreground) =>
+        withForeground(next, state, committingAttempt, (foreground) =>
           settleForeground(
             foreground,
             toolMessage.tool_call_id,
@@ -579,7 +616,7 @@ export function reduce(
       next.statuses = foldStatusWindow(
         state.statuses,
         event.status,
-        event.evicted_status_message_id,
+        event.evicted_status_message_id ?? undefined,
       );
       return next;
 
@@ -651,10 +688,21 @@ export function reduce(
       next.runtimeShutdown = true;
       return next;
 
+    case "runtime_durability_failed":
+      // The runtime entered its explicit degraded state: no new durable
+      // admission may begin. This is a runtime-published fact like any other
+      // and is carried, not interpreted — the client never decides that a
+      // runtime is degraded, and never decides that it has recovered.
+      next.durabilityFailure = {
+        operation: event.operation,
+        diagnostic: event.diagnostic,
+      };
+      return next;
+
     default:
-      // RuntimeClientConnection validates the Runtime Client event vocabulary before an
-      // event reaches this reducer. This branch is unreachable unless a
-      // caller bypasses that boundary, and must never advance the cursor.
+      // The generated event vocabulary is closed and this switch is
+      // exhaustive over it. An unhandled variant is a compile error, not a
+      // silently ignored runtime fact.
       const exhaustiveEvent: never = event;
       throw new Error(
         `unreachable Runtime Client event: ${String(exhaustiveEvent)}`,
@@ -746,7 +794,7 @@ function isDurableTranscriptEntry(
 function orderTranscript(transcript: TranscriptEntry[]): TranscriptEntry[] {
   const durable = transcript
     .filter(isDurableTranscriptEntry)
-    .sort((left, right) => left.cursor - right.cursor);
+    .sort((left, right) => compareExact(left.cursor, right.cursor));
   const streaming = transcript.filter((entry) => entry.kind === "streaming");
   return [...durable, ...streaming];
 }
@@ -830,15 +878,18 @@ function dedupeStatuses(statuses: AgentStatusView[]): AgentStatusView[] {
 
 function startAttempt(
   attemptId: string,
-  model: AttemptModelView | null,
-  executionSettings: import("../protocol/types.ts").AdmittedSettings | null,
+  model: AttemptModelView | null | undefined,
+  executionSettings:
+    | import("../protocol/app-server.ts").AdmittedSettings
+    | null
+    | undefined,
 ): AttemptPresentation {
   return {
     attemptId,
     phase: { type: "running" },
     turn: 0,
-    model,
-    executionSettings,
+    model: model ?? undefined,
+    executionSettings: executionSettings ?? undefined,
     foreground: [],
   };
 }

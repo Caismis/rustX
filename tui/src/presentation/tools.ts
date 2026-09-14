@@ -85,7 +85,7 @@ import type {
   ToolExecutionResult,
   ToolId,
   ToolProgress,
-} from "../protocol/types.ts";
+} from "../protocol/app-server.ts";
 import type { PresentationState, TranscriptEntry } from "./state.ts";
 
 /**
@@ -102,7 +102,7 @@ export type ToolLifecycle =
 
 /** One logical tool call, as one visual entity. */
 export interface CorrelatedTool {
-  workflow?: import("../protocol/types.ts").WorkflowRunView;
+  workflow?: import("../protocol/app-server.ts").WorkflowRunView;
   /** The stable runtime identity this entity is keyed by. */
   callId: ToolCallId;
   toolId: ToolId;
@@ -436,7 +436,7 @@ function transcriptCalls(entry: TranscriptEntry): CorrelatedTool[] {
 function foregroundLifecycle(execution: ForegroundToolExecution): ToolLifecycle {
   switch (execution.state.type) {
     case "running":
-      return { type: "running", progress: execution.state.progress };
+      return { type: "running", progress: execution.state.progress ?? undefined };
     case "settled":
       return { type: "settled", result: execution.state.result };
     default:

@@ -8,7 +8,7 @@
 
 import { replaceFromSnapshot } from "../../src/presentation/projection.ts";
 import type { PresentationState } from "../../src/presentation/state.ts";
-import type { RuntimeClientSnapshot } from "../../src/protocol/types.ts";
+import type { RuntimeClientSnapshot } from "../../src/protocol/app-server.ts";
 import {
   type TranscriptBlock,
   renderTranscript,

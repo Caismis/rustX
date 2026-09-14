@@ -45,11 +45,11 @@ import type {
   SessionSummaryView,
   SessionView,
   ToolOrigin,
-} from "../protocol/types.ts";
+} from "../protocol/app-server.ts";
 import {
   BACKGROUND_TERMINAL_STATES,
   SUBAGENT_TERMINAL_STATES,
-} from "../protocol/types.ts";
+} from "../protocol/app-server.ts";
 import type { PresentationState } from "./state.ts";
 
 /**
@@ -184,11 +184,11 @@ export type AgentStatusAnchor =
  */
 export function agentStatusAnchor(status: AgentStatusView): AgentStatusAnchor {
   const fresh = status.opportunities.fresh_inbound;
-  if (fresh !== undefined) {
+  if (fresh != null) {
     return { kind: "inbound_message", messageId: fresh.target_message_id };
   }
   const batch = status.opportunities.post_tool_batch;
-  if (batch?.transcript_anchor !== undefined) {
+  if (batch?.transcript_anchor != null) {
     return { kind: "transcript_position", cursor: batch.transcript_anchor };
   }
   return { kind: "unplaced" };

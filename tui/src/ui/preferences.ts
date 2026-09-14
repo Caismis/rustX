@@ -69,7 +69,7 @@ import type {
   InteractionRef,
   ToolCallId,
   ToolExecutionId,
-} from "../protocol/types.ts";
+} from "../protocol/app-server.ts";
 
 /** Stable local key for the routed identity pair. */
 export function interactionKey(interaction: InteractionRef): string {

@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
 import { readFileSync } from "node:fs";
-import { isKnownRuntimeClientEvent } from "../src/protocol/types.ts";
-import type { WorkflowRunView, WorkflowInstanceView } from "../src/protocol/types.ts";
+import type {
+  RuntimeClientEvent,
+  WorkflowRunView,
+  WorkflowInstanceView,
+  WorkflowSnapshot,
+} from "../src/protocol/app-server.ts";
 import { reduce, replaceFromSnapshot } from "../src/presentation/projection.ts";
 import { workflowDetails, workflowStatus } from "../src/ui/components/workflow-details.ts";
 import { snapshot, runtimeCursor, assistantBlocks, toolCallBlock, toolMessage } from "./support/fixtures.ts";
@@ -10,14 +14,20 @@ import { correlateTools } from "../src/presentation/tools.ts";
 import { renderToolCard } from "../src/ui/components/tool-card.ts";
 import { plainText } from "../src/ui/theme.ts";
 
-const id = { conversation_id: "conv-test", attempt_id: "attempt", invocation: 1 };
+// Exact `u64` identity domains are canonical decimal text on the App Server
+// wire, so a run invocation past 2^53 survives the round trip.
+const id = {
+  conversation_id: "conv-test",
+  attempt_id: "attempt",
+  invocation: "1",
+};
 
 it("canonical Workflow identity survives details retirement, snapshot/event fold, and pure rendering", () => {
   const result = JSON.parse(readFileSync(new URL("../../tests/fixtures/runtime-client/workflow-result-v22.json", import.meta.url), "utf8"));
   const messages = [assistantBlocks("assistant", [toolCallBlock("outer", "opaque", "not_a_workflow_hint", {})]),
     toolMessage("result", "outer", "opaque", result)];
   const initial = replaceFromSnapshot(snapshot({ messages }), runtimeCursor(0));
-  const workflows = { revision: 20, runs: [], omitted_runs: 1 };
+  const workflows: WorkflowSnapshot = { revision: "20", runs: [], omitted_runs: 1 };
   const folded = reduce(initial, { cursor: runtimeCursor(1), event: { type: "workflows_updated", workflows } });
   const reconnected = replaceFromSnapshot(snapshot({ messages, workflows }), runtimeCursor(1));
   assert.deepEqual(folded, reconnected);
@@ -34,32 +44,44 @@ it("canonical Workflow identity survives details retirement, snapshot/event fold
   assert.equal(JSON.stringify(folded), frozen);
   assert.deepEqual(folded.transcript, initial.transcript);
 });
-it("Rust v22 fixture is accepted at the transport boundary and folded unchanged", () => {
-  const event: unknown = JSON.parse(readFileSync(new URL("../../tests/fixtures/runtime-client/workflow-v22.json", import.meta.url), "utf8"));
-  assert.ok(isKnownRuntimeClientEvent(event));
-  assert.equal(event.type, "workflows_updated");
-  if (event.type !== "workflows_updated") throw new Error("fixture kind");
-  const state = reduce(replaceFromSnapshot(snapshot(), runtimeCursor(0)), { cursor: runtimeCursor(1), event });
-  assert.deepEqual(state.workflows, event.workflows);
-  assert.equal(state.workflows.runs[0]!.instances[0]!.checks_passed, false);
-  assert.deepEqual(state.workflows.runs[0]!.instances[0]!.block.invocations, [0, 2]);
+it("a replacement Workflow snapshot folds without touching canonical history", () => {
+  // The event carries one complete replacement of the runtime's bounded
+  // Workflow read model. Folding it and reconnecting to a snapshot that
+  // already contains it must produce the same projection — that equality is
+  // what makes the incremental stream disposable.
+  const workflows: WorkflowSnapshot = {
+    revision: "9007199254740993",
+    runs: [run()],
+    omitted_runs: 2,
+  };
+  const event: RuntimeClientEvent = { type: "workflows_updated", workflows };
+  const state = reduce(replaceFromSnapshot(snapshot(), runtimeCursor(0)), {
+    cursor: runtimeCursor(1),
+    event,
+  });
+  assert.deepEqual(state.workflows, workflows);
+  assert.equal(state.workflows.runs[0]!.instances[0]!.checks_passed, null);
+  assert.deepEqual(state.workflows.runs[0]!.instances[0]!.block.invocations, [0, 0]);
+  // The revision survives above the safe-integer range, which is the whole
+  // reason it crosses the wire as text.
+  assert.equal(state.workflows.revision, "9007199254740993");
 });
 function row(node: string, branch: string): WorkflowInstanceView {
   return { block: { run: id, definition: { workflow_id: "review", blocks: ["parallel", branch] }, invocations: [0, 0] },
     node, visit: 0, kind: "review", state: { type: "waiting", reason: "review" }, child: null, invocation: null, tool_id: null,
     interaction: { conversation_id: "conv-test", interaction_id: node }, iteration: null, iterations_max: null,
-    loop_exit: null, candidate: { run: id, version: 2, content: "old" }, checks_passed: null, review_accepted: true };
+    loop_exit: null, candidate: { run: id, version: "2", content: "old" }, checks_passed: null, review_accepted: true };
 }
 function run(): WorkflowRunView {
-  return { id, workflow_id: "review", program_digest: "a".repeat(64), resource_revision: 1, tool_call_id: "outer",
+  return { id, workflow_id: "review", program_digest: "a".repeat(64), resource_revision: "1", tool_call_id: "outer",
     state: { type: "running" }, instances: [row("human", "left"), { ...row("worker", "right"), state: { type: "running" }, child: "child-right", interaction: null, review_accepted: null }],
     omitted_instances: 0, steps_consumed: 4, steps_max: 20, agents_consumed: 1, candidate_users: 0,
-    candidate: { run: id, version: 3, content: "new" }, handoff: { state: "retained", path: "/candidate", truncated: false } };
+    candidate: { run: id, version: "3", content: "new" }, handoff: { state: "retained", path: "/candidate", truncated: false } };
 }
 
 it("native replacement event and reconnect snapshot converge without canonical writes", () => {
   const before = replaceFromSnapshot(snapshot(), runtimeCursor(0));
-  const workflows = { revision: 9, runs: [run()], omitted_runs: 2 };
+  const workflows: WorkflowSnapshot = { revision: "9", runs: [run()], omitted_runs: 2 };
   const after = reduce(before, { cursor: runtimeCursor(1), event: { type: "workflows_updated", workflows } });
   assert.deepEqual(after, replaceFromSnapshot(snapshot({ workflows }), runtimeCursor(1)));
   assert.deepEqual(after.transcript, before.transcript);

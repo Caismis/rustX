@@ -28,7 +28,7 @@ import {
   withToggledToolCall,
 } from "../src/ui/preferences.ts";
 import { plainText } from "../src/ui/theme.ts";
-import type { RuntimeClientSnapshot } from "../src/protocol/types.ts";
+import type { RuntimeClientSnapshot } from "../src/protocol/app-server.ts";
 import {
   approvalInteraction,
   assistantBlocks,
@@ -116,7 +116,7 @@ function representative(): RuntimeClientSnapshot {
     inbound: {
       pending: [
         {
-          sequence: 7,
+          sequence: "7",
           message: {
             id: "m5",
             content: [{ type: "text", text: "queued" }],

@@ -1,10 +1,14 @@
 /**
- * The OS process owner.
+ * The OS process owner of a TUI-owned App Server child.
  *
  * These drive a stand-in binary rather than `rustx`: the subject is lifecycle
  * mechanics — the argument contract, streams, a bounded stderr tail, stdin
  * close, wait, and the fallback termination — not protocol behaviour. The real
  * binary is exercised by the integration suite.
+ *
+ * Everything here is a *process* fact. A child that exits has cancelled
+ * nothing, settled nothing, and completed no background work; it has only
+ * stopped running.
  */
 
 import assert from "node:assert/strict";
@@ -13,32 +17,32 @@ import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
 import {
-  ChildRuntimeProcess,
-  type RuntimePaths,
-} from "../src/runtime/child-process.ts";
+  AppServerChild,
+  appServerArguments,
+  type AppServerLaunchOptions,
+} from "../src/app-server/child-process.ts";
 
 const FAKE_RUNTIME = fileURLToPath(
   new URL("./support/fake-runtime.mjs", import.meta.url),
 );
 chmodSync(FAKE_RUNTIME, 0o755);
 
-const PATHS: RuntimePaths = {
+const LAUNCH: AppServerLaunchOptions = {
+  userSettings: "/private/user/settings.toml",
   models: "/models.toml",
-  config: "/rustx.toml",
-  workspace: "/ws",
-  runtimeRoot: "/private",
+  runtimeRoot: "/private/state",
 };
 
-function spawn(env: NodeJS.ProcessEnv = {}): ChildRuntimeProcess {
-  return ChildRuntimeProcess.spawn({
+function spawn(env: NodeJS.ProcessEnv = {}): AppServerChild {
+  return AppServerChild.spawn({
     binary: FAKE_RUNTIME,
-    paths: PATHS,
+    launch: LAUNCH,
     env: { ...process.env, ...env },
   });
 }
 
 /** Reads the child's stdout to end. */
-function readAll(child: ChildRuntimeProcess): Promise<string> {
+function readAll(child: AppServerChild): Promise<string> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
     child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -46,112 +50,51 @@ function readAll(child: ChildRuntimeProcess): Promise<string> {
   });
 }
 
-describe("ChildRuntimeProcess", () => {
-  it("forwards an empty path intent without inventing infrastructure arguments", async () => {
-    const child = ChildRuntimeProcess.spawn({ binary: FAKE_RUNTIME, paths: {}, env: { ...process.env, FAKE_DUMP_ARGV: "1" } });
-    const output = readAll(child);
-    child.closeStdin();
-    await child.wait();
-    assert.deepEqual(JSON.parse((await output).trim()), []);
+describe("AppServerChild", () => {
+  it("always selects the stdio App Server, and nothing else", () => {
+    // The subcommand and the transport selection are not options: this owner
+    // exists precisely to run one `rustx app-server --listen stdio` child.
+    assert.deepEqual(appServerArguments({}), ["app-server", "--listen", "stdio"]);
   });
-  it("passes the explicit startup paths through verbatim", async () => {
+
+  it("forwards only process-level source bindings, in a deterministic order", async () => {
     const child = spawn();
     const output = readAll(child);
     child.closeStdin();
     await child.wait();
 
-    // The paths reach the binary exactly as given. Nothing here opened,
-    // parsed, validated, or defaulted any of them.
+    // Every flag here binds a source for the whole App Server *process*. None
+    // of them is a Session selection: a Session's cwd and project
+    // configuration travel in `session/create`, never in this argv.
     assert.deepEqual(JSON.parse((await output).trim()), [
+      "app-server",
+      "--user-settings",
+      "/private/user/settings.toml",
       "--models",
       "/models.toml",
-      "--config",
-      "/rustx.toml",
-      "--workspace",
-      "/ws",
       "--runtime-root",
-      "/private",
+      "/private/state",
+      "--listen",
+      "stdio",
     ]);
   });
 
-  it("forwards startup Session, Tool, and Skill controls in deterministic order", async () => {
-    const child = ChildRuntimeProcess.spawn({
+  it("omits every binding the caller did not supply", async () => {
+    const child = AppServerChild.spawn({
       binary: FAKE_RUNTIME,
-      paths: PATHS,
-      startup: {
-        continueActiveSession: false,
-        session: "session-3",
-        node: "node-7",
-        sessionName: "auth refactor",
-        skillPaths: ["/skills/first", "relative/second"],
-        noAutomaticSkills: true,
-        noBuiltinTools: true,
-        noDirectTools: true,
-        tools: "read,search",
-        excludeTools: "search",
-      },
+      launch: {},
+      env: process.env,
     });
     const output = readAll(child);
     child.closeStdin();
     await child.wait();
 
+    // An omitted binding keeps the App Server's own canonical default. The
+    // client never invents a path, and never reads one.
     assert.deepEqual(JSON.parse((await output).trim()), [
-      "--models",
-      "/models.toml",
-      "--config",
-      "/rustx.toml",
-      "--workspace",
-      "/ws",
-      "--runtime-root",
-      "/private",
-      "--session",
-      "session-3",
-      "--node",
-      "node-7",
-      "--name",
-      "auth refactor",
-      "--skill",
-      "/skills/first",
-      "--skill",
-      "relative/second",
-      "--no-automatic-skills",
-      "--no-builtin-tools",
-      "--no-direct-tools",
-      "--tools",
-      "read,search",
-      "--exclude-tools",
-      "search",
-    ]);
-  });
-
-  it("forwards a known conversation identity as a read-only attachment target", async () => {
-    const child = ChildRuntimeProcess.spawn({
-      binary: FAKE_RUNTIME,
-      paths: PATHS,
-      startup: {
-        continueActiveSession: false,
-        inspectConversation: "conversation-1-subagent-1",
-        skillPaths: [],
-        noAutomaticSkills: false,
-        noBuiltinTools: false,
-        noDirectTools: false,
-      },
-    });
-    const output = readAll(child);
-    child.closeStdin();
-    await child.wait();
-
-    assert.deepEqual(JSON.parse((await output).trim()), [
-      "--models",
-      "/models.toml",
-      "--config",
-      "/rustx.toml",
-      "--workspace",
-      "/ws",
-      "--runtime-root",
-      "/private",
-      "--inspect-conversation",
-      "conversation-1-subagent-1",
+      "app-server",
+      "--listen",
+      "stdio",
     ]);
   });
 
@@ -171,9 +114,9 @@ describe("ChildRuntimeProcess", () => {
   });
 
   it("keeps only a bounded stderr tail and counts what it dropped", async () => {
-    const child = ChildRuntimeProcess.spawn({
+    const child = AppServerChild.spawn({
       binary: FAKE_RUNTIME,
-      paths: PATHS,
+      launch: LAUNCH,
       env: { ...process.env, FAKE_STDERR_BYTES: "4096" },
       stderrTailBytes: 256,
     });
@@ -213,9 +156,9 @@ describe("ChildRuntimeProcess", () => {
   });
 
   it("reports a spawn failure as an exit, with the reason", async () => {
-    const child = ChildRuntimeProcess.spawn({
+    const child = AppServerChild.spawn({
       binary: "/definitely/not/a/binary",
-      paths: PATHS,
+      launch: LAUNCH,
       env: process.env,
     });
     const exit = await child.wait();

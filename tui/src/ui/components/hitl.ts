@@ -58,7 +58,7 @@ import type {
   InteractionRef,
   QuestionnaireResponse,
   RoutedInteraction,
-} from "../../protocol/types.ts";
+} from "../../protocol/app-server.ts";
 import {
   compareInteractionRefs,
   interactionRefLabel,

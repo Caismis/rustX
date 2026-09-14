@@ -1,7 +1,7 @@
 /** Focused Session management presentation; deletion authority stays native. */
 import { matchesKey, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { SessionDeletionWorkflow, type DeletionClient, type DeletionContext, type ReconciledSessions } from "../session-deletion-workflow.ts";
-import type { SessionDeletePreview, SessionDeleteResult, SessionSummaryView } from "../../protocol/types.ts";
+import type { SessionDeletePreview, SessionDeleteResult, SessionSummaryView } from "../../protocol/app-server.ts";
 import { sanitizeField } from "../../sanitize.ts";
 import { ConfirmationView } from "./confirmation.ts";
 import type { PopupContent } from "./popup-frame.ts";

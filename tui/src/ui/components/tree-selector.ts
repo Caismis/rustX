@@ -10,7 +10,7 @@ import type {
   SessionNodeView,
   SessionUserMessageBoundaryView,
   SessionView,
-} from "../../protocol/types.ts";
+} from "../../protocol/app-server.ts";
 import { role, style } from "../theme.ts";
 import {
   windowAroundSelected,

@@ -14,10 +14,8 @@ import {
   replaceFromSnapshot,
 } from "../src/presentation/projection.ts";
 import type { PresentationState, StreamingMessage } from "../src/presentation/state.ts";
-import type {
-  RuntimeClientEvent,
-  RuntimeClientProtocolEvent,
-} from "../src/protocol/types.ts";
+import type { RuntimeClientEvent } from "../src/protocol/app-server.ts";
+import type { ProjectedEvent } from "../src/presentation/projection.ts";
 import { agentStatusAnchor } from "../src/presentation/selectors.ts";
 import {
   agentStatus,
@@ -40,6 +38,7 @@ import {
   toolMessage,
   toolResult,
   userMessage,
+  nextCursor,
 } from "./support/fixtures.ts";
 
 /** Folds a scripted event sequence, allocating cursors in order. */
@@ -51,8 +50,8 @@ function fold(
   let current = state;
   let cursor = startCursor;
   for (const event of events) {
-    cursor = runtimeCursor(cursor + 1);
-    const protocolEvent: RuntimeClientProtocolEvent = { cursor, event };
+    cursor = nextCursor(cursor);
+    const protocolEvent: ProjectedEvent = { cursor, event };
     current = reduce(current, protocolEvent);
   }
   return current;
@@ -78,9 +77,9 @@ describe("presentation projection", () => {
     );
 
     assert.equal(state.conversationId, "conv-1");
-    assert.equal(state.cursor, 9);
+    assert.equal(state.cursor, "9");
     assert.equal(state.transcript.length, 2);
-    assert.equal(state.capabilities.revision, 4);
+    assert.equal(state.capabilities.revision, "4");
     assert.equal(
       state.capabilities.skills?.[0]?.location,
       ".agents/skills/review/SKILL.md",
@@ -113,7 +112,7 @@ describe("presentation projection", () => {
       state.transcript.map((entry) => entry.kind === "committed" && entry.messageId),
       ["historical"],
     );
-    assert.equal(state.transcriptNextCursor, 3);
+    assert.equal(state.transcriptNextCursor, "3");
   });
 
   it("prepends an older page once, without moving the live event cursor", () => {
@@ -165,7 +164,7 @@ describe("presentation projection", () => {
       merged.transcript.map((entry) => entry.kind === "committed" && entry.messageId),
       ["oldest", "middle", "newest"],
     );
-    assert.equal(merged.cursor, 19);
+    assert.equal(merged.cursor, "19");
     assert.equal(merged.transcriptNextCursor, undefined);
   });
 
@@ -183,7 +182,7 @@ describe("presentation projection", () => {
       cursor: runtimeCursor(41),
       event: {
         type: "inbound_enqueued",
-        sequence: 1,
+        sequence: "1",
         message: userMessage("message-a", "A"),
         transcript_cursor: transcriptCursor(10),
       },
@@ -196,9 +195,9 @@ describe("presentation projection", () => {
     );
     assert.deepEqual(
       state.transcript.map((entry) => entry.kind === "committed" && entry.cursor),
-      [10, 11],
+      ["10", "11"],
     );
-    assert.equal(state.cursor, 41, "live event cursor remains its own domain");
+    assert.equal(state.cursor, "41", "live event cursor remains its own domain");
 
     const merged = mergeTranscriptPage(state, {
       entries: [
@@ -217,7 +216,7 @@ describe("presentation projection", () => {
       merged.transcript.map((entry) => entry.kind === "committed" && entry.messageId),
       ["message-old", "message-a", "message-b"],
     );
-    assert.equal(merged.cursor, 41, "paging never advances the live cursor");
+    assert.equal(merged.cursor, "41", "paging never advances the live cursor");
 
     const resynced = replaceFromSnapshot(
       snapshot({
@@ -284,7 +283,7 @@ describe("presentation projection", () => {
       publication?.kind === "publication_audit"
         ? publication.cursor
         : undefined,
-      12,
+      "12",
     );
     assert.equal(state.attempt?.foreground.length ?? 0, 0);
 
@@ -329,7 +328,7 @@ describe("presentation projection", () => {
       requested?.kind === "interaction_requested"
         ? requested.cursor
         : undefined,
-      13,
+      "13",
     );
     assert.equal(state.pendingInteractions.length, 0, "historical audit is not a waiter");
   });
@@ -341,7 +340,7 @@ describe("presentation projection", () => {
       cursor: runtimeCursor(1),
       event: {
         type: "inbound_enqueued",
-        sequence: 1,
+        sequence: "1",
         message: {
           id: "accepted-user",
           content: [{ type: "text", text: "accepted" }],
@@ -362,7 +361,7 @@ describe("presentation projection", () => {
       cursor: runtimeCursor(1),
       event: {
         type: "inbound_enqueued",
-        sequence: 1,
+        sequence: "1",
         message: {
           id: "status",
           content: [{ type: "text", text: "internal" }],
@@ -408,7 +407,7 @@ describe("presentation projection", () => {
       runtimeCursor(8),
     );
     assert.deepEqual(repaired.pendingInteractions, [interaction]);
-    assert.equal(repaired.cursor, 8);
+    assert.equal(repaired.cursor, "8");
   });
 
   it("folds Questionnaires and authoritative ApprovalMode changes", () => {
@@ -419,14 +418,14 @@ describe("presentation projection", () => {
         type: "approval_mode_changed",
         effective_approval_mode: "policy",
         pending_approval_mode: "full_access",
-        revision: 1,
+        revision: "1",
       },
     ]);
 
     assert.deepEqual(state.pendingInteractions, [question]);
     assert.equal(state.effectiveApprovalMode, "policy");
     assert.equal(state.pendingApprovalMode, "full_access");
-    assert.equal(state.approvalModeRevision, 1);
+    assert.equal(state.approvalModeRevision, "1");
   });
 
   it("folds committed compaction diagnostics and rebuilds them from a snapshot", () => {
@@ -438,9 +437,9 @@ describe("presentation projection", () => {
           compaction_in_progress: false,
           compaction_count: 2,
           latest_compaction: {
-            generation: 2,
+            generation: "2",
             summary_message_id: "conv-1-summary-2",
-            surface_revision: 7,
+            surface_revision: "7",
             tokens_before: { input_tokens: 4_700, source: "estimated" },
             estimated_tokens_after: 1_800,
           },
@@ -449,7 +448,7 @@ describe("presentation projection", () => {
     ]);
 
     assert.equal(state.context.compaction_count, 2);
-    assert.equal(state.context.latest_compaction?.generation, 2);
+    assert.equal(state.context.latest_compaction?.generation, "2");
     assert.equal(
       replaceFromSnapshot(
         snapshot({ context: state.context }),
@@ -873,13 +872,13 @@ describe("presentation projection", () => {
     let state = fold(initial(), [
       {
         type: "inbound_enqueued",
-        sequence: 1,
+        sequence: "1",
         message: userMessage("m1", "first"),
         transcript_cursor: transcriptCursor(1),
       },
       {
         type: "inbound_enqueued",
-        sequence: 2,
+        sequence: "2",
         message: userMessage("m2", "second"),
         transcript_cursor: transcriptCursor(2),
       },
@@ -889,7 +888,7 @@ describe("presentation projection", () => {
     state = fold(state, [
       {
         type: "inbound_drained",
-        watermark: 1,
+        watermark: "1",
         count: 1,
         message_ids: ["m1"],
       },
@@ -898,9 +897,9 @@ describe("presentation projection", () => {
     // The drain is finite: post-watermark arrivals wait for the next one.
     assert.deepEqual(
       state.inbound.pending?.map((item) => item.sequence),
-      [2],
+      ["2"],
     );
-    assert.deepEqual(state.inbound.last_drain, { watermark: 1, count: 1 });
+    assert.deepEqual(state.inbound.last_drain, { watermark: "1", count: 1 });
   });
 
   it("folds Agent Status without composing one", () => {
@@ -971,7 +970,7 @@ describe("presentation projection", () => {
       sections: [
         todoSection({
           current: {
-            id: 7,
+            id: "7",
             subject: "Review the boundary",
             active_form: "Reviewing the boundary",
             status: "in_progress" as const,
@@ -1071,7 +1070,7 @@ describe("presentation projection", () => {
     const state = fold(initial(), [
       { type: "capability_updated", capabilities: capabilities(7) },
     ]);
-    assert.equal(state.capabilities.revision, 7);
+    assert.equal(state.capabilities.revision, "7");
     assert.equal(state.capabilities.tools?.length, 2);
   });
 
@@ -1157,7 +1156,7 @@ describe("presentation projection", () => {
         }),
       /visible transcript message is missing/,
     );
-    assert.equal(accepted.cursor, 1, "the failed event never advances the cursor");
+    assert.equal(accepted.cursor, "1", "the failed event never advances the cursor");
     assert.deepEqual(accepted.transcript, before, "the accepted state is unchanged");
   });
 
@@ -1198,7 +1197,7 @@ describe("presentation projection", () => {
       },
     });
 
-    assert.equal(state.cursor, 7);
+    assert.equal(state.cursor, "7");
     assert.equal(state.transcript.length, 0);
   });
 
@@ -1216,7 +1215,7 @@ describe("presentation projection", () => {
         }),
       /hidden Context message must not carry/,
     );
-    assert.equal(state.cursor, 0);
+    assert.equal(state.cursor, "0");
     assert.equal(state.transcript.length, 0);
   });
 
@@ -1227,7 +1226,7 @@ describe("presentation projection", () => {
           cursor: runtimeCursor(42),
           event: {
             type: "inbound_enqueued",
-            sequence: 1,
+            sequence: "1",
             message: userMessage("missing-inbound-cursor", "bad"),
           },
         }),
@@ -1243,14 +1242,14 @@ describe("presentation projection", () => {
           cursor: runtimeCursor(42),
           event: {
             type: "inbound_enqueued",
-            sequence: 1,
+            sequence: "1",
             message: contextUserMessage("hidden-inbound", "runtime status"),
             transcript_cursor: transcriptCursor(8),
           },
         }),
       /hidden Context message must not carry/,
     );
-    assert.equal(state.cursor, 0);
+    assert.equal(state.cursor, "0");
     assert.equal(state.transcript.length, 0);
   });
 
@@ -1262,7 +1261,7 @@ describe("presentation projection", () => {
     const accepted = fold(state, [
       {
         type: "inbound_enqueued",
-        sequence: 1,
+        sequence: "1",
         message: userMessage("m1", "hello"),
         transcript_cursor: transcriptCursor(1),
       },
@@ -1282,7 +1281,7 @@ describe("presentation projection", () => {
       runtimeCursor(100),
     );
 
-    assert.equal(repaired.cursor, 100);
+    assert.equal(repaired.cursor, "100");
     assert.equal(repaired.transcript.length, 1);
     assert.equal(repaired.attempt, undefined, "the snapshot is authoritative");
     assert.equal("notices" in repaired, false);
@@ -1333,8 +1332,8 @@ describe("presentation projection", () => {
 
 
 it("goal84 folds live Goal and activation changes at their stream cursors", () => {
-  const goal: import("../src/protocol/types.ts").GoalSnapshot = {
-    reference: { id: "goal-1", revision: 1 }, objective: "Deliver", phase: "active",
+  const goal: import("../src/protocol/app-server.ts").GoalSnapshot = {
+    reference: { id: "goal-1", revision: "1" }, objective: "Deliver", phase: "active",
     blocked_reason: null, autonomous_round_budget: 2, autonomous_rounds_consumed: 0,
     origin: { kind: "runtime_control" }, last_round_message_id: null,
   };

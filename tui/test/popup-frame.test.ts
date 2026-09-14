@@ -22,7 +22,7 @@ import {
 } from "../src/ui/components/popup-frame.ts";
 import { QuestionnaireOverlay } from "../src/ui/components/questionnaire.ts";
 import { SessionSelector } from "../src/ui/components/session-selector.ts";
-import type { QuestionnaireSpecification } from "../src/protocol/types.ts";
+import type { QuestionnaireSpecification } from "../src/protocol/app-server.ts";
 import { background, plainText, style } from "../src/ui/theme.ts";
 import { catalogModel, sessionModel } from "./support/fixtures.ts";
 

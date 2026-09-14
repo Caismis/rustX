@@ -6,7 +6,7 @@
  * message, event, lifecycle fact, or transcript for a child.
  */
 
-import type { RuntimeClientSubagent } from "../protocol/types.ts";
+import type { RuntimeClientSubagent } from "../protocol/app-server.ts";
 
 /**
  * Selects the next known child in display order, wrapping at either end.

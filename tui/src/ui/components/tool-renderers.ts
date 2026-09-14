@@ -39,7 +39,7 @@
  * object degrades instead of crashing.
  */
 
-import type { ToolExecutionResult, ToolId } from "../../protocol/types.ts";
+import type { ToolExecutionResult, ToolId } from "../../protocol/app-server.ts";
 import type { PreviewBudget } from "../preferences.ts";
 import { role, plainText, plainWidth } from "../theme.ts";
 

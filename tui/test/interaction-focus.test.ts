@@ -18,7 +18,7 @@ import {
   reconcileInteractionFocus,
   sameInteractionRef,
 } from "../src/presentation/interaction-focus.ts";
-import type { RoutedInteraction } from "../src/protocol/types.ts";
+import type { RoutedInteraction } from "../src/protocol/app-server.ts";
 import {
   approvalInteraction,
   childApprovalInteraction,

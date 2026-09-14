@@ -66,21 +66,19 @@ import {
 import { correlateTools } from "../presentation/tools.ts";
 import { selectTodos } from "../presentation/todos.ts";
 import type { PresentationState } from "../presentation/state.ts";
-import type { ChildRuntimeProcess } from "../runtime/child-process.ts";
-import {
-  RuntimeRequestError,
-  type RuntimeClientConnection,
-} from "../runtime/connection.ts";
-import type { SessionSwitch } from "../runtime/attachment.ts";
-import type { RuntimeClientAttachment } from "../runtime/attachment.ts";
+import { AppServerRequestError } from "../app-server/client.ts";
+import type { AppServerHost } from "../app-server/host.ts";
+import type { AppServerSession } from "../app-server/session.ts";
 import type {
   CatalogModelView,
+  SessionSettings,
   SessionSummaryView,
   SessionUserMessageBoundaryView,
   SessionView,
   ToolCallId,
   InteractionRef,
-} from "../protocol/types.ts";
+  UserContentBlock,
+} from "../protocol/app-server.ts";
 import {
   BoundarySelector,
 } from "./components/session-selector.ts";
@@ -89,6 +87,7 @@ import {
   renderBackgroundSection,
   renderInteractionSection,
   renderOrphanExecutions,
+  renderSubagentDetail,
   renderSubagentSection,
 } from "./components/activity.ts";
 import {
@@ -130,45 +129,30 @@ import {
 import { background, editorTheme, markdownTheme, style } from "./theme.ts";
 import type { TranscriptBlock } from "./components/transcript.ts";
 import { HumanInteractionOverlay } from "./components/hitl.ts";
-import type { InteractionResponse } from "../protocol/types.ts";
+import type { InteractionResponse } from "../protocol/app-server.ts";
 
 export interface RustxTuiAppOptions {
-  session: RuntimeClientAttachment;
-  connection: RuntimeClientConnection;
-  child: ChildRuntimeProcess;
+  /** The App Server connection, its Session catalog, and who owns its process. */
+  host: AppServerHost;
+  /** The Session the terminal opens on. */
+  session: AppServerSession;
+  /** `session/create` inputs for Sessions this client creates. */
+  sessionSettings: SessionSettings;
   /**
-   * Open the `/resume` selector as soon as the first attachment is live.
-   * This is `--resume`: the picker is presentation over the Session the
-   * launch already bound, and the choice becomes the ordinary Session
-   * selection Rust publishes.
+   * Open the `/resume` selector as soon as the first Session is visible.
+   *
+   * This is `--resume`: the picker is presentation over the Session already in
+   * focus, and choosing another simply moves focus.
    */
   openSessionSelector?: boolean;
   /**
-   * Whether the initial attachment is a read-only conversation inspection.
-   * A child opened from this app sets the same presentation state internally;
-   * neither form changes Runtime Client ownership.
-   */
-  readOnly?: boolean;
-  /**
-   * The workspace the runtime was launched against.
+   * The directory Sessions this launch creates are rooted at.
    *
    * Presentation only: it shortens the absolute paths the runtime publishes
-   * for display. The client never reads it, resolves against it, or treats
-   * it as a second opinion about where the runtime is running.
+   * for display. The client never reads it, resolves against it, or treats it
+   * as a second opinion about where anything is running.
    */
-  workspace?: string;
-  /** Re-spawns and re-attaches after Rust publishes a lineage switch. */
-  restartRuntime?: (target?: SessionView) => Promise<RuntimeAttachmentHandle>;
-  /** Opens a known conversation identity in a fresh ordinary attachment. */
-  openConversation?: (conversationId: string) => Promise<RuntimeAttachmentHandle>;
-  /** How long the child gets to exit after the shutdown sequence. */
-  terminationGraceMs?: number;
-}
-
-export interface RuntimeAttachmentHandle {
-  session: RuntimeClientAttachment;
-  connection: RuntimeClientConnection;
-  child: ChildRuntimeProcess;
+  cwd?: string;
 }
 
 /**
@@ -181,7 +165,7 @@ export interface RuntimeAttachmentHandle {
 interface PresentationLease {
   epoch: number;
   sessionListGeneration: number;
-  session: RuntimeClientAttachment;
+  session: AppServerSession;
 }
 
 /** One submitted approval operation; object identity is its completion token. */
@@ -189,26 +173,12 @@ interface PendingApprovalRequest {
   readonly owner: PresentationLease;
 }
 
-/** One presentation frame kept so Esc can return to the existing parent view. */
-interface NavigationFrame {
-  handle: RuntimeAttachmentHandle;
-  readOnly: boolean;
-  parentConversationId?: string;
-}
-
 export class RustxTuiApp {
-  #session: RuntimeClientAttachment;
-  #connection: RuntimeClientConnection;
-  #child: ChildRuntimeProcess;
+  readonly #host: AppServerHost;
+  #session: AppServerSession;
   readonly #dispatcher: CommandDispatcher;
-  readonly #restartRuntime: ((target?: SessionView) => Promise<RuntimeAttachmentHandle>) | undefined;
-  readonly #openConversation: ((conversationId: string) => Promise<RuntimeAttachmentHandle>) | undefined;
   readonly #openSessionSelectorAtStartup: boolean;
   readonly #workspace: string | undefined;
-  readonly #terminationGraceMs: number | undefined;
-  #readOnly: boolean;
-  #parentConversationId: string | undefined;
-  readonly #navigationStack: NavigationFrame[] = [];
 
   readonly #tui: TUI;
   readonly #startup = new Container();
@@ -226,7 +196,7 @@ export class RustxTuiApp {
   readonly #footer = new FooterView(() => ({
     state: this.#session.state,
     connection: this.#connectionLabel(),
-    session: this.#session.sessionInfo,
+    session: this.#sessionInfo,
     conversation: this.#conversationContext(),
   }));
   readonly #editor: Editor;
@@ -260,8 +230,8 @@ export class RustxTuiApp {
   #exitCode = 0;
   #finished = false;
   #started = false;
-  #restarting = false;
-  #navigating = false;
+  /** True only while a focus change is installing a different Session. */
+  #switching = false;
   #subagentListFocused = false;
   #selectedSubagentId: string | undefined;
   #presentationEpoch = 0;
@@ -271,19 +241,17 @@ export class RustxTuiApp {
   #terminalFinishStarted = false;
   #removeStateListener: (() => void) | undefined;
   #removeSnapshotListener: (() => void) | undefined;
-  #removeCloseListener: (() => void) | undefined;
+  #removeClosedListener: (() => void) | undefined;
+  readonly #removeConnectionListener: () => void;
+  /** The durable metadata of the visible Session, refreshed authoritatively. */
+  #sessionInfo: SessionView | undefined;
   #resolveExit: ((code: number) => void) | undefined;
 
   constructor(options: RustxTuiAppOptions) {
+    this.#host = options.host;
     this.#session = options.session;
-    this.#connection = options.connection;
-    this.#child = options.child;
-    this.#restartRuntime = options.restartRuntime;
-    this.#openConversation = options.openConversation;
     this.#openSessionSelectorAtStartup = options.openSessionSelector ?? false;
-    this.#workspace = options.workspace;
-    this.#terminationGraceMs = options.terminationGraceMs;
-    this.#readOnly = options.readOnly ?? false;
+    this.#workspace = options.cwd;
 
     this.#tui = new TUI(new ProcessTerminal());
     this.#editor = new Editor(this.#tui, editorTheme, { paddingX: 1 });
@@ -291,11 +259,12 @@ export class RustxTuiApp {
     this.#editor.onSubmit = (text) => {
       void this.#onSubmit(text);
     };
-    this.#editor.disableSubmit = this.#readOnly;
     this.#loader = new Loader(this.#tui, style.cyan, style.dim, "");
 
     this.#dispatcher = new CommandDispatcher({
+      host: this.#host,
       session: this.#session,
+      sessionSettings: options.sessionSettings,
       diagnostics: () => this.#diagnostics(),
     });
 
@@ -308,29 +277,50 @@ export class RustxTuiApp {
     this.#tui.addChild(this.#editor);
     this.#tui.addChild(this.#footer);
 
-    this.#bindRuntime(this.#session, this.#connection, this.#child);
+    // The connection is the one thing every Session shares. Losing it ends
+    // observation of all of them at once — and says nothing about any of them.
+    this.#removeConnectionListener = this.#host.client.onClose((error) => {
+      this.#deletion?.terminate();
+      if (this.#quitting || this.#terminalFinishStarted || this.#finished) return;
+      this.#editor.disableSubmit = true;
+      void this.#showTerminalFailureAndFinish(
+        `${compactDiagnostic(error)}\nThe App Server is no longer reachable from this client. Work it already accepted is unaffected; this client can no longer observe it.`,
+        1,
+      );
+    });
+    this.#bindSession(this.#session);
   }
 
-  #bindRuntime(
-    session: RuntimeClientAttachment,
-    connection: RuntimeClientConnection,
-    child: ChildRuntimeProcess,
-  ): void {
-    // Binding a new attachment invalidates every local surface and every
-    // continuation that was started against the previous one.
+  /**
+   * Binds the Session the terminal is showing.
+   *
+   * This is a **focus change and nothing else**. The Session being replaced on
+   * screen keeps its attachment, keeps its subscription, and keeps executing in
+   * the same App Server process. Nothing here detaches it, cancels a turn,
+   * answers an interaction, unloads a runtime, or replaces a process.
+   *
+   * What it does invalidate is local presentation: overlays, transient
+   * feedback and in-flight continuations belong to the Session that started
+   * them, so they are dropped rather than repainted over a different one.
+   */
+  #bindSession(session: AppServerSession): void {
     this.#deletion?.terminate();
     this.#invalidatePresentation();
     this.#removeStateListener?.();
     this.#removeSnapshotListener?.();
-    this.#removeCloseListener?.();
+    this.#removeClosedListener?.();
     this.#session = session;
-    this.#connection = connection;
-    this.#child = child;
+    this.#sessionInfo = undefined;
     this.#dispatcher.setSession(session);
-    const deletion = new SessionDeletionWorkflow(session,
-      () => this.#session === session && this.#connection === connection &&
-        connection.closed === undefined && !this.#finished && !this.#terminalFinishStarted,
-      (text) => this.#showTransient("info", text));
+    const deletion = new SessionDeletionWorkflow(
+      this.#host,
+      () =>
+        this.#session === session &&
+        this.#host.client.closed === undefined &&
+        !this.#finished &&
+        !this.#terminalFinishStarted,
+      (text) => this.#showTransient("info", text),
+    );
     this.#deletion = deletion;
     this.#resumeQuery = undefined;
     deletion.subscribe(() => {
@@ -352,27 +342,88 @@ export class RustxTuiApp {
       if (this.#session !== session || this.#finished) return;
       this.#renderState(state);
     });
-    const boundSession = session;
-    this.#removeCloseListener = connection.onClose((error) => {
-      if (this.#connection !== connection || this.#session !== boundSession) return;
-      deletion.terminate();
-      if (this.#restarting || this.#quitting || this.#terminalFinishStarted) return;
-      if (this.#navigating) return;
-      if (this.#navigationStack.length > 0) {
-        this.#editor.disableSubmit = true;
-        void this.#returnToParent(
-          `inspection connection lost: ${compactDiagnostic(error)}`,
-        );
-        return;
-      }
-      // Transport loss is not cancellation. It only ends observation, so the
-      // client says exactly that and stops accepting input.
-      this.#editor.disableSubmit = true;
-      void this.#showTerminalFailureAndFinish(
-        `${compactDiagnostic(error)}\nThe runtime is no longer observable from this client.`,
-        1,
+    this.#removeClosedListener = session.onClosed(() => {
+      // The server retired this attachment's residency. That is a statement
+      // about observability, not a runtime outcome, and it is reported as one.
+      if (this.#session !== session || this.#finished) return;
+      this.#showTransient(
+        "error",
+        "this Session's runtime was unloaded; reopen it with /resume to attach again",
       );
+      this.#editor.disableSubmit = true;
     });
+    this.#refreshSessionInfo();
+  }
+
+  /**
+   * Moves the terminal's focus to a different Session.
+   *
+   * Attach is idempotent per Session on one connection, so returning to a
+   * Session reuses the attachment it already has — and its projection is
+   * repaired from authoritative state rather than from whatever this client
+   * last believed.
+   */
+  async #focusSession(
+    sessionId: string,
+    nodeId: string | undefined,
+    editorContent: UserContentBlock[] | undefined,
+    notice: string | undefined,
+    lease: PresentationLease,
+  ): Promise<void> {
+    if (!this.#isCurrentPresentationLease(lease) || this.#switching) return;
+    if (sessionId === this.#session.sessionId && editorContent === undefined) {
+      // Already the visible Session. Repair rather than re-attach, so the
+      // picker's "choose the current one" is still an authoritative refresh.
+      if (notice !== undefined) this.#showTransient("info", notice);
+      return;
+    }
+    this.#switching = true;
+    this.#editor.disableSubmit = true;
+    try {
+      const next = await this.#host.attach(sessionId, nodeId);
+      this.#bindSession(next);
+      // A returning attachment may have folded events while it was off screen,
+      // and the server is the only thing entitled to say what it holds now.
+      if (next.resyncCount === 0 && this.#session === next) {
+        await next.resync();
+      }
+      if (this.#session !== next) return;
+      if (editorContent !== undefined) {
+        this.#editor.setText(editorText(editorContent));
+      }
+      this.#showTransient("info", notice ?? `showing session ${sessionId}`);
+      this.#renderState(next.state);
+    } catch (error: unknown) {
+      if (this.#finished) return;
+      this.#showTransient(
+        "error",
+        `could not open that Session: ${compactDiagnostic(error)}`,
+      );
+    } finally {
+      this.#switching = false;
+      if (!this.#finished) {
+        this.#editor.disableSubmit = this.#quitting;
+      }
+    }
+  }
+
+  /** Reads the visible Session's durable metadata for the footer. */
+  #refreshSessionInfo(): void {
+    const session = this.#session;
+    void this.#host.readSession(session.sessionId).then(
+      (info) => {
+        if (this.#session !== session || this.#finished) return;
+        this.#sessionInfo = info;
+        this.#renderState(session.state);
+      },
+      (error: unknown) => {
+        if (this.#session !== session || this.#finished) return;
+        this.#showTransient(
+          "error",
+          `session metadata unavailable: ${compactDiagnostic(error)}`,
+        );
+      },
+    );
   }
 
   /** Starts the terminal and resolves with the process exit code. */
@@ -395,39 +446,13 @@ export class RustxTuiApp {
       if (state !== undefined) {
         this.#renderState(state);
       }
-      // Session metadata is a separate native product projection from the
-      // conversation snapshot. Refresh it after the attachment handshake so
-      // startup remains the same initialize/subscribe cut used by existing
-      // Runtime Client consumers, while the footer still becomes session-aware
-      // as soon as the authoritative read returns.
-      if (!this.#isInspection()) {
-        const refreshLease = this.#presentationLease();
-        const refreshSession = (
-          refreshLease.session as unknown as {
-            refreshSession?: () => Promise<unknown>;
-          }
-        ).refreshSession;
-        if (refreshSession !== undefined) {
-          void refreshSession.call(refreshLease.session).then(
-            () => {
-              if (!this.#isCurrentPresentationLease(refreshLease)) return;
-              const refreshed = refreshLease.session.state;
-              if (refreshed !== undefined) this.#renderState(refreshed);
-            },
-            (error: unknown) => {
-              if (!this.#isCurrentPresentationLease(refreshLease)) return;
-              this.#showTransient("error", `session metadata unavailable: ${compactDiagnostic(error)}`);
-            },
-          );
-        }
-      }
       // `--resume` is the same selection `/resume` performs, asked for on the
       // command line: the runtime is already attached to the Session the
       // launch bound, and the picker is opened over it. Cancelling therefore
       // leaves that Session bound and publishes nothing.
       if (this.#openSessionSelectorAtStartup) {
         const selectorLease = this.#presentationLease();
-        void selectorLease.session
+        void this.#host
           .listSessions()
           .then((page) => {
             if (!this.#isCurrentPresentationLease(selectorLease)) return;
@@ -453,7 +478,7 @@ export class RustxTuiApp {
         // The subagent list is an explicit presentation focus. Ctrl+Up/Down
         // enters that focus so ordinary editor Enter remains ordinary message
         // submission until the user has selected a row.
-        if (this.#overlay === undefined && !this.#restarting && !this.#navigating) {
+        if (this.#overlay === undefined && !this.#switching) {
           if (matchesKey(data, "ctrl+up")) {
             this.#moveSubagentSelection(-1);
             return { consume: true };
@@ -495,9 +520,6 @@ export class RustxTuiApp {
           if (this.#overlay !== undefined) {
             return undefined;
           }
-          if (this.#isInspection()) {
-            return { consume: true };
-          }
           const lease = this.#presentationLease();
           void this.#dispatcher
             .submit("/model")
@@ -513,10 +535,10 @@ export class RustxTuiApp {
         // dismissed it. Presentation-only: it settles nothing and never
         // targets a read-only inspection.
         if (matchesKey(data, "ctrl+g")) {
-          if (!this.#isInspection() && this.#hitlOverlay === undefined) {
+          if (this.#hitlOverlay === undefined) {
             this.#hitlDismissed = undefined;
             const state = this.#session.state;
-            if (state !== undefined && state.pendingInteractions.length > 0) {
+            if (state.pendingInteractions.length > 0) {
               this.#renderState(state);
             }
           }
@@ -535,9 +557,8 @@ export class RustxTuiApp {
           const attempt = state?.attempt;
           const acted = this.#overlay !== undefined || (
             this.#subagentListFocused ||
-            this.#navigationStack.length > 0 ||
-            !this.#restarting &&
-            ((state?.pendingInteractions.length ?? 0) > 0 ||
+            !this.#switching &&
+            (state.pendingInteractions.length > 0 ||
               (attempt !== undefined && attempt.phase.type !== "settled"))
           );
           void this.#onEscape();
@@ -559,7 +580,7 @@ export class RustxTuiApp {
   }
 
   async #onSubmit(text: string): Promise<void> {
-    if (this.#restarting || this.#navigating || this.#finished || this.#isInspection()) return;
+    if (this.#switching || this.#finished) return;
     const lease = this.#presentationLease();
     const line = text.trim();
     if (line.length === 0) {
@@ -573,7 +594,7 @@ export class RustxTuiApp {
       // rather than relabeling an unfiltered page with the preserved query.
       const query = this.#resumeQuery ?? this.#deletion.context.query;
       const outcome = line === "/resume" && this.#deletion.state.kind !== "idle"
-        ? { kind: "choose_session" as const, ...await lease.session.listSessions(query, 0), query }
+        ? { kind: "choose_session" as const, ...await this.#host.listSessions(query, 0), query }
         : await this.#dispatcher.submit(text);
       if (!this.#isCurrentPresentationLease(lease)) return;
       await this.#handleOutcome(outcome, lease);
@@ -603,69 +624,38 @@ export class RustxTuiApp {
     this.#renderState(state);
   }
 
-  /** Opens the selected row by its canonical child conversation identity. */
+  /**
+   * Opens an authoritative detail view of the selected subagent.
+   *
+   * The App Server projects a child's identity, state, activity, execution
+   * profile and workspace; it exposes no method for attaching to a child
+   * conversation, so this reads `subagent/status` rather than composing a
+   * second conversation client of its own.
+   */
   async #inspectSelectedSubagent(): Promise<void> {
     if (
       !this.#subagentListFocused ||
       this.#selectedSubagentId === undefined ||
-      this.#finished ||
-      this.#navigating ||
-      this.#isInspection()
+      this.#finished
     ) {
       return;
     }
-    const openConversation = this.#openConversation;
-    const state = this.#session.state;
-    const selected = state?.subagents.find(
-      (subagent) => subagent.subagent_id === this.#selectedSubagentId,
-    );
-    if (openConversation === undefined) {
-      this.#showTransient("error", "conversation inspection is unavailable from this attachment");
-      return;
-    }
-    if (selected === undefined || selected.child_conversation_id.length === 0) {
-      this.#showTransient("error", "the selected subagent has no child conversation identity");
-      return;
-    }
-    const parentConversationId = this.#session.identity?.conversationId;
-    if (parentConversationId === undefined) {
-      this.#showTransient("error", "the parent conversation identity is not available");
-      return;
-    }
-
-    const parent: NavigationFrame = {
-      handle: {
-        session: this.#session,
-        connection: this.#connection,
-        child: this.#child,
-      },
-      readOnly: this.#readOnly,
-      parentConversationId: this.#parentConversationId,
-    };
-    this.#navigating = true;
-    this.#editor.disableSubmit = true;
+    const lease = this.#presentationLease();
+    const subagentId = this.#selectedSubagentId;
     try {
-      const next = await openConversation(selected.child_conversation_id);
-      this.#navigationStack.push(parent);
-      this.#readOnly = true;
-      this.#parentConversationId = parentConversationId;
-      this.#subagentListFocused = false;
-      this.#selectedSubagentId = undefined;
-      this.#bindRuntime(next.session, next.connection, next.child);
-      this.#editor.disableSubmit = true;
-      const nextState = next.session.state;
-      if (nextState !== undefined) this.#renderState(nextState);
-      this.#showTransient(
-        "info",
-        `inspecting child conversation ${selected.child_conversation_id} · read-only · Esc returns to parent`,
+      const subagent = await lease.session.subagentStatus(subagentId);
+      if (!this.#isCurrentPresentationLease(lease)) return;
+      this.#showInspection(
+        `Subagent ${subagent.agent}`,
+        renderSubagentDetail(subagent),
+        lease,
       );
     } catch (error: unknown) {
-      this.#showTransient("error", `conversation inspection failed: ${compactDiagnostic(error)}`);
-    } finally {
-      this.#navigating = false;
-      if (!this.#finished) {
-        this.#editor.disableSubmit = this.#isInspection() || this.#quitting;
-      }
+      if (!this.#isCurrentPresentationLease(lease)) return;
+      this.#showTransient(
+        "error",
+        `subagent status unavailable: ${compactDiagnostic(error)}`,
+      );
     }
   }
 
@@ -674,27 +664,24 @@ export class RustxTuiApp {
     if (
       !this.#subagentListFocused ||
       this.#selectedSubagentId === undefined ||
-      this.#finished ||
-      this.#restarting ||
-      this.#navigating ||
-      this.#isInspection()
+      this.#finished
     ) {
       return;
     }
     const state = this.#session.state;
-    const selected = state?.subagents.find(
+    const selected = state.subagents.find(
       (subagent) => subagent.subagent_id === this.#selectedSubagentId,
     );
     if (selected === undefined) {
       this.#showTransient("error", "the selected subagent is no longer known to the runtime");
       return;
     }
-    const resourceState = selected.workspace.resource_state;
+    const resourceState = selected.workspace?.resource_state;
     const disposalRetryable =
       resourceState === "preserved_unresolved" ||
       resourceState === "disposal_in_progress" ||
       resourceState === "worktree_removed";
-    if (selected.workspace.handoff === undefined && !disposalRetryable) {
+    if (selected.workspace?.handoff == null && !disposalRetryable) {
       this.#showTransient("info", "the selected subagent has no retained workspace");
       return;
     }
@@ -719,7 +706,7 @@ export class RustxTuiApp {
     this.#showPopup(confirmation, { width: "80%", minWidth: 48, heightPercent: 38 });
   }
 
-  /** Routes the confirmed operation through the Runtime Client boundary. */
+  /** Routes the confirmed operation through the App Server boundary. */
   async #disposeSelectedSubagent(
     subagentId: string,
     lease: PresentationLease,
@@ -747,56 +734,11 @@ export class RustxTuiApp {
       }
     } catch (error: unknown) {
       if (!this.#isCurrentPresentationLease(lease)) return;
-      if (
-        error instanceof RuntimeRequestError &&
-        error.error.type === "subagent_workspace_ownership_mismatch"
-      ) {
+      if (error instanceof AppServerRequestError) {
         this.#showTransient("error", `workspace disposal refused: ${compactDiagnostic(error)}`);
         return;
       }
       this.#showTransient("error", `workspace disposal failed: ${compactDiagnostic(error)}`);
-    }
-  }
-
-  /** Detaches only the inspection client and restores the parent frame. */
-  async #returnToParent(reason?: string): Promise<void> {
-    const frame = this.#navigationStack[this.#navigationStack.length - 1];
-    if (frame === undefined || this.#navigating) return;
-    const inspected = this.#session;
-    const inspectedConnection = this.#connection;
-    const inspectedChild = this.#child;
-    this.#navigating = true;
-    this.#editor.disableSubmit = true;
-    this.#subagentListFocused = false;
-    this.#selectedSubagentId = undefined;
-    let closeFailure: string | undefined;
-    try {
-      await this.#detachOldAttachment(inspected, inspectedConnection);
-      inspectedChild.closeStdin();
-      await inspectedChild.waitOrTerminate(this.#terminationGraceMs);
-    } catch (error: unknown) {
-      closeFailure = compactDiagnostic(error);
-    }
-
-    this.#navigationStack.pop();
-    this.#readOnly = frame.readOnly;
-    this.#parentConversationId = frame.parentConversationId;
-    this.#bindRuntime(frame.handle.session, frame.handle.connection, frame.handle.child);
-    this.#editor.disableSubmit = this.#isInspection() || this.#quitting;
-    const state = this.#session.state;
-    if (state !== undefined) this.#renderState(state);
-    this.#navigating = false;
-    if (this.#finished || this.#quitting) return;
-    if (reason !== undefined || closeFailure !== undefined) {
-      this.#showTransient(
-        "error",
-        `${reason ?? "inspection detach failed"}${closeFailure === undefined ? "" : ` · ${closeFailure}`}; returned to parent`,
-      );
-    } else {
-      this.#showTransient(
-        "info",
-        `returned to parent conversation ${this.#session.identity?.conversationId ?? "unknown"}`,
-      );
     }
   }
 
@@ -840,11 +782,14 @@ export class RustxTuiApp {
           lease,
         );
         break;
-      case "session_switch":
-        await this.#applySessionSwitch(outcome.change, lease);
-        break;
-      case "replacement_required":
-        await this.#applyReplacementRequired(outcome.message, lease);
+      case "focus_session":
+        await this.#focusSession(
+          outcome.sessionId,
+          outcome.nodeId,
+          outcome.editorContent,
+          outcome.notice,
+          lease,
+        );
         break;
       case "preference":
         this.#applyPreference(outcome.preference);
@@ -870,22 +815,16 @@ export class RustxTuiApp {
       this.#closeOverlay();
       return;
     }
-    if (this.#navigationStack.length > 0) {
-      await this.#returnToParent();
-      return;
-    }
     if (this.#subagentListFocused) {
       this.#subagentListFocused = false;
       this.#selectedSubagentId = undefined;
-      const state = this.#session.state;
-      if (state !== undefined) this.#renderState(state);
+      this.#renderState(this.#session.state);
       return;
     }
-    if (this.#isInspection()) return;
-    if (this.#restarting) return;
+    if (this.#switching) return;
     const state = this.#session.state;
-    const attempt = state?.attempt;
-    if ((state?.pendingInteractions.length ?? 0) > 0 ||
+    const attempt = state.attempt;
+    if (state.pendingInteractions.length > 0 ||
       (attempt !== undefined && attempt.phase.type !== "settled")) {
       const lease = this.#presentationLease();
       try {
@@ -903,18 +842,10 @@ export class RustxTuiApp {
 
   async #onInterrupt(): Promise<void> {
     this.#acknowledgeTransient();
-    if (this.#navigationStack.length > 0) {
-      await this.#returnToParent();
-      return;
-    }
-    if (this.#isInspection()) {
-      await this.#closeInspection();
-      return;
-    }
-    if (this.#restarting) return;
+    if (this.#switching) return;
     const state = this.#session.state;
-    if ((state?.pendingInteractions.length ?? 0) > 0 ||
-      (state?.attempt !== undefined && state.attempt.phase.type !== "settled")) {
+    if (state.pendingInteractions.length > 0 ||
+      (state.attempt !== undefined && state.attempt.phase.type !== "settled")) {
       const lease = this.#presentationLease();
       try {
         const outcome = await this.#dispatcher.submit("/cancel");
@@ -931,75 +862,45 @@ export class RustxTuiApp {
     await this.quit();
   }
 
-  /** Closes a direct read-only inspection without asking it to shut down. */
-  async #closeInspection(): Promise<void> {
-    if (this.#quitting || this.#finished) return;
-    this.#quitting = true;
-    this.#invalidatePresentation();
-    this.#editor.disableSubmit = true;
-    await this.#detachOldAttachment(this.#session, this.#connection);
-    this.#child.closeStdin();
-    const exit = await this.#child.waitOrTerminate(this.#terminationGraceMs);
-    this.#finish(exit.code ?? 1);
-  }
-
   /**
-   * The controlling-client shutdown sequence.
+   * Exits the terminal, according to who owns the App Server process.
    *
    * ```text
-   * disable new input
-   *   -> shutdown          (canonical runtime request)
-   *   -> wait for the exact active AttemptSettled fact, when needed
-   *   -> close stdin       (transport EOF, never cancellation)
-   *   -> wait              (bounded process-level fallback if it overstays)
+   * local self-hosted            existing / remote
+   *   close the child's stdin      close this socket
+   *   the child sees EOF,          the server keeps running, every
+   *   detaches and exits           Session stays loaded, accepted
+   *   (SIGTERM/SIGKILL only if     work keeps executing, pending
+   *    it overstays its grace)     interactions stay pending
    * ```
    *
-   * None of these steps claims that background work completed: the process
-   * stopping is not a semantic settlement, and this client never reports one.
+   * The local path may end work that was in flight. That happens because the
+   * process this TUI owns is deliberately shutting down — not because detaching
+   * a transport is execution authority, and not because this client decided
+   * anything was finished. Nothing here reports a settlement it did not
+   * observe, in either mode. Persistent execution across TUI exit is what an
+   * externally managed App Server is for.
+   *
+   * #291 owns graceful drain policy for the owned process; this is the
+   * shutdown boundary that exists today, used as it exists today.
    */
   async quit(): Promise<void> {
-    while (this.#navigationStack.length > 0) {
-      await this.#returnToParent();
-    }
     if (this.#quitting) {
       return;
     }
     this.#quitting = true;
     this.#invalidatePresentation();
     this.#editor.disableSubmit = true;
-    this.#showTransient("info", "shutting the runtime down…");
+    this.#showTransient(
+      "info",
+      this.#host.ownership === "owned_child"
+        ? "shutting down the App Server this client started…"
+        : "disconnecting; the App Server keeps running…",
+    );
 
-    const attempt = this.#session.state?.attempt;
-    const unsettledAttemptId =
-      attempt !== undefined && attempt.phase.type !== "settled"
-        ? attempt.attemptId
-        : undefined;
-    let lifecycleFailure: string | undefined;
-    try {
-      await this.#session.shutdown();
-    } catch (error) {
-      lifecycleFailure = `shutdown request failed: ${compactDiagnostic(error)}`;
-    }
-
-    if (lifecycleFailure === undefined && unsettledAttemptId !== undefined) {
-      try {
-        await this.#session.waitForAttemptSettlement(unsettledAttemptId);
-      } catch (error) {
-        lifecycleFailure = `attempt settlement was not observed: ${compactDiagnostic(error)}`;
-      }
-    }
-
-    this.#child.closeStdin();
-    const exit = await this.#child.waitOrTerminate(this.#terminationGraceMs);
-    this.#exitCode = exit.code ?? 1;
-    if (lifecycleFailure !== undefined && this.#exitCode === 0) {
-      this.#exitCode = 1;
-    }
-    if (lifecycleFailure !== undefined) {
-      await this.#showTerminalFailureAndFinish(lifecycleFailure, this.#exitCode);
-    } else {
-      this.#finish(this.#exitCode);
-    }
+    const exit = await this.#host.shutdown();
+    this.#exitCode = exit === undefined ? 0 : (exit.code ?? 1);
+    this.#finish(this.#exitCode);
   }
 
   /** Opens the shared focused surface for substantial read-only information. */
@@ -1147,7 +1048,7 @@ export class RustxTuiApp {
       return;
     }
     const selector = new ResumeSelector({
-      initialPage: sessions === undefined ? undefined : { sessions, nextOffset }, query, client: lease.session, workflow,
+      initialPage: sessions === undefined ? undefined : { sessions, nextOffset }, query, client: this.#host, workflow,
       alive: () => this.#isCurrentPresentationLease(lease) && this.#overlay === handle,
       feedback: (text) => this.#showTransient("info", text),
     });
@@ -1162,13 +1063,14 @@ export class RustxTuiApp {
     selector.onSelect = (session) => {
       if (!this.#isCurrentPresentationLease(lease)) return;
       this.#closeOverlay();
-      void this.#dispatcher.selectSession(session.id)
-        .then((outcome) => this.#handleOutcome(outcome, lease))
-        .catch((error: unknown) => {
-          if (this.#isCurrentPresentationLease(lease)) {
-            this.#showTransient("error", `session selection failed: ${compactDiagnostic(error)}`);
-          }
-        });
+      void this.#handleOutcome(
+        this.#dispatcher.selectSession(session.id),
+        lease,
+      ).catch((error: unknown) => {
+        if (this.#isCurrentPresentationLease(lease)) {
+          this.#showTransient("error", `session selection failed: ${compactDiagnostic(error)}`);
+        }
+      });
     };
   }
 
@@ -1216,10 +1118,10 @@ export class RustxTuiApp {
     selector.onLoadMore = () => {
       const offset = currentNextOffset;
       if (offset === undefined) return;
-      void lease.session.sessionTreePage(0, offset).then((page) => {
+      void lease.session.boundaries(offset).then((page) => {
         if (!this.#isCurrentPresentationLease(lease)) return;
-        currentNextOffset = page.nextHistoryOffset;
-        selector.appendPage(page.branchableMessages, page.nextHistoryOffset);
+        currentNextOffset = page.nextOffset;
+        selector.appendPage(page.boundaries, page.nextOffset);
       }).catch((error: unknown) => {
         if (!this.#isCurrentPresentationLease(lease)) return;
         this.#showTransient("error", `history page failed: ${compactDiagnostic(error)}`);
@@ -1244,7 +1146,7 @@ export class RustxTuiApp {
 
   #showTreeSelector(
     session: SessionView,
-    nodes: import("../protocol/types.ts").SessionNodeView[],
+    nodes: import("../protocol/app-server.ts").SessionNodeView[],
     nextNodeOffset: number | undefined,
     boundaries: SessionUserMessageBoundaryView[],
     nextHistoryOffset: number | undefined,
@@ -1270,13 +1172,17 @@ export class RustxTuiApp {
     selector.onLoadMore = () => {
       const request = selector.nextPageRequest();
       if (request === undefined) return;
-      void lease.session.sessionTreePage(request.nodeOffset, request.historyOffset).then((page) => {
+      // The graph page and the boundary page come from their own owners.
+      void Promise.all([
+        this.#host.sessionTree(session.id, request.nodeOffset),
+        lease.session.boundaries(request.historyOffset),
+      ]).then(([tree, page]) => {
         if (!this.#isCurrentPresentationLease(lease)) return;
         selector.appendPage({
-          nodes: page.nodes,
-          nextNodeOffset: page.nextNodeOffset,
-          boundaries: page.branchableMessages,
-          nextHistoryOffset: page.nextHistoryOffset,
+          nodes: tree.nodes,
+          nextNodeOffset: tree.nextOffset,
+          boundaries: page.boundaries,
+          nextHistoryOffset: page.nextOffset,
         });
       }).catch((error: unknown) => {
         if (!this.#isCurrentPresentationLease(lease)) return;
@@ -1287,14 +1193,16 @@ export class RustxTuiApp {
     selector.onSelect = (selection: TreeSelection) => {
       if (!this.#isCurrentPresentationLease(lease)) return;
       this.#closeOverlay();
-      const request = selection.kind === "node"
-        ? this.#dispatcher.selectTreeNode(session.id, selection.node.id)
+      const outcome = selection.kind === "node"
+        ? Promise.resolve(
+            this.#dispatcher.selectTreeNode(session.id, selection.node.id),
+          )
         : this.#dispatcher.branchAt(selection.boundary);
-      void request
-        .then((outcome) => this.#handleOutcome(outcome, lease))
+      void outcome
+        .then((resolved) => this.#handleOutcome(resolved, lease))
         .catch((error: unknown) => {
           if (this.#isCurrentPresentationLease(lease)) {
-            this.#showTransient("error", `session switch failed: ${compactDiagnostic(error)}`);
+            this.#showTransient("error", `session focus change failed: ${compactDiagnostic(error)}`);
           }
         });
     };
@@ -1312,181 +1220,6 @@ export class RustxTuiApp {
     this.#tui.setFocus(this.#editor);
     if (!replacing) this.#syncDeletionPresentation();
     this.#tui.requestRender();
-  }
-
-  async #applySessionSwitch(
-    change: SessionSwitch,
-    lease: PresentationLease,
-  ): Promise<void> {
-    if (!this.#isCurrentPresentationLease(lease)) return;
-
-    // Accepting a committed Session transition is itself an ownership
-    // boundary. The transition below is allowed to complete its runtime work,
-    // but unrelated continuations from the old presentation are stale now.
-    this.#invalidatePresentation();
-    if (!change.restartRequired) {
-      this.#showTransient(
-        "info",
-        `active session: ${sessionLabel(change.session)} · node ${change.session.active_node}`,
-      );
-      return;
-    }
-    const restart = this.#restartRuntime;
-    if (restart === undefined) {
-      this.#editor.disableSubmit = true;
-      await this.#showTerminalFailureAndFinish(
-        "the runtime cannot be replaced by this attachment",
-        1,
-      );
-      return;
-    }
-
-    this.#restarting = true;
-    this.#editor.disableSubmit = true;
-    this.#showTransient(
-      change.restartDiagnostic === undefined ? "info" : "error",
-      change.restartDiagnostic === undefined
-        ? `switching to session ${sessionLabel(change.session)}…`
-        : `Session ${sessionLabel(change.session)} committed before durability became uncertain: ${compactDiagnostic(change.restartDiagnostic)}`,
-    );
-    const oldSession = this.#session;
-    const oldConnection = this.#connection;
-    const oldChild = this.#child;
-    let transitionSession = oldSession;
-    let refreshLease: PresentationLease | undefined;
-    try {
-      // This local CLI adapter owns its subprocess lifetime. The catalog
-      // did not quiesce or replace it; the next subprocess receives an explicit
-      // routing identity. Shared-process residency belongs to #287/#288.
-      await this.#detachOldAttachment(oldSession, oldConnection);
-      oldChild.closeStdin();
-      await oldChild.waitOrTerminate(this.#terminationGraceMs);
-
-      const next = await restart(change.session);
-      this.#bindRuntime(next.session, next.connection, next.child);
-      transitionSession = next.session;
-      refreshLease = this.#presentationLease();
-      const authoritative = await next.session.refreshSession();
-      if (!this.#isCurrentPresentationLease(refreshLease)) return;
-      if (change.editorContent !== undefined) {
-        if (!sameSessionLineage(change.session, authoritative)) {
-          throw new Error(
-            "restarted Rust process selected a different Session/node than the committed transition",
-          );
-        }
-        this.#editor.setText(editorText(change.editorContent));
-      }
-      this.#showTransient(
-        "info",
-        `active session: ${sessionLabel(authoritative)} · node ${authoritative.active_node}`,
-      );
-      const state = refreshLease.session.state;
-      if (state !== undefined) this.#renderState(state);
-    } catch (error) {
-      // A refresh continuation that lost its lease must not turn a newer
-      // attachment's UI into a failure surface. Failures before the new
-      // attachment is bound still belong to this accepted transition.
-      if (
-        (refreshLease !== undefined && !this.#isCurrentPresentationLease(refreshLease)) ||
-        this.#session !== transitionSession ||
-        this.#finished
-      ) {
-        return;
-      }
-      this.#editor.disableSubmit = true;
-      await this.#showTerminalFailureAndFinish(
-        `session switch failed: ${compactDiagnostic(error)}`,
-        1,
-      );
-    } finally {
-      this.#restarting = false;
-      if (!this.#finished) {
-        this.#editor.disableSubmit = this.#quitting;
-      }
-    }
-  }
-
-  /**
-   * Replaces an attachment after Rust reports its terminal Session state.
-   * The restarted process reads the catalog again; this method deliberately
-   * does not infer a destination Session from the failed command.
-   */
-  async #applyReplacementRequired(
-    message: string,
-    lease: PresentationLease,
-  ): Promise<void> {
-    if (!this.#isCurrentPresentationLease(lease) || this.#restarting) return;
-    this.#invalidatePresentation();
-    const restart = this.#restartRuntime;
-    this.#restarting = true;
-    this.#editor.disableSubmit = true;
-    this.#showTransient(
-      "error",
-      `the active Session attachment must be replaced: ${compactDiagnostic(message)}`,
-    );
-    if (restart === undefined) {
-      await this.#showTerminalFailureAndFinish(
-        `the active Session attachment must be replaced: ${compactDiagnostic(message)}`,
-        1,
-      );
-      this.#restarting = false;
-      return;
-    }
-
-    const oldSession = this.#session;
-    const oldConnection = this.#connection;
-    const oldChild = this.#child;
-    let transitionSession = oldSession;
-    let refreshLease: PresentationLease | undefined;
-    try {
-      await this.#detachOldAttachment(oldSession, oldConnection);
-      oldChild.closeStdin();
-      await oldChild.waitOrTerminate(this.#terminationGraceMs);
-
-      const next = await restart(oldSession.sessionInfo);
-      this.#bindRuntime(next.session, next.connection, next.child);
-      transitionSession = next.session;
-      refreshLease = this.#presentationLease();
-      const authoritative = await next.session.refreshSession();
-      if (!this.#isCurrentPresentationLease(refreshLease)) return;
-      this.#showTransient(
-        "info",
-        `attached to authoritative Session ${sessionLabel(authoritative)} · node ${authoritative.active_node}`,
-      );
-      const state = refreshLease.session.state;
-      if (state !== undefined) this.#renderState(state);
-    } catch (error) {
-      if (
-        (refreshLease !== undefined && !this.#isCurrentPresentationLease(refreshLease)) ||
-        this.#session !== transitionSession ||
-        this.#finished
-      ) {
-        return;
-      }
-      this.#editor.disableSubmit = true;
-      await this.#showTerminalFailureAndFinish(
-        `Session attachment replacement failed: ${compactDiagnostic(error)}`,
-        1,
-      );
-    } finally {
-      this.#restarting = false;
-      if (!this.#finished) {
-        this.#editor.disableSubmit = this.#quitting;
-      }
-    }
-  }
-
-  async #detachOldAttachment(
-    session: RuntimeClientAttachment,
-    connection: RuntimeClientConnection,
-  ): Promise<void> {
-    try {
-      await session.detach();
-    } catch {
-      // The transport may already be closing. Closing it still releases the
-      // client-side attachment and never claims semantic cancellation.
-    }
-    connection.close();
   }
 
   /**
@@ -1580,11 +1313,6 @@ export class RustxTuiApp {
       sessionListGeneration: this.#deletion.generation,
       session: this.#session,
     };
-  }
-
-  /** Whether the current attachment is a read-only conversation inspection. */
-  #isInspection(): boolean {
-    return this.#readOnly || this.#navigationStack.length > 0;
   }
 
   #isCurrentPresentationLease(lease: PresentationLease): boolean {
@@ -1689,7 +1417,7 @@ export class RustxTuiApp {
         new Text(
           renderStartup(
             state,
-            this.#session.sessionInfo,
+            this.#sessionInfo,
             this.#tui.terminal.columns,
           ),
           1,
@@ -1794,9 +1522,7 @@ export class RustxTuiApp {
       }
     }
     const focused = this.#interactionFocus;
-    // A read-only inspection is never an answer surface: it may show that a
-    // child waits for human input, but the controls live only at the root.
-    if (this.#isInspection() || focused === undefined) {
+    if (focused === undefined) {
       if (this.#hitlOverlay !== undefined) this.#closeOverlay();
       return;
     }
@@ -1891,43 +1617,49 @@ export class RustxTuiApp {
   }
 
   #connectionLabel(): string {
-    const closed = this.#connection.closed;
+    const closed = this.#host.client.closed;
     return closed === undefined ? "connected" : `closed: ${closed.reason}`;
   }
 
   /** Builds the footer's current-conversation label from attachment identity. */
   #conversationContext(): ConversationContext | undefined {
-    const conversationId = this.#session.identity?.conversationId;
-    if (conversationId === undefined) return undefined;
-    return {
-      conversationId,
-      parentConversationId: this.#parentConversationId,
-      readOnly: this.#readOnly,
-    };
+    return { conversationId: this.#session.target.conversation_id };
   }
 
   #diagnostics(): DebugDiagnostics {
-    const stderr = this.#child.stderrTail();
-    const exit = this.#child.exited;
+    const stderr = this.#host.stderrTail();
+    const exit = this.#host.childExit;
+    const target = this.#session.target;
     return {
-      attachmentId: this.#session.identity?.attachmentId,
-      conversationId: this.#session.identity?.conversationId,
-      agentId: this.#session.identity?.agentId,
-      cursor: this.#session.state?.cursor,
+      connection: this.#host.describe(),
+      // Ownership is established by who spawned the process, never inferred
+      // from the endpoint, the Session, or the transport.
+      ownership:
+        this.#host.ownership === "owned_child"
+          ? "this client owns the App Server process and ends it on exit"
+          : "an external owner runs the App Server; exiting only disconnects",
+      sessionId: target.session_id,
+      attachmentId: target.attachment_id,
+      conversationId: target.conversation_id,
+      runtimeIncarnation: target.runtime_incarnation,
+      cursor: this.#session.state.cursor,
+      attachedSessions: this.#host.attached.length,
       connectionState: this.#connectionLabel(),
       childStatus:
-        exit === undefined
-          ? `running (pid ${this.#child.pid ?? "unknown"})`
-          : `exited (code ${exit.code ?? "none"}, signal ${exit.signal ?? "none"})`,
+        this.#host.ownership === "external"
+          ? "not applicable (external App Server)"
+          : exit === undefined
+            ? "running"
+            : `exited (code ${exit.code ?? "none"}, signal ${exit.signal ?? "none"})`,
       stderrTail: stderr.text,
       stderrTruncatedBytes: stderr.truncatedBytes,
-      pendingRequests: this.#connection.pendingCount,
+      pendingRequests: this.#host.client.pendingCount,
       resyncCount: this.#session.resyncCount,
     };
   }
 
   #finish(code: number): void {
-    this.#deletion.terminate();
+    this.#deletion?.terminate();
     if (this.#finished) {
       return;
     }
@@ -1947,7 +1679,7 @@ export class RustxTuiApp {
   }
 }
 
-function editorText(content: SessionSwitch["editorContent"]): string {
+function editorText(content: UserContentBlock[] | undefined): string {
   const nonText = (content ?? []).find((block) => block.type !== "text");
   if (nonText !== undefined) {
     throw new Error(
@@ -1955,7 +1687,7 @@ function editorText(content: SessionSwitch["editorContent"]): string {
     );
   }
   return (content ?? [])
-    .map((block) => block.text)
+    .map((block) => (block.type === "text" ? block.text : ""))
     .join("\n");
 }
 

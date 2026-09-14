@@ -44,7 +44,7 @@ import {
   toolResult,
 } from "./support/fixtures.ts";
 import { stateOf } from "./support/render.ts";
-import type { InteractionRef } from "../src/protocol/types.ts";
+import type { InteractionRef } from "../src/protocol/app-server.ts";
 
 const COLLIDING = "same";
 const INTERACTION: InteractionRef = {
@@ -250,7 +250,9 @@ describe("/expand addresses one domain at a time", () => {
   // The parser is the unit under test; the dispatcher only needs a state to
   // consider itself attached. No command below reaches the runtime.
   const dispatcher = new CommandDispatcher({
+    host: {} as never,
     session: { state: stateOf() } as never,
+    sessionSettings: { cwd: "/ws" },
     diagnostics: () => ({}) as never,
   });
 
