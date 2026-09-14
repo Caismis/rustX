@@ -554,7 +554,9 @@ check-then-unload window exists.
 SIGTERM or SIGINT is the normal shutdown request for both externally managed
 WebSocket servers and owned stdio children. The first request commits
 `Accepting -> Draining` at AppServerHost's admission mutex, shared by semantic
-request, connection and attachment capacity admission. The manager has no server
+request, connection and attachment capacity admission. Runtime-targeted request
+admission also captures the manager operation lease before releasing the host
+boundary, so drain cannot reject a previously accepted request in that gap. The manager has no server
 lifecycle: already accepted host requests may still claim runtime operations or
 loads. Host drain immediately supervises the current residency set while waiting
 for those request owners, then drains a final inventory to cover late admitted

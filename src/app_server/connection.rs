@@ -301,7 +301,6 @@ impl AppServerConnection {
                 snapshot: self.host.diagnostics(),
             });
         }
-        let request_owner = self.host.admit_request().map_err(host_error)?;
         if let Some(target) = runtime_target(&method) {
             let route = self.route(target)?;
             let client = route.client.clone();
@@ -316,28 +315,37 @@ impl AppServerConnection {
                 {
                     return Err(domain(ErrorData::StaleAttachment));
                 }
-                // Close cannot revoke authority after operation admission. The
-                // captured native owner lives only inside the manager-owned task.
-                client
-                    .start_operation(move || {
-                        let authority = route.attachment.operation_authority();
-                        async move {
-                            let _request = request_owner;
-                            dispatch_runtime(
-                                method,
-                                route,
-                                authority.map_err(client_error)?,
-                                changed,
-                            )
-                            .await
-                        }
+                // Route close -> host drain -> residency claim: host drain
+                // cannot interpose after request admission but before its native
+                // operation lease. Only capture authority here; execution is
+                // owned by the manager task outside these admission locks.
+                self.host
+                    .admit_request(|request_owner| {
+                        client.start_operation(move || {
+                            let authority = route.attachment.operation_authority();
+                            async move {
+                                let _request = request_owner;
+                                dispatch_runtime(
+                                    method,
+                                    route,
+                                    authority.map_err(client_error)?,
+                                    changed,
+                                )
+                                .await
+                            }
+                        })
                     })
+                    .map_err(host_error)?
                     .map_err(manager_error)?
             };
             return receiver
                 .await
                 .map_err(|_| domain(ErrorData::OperationFailed))?;
         }
+        let request_owner = self
+            .host
+            .admit_request(std::convert::identity)
+            .map_err(host_error)?;
         match method {
             Method::Initialize(_) | Method::ServerDiagnostics {} => unreachable!(),
             Method::SessionDetach { target } => {

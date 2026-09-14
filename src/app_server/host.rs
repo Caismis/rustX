@@ -99,7 +99,12 @@ impl AppServerHost {
         &self.0.policy
     }
 
-    pub(crate) fn admit_request(&self) -> Result<ServerOperation, HostAdmissionError> {
+    /// Commit request ownership and its synchronous downstream admission under
+    /// the same boundary as host drain. Never await or execute work here.
+    pub(crate) fn admit_request<T>(
+        &self,
+        commit: impl FnOnce(ServerOperation) -> T,
+    ) -> Result<T, HostAdmissionError> {
         let mut state = self.0.state.lock().expect("host mutex");
         state.accepting()?;
         if *self.0.requests.borrow()
@@ -109,7 +114,7 @@ impl AppServerHost {
             return Err(HostAdmissionError::RequestCapacity);
         }
         self.0.requests.send_modify(|n| *n += 1);
-        Ok(ServerOperation(self.0.requests.clone()))
+        Ok(commit(ServerOperation(self.0.requests.clone())))
     }
     pub(crate) fn admit_attachment(&self) -> Result<AttachmentPermit, HostAdmissionError> {
         let mut state = self.0.state.lock().expect("host mutex");
@@ -151,6 +156,11 @@ impl AppServerHost {
     }
     pub(crate) fn server_draining(&self) -> bool {
         self.0.state.lock().expect("host mutex").lifecycle != ServerLifecycle::Accepting
+    }
+
+    #[cfg(test)]
+    pub(crate) fn admission_boundary_is_held(&self) -> bool {
+        self.0.state.try_lock().is_err()
     }
 
     /// The single host commit shared by requests, attachments, and connections.

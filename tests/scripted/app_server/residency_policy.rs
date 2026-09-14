@@ -135,10 +135,10 @@ async fn operation_wins_idle_and_drain_retains_owned_lease_after_waiter_drop() {
         ResidencyState::Loaded
     );
     let b = f.load(1).await.unwrap().unwrap();
-    let accepted = f.host.admit_request().unwrap();
+    let accepted = f.host.admit_request(std::convert::identity).unwrap();
     f.host.begin_drain();
     assert!(matches!(
-        f.host.admit_request(),
+        f.host.admit_request(std::convert::identity),
         Err(HostAdmissionError::ServerDraining)
     ));
     let host = f.host.clone();
@@ -633,13 +633,13 @@ async fn goal_rearm_and_idle_claim_have_both_winner_orders() {
 async fn host_admission_commit_accounts_for_requests_connections_and_attachments() {
     bounded(async {
         let f = Fixture::new().await;
-        let request = f.host.admit_request().unwrap();
+        let request = f.host.admit_request(std::convert::identity).unwrap();
         let connection = f.host.admit_connection(true).unwrap();
         let attachment = f.host.admit_attachment().unwrap();
         f.host.begin_drain();
         f.host.begin_drain();
         assert!(matches!(
-            f.host.admit_request(),
+            f.host.admit_request(std::convert::identity),
             Err(HostAdmissionError::ServerDraining)
         ));
         assert!(matches!(
@@ -681,4 +681,62 @@ async fn host_admission_commit_accounts_for_requests_connections_and_attachments
 fn residency_owner_does_not_depend_on_app_server() {
     let source = include_str!("../../../src/local_runtime/session_runtime_manager.rs");
     assert!(!source.contains("crate::app_server"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn host_request_and_runtime_lease_commit_before_drain_as_one_admission() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let a = f.load(0).await.unwrap().unwrap();
+        let probe = f.manager.probe(a.conversation_id());
+        probe.before_operation.arm();
+        let gap = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let parked = gap.arm_scoped();
+        let host = f.host.clone();
+        let gate = gap.clone();
+        let client = a.client();
+        let admission = tokio::task::spawn_blocking(move || {
+            host.admit_request(|owner| {
+                // The actual synchronous callback used by protocol dispatch:
+                // host request counted, runtime operation not admitted yet.
+                gate.enter();
+                client.start_operation(move || async move {
+                    let _owner = owner;
+                    291
+                })
+            })
+            .unwrap()
+            .unwrap()
+        });
+        gate_entered(&gap).await;
+        assert!(
+            f.host.admission_boundary_is_held(),
+            "drain cannot commit in the former admission gap"
+        );
+        let host = f.host.clone();
+        let draining = tokio::spawn(async move { host.drain().await });
+        drop(parked);
+        let response = admission.await.unwrap();
+        probe.before_operation.entered().await;
+        probe
+            .draining_operations
+            .subscribe()
+            .wait_for(|draining| *draining)
+            .await
+            .unwrap();
+        assert!(!draining.is_finished());
+        let called = std::sync::atomic::AtomicBool::new(false);
+        assert!(matches!(
+            f.host
+                .admit_request(|_| called.store(true, Ordering::SeqCst)),
+            Err(HostAdmissionError::ServerDraining)
+        ));
+        assert!(!called.load(Ordering::SeqCst));
+        probe.before_operation.release();
+        assert_eq!(response.await.unwrap(), 291);
+        assert!(draining.await.unwrap().is_empty());
+        f.host.finish_drain().unwrap();
+        f.close().await;
+    })
+    .await;
 }
