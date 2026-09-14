@@ -129,7 +129,7 @@ export class FakeTransport extends BaseTransport {
   }
 
   /** Delivers one protocol message to the client. */
-  override deliver(record: object): void {
+  override deliver(record: unknown): void {
     super.deliver(record);
   }
 

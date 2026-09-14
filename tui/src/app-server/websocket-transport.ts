@@ -238,15 +238,6 @@ export class WebSocketTransport extends BaseTransport {
       );
       return;
     }
-    if (typeof record !== "object" || record === null) {
-      this.terminate(
-        new TransportClosedError(
-          "protocol_error",
-          "a protocol message is not a JSON object",
-        ),
-      );
-      return;
-    }
     this.deliver(record);
   }
 }

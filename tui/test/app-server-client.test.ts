@@ -19,7 +19,8 @@ import {
   APP_SERVER_PROTOCOL_VERSION,
   AppServerClient,
   AppServerRequestError,
-  SIDE_EFFECTING_METHODS,
+  METHOD_RESPONSE_LOSS_CLASS,
+  type ResponseLossClass,
   UncertainOutcomeError,
   isResyncRequired,
   isStaleAttachment,
@@ -30,6 +31,7 @@ import { AppServerSession } from "../src/app-server/session.ts";
 import type {
   AttachmentTarget,
   MethodResult,
+  MethodName,
   RpcError,
 } from "../src/protocol/app-server.ts";
 import {
@@ -266,36 +268,6 @@ describe("uncertain mutations", () => {
     // The whole point: exactly one `turn/start` was ever written.
     await tick();
     assert.equal(transport.log.count("turn/start"), 1);
-  });
-
-  it("covers every mutating method in the vocabulary", () => {
-    // A method that can change server state and is missing here would settle
-    // as a plain failure, and a caller could reasonably resend it.
-    for (const method of [
-      "turn/start",
-      "turn/steer",
-      "turn/cancel",
-      "interaction/respond",
-      "interaction/cancel",
-      "session/create",
-      "session/delete",
-      "session/name",
-      "session/fork",
-      "session/branch",
-      "session/unload",
-      "settings/replace",
-      "settings/setModel",
-      "settings/setApprovalMode",
-    ] as const) {
-      assert.ok(
-        SIDE_EFFECTING_METHODS.has(method),
-        `${method} must settle as an unknown outcome`,
-      );
-    }
-    // Pure reads are deliberately absent: reissuing one changes nothing.
-    for (const method of ["session/list", "session/read", "session/snapshot"] as const) {
-      assert.ok(!SIDE_EFFECTING_METHODS.has(method));
-    }
   });
 });
 
@@ -631,3 +603,93 @@ it("server closure fences pending snapshots and all later observations", async (
   assert.equal(session.state.cursor, "5");
   assert.equal(session.state.runtimeShutdown, false);
 });
+
+describe("generated-contract ingress", () => {
+  const event = () => notification("session/event", {
+    target: target(), cursor: runtimeCursor(6), event: { type: "runtime_shutdown" },
+  });
+  const malformed: [string, unknown][] = [
+    ["unknown notification", { jsonrpc: "2.0", method: "session/unknown", params: {} }],
+    ["missing params", { jsonrpc: "2.0", method: "session/event" }],
+    ["malformed target", { ...event(), params: { ...event().params, target: { session_id: "a" } } }],
+    ["nested exact integer", { ...event(), params: { ...event().params, target: { ...target(), runtime_incarnation: "01" } } }],
+    ["nested event", { ...event(), params: { ...event().params, event: { type: "runtime_shutdown", unexpected: true } } }],
+    ["wrong jsonrpc", { ...event(), jsonrpc: "1.0" }],
+    ["missing jsonrpc", { method: "session/closed", params: { target: target() } }],
+    ["invalid id", { jsonrpc: "2.0", id: true, result: { type: "detached" } }],
+    ["fractional id", { jsonrpc: "2.0", id: 1.5, result: { type: "detached" } }],
+    ["unsafe id", { jsonrpc: "2.0", id: Number.MAX_SAFE_INTEGER + 1, result: { type: "detached" } }],
+    ["exclusive response fields", { jsonrpc: "2.0", id: 2, result: { type: "detached" }, error: { code: -1, message: "failure" } }],
+    ["missing response body", { jsonrpc: "2.0", id: 2 }],
+    ["malformed correlated mutation result", { jsonrpc: "2.0", id: 3, result: { type: "cancellation_accepted" } }],
+    ["wrong correlated mutation result tag", { jsonrpc: "2.0", id: 3, result: { type: "detached" } }],
+    ["invalid result DTO", { jsonrpc: "2.0", id: 2, result: { type: "sessions", sessions: "invalid" } }],
+    ["nested result bounds", { jsonrpc: "2.0", id: 2, result: { type: "snapshot", cursor: runtimeCursor(6), snapshot: snapshot({ context: { compaction_in_progress: false, compaction_count: -1 } }) } }],
+    ["no nested boolean coercion", { jsonrpc: "2.0", id: 2, result: { type: "server_info", capabilities: { ...CAPABILITIES, multi_session: "true" } } }],
+    ["invalid RPC error", { jsonrpc: "2.0", id: 2, error: { code: "bad", message: null } }],
+    ["invalid nested RPC error", { jsonrpc: "2.0", id: 2, error: { code: -1, message: "failure", data: { kind: "stale_settings", expected: "not-a-revision", actual: "1" } } }],
+    ["unexpected request", { jsonrpc: "2.0", id: 2, method: "server/info", params: {} }],
+    ["null", null], ["array", []], ["primitive", 1],
+  ];
+  for (const [name, record] of malformed) {
+    it(`rejects ${name} without delivery or listener exceptions and settles pending requests once`, async () => {
+      const { client, transport } = await initialized();
+      let deliveries = 0;
+      let closes = 0;
+      let reads = 0;
+      let mutations = 0;
+      client.onNotification(() => { deliveries += 1; });
+      client.onClose(() => { closes += 1; assert.equal(client.closed?.reason, "protocol_error"); });
+      const read = client.call("session/list", { query: null, offset: 0, limit: 1 }, "sessions")
+        .then(() => assert.fail("invalid response accepted"), (error: unknown) => { reads += 1; return error; });
+      const mutation = client.call("turn/cancel", { target: target() }, "cancellation_accepted")
+        .then(() => assert.fail("mutation falsely completed"), (error: unknown) => { mutations += 1; return error; });
+      await transport.log.awaitRequests(3);
+      assert.doesNotThrow(() => transport.deliver(record));
+      assert.equal(client.closed?.reason, "protocol_error");
+      assert.equal(client.pendingCount, 0);
+      assert.equal(transport.disposed, true);
+      transport.deliver(event());
+      transport.fail("socket_error");
+      const [readError, mutationError] = await Promise.all([read, mutation]);
+      assert.equal(readError, client.closed);
+      assert.ok(mutationError instanceof UncertainOutcomeError);
+      assert.equal(mutationError.transportFailure, client.closed);
+      assert.deepEqual([deliveries, closes, reads, mutations], [0, 1, 1, 1]);
+      assert.equal(transport.log.count("turn/cancel"), 1);
+    });
+  }
+
+  it("delivers a validated notification unchanged to semantic listeners", async () => {
+    const { client, transport } = await initialized();
+    const message = event();
+    let observed: unknown;
+    client.onNotification((value) => { observed = value; });
+    transport.deliver(message);
+    assert.equal(observed, message);
+    assert.equal(client.closed, undefined);
+  });
+
+  it("does not relabel a valid semantic listener bug as wire corruption", async () => {
+    const { client, transport } = await initialized();
+    const bug = new Error("semantic bug");
+    client.onNotification(() => { throw bug; });
+    assert.throws(() => transport.deliver(event()), (error) => error === bug);
+    assert.equal(client.closed, undefined);
+  });
+
+  it("losing initialize fails the connection without an uncertain product mutation", async () => {
+    const transport = new FakeTransport();
+    const pending = AppServerClient.initialize({ transport });
+    await transport.log.awaitMethod("initialize");
+    transport.fail("input_eof");
+    await assert.rejects(pending, TransportClosedError);
+    assert.equal(transport.log.count("initialize"), 1);
+    assert.equal(METHOD_RESPONSE_LOSS_CLASS.initialize, "connection_local");
+  });
+});
+
+// Compile-time regression: extending the vocabulary cannot inherit a default.
+// @ts-expect-error A future method requires its own response-loss decision.
+const futurePolicy: Record<MethodName | "future/mutation", ResponseLossClass> = METHOD_RESPONSE_LOSS_CLASS;
+void futurePolicy;

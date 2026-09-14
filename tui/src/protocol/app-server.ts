@@ -452,17 +452,17 @@ export const SUBAGENT_TERMINAL_STATES: ReadonlySet<SubagentState> =
 // ---------------------------------------------------------------------------
 // Record classification
 //
-// One decoded JSON value is a response, a notification, or a protocol
-// violation. Classification is structural and total; it never guesses.
+// These classifiers accept only DTOs already validated by decoder.ts. They
+// narrow the generated union; they do not establish trust in arbitrary JSON.
 // ---------------------------------------------------------------------------
 
-/** Whether a decoded record is a JSON-RPC response carrying a correlation id. */
-export function isResponse(record: object): record is Response {
-  return "id" in record && ("result" in record || "error" in record);
+/** Whether a validated record is a JSON-RPC response. */
+export function isResponse(record: ProtocolMessage): record is Response {
+  return "result" in record || "error" in record;
 }
 
 /** Whether a decoded record is a server notification. */
-export function isNotification(record: object): record is Notification {
+export function isNotification(record: ProtocolMessage): record is Notification {
   return !("id" in record) && "method" in record;
 }
 

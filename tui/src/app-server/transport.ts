@@ -11,7 +11,7 @@
  *   TUI-owned child      externally managed server
  * ```
  *
- * A transport delivers **complete App Server protocol messages** and the
+ * A transport delivers **complete, untrusted decoded JSON values** and the
  * lifetime of the physical connection. That is all it is allowed to know. It
  * does not know what a Session is, what a Turn is, which requests are
  * side-effecting, how a response correlates to a request, or what any of it
@@ -54,8 +54,8 @@ export class TransportClosedError extends Error {
   }
 }
 
-/** A decoded protocol message, before the client classifies it. */
-export type TransportRecord = object;
+/** Parsed JSON only: never a trusted App Server DTO until protocol decoding. */
+export type TransportRecord = unknown;
 
 export interface AppServerTransport {
   /** The terminal failure, once the transport has one. */

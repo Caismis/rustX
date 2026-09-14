@@ -505,7 +505,9 @@ describe("existing/remote mode: WebSocket to an externally managed App Server", 
         await transport.send(message);
       },
       onMessage: (listener) => transport.onMessage((message) => {
-        if (loseResponse && "result" in message && (message.result as { type: string }).type === "session") {
+        const result = typeof message === "object" && message !== null && "result" in message
+          ? message.result : undefined;
+        if (loseResponse && typeof result === "object" && result !== null && "type" in result && result.type === "session") {
           transport.close(); // The server committed the rename; drop its response.
           return;
         }

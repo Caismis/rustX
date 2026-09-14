@@ -81,8 +81,20 @@ A Rust DTO change regenerates the TypeScript and fails `pnpm typecheck` at every
 use site.
 
 Transport differences end below the typed client. `StdioTransport` and
-`WebSocketTransport` deliver complete protocol messages and connection lifetime;
+`WebSocketTransport` deliver untrusted parsed JSON and connection lifetime;
 neither knows what a Session, a Turn, an approval or a retry is.
+
+Transport framing and JSON parsing produce untrusted values. Before correlation
+or notification delivery, the single App Server client validates each value
+against the Rust-generated `v1.schema.json`, compiled once by its protocol
+decoder. Invalid envelopes or nested DTOs terminate the connection as
+`protocol_error`; no partial message reaches host, Session, or UI code.
+
+A total `Record<MethodName, ResponseLossClass>` policy classifies every generated
+method. Reads fail with the connection; side-effecting requests have unknown
+outcomes and are never replayed. Initialize and subscription changes are
+connection-local and must be established anew after reconnecting. New protocol
+methods cannot compile until their response-loss semantics are classified.
 
 ## Session switching is focus
 

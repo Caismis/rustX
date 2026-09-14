@@ -144,15 +144,6 @@ export class StdioTransport extends BaseTransport {
       return;
     }
     for (const record of records) {
-      if (typeof record !== "object" || record === null) {
-        this.terminate(
-          new TransportClosedError(
-            "protocol_error",
-            "a protocol record is not a JSON object",
-          ),
-        );
-        return;
-      }
       this.deliver(record);
       if (this.closed !== undefined) {
         return;

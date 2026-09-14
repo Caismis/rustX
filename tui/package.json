@@ -18,7 +18,9 @@
     "start": "node src/main.ts"
   },
   "dependencies": {
-    "@earendil-works/pi-tui": "0.82.1"
+    "@earendil-works/pi-tui": "0.82.1",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1"
   },
   "devDependencies": {
     "@types/node": "22.19.2",

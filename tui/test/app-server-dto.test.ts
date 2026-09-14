@@ -7,15 +7,14 @@
  * what Rust actually serializes" rather than "two transcriptions of the
  * protocol agree with each other".
  *
- * The type-level half matters just as much: the fixture set is annotated as
- * `ProtocolMessage[]` from the generated module, so a Rust DTO change that
- * regenerates a different shape fails `pnpm typecheck` here before any
- * assertion runs.
+ * Runtime decoding uses the same generated schema as the TypeScript DTOs.
  */
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
+
+import { decodeProtocolMessage } from "../src/protocol/decoder.ts";
 
 import {
   compareExact,
@@ -24,8 +23,6 @@ import {
   isNotification,
   isResponse,
   isSuccess,
-  type ProtocolMessage,
-  type Response,
 } from "../src/protocol/app-server.ts";
 
 const FIXTURE_URL = new URL(
@@ -33,13 +30,17 @@ const FIXTURE_URL = new URL(
   import.meta.url,
 );
 const encoded = readFileSync(FIXTURE_URL, "utf8");
-const fixtures = JSON.parse(encoded) as ProtocolMessage[];
+const fixtures = (JSON.parse(encoded) as unknown[]).map((record) => {
+  const decoded = decodeProtocolMessage(record);
+  assert.ok(decoded, "every Rust fixture satisfies the generated runtime contract");
+  return decoded;
+});
 
 describe("Rust-produced App Server fixtures", () => {
   it("classifies every message as a request, a response, or a notification", () => {
     assert.ok(fixtures.length > 0, "the generated fixture set is not empty");
     for (const message of fixtures) {
-      const record = message as object;
+      const record = message;
       const request = "method" in record && "id" in record;
       assert.ok(
         request || isResponse(record) || isNotification(record),
@@ -52,11 +53,9 @@ describe("Rust-produced App Server fixtures", () => {
   });
 
   it("separates a correlated result from a correlated failure", () => {
-    const responses = fixtures
-      .map((message) => message as object)
-      .filter((record) => !("method" in record) && isResponse(record));
+    const responses = fixtures.filter(isResponse);
     assert.ok(responses.length > 0);
-    for (const response of responses as Response[]) {
+    for (const response of responses) {
       assert.notEqual(
         isFailure(response),
         isSuccess(response),

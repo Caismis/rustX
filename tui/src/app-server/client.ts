@@ -42,6 +42,8 @@
  * never to resend.
  */
 
+import { decodeProtocolMessage } from "../protocol/decoder.ts";
+
 import {
   describeRpcError,
   isFailure,
@@ -52,6 +54,7 @@ import {
   type ClientIdentity,
   type MethodName,
   type MethodParams,
+  type MethodResult,
   type Notification,
   type PresentationCapabilities,
   type RequestId,
@@ -129,44 +132,59 @@ export class UncertainOutcomeError extends Error {
   }
 }
 
-/**
- * The methods whose outcome is unknown when their response is lost.
- *
- * Every method that can change server state is listed. A read whose response is
- * lost can simply be issued again after reconnecting — nothing happened — so
- * reads are deliberately absent, and the default for an unlisted method is the
- * safe one only because the list is exhaustive over the mutating vocabulary.
- */
-export const SIDE_EFFECTING_METHODS: ReadonlySet<MethodName> = new Set<MethodName>([
-  "session/create",
-  "session/name",
-  "session/fork",
-  "session/branch",
-  "session/delete",
-  "session/recoverDeletion",
-  "session/attach",
-  "session/detach",
-  "session/unload",
-  "turn/start",
-  "turn/steer",
-  "turn/cancel",
-  "interaction/respond",
-  "interaction/cancel",
-  "settings/replace",
-  "settings/setModel",
-  "settings/setApprovalMode",
-  "settings/saveDefault",
-  "resources/reload",
-  "context/compact",
-  "goal/control",
-  "background/cancel",
-  "subagent/cancel",
-  "subagent/disposeWorkspace",
-]);
+/** Every generated method must deliberately classify a lost response. */
+export type ResponseLossClass = "read" | "side_effecting" | "connection_local";
+export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
+  "settings/defaults": "read",
+  "settings/saveDefault": "side_effecting",
+  "session/unload": "side_effecting",
+  "session/transcript": "read",
+  "settings/model": "read",
+  "settings/models": "read",
+  "settings/setModel": "side_effecting",
+  "settings/setApprovalMode": "side_effecting",
+  "resources/read": "read",
+  "context/compact": "side_effecting",
+  "goal/control": "side_effecting",
+  "background/status": "read",
+  "background/cancel": "side_effecting",
+  "subagent/status": "read",
+  "subagent/cancel": "side_effecting",
+  "subagent/disposeWorkspace": "side_effecting",
+  // Negotiation and subscriptions die with this connection; neither changes
+  // authoritative product/runtime state. Re-establish them after reconnect.
+  "initialize": "connection_local",
+  "server/info": "read",
+  "server/diagnostics": "read",
+  "session/list": "read",
+  "session/create": "side_effecting",
+  "session/read": "read",
+  "session/name": "side_effecting",
+  "session/tree": "read",
+  "session/boundaries": "read",
+  "session/fork": "side_effecting",
+  "session/branch": "side_effecting",
+  "session/deletePreview": "read",
+  "session/delete": "side_effecting",
+  "session/recoverDeletion": "side_effecting",
+  "session/attach": "side_effecting",
+  "session/detach": "side_effecting",
+  "session/snapshot": "read",
+  "session/subscribe": "connection_local",
+  "turn/start": "side_effecting",
+  "turn/steer": "side_effecting",
+  "turn/cancel": "side_effecting",
+  "interaction/respond": "side_effecting",
+  "interaction/cancel": "side_effecting",
+  "settings/read": "read",
+  "settings/replace": "side_effecting",
+  "resources/reload": "side_effecting",
+} satisfies Record<MethodName, ResponseLossClass>);
 
 interface PendingRequest {
   readonly method: MethodName;
-  resolve: (result: unknown) => void;
+  readonly expect: ResultType;
+  resolve: (result: MethodResult) => void;
   reject: (error: Error) => void;
 }
 
@@ -251,13 +269,7 @@ export class AppServerClient {
     params: MethodParams<M>,
     expect: T,
   ): Promise<ResultOf<T>> {
-    const result = await this.#request(method, params);
-    const typed = result as { type?: unknown };
-    if (typed.type !== expect) {
-      throw new Error(
-        `${method} returned ${String(typed.type)} instead of ${expect}`,
-      );
-    }
+    const result = await this.#request(method, params, expect);
     return result as ResultOf<T>;
   }
 
@@ -287,7 +299,7 @@ export class AppServerClient {
     return this.#transport.close();
   }
 
-  #request(method: MethodName, params: unknown): Promise<unknown> {
+  #request(method: MethodName, params: unknown, expect: ResultType): Promise<MethodResult> {
     if (this.#closed !== undefined) {
       // After termination a new request fails immediately rather than waiting
       // for a peer that will never answer. Nothing was sent, so nothing is
@@ -298,8 +310,8 @@ export class AppServerClient {
     const id = this.#nextRequestId;
     this.#nextRequestId += 1;
 
-    return new Promise<unknown>((resolve, reject) => {
-      this.#pending.set(id, { method, resolve, reject });
+    return new Promise<MethodResult>((resolve, reject) => {
+      this.#pending.set(id, { method, expect, resolve, reject });
       void this.#transport
         .send({ jsonrpc: "2.0", id, method, params })
         .catch(() => {
@@ -309,8 +321,14 @@ export class AppServerClient {
     });
   }
 
-  #dispatch(record: TransportRecord): void {
+  #dispatch(untrusted: TransportRecord): void {
     if (this.#closed !== undefined) {
+      return;
+    }
+
+    const record = decodeProtocolMessage(untrusted);
+    if (record === undefined) {
+      this.#fail("invalid App Server v1 protocol message");
       return;
     }
 
@@ -345,6 +363,10 @@ export class AppServerClient {
       this.#fail(`the App Server answered unknown request id ${String(record.id)}`);
       return;
     }
+    if (!isFailure(record) && record.result.type !== pending.expect) {
+      this.#fail(`${pending.method} returned ${record.result.type} instead of ${pending.expect}`);
+      return;
+    }
     this.#pending.delete(record.id);
 
     if (isFailure(record)) {
@@ -375,7 +397,7 @@ export class AppServerClient {
     this.#pending.clear();
     for (const request of pending) {
       request.reject(
-        SIDE_EFFECTING_METHODS.has(request.method)
+        METHOD_RESPONSE_LOSS_CLASS[request.method] === "side_effecting"
           ? new UncertainOutcomeError(request.method, error)
           : error,
       );
