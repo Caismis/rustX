@@ -62,12 +62,24 @@ function appFor(t: TestContext, host: AppServerHost, focus: StartupFocus, reconn
   t.mock.method(Editor.prototype, "setAutocompleteProvider", function(this: Editor, provider: Parameters<Editor["setAutocompleteProvider"]>[0]) {
     editor = this; return autocomplete.call(this, provider);
   });
+  let input!: Parameters<TUI["addInputListener"]>[0];
+  const addInput = TUI.prototype.addInputListener;
+  t.mock.method(TUI.prototype, "addInputListener", function(this: TUI, listener: typeof input) {
+    input = listener; return addInput.call(this, listener);
+  });
+  const hidden: ResumeSelector[] = [];
   const surfaces: ResumeSelector[] = [];
   const feedback: string[] = [];
   const original = TUI.prototype.showOverlay;
   t.mock.method(TUI.prototype, "showOverlay", function(this: TUI, content: Parameters<TUI["showOverlay"]>[0], options: Parameters<TUI["showOverlay"]>[1]) {
-    if (content instanceof PopupFrame && content.content instanceof ResumeSelector) surfaces.push(content.content);
-    return original.call(this, content, options);
+    const handle = original.call(this, content, options);
+    if (content instanceof PopupFrame && content.content instanceof ResumeSelector) {
+      const surface = content.content;
+      surfaces.push(surface);
+      const hide = handle.hide;
+      t.mock.method(handle, "hide", () => { hidden.push(surface); hide(); });
+    }
+    return handle;
   });
   const replace = TransientFeedbackSurface.prototype.replace;
   t.mock.method(TransientFeedbackSurface.prototype, "replace", function(this: TransientFeedbackSurface, value: Parameters<TransientFeedbackSurface["replace"]>[0]) {
@@ -76,7 +88,7 @@ function appFor(t: TestContext, host: AppServerHost, focus: StartupFocus, reconn
   const app = new RustxTuiApp({ host, ...focus, reconnect, sessionSettings: parsedResume().sessionSettings });
   const running = app.run();
   t.after(async () => { await app.quit(); await running; });
-  return { app, surfaces, feedback, editor };
+  return { app, surfaces, hidden, feedback, editor, input: (data: string) => input(data) };
 }
 
 it("remote missing cwd fails at argument parsing before token reading or connection", () => {
@@ -280,33 +292,63 @@ it("unfocused reconnect to empty catalog initializes and reads before explicit c
   assert.equal(reconnects, 1, "creation does not replace the host");
 });
 
-for (const stage of ["create", "attach"] as const) {
-  it(`${stage} failure leaves the empty picker recoverable without rollback or retry`, async (t) => {
-    const { host, transport } = await connected();
-    const h = appFor(t, host, { resumePage: { sessions: [] } });
-    const selector = h.surfaces[0]!;
-    selector.handleInput("\r");
-    const [create] = await transport.log.awaitMethod("session/create");
-    let failed = create!;
-    if (stage === "attach") {
-      transport.respond(create!.id, { type: "session_transition", session: sessionView({ id: "created" }) });
-      [failed] = await transport.log.awaitMethod("session/attach") as [typeof failed];
-    }
-    transport.respondError(failed.id, { code: -32000, message: `${stage} rejected`, data: { kind: "operation_failed" } });
-    await tick();
-    assert.match(h.feedback.at(-1)!, new RegExp(`${stage} rejected`));
-    assert.match(selector.render(80).join(), /New Session/);
-    assert.equal(host.attached.length, 0);
-    assert.equal(h.editor.disableSubmit, true);
-    assert.equal(transport.log.count("session/create"), 1);
-    assert.equal(transport.log.count("session/attach"), stage === "attach" ? 1 : 0);
-    assert.equal(transport.log.count("session/delete"), 0);
-    selector.handleInput("\x1b");
-    // Escape is available so the user can reopen and reconcile the catalog.
-    selector.handleInput("\r");
-    assert.equal(transport.log.count("session/create"), 1);
-  });
-}
+it("create failure retains the authoritative empty picker without attach or retry", async (t) => {
+  const { host, transport } = await connected();
+  const h = appFor(t, host, { resumePage: { sessions: [] } });
+  const selector = h.surfaces[0]!;
+  selector.handleInput("\r");
+  const [create] = await transport.log.awaitMethod("session/create");
+  transport.respondError(create!.id, { code: -32000, message: "create rejected", data: { kind: "operation_failed" } });
+  await tick();
+  assert.match(h.feedback.at(-1)!, /create rejected/);
+  assert.match(selector.render(80).join(), /New Session/);
+  assert.deepEqual(h.hidden, []);
+  assert.equal(host.attached.length, 0);
+  assert.equal(h.editor.disableSubmit, true);
+  assert.equal(transport.log.count("session/create"), 1);
+  assert.equal(transport.log.count("session/attach"), 0);
+  assert.equal(transport.log.count("session/delete"), 0);
+});
+
+it("committed create retires empty authority before failed attach; reopening reads the durable Session", async (t) => {
+  const { host, transport } = await connected();
+  const h = appFor(t, host, { resumePage: { sessions: [] } });
+  const stale = h.surfaces[0]!;
+  stale.handleInput("\r");
+  const [create] = await transport.log.awaitMethod("session/create");
+  transport.respond(create!.id, { type: "session_transition", session: sessionView({ id: "created" }) });
+  const [attach] = await transport.log.awaitMethod("session/attach");
+  assert.deepEqual(h.hidden, [stale], "empty authority retires before attach settles");
+  transport.respondError(attach!.id, { code: -32000, message: "attach rejected", data: { kind: "operation_failed" } });
+  await tick();
+  assert.match(h.feedback.at(-1)!, /attach rejected/);
+  assert.equal(host.attached.length, 0);
+  assert.equal(h.editor.disableSubmit, true);
+  stale.handleInput("\r");
+  await stale.onCreate!();
+  assert.equal(transport.log.count("session/create"), 1, "retired picker cannot create again");
+  assert.equal(transport.log.count("session/attach"), 1);
+  assert.equal(transport.log.count("session/list"), 0, "no implicit reconciliation or mutation");
+  for (const method of ["session/delete", "session/unload", "session/detach", "turn/cancel"]) assert.equal(transport.log.count(method), 0);
+  assert.equal(transport.disposed, false, "same host is retained");
+
+  h.input("\r"); // Explicitly reopen resume through the unfocused input path.
+  const createdRow = { ...rows[0]!, id: "created" };
+  await catalog(transport, [createdRow]);
+  await tick();
+  const fresh = h.surfaces.at(-1)!;
+  assert.notEqual(fresh, stale);
+  assert.deepEqual(fresh.selector.visibleSessions(), [{ ...createdRow, residency: "Unloaded", activeRoot: false }]);
+  assert.doesNotMatch(fresh.render(80).join(), /No Sessions available|New Session/);
+  assert.equal(transport.log.count("session/create"), 1);
+  assert.equal(transport.log.count("session/attach"), 1, "catalog refresh does not retry attachment");
+  fresh.handleInput("\r");
+  await attachment(transport, "created", 2);
+  await finishFocus(transport);
+  assert.equal(transport.log.count("session/create"), 1);
+  assert.equal(h.editor.disableSubmit, false);
+  assert.deepEqual(host.attached.map((session) => session.sessionId), ["created"]);
+});
 
 for (const stage of ["create", "attach"] as const) {
   it(`lost empty-picker ${stage} response reconnects read-only without mutation replay`, async (t) => {

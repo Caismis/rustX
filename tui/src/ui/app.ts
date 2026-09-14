@@ -1152,6 +1152,9 @@ export class RustxTuiApp {
         if (!this.#isCurrentPresentationLease(lease) || this.#overlay !== handle || this.#switching) return;
         const outcome = await this.#dispatcher.newSession();
         if (!this.#isCurrentPresentationLease(lease)) return;
+        // A committed create invalidates the empty catalog even if attach fails.
+        // Retire its action now; reopening resume must read fresh authority.
+        if (outcome.kind === "focus_session") this.#closeOverlay();
         await this.#handleOutcome(outcome, lease);
       };
     }
