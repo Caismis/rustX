@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::connection::AppServerConnection;
 
+pub mod resources;
 pub mod stdio;
 pub mod websocket;
 
@@ -15,6 +16,10 @@ pub mod websocket;
 pub const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 /// Maximum queued outbound records (plus one being written).
 pub const OUTBOUND_MESSAGES: usize = 32;
+/// Explicit encoded-byte budget, excluding the single record being written.
+/// Every queued record is size-checked before insertion, so the message queue
+/// itself enforces both finite dimensions without a second permit system.
+pub const OUTBOUND_QUEUE_BYTES: usize = OUTBOUND_MESSAGES * MAX_MESSAGE_BYTES;
 /// Maximum concurrently polled semantic requests per physical connection.
 pub const IN_FLIGHT_REQUESTS: usize = 16;
 /// Deadline for each physical write, including flush.
@@ -81,7 +86,16 @@ where
     loop {
         tokio::select! {
             biased;
-            () = shutdown.cancelled() => return Ok(()),
+            () = shutdown.cancelled() => {
+                if connection.server_draining() {
+                    // The host has supervised semantic owners. Drain encoded
+                    // records with the physical write deadline before close.
+                    drop(requests);
+                    drop(outgoing);
+                    return write.await;
+                }
+                return Ok(());
+            },
             result = &mut write => return result,
             notification = connection.next_notification(), if observation_turn => {
                 enqueue(&outgoing, &notification)?;

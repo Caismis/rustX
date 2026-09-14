@@ -392,6 +392,13 @@ async fn attach_session(
 async fn capacity_rejection_never_composes_and_unload_reclaims_without_notifications() {
     bounded(async {
         let f = Fixture::new().await;
+        f.manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .policy
+            .max_resident_runtimes = 64;
         let connection = AppServerConnection::new(f.manager.clone());
         initialize(&connection).await;
         let sessions = cold_sessions(&f, 34).await;
@@ -409,7 +416,7 @@ async fn capacity_rejection_never_composes_and_unload_reclaims_without_notificat
                 }
             )
             .await,
-            ErrorData::InvalidState
+            ErrorData::AttachmentCapacity
         );
         assert_eq!(
             f.manager
@@ -446,6 +453,13 @@ async fn concurrent_final_slot_is_reserved_before_composition() {
     bounded(async {
         use std::sync::Arc;
         let f = Fixture::new().await;
+        f.manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .policy
+            .max_resident_runtimes = 64;
         let connection = Arc::new(AppServerConnection::new(f.manager.clone()));
         initialize(&connection).await;
         let sessions = cold_sessions(&f, 33).await;
@@ -490,7 +504,7 @@ async fn concurrent_final_slot_is_reserved_before_composition() {
             loser,
             Response::Failure(Failure {
                 error: RpcError {
-                    data: Some(ErrorData::InvalidState),
+                    data: Some(ErrorData::AttachmentCapacity),
                     ..
                 },
                 ..

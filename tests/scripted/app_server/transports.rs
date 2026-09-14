@@ -149,7 +149,9 @@ async fn adapter_disconnect_cannot_settle_approval_or_questionnaire() {
     bounded(async {
         for ws in [false, true] {
             for tool in ["read", "ask_user"] {
-                let f = Fixture::with_tool(Some(tool)).await;
+                let mut f = Fixture::with_tool(Some(tool)).await;
+                let clock = Arc::new(crate::runtime::monotonic::ManualMonotonicClock::new());
+                f.manager.clock = clock.clone();
                 let (client, serving) = connected(&f, ws).await;
                 initialize(&client).await;
                 let target = attach(&client, &f).await;
@@ -175,6 +177,13 @@ async fn adapter_disconnect_cannot_settle_approval_or_questionnaire() {
                 client.close().await;
                 let _ = serving.await.unwrap();
                 assert_eq!(coordinator.pending_count(), 1);
+                assert!(native.idle_epoch().is_err());
+                clock.advance(f.manager.policy().idle_grace_ms + 1);
+                f.manager.reap_idle();
+                assert_eq!(
+                    f.manager.residency(runtime.conversation_id()),
+                    super::ResidencyState::Loaded
+                );
                 let replacement = AppServerConnection::new(f.manager.clone());
                 let direct = app_server_conformance::DirectDriver(&replacement);
                 initialize(&direct).await;
@@ -419,7 +428,9 @@ impl crate::tools::executor::ToolExecutor for BackgroundGate {
 async fn adapter_disconnect_does_not_cancel_server_owned_background_execution() {
     bounded(async {
         for ws in [false, true] {
-            let f = Fixture::new().await;
+            let mut f = Fixture::new().await;
+            let clock = Arc::new(crate::runtime::monotonic::ManualMonotonicClock::new());
+            f.manager.clock = clock.clone();
             let (client, serving) = connected(&f, ws).await;
             initialize(&client).await;
             let target = attach(&client, &f).await;
@@ -468,6 +479,13 @@ async fn adapter_disconnect_does_not_cancel_server_owned_background_execution() 
                     .as_ref()
                     .unwrap()
                     .is_cancelled()
+            );
+            assert!(native.idle_epoch().is_err());
+            clock.advance(f.manager.policy().idle_grace_ms + 1);
+            f.manager.reap_idle();
+            assert_eq!(
+                f.manager.residency(managed.conversation_id()),
+                super::ResidencyState::Loaded
             );
             gate.release();
             background.wait_until_terminal(&execution_id).await.unwrap();

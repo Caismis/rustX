@@ -4,6 +4,7 @@
 #[path = "../../support/app_server_conformance.rs"]
 mod app_server_conformance;
 mod protocol;
+mod residency_policy;
 mod transports;
 use super::*;
 use crate::events::types::RuntimeEvent;
@@ -46,6 +47,8 @@ impl AsyncGate {
 }
 #[derive(Debug)]
 pub(super) struct Probe {
+    pub(super) idle_before_claim: Arc<crate::runtime::conversation_runtime::Gate>,
+    pub(super) idle_after_claim: Arc<crate::runtime::conversation_runtime::Gate>,
     pub(super) activation: Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>,
     pub(super) compositions: AtomicUsize,
     pub(super) joined: watch::Sender<usize>,
@@ -59,6 +62,8 @@ pub(super) struct Probe {
 impl Default for Probe {
     fn default() -> Self {
         Self {
+            idle_before_claim: Arc::default(),
+            idle_after_claim: Arc::default(),
             activation: Mutex::new(None),
             compositions: AtomicUsize::new(0),
             joined: watch::channel(0).0,
@@ -346,6 +351,8 @@ async fn different_conversations_overlap_provider_and_keep_durable_state_isolate
         let live_b = b.inspect_runtime().unwrap();
         live_b.submit_inbound(input("request-B")).unwrap();
         f.gates[1].wait_entered().await;
+        assert_eq!(f.manager.diagnostics().active_roots, 2);
+        assert_eq!(f.manager.diagnostics().loaded, 2);
         assert_eq!(f.provider.request_bodies().len(), 2);
         assert_eq!(
             f.manager.residency(a.conversation_id()),
@@ -1169,7 +1176,7 @@ async fn stale_attachment_subscription_and_endpoint_do_not_own_residency() {
         let f = Fixture::new().await;
         let identity = f.load(0).await.unwrap().unwrap();
         let client = identity.client();
-        let attachment = client.attach().unwrap().attachment;
+        let attachment = client.attach().unwrap().0.attachment;
         let subscription = attachment.subscription().unwrap();
         let (endpoint, weak_host) = {
             let resident = identity.resident.upgrade().unwrap();
@@ -1219,7 +1226,7 @@ async fn stale_attachment_subscription_and_endpoint_do_not_own_residency() {
                 .error,
             Some(RuntimeClientError::NotAttached)
         );
-        let _new_attachment = replacement.client().attach().unwrap().attachment;
+        let _new_attachment = replacement.client().attach().unwrap().0.attachment;
         f.manager
             .unload(replacement.conversation_id())
             .await

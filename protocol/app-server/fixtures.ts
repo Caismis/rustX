@@ -3,6 +3,50 @@ import type {ProtocolMessage} from './v1.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
+    "id": 291,
+    "result": {
+      "type": "diagnostics",
+      "snapshot": {
+        "lifecycle": "Accepting",
+        "policy": {
+          "max_resident_runtimes": 8,
+          "max_connections": 32,
+          "max_external_attachments": 64,
+          "idle_grace_ms": "300000",
+          "shutdown_deadline_ms": "30000"
+        },
+        "loaded": 0,
+        "loading": 0,
+        "unloading": 0,
+        "active_roots": 0,
+        "external_attachments": 0,
+        "sessions": [],
+        "admission_refusals": {},
+        "shutdown_failures": "0",
+        "shutdown_timeouts": "0",
+        "unload_failures": "0",
+        "transport": {
+          "websocket_connections": 0,
+          "stdio_connections": 0,
+          "connection_refusals": "0",
+          "delivery_failures": "0",
+          "max_message_bytes": 1048576,
+          "outbound_queue_messages": 32,
+          "outbound_queue_bytes": 33554432,
+          "in_flight_requests": 16,
+          "write_deadline_ms": "10000"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 291,
+    "method": "server/diagnostics",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
@@ -293,6 +337,50 @@ export const fixtures = [
           ],
           "omitted_runs": 0
         }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 291,
+    "error": {
+      "code": -32000,
+      "message": "Operation rejected",
+      "data": {
+        "kind": "residency_capacity"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 291,
+    "error": {
+      "code": -32000,
+      "message": "Operation rejected",
+      "data": {
+        "kind": "attachment_capacity"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 291,
+    "error": {
+      "code": -32000,
+      "message": "Operation rejected",
+      "data": {
+        "kind": "request_capacity"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 291,
+    "error": {
+      "code": -32000,
+      "message": "Operation rejected",
+      "data": {
+        "kind": "server_draining"
       }
     }
   }

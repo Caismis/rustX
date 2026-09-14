@@ -30,6 +30,34 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         attachment_id: crate::runtime_client::types::AttachmentId::new("attachment-fixture"),
     };
     let mut fixtures = vec![
+        ProtocolMessage::Response(Response::Success(Box::new(Success {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(291),
+            result: MethodResult::Diagnostics {
+                snapshot: crate::local_runtime::session_runtime_manager::ResidencyDiagnostics {
+                    lifecycle:
+                        crate::local_runtime::session_runtime_manager::ServerLifecycle::Accepting,
+                    policy: crate::local_runtime::app_server_policy::AppServerPolicy::default(),
+                    loaded: 0,
+                    loading: 0,
+                    unloading: 0,
+                    active_roots: 0,
+                    external_attachments: 0,
+                    sessions: Vec::new(),
+                    admission_refusals: std::collections::BTreeMap::default(),
+                    unload_failures: 0,
+                    shutdown_failures: 0,
+                    shutdown_timeouts: 0,
+                    transport: super::transport::resources::TransportResources::default()
+                        .snapshot(),
+                },
+            },
+        }))),
+        ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(291),
+            call: Method::ServerDiagnostics {},
+        })),
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("initialize-fixture".into()),
@@ -235,6 +263,22 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             ),
         },
     }));
+    for data in [
+        super::protocol::ErrorData::ResidencyCapacity,
+        super::protocol::ErrorData::AttachmentCapacity,
+        super::protocol::ErrorData::RequestCapacity,
+        super::protocol::ErrorData::ServerDraining,
+    ] {
+        fixtures.push(ProtocolMessage::Response(Response::Failure(Failure {
+            jsonrpc: JsonRpcVersion::V2,
+            id: Some(RequestId::Integer(291)),
+            error: RpcError {
+                code: -32000,
+                message: "Operation rejected".into(),
+                data: Some(data),
+            },
+        })));
+    }
     fixtures
 }
 

@@ -45,8 +45,8 @@ In the planned local self-hosted mode, `rustx-tui` owns
 through the process lifecycle seam. This is owner-driven process shutdown,
 not transport EOF semantically cancelling work. Persistent execution across TUI
 exit requires an externally managed App Server; WebSocket/existing-server TUI
-disconnect never shuts down that process. The standalone entry point and explicit SIGINT/SIGTERM transport shutdown seam
-are implemented. #291 will add graceful runtime drain/residency governance.
+disconnect never shuts down that process. SIGINT/SIGTERM enters the shared server
+drain contract described below.
 
 ## Standalone startup
 
@@ -153,15 +153,15 @@ tenancy, workspace ACLs, or authentication inside `initialize`.
 | WebSocket frame and assembled text message | 1,048,576 bytes each | Library rejects excess before dispatch |
 | WebSocket read buffer | 128 KiB | Fixed library buffer |
 | WebSocket write buffer | Flush immediately; maximum 1 MiB + 1 KiB | Fail on excess |
-| WebSocket clients, including pending handshakes | 32 | Drop additional accepted sockets |
+| WebSocket clients, including pending handshakes | Configured (default 32) | HTTP 503 where writable, then close |
 | WebSocket handshake | 5 seconds | Drop incomplete socket |
 | HTTP handshake parsing | Library bounds: 64 KiB / 512 reads / 124 headers | Reject excess; library also rejects pathological tiny reads |
-| External Session attachments | Existing endpoint bound: 32 per connection | Existing domain rejection |
+| External Session attachments | 32 per connection; configured process total (default 64) | Typed attachment capacity rejection |
 
 The outbound queue holds at most 32 MiB of encoded payload plus one message being
 written. Request futures, current decoding/serialization, and library framing buffers
 are additional bounded transport work. Native runtime state and result construction
-remain under their existing owners; these transport limits are not #291 residency quotas.
+remain under their existing owners; these transport limits are independent from residency quotas.
 
 Ready observations alternate with protocol progress (a completed response or
 incoming-message admission), starting with protocol progress. At most one ready
@@ -189,12 +189,11 @@ captured under the close/admission lock and retained only in the manager-owned
 operation task; subsequent detach cannot revoke an already-admitted mutation.
 Connection-local subscription delivery still ends with the attachment.
 
-SIGINT/SIGTERM stops transport admission and settles connection tasks/attachments.
-It does not define a second runtime shutdown state machine or guarantee graceful drain
-of in-flight work; #291 owns that follow-up. Stdio EOF ends the standalone child process
-after detaching; any subsequent loss of execution is process death, not semantic EOF
-cancellation. An owning TUI may explicitly terminate its child. One WebSocket client
-closing never shuts down the listener or any other client.
+SIGINT/SIGTERM commits server drain, supervises every resident runtime through
+native settlement, and then terminates transport tasks. Stdio EOF only detaches;
+the child awaits an explicit owner signal. One WebSocket client closing never
+shuts down the listener or any other client. A deadline or second signal forces
+host termination without claiming semantic settlement.
 
 ## Transport validation
 
@@ -269,8 +268,8 @@ Session resident. Connection reservation is request-scoped; residency loading is
 manager-scoped once claimed. Cancelling an admitted cold attach releases its slot
 but does not roll back the manager-owned Loading flight: it may reach Loaded with
 zero external attachments. A later attach reuses that resident incarnation.
-Headless residency quotas/admission/idle eviction belong to #291, not request
-cancellation. Its map is locked only for local routing changes; no lock
+Headless residency quotas/admission/idle eviction belong to the manager process
+policy, independently of request cancellation. Its map is locked only for local routing changes; no lock
 spans composition, provider work, interaction settlement or shutdown. Requests
 may run concurrently and finish out of order.
 One notification consumer uses bounded fan-in over native subscriptions;
@@ -468,3 +467,124 @@ runtime settings. It needs no provider timing, framing, retries or network state
 Adapters own transport mechanics, not expected semantic outcomes. This supplements
 the detailed owner/race tests; byte framing, limits and process/socket failures
 remain #36 tests, not a production transport framework in #288.
+
+## Process residency and drain policy (#291)
+
+Runtime residency is process-local cache/resource ownership, not durable Session
+lifecycle authority. Unload releases a live incarnation; it neither deletes a
+Session nor changes its durable selections. A later attach cold-loads through
+normal current configuration resolution and native recovery.
+
+The canonical **user** `settings.toml` accepts this process-only table. Project
+TOML cannot override it, and it is never persisted in a Session:
+
+```toml
+[app_server]
+max_resident_runtimes = 8
+max_connections = 32
+max_external_attachments = 64
+idle_grace_ms = 300000
+shutdown_deadline_ms = 30000
+```
+
+These conservative defaults allow several concurrently focused Sessions while
+bounding expensive live compositions. The five-minute grace avoids recomposing
+on ordinary focus changes; the thirty-second host deadline bounds operational
+shutdown independently of native settlement. They are product defaults, not
+throughput or user-per-host claims. One process still represents one user
+environment. Zero values are invalid. Upper authoring bounds are respectively
+256 runtimes, 1024 connections, 4096 attachments, one day of idle grace, and one
+hour of shutdown grace. Invalid policy fails before traffic admission. Settings
+changes take effect on the next process start.
+
+`Loading`, `Loaded`, and `Unloading` all consume the same writer quota. The
+registry lock checks quota and installs `Loading` atomically; same-Conversation
+callers join that flight without consuming another slot. Composition runs
+outside that lock. Failure releases a loading reservation; unproven unload
+retains its counted `Unloading` slot. Capacity refusal does not queue for a slot.
+One native coordinator owns at most one current root attempt, so the resident
+slot limit also bounds aggregate root attempts. Pending inbound remains durable
+native work; a `turn/start` response does not release an execution permit. No
+second root-attempt registry or limiter is introduced. Subagent/Workflow limits
+remain with their native domains.
+
+External attachments have independent residency leases, excluding internal
+projection/control plumbing. Each connection still permits at most 32 attached
+or reserved Session routes; the configured attachment limit applies across the
+process. Detach releases only the external relationship. WebSocket close, stdio
+EOF, and broken pipe do not cancel attempts or answer interactions. Focusing B
+and detaching A does not immediately unload A.
+
+One process reaper checks resident slots once per second using the runtime's
+`MonotonicClock`. The grace begins at the first positively verified eligible
+scan, never earlier than native settlement. Polling may conservatively add a
+scan interval. Timing is reset by external attachment/operation activity or
+native admission activity, including work that finishes between scans. Native
+eligibility excludes current attempts, compaction, accepted pending inbound,
+recovery continuation, pending interactions, background preparation/execution,
+unsettled subagents, and counted lifecycle owners (including Workflow,
+capability/MCP preparation, interaction callback authority and attempt tasks).
+Goal-enabled runtimes are conservatively retained, including disarmed Goals:
+there is no Goal wake/reload contract in this issue.
+
+The native admission change token is invalidation only, not a second work-state
+registry. The reaper reads native owners outside the registry lock. At eviction
+commit it holds the registry lock, requires zero external attachments and
+operation leases, validates activity, and claims native `Running -> Draining`
+under the coordinator/lifecycle admission boundary before publishing
+`Unloading`. The claim uses nonblocking native lock acquisition; contention
+conservatively retains the slot without holding up other Sessions. New attach/control/inbound either admitted its lease first and
+prevents that claim, or observes a stale/unloading incarnation. External teardown
+runs outside the registry lock through the existing unload owner. No unchecked
+check-then-unload window exists.
+
+SIGTERM or SIGINT is the normal shutdown request for both externally managed
+WebSocket servers and owned stdio children. The first request commits
+`Accepting -> Draining` at the same registry boundary as load and operation
+admission. Diagnostics remain readable, but new semantic work receives
+`server_draining`. New WebSocket sockets are refused at the transport boundary.
+Every reserved/live runtime is supervised concurrently through native shutdown;
+operation leases, native settlement, and the existing host projection drain
+are awaited before composition release.
+Failures are collected without abandoning siblings. Native shutdown may request
+cancellation through the existing owners; requesting cancellation is never
+reported as proof of physical or durable settlement. Session catalog and runtime
+writes already have transactional/synchronous owners, so there is no invented
+flush layer. Admitted catalog mutations retain their tasks until completion.
+
+Only successful settlement of all slots yields `Terminated`. A settlement
+failure remains fail-closed, is reported on stderr, and exits nonzero. The host
+deadline covers runtime drain and transport exit. Deadline expiration or a
+second termination signal takes the explicit forced host exit (code 3), reports
+unproven residency resources, and bypasses executor destruction. It writes no
+fabricated tool/interaction outcome and does not advertise retained slots as
+unloaded. Recovery in a replacement process remains the native durable recovery
+contract. Unexpected stdio EOF waits for the owner's explicit signal; EOF alone
+is not the shutdown request. #290 will consume this owned-child contract; this
+issue does not migrate the TUI.
+
+`server/diagnostics` is a read-only, initialized semantic request. Its
+`diagnostics` result contains lifecycle, configured policy, loaded/loading/
+unloading counts, native active-root count, external attachment counts, per-
+Session resident identities and operation counts, typed refusal counters,
+unload/shutdown failures/timeouts, and transport budgets/counts. The Session list
+contains reserved/resident slots; absent Sessions are unloaded. `idle_for_ms`
+and `idle_remaining_ms` are relative, conservative scan facts, not lifecycle
+authority. Counts come from the registry, native coordinator, external leases,
+and physical transport leases. Native execution facts are sampled outside the
+registry lock; this is not a transaction across all runtime owners. No credentials, environments, or runtime handles
+are exposed.
+
+Each physical connection has a 1 MiB encoded-message limit, 32 outbound queued
+messages (explicit 32 MiB queue byte budget), one additional message being
+written, 16 in-flight protocol requests, and a 10-second physical write deadline.
+These transport-owned budgets remain fixed, not Session policy. Encoded messages
+are bounded before queue insertion; no byte allocation is inferred from object
+sizes. Slow consumers are disconnected and release attachments without semantic
+settlement. Handshaking sockets count toward the configured connection quota and
+have a five-second handshake deadline. Capacity/drain rejection before JSON-RPC
+uses HTTP 503 where the socket can accept the response, then closes. stdio owns
+one physical connection. Process catalog request ownership is additionally
+bounded by `max_connections * 16` outstanding operations; refusal is
+`request_capacity`. Other typed refusals are `residency_capacity`,
+`attachment_capacity`, and the existing `stale_runtime` for retired incarnations.
