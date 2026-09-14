@@ -52,7 +52,7 @@
 //! > Durable Session identity and graph state belong to `SessionController`.
 //! > `LocalSessionClient` is a single-runtime CLI attachment, with explicit
 //! > Session identity and client-local routing. Catalog commands do not quiesce
-//! > or replace a runtime. Concurrent residency belongs to #287.
+//! > or replace a runtime. Concurrent residency belongs to `SessionRuntimeManager`.
 //!
 //! A client — including the Issue #39 TUI — owns the child process
 //! lifecycle and nothing else. It never assembles provider adapters, model
@@ -1037,9 +1037,41 @@ impl LocalConversationCore {
         artifacts_root: PathBuf,
         lifecycle: Arc<crate::runtime::local_storage::ProductController>,
     ) -> Result<Self, LocalRuntimeError> {
+        let access = Arc::new(
+            crate::runtime::local_storage::ConversationAccess::start(lifecycle, &artifacts_root)
+                .map_err(|e| LocalRuntimeError::ToolRuntime {
+                    detail: e.to_string(),
+                })?,
+        );
+        Self::compose_with_access(
+            paths,
+            dependencies,
+            registry,
+            runtime_config,
+            session_state,
+            conversation_id,
+            artifacts_root,
+            access,
+        )
+        .await
+    }
+
+    /// The shared native composition consumes already-admitted allocation authority.
+    /// Session callers must acquire it before resolving authoritative cold settings.
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+    pub(crate) async fn compose_with_access(
+        paths: &AdmittedSessionConfig,
+        dependencies: &LocalRuntimeDependencies,
+        registry: ModelBindingRegistry,
+        runtime_config: CurrentRuntimeConfig,
+        session_state: SessionPersistentState,
+        conversation_id: ConversationId,
+        artifacts_root: PathBuf,
+        conversation_access: Arc<crate::runtime::local_storage::ConversationAccess>,
+    ) -> Result<Self, LocalRuntimeError> {
         // Keep the one-shot preparation state off the awaiting caller's stack.
         Box::pin(async move {
-            let product_root = lifecycle.root().to_path_buf();
+            let product_root = conversation_access.root().to_path_buf();
             // The current runtime default was validated by the composition
             // caller before any first-Session publication. Validate it here too
             // for direct low-level callers, while the selected durable Session
@@ -1089,15 +1121,6 @@ impl LocalConversationCore {
             // Client projection — is derived from what this materializes, never
             // configured a second time.
             .with_extensions(extensions.clone());
-            let conversation_access = Arc::new(
-                crate::runtime::local_storage::ConversationAccess::start(
-                    lifecycle,
-                    &artifacts_root,
-                )
-                .map_err(|e| LocalRuntimeError::ToolRuntime {
-                    detail: e.to_string(),
-                })?,
-            );
             tool_runtime_config.lifecycle = Some(conversation_access.clone());
             tool_runtime_config.environment = Some(base_environment.clone());
             let tool_runtime =
@@ -1794,7 +1817,7 @@ impl LocalConversationCore {
     /// catalog transaction — can place that commit between them. Every
     /// fallible composition step is then on the pre-commit side, and the
     /// activation that follows the commit cannot fail.
-    fn into_bound_with_control(
+    pub(crate) fn into_bound_with_control(
         self,
         control: Option<Arc<dyn RuntimeClientSessionControl>>,
     ) -> Result<LocalConversationRuntime, LocalRuntimeError> {
@@ -2447,7 +2470,7 @@ impl HeadlessConversationRuntime {
 /// authority. This is intentionally a composition concern, not a
 /// `SessionCatalog` concern: callers can validate the current runtime default
 /// before publishing a first durable Session.
-fn load_model_registry(
+pub(crate) fn load_model_registry(
     paths: &AdmittedSessionConfig,
     dependencies: &LocalRuntimeDependencies,
 ) -> Result<ModelBindingRegistry, LocalRuntimeError> {
