@@ -1,0 +1,425 @@
+//! Real standalone process, pipe and network boundaries; shared semantic authority.
+use futures_util::{SinkExt, StreamExt};
+use nix::{
+    sys::signal::{Signal, kill},
+    unistd::Pid,
+};
+use rustx::{
+    app_server::transport::MAX_MESSAGE_BYTES,
+    local_runtime::{
+        configuration::SessionConfigInput,
+        session::{SessionId, SessionPersistentState},
+        session_controller::SessionController,
+    },
+};
+use std::{path::PathBuf, process::Stdio};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    process::{Child, Command},
+};
+use tokio_tungstenite::tungstenite::protocol::frame::{
+    Frame,
+    coding::{Data, OpCode},
+};
+use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
+#[path = "../support/app_server_conformance.rs"]
+mod app_server_conformance;
+#[path = "../support/app_server_driver.rs"]
+mod driver;
+
+struct Fixture {
+    root: tempfile::TempDir,
+    sessions: [SessionId; 2],
+}
+impl Fixture {
+    async fn new() -> Self {
+        let root =
+            tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
+        let home = root.path().join("home");
+        let config = home.join(".config/rustx");
+        std::fs::create_dir_all(&config).unwrap();
+        let initialized = Command::new(env!("CARGO_BIN_EXE_rustx"))
+            .env("HOME", &home)
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("XDG_STATE_HOME")
+            .arg("init")
+            .args([
+                "--template",
+                "openai-chat",
+                "--provider",
+                "local",
+                "--model-id",
+                "test",
+                "--endpoint",
+                "http://127.0.0.1:9/v1",
+                "--credential-env",
+                "TEST_KEY",
+                "--context-window",
+                "128000",
+                "--max-output",
+                "4096",
+                "--tool-calls",
+                "true",
+                "--reasoning",
+                "false",
+                "--compat",
+                "chat_reasoning_replay = \"omit\"",
+            ])
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            initialized.status.success(),
+            "{}",
+            String::from_utf8_lossy(&initialized.stdout)
+        );
+        let host =
+            rustx::local_runtime::HostEnvironment::from_paths(root.path().into(), home, None, None)
+                .unwrap();
+        let controller = SessionController::open(&root.path().join("runtime")).unwrap();
+        let mut sessions = Vec::new();
+        for name in ["a", "b"] {
+            let workspace = root.path().join(name);
+            std::fs::create_dir(&workspace).unwrap();
+            rustx::local_runtime::launch::change_trust(
+                &rustx::local_runtime::LaunchRequest {
+                    workspace: Some(workspace.clone()),
+                    ..Default::default()
+                },
+                &host,
+                rustx::local_runtime::TrustAction::Grant,
+            )
+            .unwrap();
+            sessions.push(
+                controller
+                    .create_session(SessionPersistentState::from_input(
+                        &SessionConfigInput::new(workspace),
+                    ))
+                    .await
+                    .unwrap()
+                    .session
+                    .id,
+            );
+        }
+        // Invalid project authoring at process cwd must never become Session cwd.
+        std::fs::write(root.path().join("rustx.toml"), "invalid TOML at launch cwd").unwrap();
+        std::fs::write(root.path().join("token"), driver::TOKEN).unwrap();
+        Self {
+            root,
+            sessions: sessions.try_into().unwrap(),
+        }
+    }
+    fn command(&self, listen: &str) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_rustx"));
+        command
+            .current_dir(self.root.path())
+            .env("HOME", self.root.path().join("home"))
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("XDG_STATE_HOME")
+            .env("TEST_KEY", "fixture")
+            .args(["app-server", "--runtime-root"])
+            .arg(self.root.path().join("runtime"))
+            .args(["--listen", listen])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        command
+    }
+    async fn ws(&self) -> (Child, String) {
+        let mut child = self
+            .command("ws://127.0.0.1:0")
+            .arg("--token-file")
+            .arg(self.root.path().join("token"))
+            .spawn()
+            .unwrap();
+        let line = BufReader::new(child.stderr.take().unwrap())
+            .lines()
+            .next_line()
+            .await
+            .unwrap()
+            .unwrap();
+        (
+            child,
+            line.strip_prefix("rustx app-server listening ")
+                .unwrap()
+                .to_owned(),
+        )
+    }
+}
+async fn bounded<T>(future: impl Future<Output = T>) -> T {
+    tokio::time::timeout(std::time::Duration::from_mins(1), future)
+        .await
+        .expect("outer liveness guard")
+}
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":1,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+
+#[tokio::test]
+async fn app_server_stdio_real_process_shared_conformance() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let mut child = f.command("stdio").spawn().unwrap();
+        let driver = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        app_server_conformance::representative_scenario(&driver, f.sessions.clone()).await;
+        driver.close().await;
+        assert!(child.wait().await.unwrap().success());
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn app_server_websocket_real_process_shared_conformance_and_listener_survives() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let (mut child, url) = f.ws().await;
+        let client = driver::websocket(&url).await;
+        app_server_conformance::representative_scenario(&client, f.sessions.clone()).await;
+        client.close().await;
+        let mut replacement = driver::socket(&url).await;
+        replacement.send(INITIALIZE.into()).await.unwrap();
+        assert_eq!(
+            json_response(&mut replacement).await["result"]["protocol_version"],
+            1
+        );
+        kill(
+            Pid::from_raw(i32::try_from(child.id().unwrap()).unwrap()),
+            Signal::SIGTERM,
+        )
+        .unwrap();
+        assert!(child.wait().await.unwrap().success());
+    })
+    .await;
+}
+
+type Socket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+async fn json_response(socket: &mut Socket) -> serde_json::Value {
+    let Message::Text(text) = socket.next().await.unwrap().unwrap() else {
+        panic!("text response");
+    };
+    serde_json::from_str(text.as_str()).unwrap()
+}
+
+#[tokio::test]
+async fn app_server_websocket_authentication_framing_and_protocol_errors() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let (mut child, url) = f.ws().await;
+        for offer in [
+            None,
+            Some("rustx.app-server.v1"),
+            Some("rustx.app-server.v1, rustx-token.wrong"),
+        ] {
+            let mut request = url.as_str().into_client_request().unwrap();
+            if let Some(offer) = offer {
+                request
+                    .headers_mut()
+                    .insert("sec-websocket-protocol", offer.parse().unwrap());
+            }
+            let error = tokio_tungstenite::connect_async(request).await.unwrap_err();
+            let tokio_tungstenite::tungstenite::Error::Http(response) = error else {
+                panic!("HTTP rejection");
+            };
+            assert_eq!(response.status(), 401);
+        }
+        let mut socket = driver::socket(&url).await;
+        let middle = INITIALIZE.len() / 2;
+        socket
+            .send(Message::Frame(Frame::message(
+                INITIALIZE.as_bytes()[..middle].to_vec(),
+                OpCode::Data(Data::Text),
+                false,
+            )))
+            .await
+            .unwrap();
+        socket
+            .send(Message::Frame(Frame::message(
+                INITIALIZE.as_bytes()[middle..].to_vec(),
+                OpCode::Data(Data::Continue),
+                true,
+            )))
+            .await
+            .unwrap();
+        assert_eq!(json_response(&mut socket).await["id"], 1);
+        // The next two responses prove distinct messages and no duplicate fragment dispatch.
+        for (record, code) in [
+            ("{", -32700),
+            (r#"{"jsonrpc":"2.0","id":2,"method":"bogus"}"#, -32601),
+            (
+                r#"{"jsonrpc":"2.0","id":3,"method":"session/create","params":{}}"#,
+                -32602,
+            ),
+            ("[]", -32600),
+        ] {
+            socket.send(record.into()).await.unwrap();
+            assert_eq!(json_response(&mut socket).await["error"]["code"], code);
+        }
+        socket
+            .send(Message::Binary(INITIALIZE.as_bytes().to_vec().into()))
+            .await
+            .unwrap();
+        assert!(
+            socket
+                .next()
+                .await
+                .is_none_or(|result| result.is_err() || matches!(result, Ok(Message::Close(_))))
+        );
+        let mut socket = driver::socket(&url).await;
+        let _ = socket
+            .send(Message::Text(" ".repeat(MAX_MESSAGE_BYTES + 1).into()))
+            .await;
+        assert!(
+            socket
+                .next()
+                .await
+                .is_none_or(|result| result.is_err() || matches!(result, Ok(Message::Close(_))))
+        );
+        let mut socket = driver::socket(&url).await;
+        let exact = format!(
+            "{}{}",
+            " ".repeat(MAX_MESSAGE_BYTES - INITIALIZE.len()),
+            INITIALIZE
+        );
+        socket.send(exact.into()).await.unwrap();
+        assert_eq!(json_response(&mut socket).await["id"], 1);
+        child.kill().await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn app_server_stdio_protocol_errors_are_records_but_framing_is_terminal() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let mut child = f.command("stdio").spawn().unwrap();
+        let mut input = child.stdin.take().unwrap();
+        let mut output = BufReader::new(child.stdout.take().unwrap()).lines();
+        for (record, code) in [
+            ("{", -32700),
+            ("[]", -32600),
+            (r#"{"jsonrpc":"2.0","id":2,"method":"bogus"}"#, -32601),
+        ] {
+            input
+                .write_all(format!("{record}\n").as_bytes())
+                .await
+                .unwrap();
+            let reply: serde_json::Value =
+                serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
+            assert_eq!(reply["error"]["code"], code);
+        }
+        input
+            .write_all(
+                format!(
+                    "{}{}\n",
+                    " ".repeat(MAX_MESSAGE_BYTES - INITIALIZE.len()),
+                    INITIALIZE
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let reply: serde_json::Value =
+            serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(reply["id"], 1);
+        drop(input);
+        assert!(child.wait().await.unwrap().success());
+        assert!(output.next_line().await.unwrap().is_none());
+        for bytes in [
+            vec![0xff, b'\n'],
+            b"{}".to_vec(),
+            vec![b' '; MAX_MESSAGE_BYTES + 1],
+        ] {
+            let mut child = f.command("stdio").spawn().unwrap();
+            let mut input = child.stdin.take().unwrap();
+            let _ = input.write_all(&bytes).await;
+            drop(input);
+            let output = child.wait_with_output().await.unwrap();
+            assert!(!output.status.success());
+            assert!(output.stdout.is_empty());
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn app_server_bootstrap_fails_before_readiness_and_owner_may_kill_stdio_child() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let mut child = f.command("stdio").spawn().unwrap();
+        let mut input = child.stdin.take().unwrap();
+        input
+            .write_all(format!("{INITIALIZE}\n").as_bytes())
+            .await
+            .unwrap();
+        let mut output = BufReader::new(child.stdout.take().unwrap()).lines();
+        assert!(output.next_line().await.unwrap().is_some());
+        child.kill().await.unwrap();
+        assert!(!child.wait().await.unwrap().success());
+        for failure in ["settings", "catalog", "root"] {
+            let f = Fixture::new().await;
+            let path: PathBuf = match failure {
+                "settings" => f.root.path().join("home/.config/rustx/settings.toml"),
+                "catalog" => f.root.path().join("home/.config/rustx/models.toml"),
+                _ => {
+                    std::fs::remove_dir_all(f.root.path().join("runtime")).unwrap();
+                    f.root.path().join("runtime")
+                }
+            };
+            std::fs::write(path, "invalid").unwrap();
+            for listen in ["stdio", "ws://127.0.0.1:0"] {
+                let mut command = f.command(listen);
+                if listen != "stdio" {
+                    command.arg("--token-file").arg(f.root.path().join("token"));
+                }
+                let output = command.output().await.unwrap();
+                assert!(!output.status.success());
+                assert!(output.stdout.is_empty());
+                assert!(
+                    !String::from_utf8(output.stderr)
+                        .unwrap()
+                        .contains("listening")
+                );
+            }
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn app_server_websocket_client_limit_preserves_admitted_clients() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let (mut child, url) = f.ws().await;
+        let mut clients = Vec::new();
+        for _ in 0..rustx::app_server::transport::websocket::MAX_CLIENTS {
+            clients.push(driver::socket(&url).await);
+        }
+        assert!(
+            tokio_tungstenite::connect_async(url.as_str())
+                .await
+                .is_err()
+        );
+        clients[0].send(INITIALIZE.into()).await.unwrap();
+        assert_eq!(json_response(&mut clients[0]).await["id"], 1);
+        clients[1].send(INITIALIZE.into()).await.unwrap();
+        assert_eq!(json_response(&mut clients[1]).await["id"], 1);
+        child.kill().await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn app_server_stdio_broken_output_pipe_settles_with_input_still_open() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let mut child = f.command("stdio").spawn().unwrap();
+        let mut input = child.stdin.take().unwrap();
+        drop(child.stdout.take());
+        input
+            .write_all(format!("{INITIALIZE}\n").as_bytes())
+            .await
+            .unwrap();
+        assert!(child.wait().await.unwrap().success());
+    })
+    .await;
+}

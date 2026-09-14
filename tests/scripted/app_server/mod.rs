@@ -1,7 +1,10 @@
 //! Residency races at the real manager, native composition, provider and
 //! allocation boundaries. Timeouts are liveness guards, never race evidence.
 #![allow(clippy::too_many_lines)]
+#[path = "../../support/app_server_conformance.rs"]
+mod app_server_conformance;
 mod protocol;
+mod transports;
 use super::*;
 use crate::events::types::RuntimeEvent;
 use crate::local_runtime::configuration::SessionConfigInput;

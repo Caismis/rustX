@@ -155,6 +155,13 @@ async fn serve_request(request: super::launch::LaunchRequest) -> ProcessOutcome 
 /// Activity observation IPC (Issue #178).
 pub async fn run_process(arguments: impl IntoIterator<Item = String>) -> i32 {
     let arguments: Vec<String> = arguments.into_iter().collect();
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "app-server")
+    {
+        return crate::app_server::process::run_process(arguments.into_iter().skip(1).collect())
+            .await;
+    }
     // The internal subagent-child mode (Issue #60): one exact flag, no
     // paths — the typed startup specification arrives over the inherited
     // control channel (fd 0).
@@ -214,7 +221,12 @@ async fn run_configuration_command(command: super::cli::Command) -> i32 {
     use super::cli::Command;
     use super::diagnostics::{Report, Validity};
     if matches!(command, Command::Help) {
-        let _ = writeln!(std::io::stdout(), "{USAGE}\n{}", super::cli::CONFIG_USAGE);
+        let _ = writeln!(
+            std::io::stdout(),
+            "{USAGE}\n{}\n{}",
+            super::cli::CONFIG_USAGE,
+            crate::app_server::process::USAGE
+        );
         return 0;
     }
     let Ok(host) = super::launch::HostEnvironment::capture() else {

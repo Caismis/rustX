@@ -25,6 +25,7 @@ fn valid_request_id(id: &RequestId) -> bool {
 
 #[derive(Default)]
 struct RouteTable {
+    closed: bool,
     active: BTreeMap<SessionId, Arc<Route>>,
     reserved: std::collections::BTreeSet<SessionId>,
 }
@@ -38,6 +39,9 @@ struct AttachReservation {
 impl AttachReservation {
     fn new(table: &Arc<Mutex<RouteTable>>, session: &SessionId) -> Result<Self, RpcError> {
         let mut routes = table.lock().expect("routes mutex");
+        if routes.closed {
+            return Err(domain(ErrorData::StaleAttachment));
+        }
         if routes.active.contains_key(session) || routes.reserved.contains(session) {
             return Err(domain(ErrorData::ControllerInUse));
         }
@@ -52,11 +56,21 @@ impl AttachReservation {
         })
     }
 
-    fn commit(mut self, route: Arc<Route>) {
+    fn commit<T>(
+        mut self,
+        attach: impl FnOnce() -> Result<(Arc<Route>, T), RpcError>,
+    ) -> Result<T, RpcError> {
         let mut routes = self.table.lock().expect("routes mutex");
         routes.reserved.remove(&self.session);
+        if routes.closed {
+            return Err(domain(ErrorData::StaleAttachment));
+        }
+        // Claim and publish under the same close boundary: a closed connection
+        // must never acquire even a temporary external attachment. No await.
+        let (route, result) = attach()?;
         routes.active.insert(self.session.clone(), route);
         self.committed = true;
+        Ok(result)
     }
 }
 
@@ -121,6 +135,21 @@ impl AppServerConnection {
             reader: tokio::sync::Mutex::new(()),
             next_route: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    /// Permanently release this connection's external claims, even while callers
+    /// retain references. The route-table lock linearizes close against attach
+    /// reservation/commit. Already admitted runtime operations remain server-owned.
+    /// Calling close again has no effect; it never unloads or cancels a runtime.
+    /// # Panics
+    /// Panics if the routing mutex is poisoned.
+    pub fn close(&self) {
+        let mut routes = self.routes.lock().expect("routes mutex");
+        routes.closed = true;
+        for (_, route) in std::mem::take(&mut routes.active) {
+            route.attachment.detach();
+        }
+        self.changed.notify_one();
     }
 
     /// Decode a strict JSON-RPC request before performing any semantic action.
@@ -198,6 +227,9 @@ impl AppServerConnection {
 
     #[allow(clippy::too_many_lines)]
     async fn dispatch(&self, method: Method) -> Result<MethodResult, RpcError> {
+        if self.routes.lock().expect("routes mutex").closed {
+            return Err(domain(ErrorData::StaleAttachment));
+        }
         if let Method::Initialize(params) = method {
             if params.protocol_version != APP_SERVER_PROTOCOL_VERSION {
                 return Err(domain(ErrorData::UnsupportedVersion {
@@ -394,29 +426,34 @@ impl AppServerConnection {
                     .load(&session_id, node_id.as_ref())
                     .await
                     .map_err(manager_error)?;
-                let client = runtime.client();
-                let crate::runtime_client::attachment::AttachedSnapshot {
-                    attachment,
-                    snapshot,
-                    cursor,
-                } = client.attach().map_err(manager_error)?;
-                let target = AttachmentTarget {
-                    session_id: session_id.clone(),
-                    conversation_id: runtime.conversation_id().clone(),
-                    runtime_incarnation: runtime.incarnation_id(),
-                    attachment_id: attachment.attachment_id().clone(),
-                };
-                reservation.commit(Arc::new(Route {
-                    target: target.clone(),
-                    client,
-                    attachment,
-                }));
+                let result = reservation.commit(|| {
+                    let client = runtime.client();
+                    let crate::runtime_client::attachment::AttachedSnapshot {
+                        attachment,
+                        snapshot,
+                        cursor,
+                    } = client.attach().map_err(manager_error)?;
+                    let target = AttachmentTarget {
+                        session_id: session_id.clone(),
+                        conversation_id: runtime.conversation_id().clone(),
+                        runtime_incarnation: runtime.incarnation_id(),
+                        attachment_id: attachment.attachment_id().clone(),
+                    };
+                    Ok((
+                        Arc::new(Route {
+                            target: target.clone(),
+                            client,
+                            attachment,
+                        }),
+                        MethodResult::Attached {
+                            target,
+                            snapshot: Box::new(snapshot),
+                            cursor,
+                        },
+                    ))
+                })?;
                 self.changed.notify_one();
-                Ok(MethodResult::Attached {
-                    target,
-                    snapshot: Box::new(snapshot),
-                    cursor,
-                })
+                Ok(result)
             }
             _ => unreachable!("runtime methods admitted above"),
         }
@@ -512,9 +549,7 @@ impl AppServerConnection {
 
 impl Drop for AppServerConnection {
     fn drop(&mut self) {
-        for route in self.routes.lock().expect("routes mutex").active.values() {
-            route.attachment.detach();
-        }
+        self.close();
     }
 }
 

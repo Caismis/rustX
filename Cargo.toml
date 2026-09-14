@@ -99,6 +99,7 @@ xberg = { version = "1.0.14", default-features = false, features = [
     "office",
     "tokio-runtime",
 ] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake", "connect"] }
 
 [lints.rust]
 # The runtime process-supervision capability and the per-invocation Bash

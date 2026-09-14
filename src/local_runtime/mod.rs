@@ -1,4 +1,7 @@
-//! The local conversation runtime process (Issue #42).
+//! Shared local configuration, durable Session, and runtime owners.
+//!
+//! Ordinary `rustx` serves the local Runtime Client path described below.
+//! `rustx app-server` composes these shared owners through [`crate::app_server`].
 //!
 //! This module owns everything between explicit startup configuration and
 //! the Runtime Client endpoint a transport wraps:

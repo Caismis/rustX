@@ -30,7 +30,7 @@ execution, interaction, cancellation, history, residency, or replay semantics.
 After #290, ordinary local TUI mode uses first-class App Server stdio JSONL to a
 TUI-owned child; browser and existing/remote TUI clients use WebSocket to an
 externally managed server. The ordinary local TUI does not need a loopback
-WebSocket merely to consume the unified App Server protocol. This future stdio
+WebSocket merely to consume the unified App Server protocol. This App Server stdio
 binding is not the old Runtime Client wire protocol currently carried by the TUI's
 pipes: #290 replaces those temporary semantics with the generated App Server DTOs.
 
@@ -42,11 +42,150 @@ Session unload/delete, or server shutdown. Explicit detach has the same separati
 
 In the planned local self-hosted mode, `rustx-tui` owns
 `rustx app-server --listen stdio`. Normal TUI exit explicitly shuts down that child
-under the #36/#291 process-lifecycle policy. This is owner-driven process shutdown,
+through the process lifecycle seam. This is owner-driven process shutdown,
 not transport EOF semantically cancelling work. Persistent execution across TUI
 exit requires an externally managed App Server; WebSocket/existing-server TUI
-disconnect never shuts down that process. The entry point and shutdown policy are
-follow-up work, not implemented here.
+disconnect never shuts down that process. The standalone entry point and explicit SIGINT/SIGTERM transport shutdown seam
+are implemented. #291 will add graceful runtime drain/residency governance.
+
+## Standalone startup
+
+One process represents one user environment. Bootstrap binds the canonical user
+TOML, validates the selected model catalog, opens one durable `SessionController`,
+and creates one `SessionRuntimeManager` before accepting transport traffic. There
+is no global active Session and no fixed Conversation composed at launch.
+
+```sh
+# Canonical user source: $XDG_CONFIG_HOME/rustx/settings.toml,
+# defaulting to ~/.config/rustx/settings.toml. Use rustx init to author it.
+rustx app-server --runtime-root /private/user/rustx-state --listen stdio
+
+# Omit --runtime-root to use the user TOML binding, otherwise the default is
+# $XDG_STATE_HOME/rustx/app-server (default ~/.local/state/rustx/app-server).
+rustx app-server --listen ws://127.0.0.1:8080 --token-file /private/user/socket-token
+```
+
+`--models <models.toml>` and `--runtime-root <path>` override source bindings using
+the existing configuration resolver. Relative CLI paths resolve at launch; paths
+authored in user settings resolve relative to that document. `--config` is
+intentionally absent here: in ordinary `rustx` it selects a Session/project override,
+not the canonical user source. Use the XDG user configuration binding for the server.
+Session cwd and optional project configuration come from `session/create` settings;
+launch cwd is never substituted for Session cwd. Sessions retain the existing trust
+and configuration admission rules. Neither cwd nor transport authentication is a sandbox.
+
+Exactly one transport is selected. `ws://IP:PORT` accepts numeric IPv4/IPv6 socket
+addresses, including port 0 for host-assigned ports. The server advertises the bound
+address on stderr only after bootstrap succeeds. Stdio readiness is the response to
+`initialize`; no banner is emitted. Stdio requires pipes on stdin/stdout, as supplied
+by a child-process launcher. The command does not daemonize or reconnect orphaned pipes.
+The existing ordinary `rustx` Runtime Client and internal `--subagent-child` paths
+remain in use until #290.
+
+## Transport framing and admission
+
+Stdio reads one UTF-8 JSON-RPC message per LF-terminated record and writes one response
+or notification per LF-terminated record. LF is excluded from the payload limit;
+a CR before LF counts toward that limit and is ordinary JSON whitespace. EOF at a
+record boundary and broken pipe close the connection. Unterminated EOF, invalid UTF-8,
+and oversized records fail the transport before dispatch. Malformed JSON and invalid
+JSON-RPC instead receive the existing protocol error envelopes, and the connection
+remains usable. All diagnostics go to stderr.
+
+WebSocket uses `tokio-tungstenite` 0.30 without TLS or compression features. One
+complete text message is one semantic request. The library reassembles fragments
+before dispatch, validates UTF-8, enforces frame/message bounds, and handles control
+frames. Binary messages, oversized messages and invalid framing terminate that client.
+JSON/JSON-RPC errors behave exactly as on stdio. No binary protocol, multiplexed
+subprotocol, REST API, or alternative Session API exists.
+
+### Dedicated WebSocket credential
+
+WebSocket requires `--token-file`: 43–128 base64url characters, with at most one
+trailing LF (129 file bytes maximum). Generate at least 32 random bytes; keep the
+file user-private. For example:
+
+```sh
+umask 077
+python3 -c 'import secrets; print(secrets.token_urlsafe(32))' > /private/user/socket-token
+```
+
+A browser can supply the credential in its handshake without arbitrary headers:
+
+```js
+const socket = new WebSocket("ws://127.0.0.1:8080/", [
+  "rustx.app-server.v1",
+  `rustx-token.${dedicatedTransportToken}`,
+]);
+```
+
+The server requires both offers on path `/` without a query, rejects failed admission
+with HTTP 401, and selects only `rustx.app-server.v1` in its response. It never echoes
+the credential. Admission completes before constructing `AppServerConnection`, so
+unauthenticated clients cannot initialize or invoke any method. This is a dedicated
+single-user transport secret, never a provider key, MCP secret, or runtime credential.
+It is captured at startup; rotation requires restarting the process.
+
+The trusted host supplies this token to authorized clients. It owns secure token
+delivery/storage, redaction of handshake headers in proxy logs, browser origin/CSP
+policy, TLS termination (`wss://` externally), network access, OS identity/isolation,
+and process supervision. Use secure termination for non-loopback deployments. All
+admitted clients act within the same user environment; rustX adds no accounts,
+tenancy, workspace ACLs, or authentication inside `initialize`.
+
+### Finite delivery policy
+
+| Bound | Value | Terminal behavior |
+| --- | --- | --- |
+| Inbound and outbound JSON payload | 1,048,576 bytes | Close on excess; never dispatch partial input |
+| Stdio read buffer | 8 KiB | Incremental bounded record assembly |
+| Concurrent request futures per connection | 16 | Close if another message arrives while full |
+| Outbound queue per connection | 32 messages | `try_send` failure closes immediately |
+| One outbound write including flush | 10 seconds | Drop writer future and close |
+| WebSocket frame and assembled text message | 1,048,576 bytes each | Library rejects excess before dispatch |
+| WebSocket read buffer | 128 KiB | Fixed library buffer |
+| WebSocket write buffer | Flush immediately; maximum 1 MiB + 1 KiB | Fail on excess |
+| WebSocket clients, including pending handshakes | 32 | Drop additional accepted sockets |
+| WebSocket handshake | 5 seconds | Drop incomplete socket |
+| HTTP handshake parsing | Library bounds: 64 KiB / 512 reads / 124 headers | Reject excess; library also rejects pathological tiny reads |
+| External Session attachments | Existing endpoint bound: 32 per connection | Existing domain rejection |
+
+The outbound queue holds at most 32 MiB of encoded payload plus one message being
+written. Request futures, current decoding/serialization, and library framing buffers
+are additional bounded transport work. Native runtime state and result construction
+remain under their existing owners; these transport limits are not #291 residency quotas.
+
+Each physical connection has one serialized writer. Requests can overlap across
+Sessions, and responses may finish out of order; clients correlate by JSON-RPC ID.
+The common serving layer never waits for queue capacity while retaining semantic
+leases. A non-reading peer triggers queue overflow or the write deadline. Teardown
+drops read/write/request-waiter futures and explicitly closes the semantic connection.
+Already admitted runtime operations continue under their existing server owners.
+A mutation whose response is lost has an **unknown outcome**: no transport retries it.
+Reconnect with initialize/attach/snapshot/resync and inspect authoritative state.
+
+`AppServerConnection::close()` is permanent and idempotent. Its route-table lock
+linearizes close against attachment reservation/claim/commit, including pending loads.
+It releases exact external claims even if concurrent tasks retain an `Arc`; it never
+cancels execution, settles an interaction, unloads a runtime or edits history. Transport
+termination has one cleanup path. A stale attachment cannot control its replacement.
+
+SIGINT/SIGTERM stops transport admission and settles connection tasks/attachments.
+It does not define a second runtime shutdown state machine or guarantee graceful drain
+of in-flight work; #291 owns that follow-up. Stdio EOF ends the standalone child process
+after detaching; any subsequent loss of execution is process death, not semantic EOF
+cancellation. An owning TUI may explicitly terminate its child. One WebSocket client
+closing never shuts down the listener or any other client.
+
+## Transport validation
+
+`tests/support/app_server_conformance.rs` supplies one expectation set for direct,
+real-process stdio and real-process WebSocket drivers. Boundary tests additionally
+cover handshake admission, fragmented messages, exact size limits, JSON error recovery,
+process bootstrap/readiness, correlation, listener survival and process ownership.
+Native provider/interaction gates establish disconnect behavior. Controlled byte pipes
+exercise actual queue overflow, request admission saturation and a paused-clock write
+deadline; timeouts elsewhere are only outer liveness guards.
 
 ## JSON-RPC and initialization
 

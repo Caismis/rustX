@@ -92,8 +92,9 @@ user-visible command surface.
 
 That current Runtime Client wire contract is temporary pre-#290 infrastructure.
 The [App Server protocol](docs/app-server-protocol.md) (#288) is the unified,
-transport-neutral client boundary. #36 supplies first-class stdio JSONL and
-WebSocket bindings and the standalone server entry point; #290 moves local TUI
+transport-neutral client boundary. `rustx app-server --listen stdio` and
+`rustx app-server --listen ws://127.0.0.1:8080 --token-file <path>` provide the
+standalone server transports; #290 moves local TUI
 to stdio JSONL with a TUI-owned App Server child and existing/remote TUI to
 WebSocket with an externally managed server. Ordinary local use needs no loopback
 WebSocket. Connection detach is separate from owner-driven child-process shutdown.
