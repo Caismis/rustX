@@ -12,8 +12,8 @@ export const fixtures = [
           "max_resident_runtimes": 8,
           "max_connections": 32,
           "max_external_attachments": 64,
-          "idle_grace_ms": "300000",
-          "shutdown_deadline_ms": "30000"
+          "idle_grace_ms": 300000,
+          "shutdown_deadline_ms": 30000
         },
         "loaded": 0,
         "loading": 0,

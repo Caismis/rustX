@@ -4,10 +4,15 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct AppServerPolicy {
+    #[schemars(range(min = 1, max = 256))]
     pub max_resident_runtimes: usize,
+    #[schemars(range(min = 1, max = 1024))]
     pub max_connections: usize,
+    #[schemars(range(min = 1, max = 4096))]
     pub max_external_attachments: usize,
+    #[schemars(range(min = 1, max = 86_400_000))]
     pub idle_grace_ms: u64,
+    #[schemars(range(min = 1, max = 3_600_000))]
     pub shutdown_deadline_ms: u64,
 }
 impl Default for AppServerPolicy {
@@ -65,5 +70,30 @@ mod tests {
             ..AppServerPolicy::default()
         };
         assert!(impossible.validate().is_err());
+    }
+    #[test]
+    fn schema_and_startup_accept_the_same_policy_bounds() {
+        let schema = serde_json::to_value(schemars::schema_for!(AppServerPolicy)).unwrap();
+        for (field, max) in [
+            ("max_resident_runtimes", 256_u64),
+            ("max_connections", 1024),
+            ("max_external_attachments", 4096),
+            ("idle_grace_ms", 86_400_000),
+            ("shutdown_deadline_ms", 3_600_000),
+        ] {
+            assert_eq!(schema["properties"][field]["minimum"], 1);
+            assert_eq!(schema["properties"][field]["maximum"], max);
+            for (number, valid) in [(0, false), (1, true), (max, true), (max + 1, false)] {
+                let mut value = serde_json::to_value(AppServerPolicy::default()).unwrap();
+                value[field] = number.into();
+                assert_eq!(
+                    serde_json::from_value::<AppServerPolicy>(value)
+                        .unwrap()
+                        .validate()
+                        .is_ok(),
+                    valid
+                );
+            }
+        }
     }
 }

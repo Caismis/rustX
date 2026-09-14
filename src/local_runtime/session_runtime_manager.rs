@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
-use super::app_server_policy::AppServerPolicy;
 use crate::runtime::monotonic::{MonotonicClock, SystemMonotonicClock};
 use tokio::sync::watch;
 
@@ -57,9 +56,6 @@ pub enum RuntimeManagerError {
     },
     StaleIncarnation,
     ResidencyCapacity,
-    AttachmentCapacity,
-    ServerDraining,
-    RequestCapacity,
     TransitionFailed(String),
 }
 impl std::fmt::Display for RuntimeManagerError {
@@ -75,9 +71,6 @@ impl std::fmt::Display for RuntimeManagerError {
                 "Session {session_id:?} already owns {resident_conversation:?}; cannot load {requested_conversation:?}"
             ),
             Self::ResidencyCapacity => f.write_str("runtime residency capacity exhausted"),
-            Self::AttachmentCapacity => f.write_str("external attachment capacity exhausted"),
-            Self::RequestCapacity => f.write_str("process request capacity exhausted"),
-            Self::ServerDraining => f.write_str("server is draining"),
             Self::StaleIncarnation => f.write_str("runtime incarnation is no longer current"),
             Self::TransitionFailed(message) => message.fmt(f),
         }
@@ -165,68 +158,49 @@ struct ResidentRuntime {
 
 /// External semantic relationship, independent of internal Runtime Client plumbing.
 #[derive(Debug)]
-pub(crate) struct ExternalAttachment {
+pub(crate) struct RuntimeResidencyPin {
     registry: Weak<RuntimeRegistry>,
     resident: Weak<ResidentRuntime>,
     released: std::sync::atomic::AtomicBool,
 }
-impl ExternalAttachment {
+impl RuntimeResidencyPin {
     /// # Panics
     /// Panics if an internal ownership mutex is poisoned.
     pub(crate) fn release(&self) {
         if let Some(registry) = self.registry.upgrade() {
-            let mut state = registry.0.lock().expect("registry mutex");
-            if !self.released.swap(true, Ordering::Relaxed) {
-                state.attachments -= 1;
-                if let Some(resident) = self.resident.upgrade() {
-                    resident.external.fetch_sub(1, Ordering::Relaxed);
-                    resident.activity.fetch_add(1, Ordering::Relaxed);
-                }
+            let _state = registry.0.lock().expect("registry mutex");
+            if !self.released.swap(true, Ordering::Relaxed)
+                && let Some(resident) = self.resident.upgrade()
+            {
+                resident.external.fetch_sub(1, Ordering::Relaxed);
+                resident.activity.fetch_add(1, Ordering::Relaxed);
             }
         }
     }
 }
-impl Drop for ExternalAttachment {
+impl Drop for RuntimeResidencyPin {
     fn drop(&mut self) {
         self.release();
     }
 }
 
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Default,
-    PartialEq,
-    Eq,
-    serde::Serialize,
-    serde::Deserialize,
-    schemars::JsonSchema,
-)]
-pub enum ServerLifecycle {
-    #[default]
-    Accepting,
-    Draining,
-    Terminated,
+/// The manager receives only residency policy, resolved by its composer.
+#[derive(Clone, Debug)]
+pub struct RuntimeResidencyPolicy {
+    pub max_resident_runtimes: usize,
+    pub idle_grace_ms: u64,
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
-pub struct ResidencyDiagnostics {
-    pub lifecycle: ServerLifecycle,
-    pub policy: AppServerPolicy,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuntimeResidencyDiagnostics {
     pub loaded: usize,
     pub loading: usize,
     pub unloading: usize,
     pub active_roots: usize,
-    pub external_attachments: usize,
+    pub residency_pins: usize,
     pub sessions: Vec<SessionResidencyDiagnostic>,
     pub admission_refusals: std::collections::BTreeMap<String, u64>,
-    pub shutdown_failures: u64,
-    pub shutdown_timeouts: u64,
     pub unload_failures: u64,
-    pub transport: crate::app_server::transport::resources::TransportDiagnostics,
 }
 #[derive(
     Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
@@ -241,13 +215,6 @@ pub struct SessionResidencyDiagnostic {
     pub active_root: bool,
     pub idle_for_ms: Option<u64>,
     pub idle_remaining_ms: Option<u64>,
-}
-
-pub(crate) struct ServerOperation(watch::Sender<usize>);
-impl Drop for ServerOperation {
-    fn drop(&mut self) {
-        self.0.send_modify(|count| *count -= 1);
-    }
 }
 
 /// Private, non-cloneable server-operation ownership. Never lent to a client.
@@ -293,8 +260,7 @@ impl ManagedRuntimeClient {
             .registry
             .upgrade()
             .ok_or(RuntimeManagerError::StaleIncarnation)?;
-        let mut state = registry.0.lock().expect("registry mutex");
-        state.accepting()?;
+        let state = registry.0.lock().expect("registry mutex");
         let Some(Entry::Loaded(resident)) = state.entries.get(&identity.conversation) else {
             return Err(RuntimeManagerError::StaleIncarnation);
         };
@@ -366,7 +332,7 @@ impl ManagedRuntimeClient {
     ) -> Result<
         (
             crate::runtime_client::attachment::AttachedSnapshot,
-            ExternalAttachment,
+            RuntimeResidencyPin,
         ),
         RuntimeManagerError,
     > {
@@ -377,17 +343,14 @@ impl ManagedRuntimeClient {
             .registry
             .upgrade()
             .ok_or(RuntimeManagerError::StaleIncarnation)?;
-        let mut state = registry.0.lock().expect("registry mutex");
-        state.accepting()?;
-        if state.attachments == state.policy.max_external_attachments {
-            state.refuse("attachment_capacity");
-            return Err(RuntimeManagerError::AttachmentCapacity);
+        let state = registry.0.lock().expect("registry mutex");
+        if !matches!(state.entries.get(&runtime.identity.conversation), Some(Entry::Loaded(current)) if Arc::ptr_eq(current, runtime))
+        {
+            return Err(RuntimeManagerError::StaleIncarnation);
         }
-        // The operation lease excludes idle claim while native attachment is
-        // constructed; reservation is independent of internal host clients.
-        state.attachments += 1;
+        // Pin acquisition shares registry publication with idle eviction.
         runtime.external.fetch_add(1, Ordering::Relaxed);
-        let external = ExternalAttachment {
+        let external = RuntimeResidencyPin {
             registry: Arc::downgrade(&registry),
             resident: Arc::downgrade(runtime),
             released: std::sync::atomic::AtomicBool::new(false),
@@ -479,17 +442,12 @@ enum Entry {
         flight: Arc<Flight>,
     },
 }
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct RegistryState {
     entries: HashMap<ConversationId, Entry>,
-    policy: AppServerPolicy,
-    lifecycle: ServerLifecycle,
-    attachments: usize,
+    policy: RuntimeResidencyPolicy,
     refusals: std::collections::BTreeMap<String, u64>,
-    shutdown_failures: u64,
-    shutdown_timeouts: u64,
     unload_failures: u64,
-    requests: Option<watch::Sender<usize>>,
 
     // Ownership index only, not a second state machine. Covers every entry,
     // including replacement handoff and failed (unproven) shutdown.
@@ -503,13 +461,6 @@ impl RegistryState {
     fn refuse(&mut self, reason: &str) {
         let count = self.refusals.entry(reason.into()).or_default();
         *count = count.saturating_add(1);
-    }
-    fn accepting(&mut self) -> Result<(), RuntimeManagerError> {
-        if self.lifecycle != ServerLifecycle::Accepting {
-            self.refuse("server_draining");
-            return Err(RuntimeManagerError::ServerDraining);
-        }
-        Ok(())
     }
     fn reserve(&mut self) -> Result<(), RuntimeManagerError> {
         if self.entries.len() >= self.policy.max_resident_runtimes {
@@ -541,7 +492,7 @@ impl RegistryState {
     }
 }
 /// Owned only by the process runtime manager and its in-progress flights.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct RuntimeRegistry(Mutex<RegistryState>);
 
 /// The user-process residency owner. Durable metadata belongs to `sessions`,
@@ -554,13 +505,12 @@ pub struct SessionRuntimeManager {
     credentials: CredentialSnapshot,
     dependencies: Arc<LocalRuntimeDependencies>,
     clock: Arc<dyn MonotonicClock>,
-    transport: Arc<crate::app_server::transport::resources::TransportResources>,
 }
 impl SessionRuntimeManager {
     #[must_use]
     /// # Panics
     /// Panics if an internal ownership mutex is poisoned.
-    pub fn diagnostics(&self) -> ResidencyDiagnostics {
+    pub fn diagnostics(&self) -> RuntimeResidencyDiagnostics {
         let (mut snapshot, candidates) = {
             let state = self.registry.0.lock().expect("registry mutex");
             let candidates: Vec<_> = state
@@ -578,20 +528,15 @@ impl SessionRuntimeManager {
                 })
                 .collect();
             (
-                ResidencyDiagnostics {
-                    lifecycle: state.lifecycle,
-                    policy: state.policy.clone(),
+                RuntimeResidencyDiagnostics {
                     loaded: 0,
                     loading: 0,
                     unloading: 0,
                     active_roots: 0,
-                    external_attachments: state.attachments,
+                    residency_pins: 0,
                     sessions: Vec::new(),
                     admission_refusals: state.refusals.clone(),
-                    shutdown_failures: state.shutdown_failures,
-                    shutdown_timeouts: state.shutdown_timeouts,
                     unload_failures: state.unload_failures,
-                    transport: self.transport.snapshot(),
                 },
                 candidates,
             )
@@ -637,9 +582,14 @@ impl SessionRuntimeManager {
                 active_root,
                 idle_for_ms,
                 idle_remaining_ms: idle_for_ms
-                    .map(|elapsed| snapshot.policy.idle_grace_ms.saturating_sub(elapsed)),
+                    .map(|elapsed| self.policy().idle_grace_ms.saturating_sub(elapsed)),
             });
         }
+        snapshot.residency_pins = snapshot
+            .sessions
+            .iter()
+            .map(|s| s.external_attachments)
+            .sum();
         snapshot
             .sessions
             .sort_by(|a, b| a.session_id.cmp(&b.session_id));
@@ -648,7 +598,7 @@ impl SessionRuntimeManager {
     #[must_use]
     /// # Panics
     /// Panics if an internal ownership mutex is poisoned.
-    pub fn policy(&self) -> AppServerPolicy {
+    pub fn policy(&self) -> RuntimeResidencyPolicy {
         self.registry
             .0
             .lock()
@@ -657,101 +607,12 @@ impl SessionRuntimeManager {
             .clone()
     }
 
-    /// One process admission boundary, shared with loading and operation leases.
+    /// Supervise the current residency set without failing fast. To prove all
+    /// residency settled, the composer must also settle upstream admissions and
+    /// drain a final inventory; this owner has no server lifecycle/protocol gate.
     /// # Panics
-    /// Panics if an internal ownership mutex is poisoned.
-    pub fn begin_drain(&self) {
-        let mut state = self.registry.0.lock().expect("registry mutex");
-        if state.lifecycle == ServerLifecycle::Accepting {
-            state.lifecycle = ServerLifecycle::Draining;
-        }
-    }
-
-    pub(crate) fn admit_request(&self) -> Result<ServerOperation, RuntimeManagerError> {
-        let mut state = self.registry.0.lock().expect("registry mutex");
-        state.accepting()?;
-        let limit = state.policy.max_connections * 16;
-        let requests = state.requests.get_or_insert_with(|| watch::channel(0).0);
-        if *requests.borrow() >= limit {
-            state.refuse("request_capacity");
-            return Err(RuntimeManagerError::RequestCapacity);
-        }
-        requests.send_modify(|count| *count += 1);
-        Ok(ServerOperation(requests.clone()))
-    }
-
-    /// Forced host reporting cannot wait behind a native owner or storage I/O.
-    pub(crate) fn forced_resources(&self, timeout: bool) -> String {
-        let Ok(mut state) = self.registry.0.try_lock() else {
-            return "residency snapshot unavailable (admission boundary busy)".into();
-        };
-        if timeout {
-            state.shutdown_timeouts += 1;
-        }
-        let mut resources: Vec<_> = state
-            .entries
-            .iter()
-            .map(|(id, entry)| {
-                let phase = match entry {
-                    Entry::Loading(_) => "Loading",
-                    Entry::Loaded(_) => "Loaded",
-                    Entry::Unloading { .. } => "Unloading",
-                };
-                format!("{id:?}: {phase}")
-            })
-            .collect();
-        resources.sort();
-        let pending_requests = state
-            .requests
-            .as_ref()
-            .map_or(0, |requests| *requests.borrow());
-        format!(
-            "runtimes=[{}]; pending_protocol_operations={pending_requests}; physical_connections_remain={}",
-            resources.join(", "),
-            self.transport.has_connections()
-        )
-    }
-
-    pub(crate) fn admit_connection(
-        &self,
-        websocket: bool,
-    ) -> Option<crate::app_server::transport::resources::ConnectionLease> {
-        let mut state = self.registry.0.lock().expect("registry mutex");
-        if state.accepting().is_err() {
-            self.transport.refuse();
-            return None;
-        }
-        self.transport.reserve(
-            websocket,
-            if websocket {
-                state.policy.max_connections
-            } else {
-                1
-            },
-        )
-    }
-
-    pub(crate) fn attachment_capacity_refused(&self) {
-        self.registry
-            .0
-            .lock()
-            .expect("registry mutex")
-            .refuse("attachment_capacity");
-    }
-
-    pub(crate) fn transport_failure(&self) {
-        self.transport.delivery_failed();
-    }
-
-    pub(crate) fn server_draining(&self) -> bool {
-        self.registry.0.lock().expect("registry mutex").lifecycle != ServerLifecycle::Accepting
-    }
-
-    /// Supervise every reserved/live slot independently. Failure never skips a sibling.
-    /// # Panics
-    /// Panics if an internal ownership mutex is poisoned.
-    pub async fn drain(&self) -> Vec<String> {
-        self.begin_drain();
+    /// Panics if the residency mutex is poisoned.
+    pub async fn drain_all_runtimes(&self) -> Vec<String> {
         let ids: Vec<_> = self
             .registry
             .0
@@ -768,44 +629,39 @@ impl SessionRuntimeManager {
                 .map(|error| format!("{id:?}: {error}"))
         }))
         .await;
-        let requests = self
-            .registry
-            .0
-            .lock()
-            .expect("registry mutex")
-            .requests
-            .clone();
-        if let Some(requests) = requests {
-            requests
-                .subscribe()
-                .wait_for(|count| *count == 0)
-                .await
-                .expect("request owner");
-        }
         let mut failures: Vec<_> = results.into_iter().flatten().collect();
         failures.sort();
-        if !failures.is_empty() {
-            self.registry
-                .0
-                .lock()
-                .expect("registry mutex")
-                .shutdown_failures += 1;
-        }
         failures
     }
 
-    /// Final host publication, after runtime, request, and transport owners settle.
-    pub(crate) fn finish_drain(&self) -> Result<(), RuntimeManagerError> {
-        let mut state = self.registry.0.lock().expect("registry mutex");
-        if state.lifecycle != ServerLifecycle::Draining
-            || !state.entries.is_empty()
-            || state.requests.as_ref().is_some_and(|r| *r.borrow() != 0)
-            || self.transport.has_connections()
-        {
-            return Err(error("server settlement is not proven"));
-        }
-        state.lifecycle = ServerLifecycle::Terminated;
-        Ok(())
+    pub(crate) fn is_empty(&self) -> bool {
+        self.registry
+            .0
+            .lock()
+            .expect("registry mutex")
+            .entries
+            .is_empty()
+    }
+
+    /// Nonblocking inventory for a composer's forced termination report.
+    pub(crate) fn unproven_resources(&self) -> String {
+        let Ok(state) = self.registry.0.try_lock() else {
+            return "residency snapshot unavailable (admission boundary busy)".into();
+        };
+        let mut resources: Vec<_> = state
+            .entries
+            .iter()
+            .map(|(id, entry)| {
+                let phase = match entry {
+                    Entry::Loading(_) => "Loading",
+                    Entry::Loaded(_) => "Loaded",
+                    Entry::Unloading { .. } => "Unloading",
+                };
+                format!("{id:?}: {phase}")
+            })
+            .collect();
+        resources.sort();
+        format!("runtimes=[{}]", resources.join(", "))
     }
 
     /// # Panics
@@ -840,9 +696,6 @@ impl SessionRuntimeManager {
     pub fn reap_idle(&self) {
         let candidates: Vec<_> = {
             let state = self.registry.0.lock().expect("registry mutex");
-            if state.lifecycle != ServerLifecycle::Accepting {
-                return;
-            }
             state
                 .entries
                 .values()
@@ -864,9 +717,6 @@ impl SessionRuntimeManager {
                 .idle_before_claim
                 .enter();
             let mut state = self.registry.0.lock().expect("registry mutex");
-            if state.lifecycle != ServerLifecycle::Accepting {
-                return;
-            }
             if !matches!(state.entries.get(&resident.identity.conversation), Some(Entry::Loaded(current)) if Arc::ptr_eq(current, &resident))
             {
                 continue;
@@ -926,8 +776,11 @@ impl SessionRuntimeManager {
         configuration: UserConfigManager,
         credentials: CredentialSnapshot,
         dependencies: LocalRuntimeDependencies,
+        policy: RuntimeResidencyPolicy,
     ) -> Result<Self, RuntimeManagerError> {
-        let policy = configuration.app_server_policy().map_err(error)?;
+        if policy.max_resident_runtimes == 0 || policy.idle_grace_ms == 0 {
+            return Err(error("residency limits must be positive"));
+        }
         sessions.runtime_owner.set(()).map_err(|()| {
             error("SessionController already allocated its runtime manager; clone that manager")
         })?;
@@ -935,13 +788,19 @@ impl SessionRuntimeManager {
             sessions,
             registry: Arc::new(RuntimeRegistry(Mutex::new(RegistryState {
                 policy,
-                ..RegistryState::default()
+                entries: HashMap::new(),
+                by_session: HashMap::new(),
+                refusals: std::collections::BTreeMap::default(),
+                unload_failures: 0,
+                #[cfg(test)]
+                probes: HashMap::new(),
+                #[cfg(test)]
+                reaper_waiting: None,
             }))),
             configuration,
             credentials,
             dependencies: Arc::new(dependencies),
             clock: Arc::new(SystemMonotonicClock::new()),
-            transport: Arc::default(),
         })
     }
     #[must_use]
@@ -994,7 +853,6 @@ impl SessionRuntimeManager {
             let id_for_probe = id.clone();
             let flight = {
                 let mut registry = self.registry.0.lock().expect("registry mutex");
-                registry.accepting()?;
                 registry.check_session(session, &id)?;
                 match registry.entries.get(&id) {
                     Some(Entry::Loaded(runtime)) => return Ok(runtime.identity.clone()),
@@ -1219,7 +1077,6 @@ impl SessionRuntimeManager {
             let id = access.node.conversation_id.clone();
             let (flight, claimed) = {
                 let mut registry = self.registry.0.lock().expect("registry mutex");
-                registry.accepting()?;
                 registry.check_session(session, &id)?;
                 match registry.entries.get(&id) {
                     None => {

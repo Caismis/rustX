@@ -34,9 +34,8 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::Integer(291),
             result: MethodResult::Diagnostics {
-                snapshot: crate::local_runtime::session_runtime_manager::ResidencyDiagnostics {
-                    lifecycle:
-                        crate::local_runtime::session_runtime_manager::ServerLifecycle::Accepting,
+                snapshot: crate::app_server::host::ServerDiagnostics {
+                    lifecycle: crate::app_server::host::ServerLifecycle::Accepting,
                     policy: crate::local_runtime::app_server_policy::AppServerPolicy::default(),
                     loaded: 0,
                     loading: 0,

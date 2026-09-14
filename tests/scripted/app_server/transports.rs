@@ -17,7 +17,7 @@ async fn connected(
     f: &Fixture,
     ws: bool,
 ) -> (driver::Driver, tokio::task::JoinHandle<io::Result<()>>) {
-    let manager = f.manager.clone();
+    let manager = f.host.clone();
     if ws {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap());
@@ -111,7 +111,7 @@ async fn adapter_disconnect_preserves_active_execution_and_replacement_authority
             let runtime = f.manager.load(&old.session_id, None).await.unwrap();
             assert!(runtime.inspect_runtime().unwrap().has_current_attempt());
             assert_eq!(runtime.incarnation_id(), old.runtime_incarnation);
-            let replacement = AppServerConnection::new(f.manager.clone());
+            let replacement = AppServerConnection::new(f.host.clone());
             let direct = app_server_conformance::DirectDriver(&replacement);
             initialize(&direct).await;
             let new = attach(&direct, &f).await;
@@ -184,7 +184,7 @@ async fn adapter_disconnect_cannot_settle_approval_or_questionnaire() {
                     f.manager.residency(runtime.conversation_id()),
                     super::ResidencyState::Loaded
                 );
-                let replacement = AppServerConnection::new(f.manager.clone());
+                let replacement = AppServerConnection::new(f.host.clone());
                 let direct = app_server_conformance::DirectDriver(&replacement);
                 initialize(&direct).await;
                 let target = attach(&direct, &f).await;
@@ -207,7 +207,7 @@ async fn blocked_pipe_overflows_and_drops_writer_while_runtime_progresses() {
     bounded(async {
         use tokio::io::AsyncWriteExt;
         let f = Fixture::new().await;
-        let connection = Arc::new(AppServerConnection::new(f.manager.clone()));
+        let connection = Arc::new(AppServerConnection::new(f.host.clone()));
         let direct = app_server_conformance::DirectDriver(&connection);
         initialize(&direct).await;
         let target = attach(&direct, &f).await;
@@ -251,7 +251,7 @@ async fn blocked_websocket_overflows_with_controlled_duplex_capacity() {
         let f = Fixture::new().await;
         // Real WebSocket HTTP handshake and framing over an exactly bounded byte pipe.
         let (client, server) = tokio::io::duplex(1024);
-        let manager = f.manager.clone();
+        let manager = f.host.clone();
         let serving = tokio::spawn(websocket::connection(
             server,
             manager,
@@ -315,7 +315,7 @@ async fn adapters_share_direct_semantic_expectations() {
 async fn blocked_writer_deadline_is_cancellable_without_another_input_record() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let f = Fixture::new().await;
-    let connection = Arc::new(AppServerConnection::new(f.manager.clone()));
+    let connection = Arc::new(AppServerConnection::new(f.host.clone()));
     let (mut input, reader) = tokio::io::duplex(1024);
     let (writer, mut unread) = tokio::io::duplex(1);
     tokio::time::pause();
@@ -346,7 +346,7 @@ async fn request_admission_overflow_releases_transport_but_not_server_operation_
     bounded(async {
         use tokio::io::AsyncWriteExt;
         let f = Fixture::new().await;
-        let connection = Arc::new(AppServerConnection::new(f.manager.clone()));
+        let connection = Arc::new(AppServerConnection::new(f.host.clone()));
         let direct = app_server_conformance::DirectDriver(&connection);
         initialize(&direct).await;
         let target = attach(&direct, &f).await;
@@ -510,7 +510,7 @@ async fn incomplete_websocket_handshake_has_a_finite_deadline() {
     tokio::time::pause();
     let result = websocket::connection(
         server,
-        f.manager.clone(),
+        f.host.clone(),
         websocket::Credential::new(driver::TOKEN.into()).unwrap(),
         CancellationToken::new(),
     )
@@ -577,7 +577,7 @@ async fn authenticated_websocket_capacity_is_released_after_client_reaping() {
         let (slots, mut observed) = tokio::sync::watch::channel(0);
         let serving = tokio::spawn(websocket::serve_listener(
             listener,
-            f.manager.clone(),
+            f.host.clone(),
             websocket::Credential::new(driver::TOKEN.into()).unwrap(),
             stop.clone(),
             Some(slots),
@@ -683,7 +683,7 @@ async fn ready_control_admission_does_not_wait_for_continuous_notifications() {
     bounded(async {
         use tokio::io::AsyncWriteExt;
         let f = Fixture::new().await;
-        let connection = Arc::new(AppServerConnection::new(f.manager.clone()));
+        let connection = Arc::new(AppServerConnection::new(f.host.clone()));
         let direct = app_server_conformance::DirectDriver(&connection);
         initialize(&direct).await;
         let target = attach(&direct, &f).await;

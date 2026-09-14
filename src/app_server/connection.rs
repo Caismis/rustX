@@ -10,12 +10,12 @@ use super::protocol::{
 };
 use crate::local_runtime::session::SessionId;
 use crate::local_runtime::session_controller::SessionController;
-use crate::local_runtime::session_runtime_manager::{
-    ManagedRuntimeClient, RuntimeManagerError, SessionRuntimeManager,
-};
+use crate::local_runtime::session_runtime_manager::{ManagedRuntimeClient, RuntimeManagerError};
 use crate::runtime_client::attachment::RuntimeAttachment;
 use crate::runtime_client::host::EventDelivery;
 use crate::runtime_client::types::{RuntimeClientError, RuntimeClientResult};
+
+use super::host::{AppServerHost, AttachmentPermit, HostAdmissionError};
 
 const MAX_ATTACHMENTS: usize = 32;
 
@@ -40,7 +40,7 @@ impl AttachReservation {
     fn new(
         table: &Arc<Mutex<RouteTable>>,
         session: &SessionId,
-        manager: &SessionRuntimeManager,
+        host: &AppServerHost,
     ) -> Result<Self, RpcError> {
         let mut routes = table.lock().expect("routes mutex");
         if routes.closed {
@@ -50,7 +50,7 @@ impl AttachReservation {
             return Err(domain(ErrorData::ControllerInUse));
         }
         if routes.active.len() + routes.reserved.len() >= MAX_ATTACHMENTS {
-            manager.attachment_capacity_refused();
+            host.attachment_capacity_refused();
             return Err(domain(ErrorData::AttachmentCapacity));
         }
         routes.reserved.insert(session.clone());
@@ -102,6 +102,7 @@ fn release_route(table: &Mutex<RouteTable>, route: &Arc<Route>) {
         routes.active.remove(&route.target.session_id);
         route.attachment.detach();
         route.external.release();
+        route.capacity.release();
     }
 }
 
@@ -109,14 +110,15 @@ struct Route {
     target: AttachmentTarget,
     client: ManagedRuntimeClient,
     attachment: RuntimeAttachment,
-    external: crate::local_runtime::session_runtime_manager::ExternalAttachment,
+    external: crate::local_runtime::session_runtime_manager::RuntimeResidencyPin,
+    capacity: AttachmentPermit,
 }
 
 /// A transport may share this connection across concurrent request handlers.
 /// A single notification consumer drives fan-in directly, without pump tasks.
 #[derive(Clone)]
 pub struct AppServerConnection {
-    manager: SessionRuntimeManager,
+    host: AppServerHost,
     sessions: SessionController,
     initialized: Arc<Mutex<Option<InitializeParams>>>,
     routes: Arc<Mutex<RouteTable>>,
@@ -127,11 +129,11 @@ pub struct AppServerConnection {
 
 impl AppServerConnection {
     pub(crate) fn server_draining(&self) -> bool {
-        self.manager.server_draining()
+        self.host.server_draining()
     }
 
     pub(crate) fn transport_failure(&self) {
-        self.manager.transport_failure();
+        self.host.transport_failure();
     }
 
     #[cfg(test)]
@@ -141,10 +143,10 @@ impl AppServerConnection {
     }
 
     #[must_use]
-    pub fn new(manager: SessionRuntimeManager) -> Self {
+    pub fn new(host: AppServerHost) -> Self {
         Self {
-            sessions: manager.session_controller(),
-            manager,
+            sessions: host.manager().session_controller(),
+            host,
             initialized: Arc::new(Mutex::new(None)),
             routes: Arc::new(Mutex::new(RouteTable::default())),
             changed: Arc::new(tokio::sync::Notify::new()),
@@ -165,6 +167,7 @@ impl AppServerConnection {
         for (_, route) in std::mem::take(&mut routes.active) {
             route.attachment.detach();
             route.external.release();
+            route.capacity.release();
         }
         self.changed.notify_one();
     }
@@ -295,10 +298,10 @@ impl AppServerConnection {
         }
         if matches!(method, Method::ServerDiagnostics {}) {
             return Ok(MethodResult::Diagnostics {
-                snapshot: self.manager.diagnostics(),
+                snapshot: self.host.diagnostics(),
             });
         }
-        let _request = self.manager.admit_request().map_err(manager_error)?;
+        let request_owner = self.host.admit_request().map_err(host_error)?;
         if let Some(target) = runtime_target(&method) {
             let route = self.route(target)?;
             let client = route.client.clone();
@@ -319,6 +322,7 @@ impl AppServerConnection {
                     .start_operation(move || {
                         let authority = route.attachment.operation_authority();
                         async move {
+                            let _request = request_owner;
                             dispatch_runtime(
                                 method,
                                 route,
@@ -354,12 +358,13 @@ impl AppServerConnection {
                 .map_err(session_error),
             Method::SessionUnload { target } => {
                 let route = self.route(&target)?;
-                let manager = self.manager.clone();
+                let manager = self.host.manager().clone();
                 let routes = self.routes.clone();
                 let changed = self.changed.clone();
                 let (sender, receiver) = tokio::sync::oneshot::channel();
                 // Cleanup is server-owned even if the initiating caller goes away.
                 tokio::spawn(async move {
+                    let _request = request_owner;
                     let result = manager
                         .unload_incarnation(&target.conversation_id, target.runtime_incarnation)
                         .await
@@ -483,11 +488,13 @@ impl AppServerConnection {
                 session_id,
                 node_id,
             } => {
-                let reservation = AttachReservation::new(&self.routes, &session_id, &self.manager)?;
+                let capacity = self.host.admit_attachment().map_err(host_error)?;
+                let reservation = AttachReservation::new(&self.routes, &session_id, &self.host)?;
                 // Reservation is request-scoped; once claimed, Loading is
                 // manager-scoped. Dropping this request does not roll it back.
                 let runtime = self
-                    .manager
+                    .host
+                    .manager()
                     .load(&session_id, node_id.as_ref())
                     .await
                     .map_err(manager_error)?;
@@ -513,6 +520,7 @@ impl AppServerConnection {
                             client,
                             attachment,
                             external,
+                            capacity,
                         }),
                         MethodResult::Attached {
                             target,
@@ -840,10 +848,7 @@ fn client_error(error: RuntimeClientError) -> RpcError {
 }
 fn manager_error(error: RuntimeManagerError) -> RpcError {
     match error {
-        RuntimeManagerError::RequestCapacity => domain(ErrorData::RequestCapacity),
         RuntimeManagerError::ResidencyCapacity => domain(ErrorData::ResidencyCapacity),
-        RuntimeManagerError::AttachmentCapacity => domain(ErrorData::AttachmentCapacity),
-        RuntimeManagerError::ServerDraining => domain(ErrorData::ServerDraining),
         RuntimeManagerError::StaleIncarnation => domain(ErrorData::StaleRuntime),
         RuntimeManagerError::Client(error) => client_error(error),
         _ => domain(ErrorData::OperationFailed),
@@ -883,5 +888,13 @@ fn failure(id: Option<RequestId>, error: RpcError) -> Response {
         jsonrpc: JsonRpcVersion::V2,
         id,
         error,
+    })
+}
+
+fn host_error(error: HostAdmissionError) -> RpcError {
+    domain(match error {
+        HostAdmissionError::ServerDraining => ErrorData::ServerDraining,
+        HostAdmissionError::RequestCapacity => ErrorData::RequestCapacity,
+        HostAdmissionError::AttachmentCapacity => ErrorData::AttachmentCapacity,
     })
 }

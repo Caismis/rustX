@@ -88,6 +88,7 @@ impl Probe {
 struct Fixture {
     _root: tempfile::TempDir,
     manager: SessionRuntimeManager,
+    host: crate::app_server::host::AppServerHost,
     sessions: [SessionSnapshot; 2],
     gates: [Arc<HeaderGate>; 2],
     provider: FixtureServer,
@@ -196,10 +197,18 @@ impl Fixture {
             UserConfigManager::new(paths.sources.clone()).unwrap(),
             CredentialSnapshot::new([("TEST_KEY".into(), "fixture".into())]),
             LocalRuntimeDependencies::default(),
+            RuntimeResidencyPolicy {
+                max_resident_runtimes: 8,
+                idle_grace_ms: 300_000,
+            },
         )
         .unwrap();
         Self {
             _root: root,
+            host: crate::app_server::host::AppServerHost::new(
+                manager.clone(),
+                crate::local_runtime::app_server_policy::AppServerPolicy::default(),
+            ),
             manager,
             sessions: sessions.try_into().unwrap(),
             gates,
@@ -795,7 +804,8 @@ async fn panicked_composition_task_cleans_flight_and_warm_load_never_reresolves(
                 f.manager.sessions.clone(),
                 f.manager.configuration.clone(),
                 f.manager.credentials.clone(),
-                LocalRuntimeDependencies::default()
+                LocalRuntimeDependencies::default(),
+                f.manager.policy(),
             )
             .is_err()
         );

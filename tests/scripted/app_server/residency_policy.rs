@@ -1,4 +1,5 @@
 use super::*;
+use crate::app_server::host::{AppServerHost, HostAdmissionError, ServerLifecycle};
 use crate::runtime::monotonic::ManualMonotonicClock;
 
 fn policy(f: &mut Fixture, limit: usize) -> Arc<ManualMonotonicClock> {
@@ -7,6 +8,15 @@ fn policy(f: &mut Fixture, limit: usize) -> Arc<ManualMonotonicClock> {
     let mut state = f.manager.registry.0.lock().unwrap();
     state.policy.max_resident_runtimes = limit;
     state.policy.idle_grace_ms = 100;
+    drop(state);
+    f.host = AppServerHost::new(
+        f.manager.clone(),
+        crate::local_runtime::app_server_policy::AppServerPolicy {
+            max_resident_runtimes: limit,
+            idle_grace_ms: 100,
+            ..Default::default()
+        },
+    );
     clock
 }
 
@@ -124,17 +134,15 @@ async fn operation_wins_idle_and_drain_retains_owned_lease_after_waiter_drop() {
         f.manager.residency(a.conversation_id()),
         ResidencyState::Loaded
     );
-    f.manager.begin_drain();
-    assert_eq!(
-        a.client().start_operation(|| async {}).unwrap_err(),
-        RuntimeManagerError::ServerDraining
-    );
-    assert_eq!(
-        f.load(1).await.unwrap().unwrap_err(),
-        RuntimeManagerError::ServerDraining
-    );
-    let manager = f.manager.clone();
-    let drain = tokio::spawn(async move { manager.drain().await });
+    let b = f.load(1).await.unwrap().unwrap();
+    let accepted = f.host.admit_request().unwrap();
+    f.host.begin_drain();
+    assert!(matches!(
+        f.host.admit_request(),
+        Err(HostAdmissionError::ServerDraining)
+    ));
+    let host = f.host.clone();
+    let drain = tokio::spawn(async move { host.drain().await });
     probe
         .draining_operations
         .subscribe()
@@ -146,13 +154,18 @@ async fn operation_wins_idle_and_drain_retains_owned_lease_after_waiter_drop() {
         f.manager.residency(a.conversation_id()),
         ResidencyState::Unloading
     );
+    // B settles even while A and an accepted host request remain pending.
+    f.manager.unload(b.conversation_id()).await.unwrap();
+    assert_eq!(
+        f.manager.residency(b.conversation_id()),
+        ResidencyState::Unloaded
+    );
+    assert!(!drain.is_finished());
+    drop(accepted);
     probe.before_operation.release();
     assert!(drain.await.unwrap().is_empty());
-    f.manager.finish_drain().unwrap();
-    assert_eq!(
-        f.manager.diagnostics().lifecycle,
-        ServerLifecycle::Terminated
-    );
+    f.host.finish_drain().unwrap();
+    assert_eq!(f.host.diagnostics().lifecycle, ServerLifecycle::Terminated);
     f.close().await;
 }
 
@@ -160,23 +173,27 @@ async fn operation_wins_idle_and_drain_retains_owned_lease_after_waiter_drop() {
 async fn external_attachment_capacity_is_independent_and_released_on_detach() {
     let mut f = Fixture::new().await;
     policy(&mut f, 2);
-    f.manager
-        .registry
-        .0
-        .lock()
-        .unwrap()
-        .policy
-        .max_external_attachments = 1;
+    let host = AppServerHost::new(
+        f.manager.clone(),
+        crate::local_runtime::app_server_policy::AppServerPolicy {
+            max_external_attachments: 1,
+            ..Default::default()
+        },
+    );
     let a = f.load(0).await.unwrap().unwrap();
     let b = f.load(1).await.unwrap().unwrap();
+    let capacity = host.admit_attachment().unwrap();
     let (_a, external) = a.client().attach().unwrap();
     assert!(matches!(
-        b.client().attach(),
-        Err(RuntimeManagerError::AttachmentCapacity)
+        host.admit_attachment(),
+        Err(HostAdmissionError::AttachmentCapacity)
     ));
     external.release();
+    capacity.release();
+    let _capacity = host.admit_attachment().unwrap();
     let _b = b.client().attach().unwrap();
-    assert_eq!(f.manager.diagnostics().external_attachments, 1);
+    assert_eq!(f.manager.diagnostics().residency_pins, 1);
+    assert_eq!(host.diagnostics().external_attachments, 1);
     f.close().await;
 }
 
@@ -311,7 +328,7 @@ async fn drain_reports_failure_and_still_settles_sibling_without_releasing_faile
         f.manager.load(&c.id, None).await.unwrap_err(),
         RuntimeManagerError::ResidencyCapacity
     );
-    let failures = f.manager.drain().await;
+    let failures = f.host.drain().await;
     assert_eq!(failures.len(), 1);
     assert_eq!(
         f.manager.residency(a.conversation_id()),
@@ -321,8 +338,8 @@ async fn drain_reports_failure_and_still_settles_sibling_without_releasing_faile
         f.manager.residency(b.conversation_id()),
         ResidencyState::Unloaded
     );
-    assert_eq!(f.manager.diagnostics().lifecycle, ServerLifecycle::Draining);
-    assert_eq!(f.manager.diagnostics().shutdown_failures, 1);
+    assert_eq!(f.host.diagnostics().lifecycle, ServerLifecycle::Draining);
+    assert_eq!(f.host.diagnostics().shutdown_failures, 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -355,7 +372,7 @@ async fn accepted_inbound_before_attempt_admission_prevents_idle_claim() {
 }
 
 #[tokio::test]
-async fn goal_extension_is_conservatively_retained_and_policy_is_user_only() {
+async fn inactive_goal_can_idle_unload_and_policy_is_user_only() {
     let mut f = Fixture::new().await;
     let clock = policy(&mut f, 2);
     std::fs::write(
@@ -369,7 +386,7 @@ async fn goal_extension_is_conservatively_retained_and_policy_is_user_only() {
     f.manager.reap_idle();
     assert_eq!(
         f.manager.residency(a.conversation_id()),
-        ResidencyState::Loaded
+        ResidencyState::Unloading
     );
     std::fs::write(
         f.workspaces[1].join("rustx.toml"),
@@ -444,4 +461,224 @@ async fn one_reaper_timer_wakes_from_manual_clock_and_unloads_automatically() {
         f.close().await;
     })
     .await;
+}
+
+async fn goal_fixture() -> (
+    Fixture,
+    Arc<ManualMonotonicClock>,
+    Arc<ManagedRuntime>,
+    ConversationRuntime,
+) {
+    let mut f = Fixture::new().await;
+    let clock = policy(&mut f, 2);
+    std::fs::write(
+        f.workspaces[0].join("rustx.toml"),
+        "[agent.extensions.goal]\nenabled = true\n",
+    )
+    .unwrap();
+    let a = f.load(0).await.unwrap().unwrap();
+    let native = a.inspect_runtime().unwrap();
+    while native.idle_epoch().is_err() {
+        tokio::task::yield_now().await;
+    }
+    (f, clock, a, native)
+}
+
+#[tokio::test]
+async fn armed_goal_owns_residency_until_native_disarm_transitions() {
+    bounded(async {
+        use crate::goal::{GoalControl, GoalMutation};
+        for mutation in [
+            Some(GoalMutation::Pause),
+            Some(GoalMutation::Block {
+                reason: "waiting".into(),
+            }),
+            Some(GoalMutation::Complete),
+            None,
+        ] {
+            let (f, clock, a, native) = goal_fixture().await;
+            // No await between activation and probe: the real driver has not
+            // consumed its wake. Armed future authority alone must pin residency.
+            let goal = native
+                .control_goal(GoalControl::Create {
+                    objective: "test ownership".into(),
+                    budget: 2,
+                })
+                .unwrap();
+            assert!(goal.armed);
+            assert!(!native.has_current_attempt());
+            assert_eq!(
+                native.idle_epoch(),
+                Err(crate::runtime::conversation_runtime::IdleBusyReason::AutonomousExtension)
+            );
+            f.manager.reap_idle();
+            clock.advance(1000);
+            f.manager.reap_idle();
+            assert_eq!(
+                f.manager.residency(a.conversation_id()),
+                ResidencyState::Loaded
+            );
+            if let Some(mutation) = mutation {
+                let view = native
+                    .control_goal(GoalControl::Mutate {
+                        expected: goal.current.unwrap().reference,
+                        mutation,
+                    })
+                    .unwrap();
+                assert!(!view.armed);
+            } else {
+                native.disarm_goal();
+            }
+            assert!(native.idle_epoch().is_ok());
+            f.manager.reap_idle();
+            clock.advance(99);
+            f.manager.reap_idle();
+            assert_eq!(
+                f.manager.residency(a.conversation_id()),
+                ResidencyState::Loaded
+            );
+            clock.advance(1);
+            f.manager.reap_idle();
+            assert_eq!(
+                f.manager.residency(a.conversation_id()),
+                ResidencyState::Unloading
+            );
+            f.manager.unload(a.conversation_id()).await.unwrap();
+            f.close().await;
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn recovered_durable_goal_is_disarmed_and_can_idle_unload() {
+    bounded(async {
+        let (f, clock, a, native) = goal_fixture().await;
+        native
+            .control_goal(crate::goal::GoalControl::Create {
+                objective: "persisted goal".into(),
+                budget: 2,
+            })
+            .unwrap();
+        native.disarm_goal();
+        f.manager.unload(a.conversation_id()).await.unwrap();
+        let recovered = f.load(0).await.unwrap().unwrap();
+        let runtime = recovered.inspect_runtime().unwrap();
+        let goal = runtime.goal_view().unwrap().unwrap();
+        assert!(goal.current.is_some());
+        assert!(!goal.armed);
+        while runtime.idle_epoch().is_err() {
+            tokio::task::yield_now().await;
+        }
+        f.manager.reap_idle();
+        clock.advance(100);
+        f.manager.reap_idle();
+        assert_eq!(
+            f.manager.residency(recovered.conversation_id()),
+            ResidencyState::Unloading
+        );
+        f.manager.unload(recovered.conversation_id()).await.unwrap();
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn goal_rearm_and_idle_claim_have_both_winner_orders() {
+    bounded(async {
+        use crate::goal::{GoalControl, GoalMutation};
+        for rearm_wins in [true, false] {
+            let (f, _, a, native) = goal_fixture().await;
+            let goal = native
+                .control_goal(GoalControl::Create {
+                    objective: "race".into(),
+                    budget: 1,
+                })
+                .unwrap();
+            native.disarm_goal();
+            // Drive both native commit orders without yielding to the driver.
+            // The epoch is exactly the token the manager uses at idle claim.
+            let epoch = native.idle_epoch().unwrap();
+            let rearm = GoalControl::Mutate {
+                expected: goal.current.unwrap().reference,
+                mutation: GoalMutation::Resume,
+            };
+            if rearm_wins {
+                assert!(native.control_goal(rearm).unwrap().armed);
+                native.disarm_goal();
+                assert!(!native.has_current_attempt());
+                assert!(native.idle_epoch().is_ok());
+                assert!(
+                    !native.claim_idle(epoch),
+                    "activation invalidates even after disarming again"
+                );
+            } else {
+                assert!(native.claim_idle(epoch));
+                assert!(
+                    native
+                        .control_goal(rearm)
+                        .unwrap_err()
+                        .contains("accepts no inbound")
+                );
+                assert!(!native.goal_view().unwrap().unwrap().armed);
+            }
+            f.manager.unload(a.conversation_id()).await.unwrap();
+            f.close().await;
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn host_admission_commit_accounts_for_requests_connections_and_attachments() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let request = f.host.admit_request().unwrap();
+        let connection = f.host.admit_connection(true).unwrap();
+        let attachment = f.host.admit_attachment().unwrap();
+        f.host.begin_drain();
+        f.host.begin_drain();
+        assert!(matches!(
+            f.host.admit_request(),
+            Err(HostAdmissionError::ServerDraining)
+        ));
+        assert!(matches!(
+            f.host.admit_attachment(),
+            Err(HostAdmissionError::ServerDraining)
+        ));
+        assert!(f.host.admit_connection(true).is_none());
+        assert!(f.host.finish_drain().is_err());
+        // A request admitted before the host commit may still load. The lower
+        // manager has no duplicate server gate. Drain must include this slot.
+        let host = f.host.clone();
+        let mut drain = Box::pin(host.drain());
+        assert!(futures_util::poll!(&mut drain).is_pending());
+        let a = f.load(0).await.unwrap().unwrap();
+        assert_eq!(
+            f.manager.residency(a.conversation_id()),
+            ResidencyState::Loaded
+        );
+        drop(request);
+        assert!(drain.await.is_empty());
+        assert!(f.host.finish_drain().is_err());
+        drop(connection);
+        assert!(f.host.finish_drain().is_err());
+        drop(attachment);
+        f.host.finish_drain().unwrap();
+        let snapshot = f.host.diagnostics();
+        assert_eq!(snapshot.lifecycle, ServerLifecycle::Terminated);
+        assert_eq!(snapshot.loaded + snapshot.loading + snapshot.unloading, 0);
+        assert_eq!(snapshot.external_attachments, 0);
+        assert_eq!(snapshot.transport.websocket_connections, 0);
+        assert_eq!(snapshot.transport.connection_refusals, 1);
+        assert_eq!(snapshot.admission_refusals["server_draining"], 3);
+        f.close().await;
+    })
+    .await;
+}
+
+#[test]
+fn residency_owner_does_not_depend_on_app_server() {
+    let source = include_str!("../../../src/local_runtime/session_runtime_manager.rs");
+    assert!(!source.contains("crate::app_server"));
 }

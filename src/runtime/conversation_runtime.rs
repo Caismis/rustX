@@ -1441,7 +1441,11 @@ impl RuntimeInner {
         {
             return Err(Busy::Durability);
         }
-        if self.tool_runtime.goal().is_some() {
+        if self
+            .tool_runtime
+            .goal()
+            .is_some_and(crate::goal::GoalDomain::owns_autonomous_work)
+        {
             return Err(Busy::AutonomousExtension);
         }
         if self.mailbox.has_pending().map_err(|_| Busy::Durability)? {

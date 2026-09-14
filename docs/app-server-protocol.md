@@ -268,7 +268,7 @@ Session resident. Connection reservation is request-scoped; residency loading is
 manager-scoped once claimed. Cancelling an admitted cold attach releases its slot
 but does not roll back the manager-owned Loading flight: it may reach Loaded with
 zero external attachments. A later attach reuses that resident incarnation.
-Headless residency quotas/admission/idle eviction belong to the manager process
+Headless residency quotas and idle eviction belong to the runtime manager
 policy, independently of request cancellation. Its map is locked only for local routing changes; no lock
 spans composition, provider work, interaction settlement or shutdown. Requests
 may run concurrently and finish out of order.
@@ -497,6 +497,12 @@ environment. Zero values are invalid. Upper authoring bounds are respectively
 hour of shutdown grace. Invalid policy fails before traffic admission. Settings
 changes take effect on the next process start.
 
+Configuration resolves the policy once during App Server composition. The host
+owns the full process policy and passes only runtime count and idle grace to
+SessionRuntimeManager. The dependency graph is AppServerHost → connection /
+transport / SessionRuntimeManager → ConversationRuntime; the manager never imports
+App Server types.
+
 `Loading`, `Loaded`, and `Unloading` all consume the same writer quota. The
 registry lock checks quota and installs `Loading` atomically; same-Conversation
 callers join that flight without consuming another slot. Composition runs
@@ -508,8 +514,10 @@ native work; a `turn/start` response does not release an execution permit. No
 second root-attempt registry or limiter is introduced. Subagent/Workflow limits
 remain with their native domains.
 
-External attachments have independent residency leases, excluding internal
-projection/control plumbing. Each connection still permits at most 32 attached
+AppServerHost owns process-wide attachment capacity reservations. Each admitted
+attachment separately obtains an incarnation-bound RuntimeResidencyPin from the
+manager, excluding internal projection/control plumbing. Pins know neither the
+global attachment limit nor transport identity. Each connection still permits at most 32 attached
 or reserved Session routes; the configured attachment limit applies across the
 process. Detach releases only the external relationship. WebSocket close, stdio
 EOF, and broken pipe do not cancel attempts or answer interactions. Focusing B
@@ -524,8 +532,13 @@ eligibility excludes current attempts, compaction, accepted pending inbound,
 recovery continuation, pending interactions, background preparation/execution,
 unsettled subagents, and counted lifecycle owners (including Workflow,
 capability/MCP preparation, interaction callback authority and attempt tasks).
-Goal-enabled runtimes are conservatively retained, including disarmed Goals:
-there is no Goal wake/reload contract in this issue.
+Goal capability presence does not pin residency. The native GoalDomain's
+process-local armed activation owns authority to admit future autonomous work
+and blocks idle eviction. Enabled-but-inactive, recovered/disarmed, paused,
+blocked and completed Goals do not independently block eviction. Recovery starts
+activation disarmed. Goal create/resume commits through the existing native
+lifecycle boundary and changes its epoch; a stale idle probe cannot cross a
+later activation, even if that Goal disarms again before eviction claims.
 
 The native admission change token is invalidation only, not a second work-state
 registry. The reaper reads native owners outside the registry lock. At eviction
@@ -540,8 +553,12 @@ check-then-unload window exists.
 
 SIGTERM or SIGINT is the normal shutdown request for both externally managed
 WebSocket servers and owned stdio children. The first request commits
-`Accepting -> Draining` at the same registry boundary as load and operation
-admission. Diagnostics remain readable, but new semantic work receives
+`Accepting -> Draining` at AppServerHost's admission mutex, shared by semantic
+request, connection and attachment capacity admission. The manager has no server
+lifecycle: already accepted host requests may still claim runtime operations or
+loads. Host drain immediately supervises the current residency set while waiting
+for those request owners, then drains a final inventory to cover late admitted
+loads. Both passes supervise all entries without failing fast. Diagnostics remain readable, but new semantic work receives
 `server_draining`. New WebSocket sockets are refused at the transport boundary.
 Every reserved/live runtime is supervised concurrently through native shutdown;
 operation leases, native settlement, and the existing host projection drain
@@ -552,9 +569,10 @@ reported as proof of physical or durable settlement. Session catalog and runtime
 writes already have transactional/synchronous owners, so there is no invented
 flush layer. Admitted catalog mutations retain their tasks until completion.
 
-Only successful settlement of all slots yields `Terminated`. A settlement
+Only proven runtime, accepted-request, attachment and transport settlement yields
+`Terminated`. A settlement
 failure remains fail-closed, is reported on stderr, and exits nonzero. The host
-deadline covers runtime drain and transport exit. Deadline expiration or a
+deadline covers accepted-request settlement, runtime drain and transport exit. Deadline expiration or a
 second termination signal takes the explicit forced host exit (code 3), reports
 unproven residency resources, and bypasses executor destruction. It writes no
 fabricated tool/interaction outcome and does not advertise retained slots as
@@ -570,8 +588,10 @@ Session resident identities and operation counts, typed refusal counters,
 unload/shutdown failures/timeouts, and transport budgets/counts. The Session list
 contains reserved/resident slots; absent Sessions are unloaded. `idle_for_ms`
 and `idle_remaining_ms` are relative, conservative scan facts, not lifecycle
-authority. Counts come from the registry, native coordinator, external leases,
-and physical transport leases. Native execution facts are sampled outside the
+authority. Aggregation happens upward in AppServerHost: manager diagnostics
+contain only residency/native samples, transport diagnostics contain physical
+connections/queues/failures, and host diagnostics add lifecycle, global attachment
+capacity and host refusal/failure counts. None of these snapshots is authority. Native execution facts are sampled outside the
 registry lock; this is not a transaction across all runtime owners. No credentials, environments, or runtime handles
 are exposed.
 

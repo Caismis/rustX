@@ -549,7 +549,7 @@ export type ReviewDecision =
 export type Response = Success | Failure;
 export type MethodResult =
   | {
-      snapshot: ResidencyDiagnostics;
+      snapshot: ServerDiagnostics;
       type: 'diagnostics';
     }
   | {
@@ -2731,7 +2731,7 @@ export interface Success {
   id: RequestId;
   result: MethodResult;
 }
-export interface ResidencyDiagnostics {
+export interface ServerDiagnostics {
   lifecycle: ServerLifecycle;
   policy: AppServerPolicy;
   loaded: number;
@@ -2752,8 +2752,8 @@ export interface AppServerPolicy {
   max_resident_runtimes?: number;
   max_connections?: number;
   max_external_attachments?: number;
-  idle_grace_ms?: string;
-  shutdown_deadline_ms?: string;
+  idle_grace_ms?: number;
+  shutdown_deadline_ms?: number;
 }
 export interface SessionResidencyDiagnostic {
   session_id: SessionId;

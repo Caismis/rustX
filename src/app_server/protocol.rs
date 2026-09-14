@@ -316,7 +316,7 @@ pub struct Failure {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MethodResult {
     Diagnostics {
-        snapshot: crate::local_runtime::session_runtime_manager::ResidencyDiagnostics,
+        snapshot: crate::app_server::host::ServerDiagnostics,
     },
     Defaults {
         document: crate::runtime_client::settings::DefaultDocument,

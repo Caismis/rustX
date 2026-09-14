@@ -1,9 +1,6 @@
 //! WebSocket admission and framing. Each admitted socket gets its own endpoint.
 use super::{MAX_MESSAGE_BYTES, WRITE_TIMEOUT, failure};
-use crate::{
-    app_server::connection::AppServerConnection,
-    local_runtime::session_runtime_manager::SessionRuntimeManager,
-};
+use crate::{app_server::connection::AppServerConnection, app_server::host::AppServerHost};
 use futures_util::{SinkExt, StreamExt};
 use std::{io, sync::Arc, time::Duration};
 use tokio::{net::TcpListener, task::JoinSet};
@@ -52,13 +49,13 @@ impl Credential {
 /// Returns listener accept failures after settling existing connections.
 pub async fn serve(
     listener: TcpListener,
-    manager: SessionRuntimeManager,
+    host: AppServerHost,
     credential: Credential,
     shutdown: CancellationToken,
 ) -> io::Result<()> {
     serve_listener(
         listener,
-        manager,
+        host,
         credential,
         shutdown,
         #[cfg(test)]
@@ -71,7 +68,7 @@ pub async fn serve(
 // tasks. It never participates in production admission or semantic ownership.
 pub(crate) async fn serve_listener(
     listener: TcpListener,
-    manager: SessionRuntimeManager,
+    host: AppServerHost,
     credential: Credential,
     shutdown: CancellationToken,
     #[cfg(test)] slots: Option<tokio::sync::watch::Sender<usize>>,
@@ -88,17 +85,17 @@ pub(crate) async fn serve_listener(
             },
             accepted = listener.accept() => {
                 let (socket, _) = match accepted { Ok(value) => value, Err(error) => break Err(error) };
-                let Some(lease) = manager.admit_connection(true) else {
+                let Some(lease) = host.admit_connection(true) else {
                     // A rejected socket never enters JSON-RPC or a task queue.
                     let _ = socket.try_write(b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
                     continue;
                 };
-                let manager = manager.clone();
+                let host = host.clone();
                 let credential = credential.clone();
                 let stop = stop.clone();
                 clients.spawn(async move {
                     let _lease = lease;
-                    let _ = connection(socket, manager, credential, stop).await;
+                    let _ = connection(socket, host, credential, stop).await;
                 });
                 #[cfg(test)]
                 if let Some(slots) = &slots { slots.send_replace(clients.len()); }
@@ -112,7 +109,7 @@ pub(crate) async fn serve_listener(
 
 pub(crate) async fn connection<S>(
     socket: S,
-    manager: SessionRuntimeManager,
+    host: AppServerHost,
     credential: Credential,
     shutdown: CancellationToken,
 ) -> io::Result<()>
@@ -172,7 +169,7 @@ where
                 Err(error) => Some(Err(io::Error::other(error))),
             }
         });
-    let endpoint = Arc::new(AppServerConnection::new(manager));
+    let endpoint = Arc::new(AppServerConnection::new(host));
     let result = super::serve(
         endpoint.clone(),
         incoming,
