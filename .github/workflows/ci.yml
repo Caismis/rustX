@@ -272,18 +272,6 @@ jobs:
         working-directory: tui
         run: pnpm typecheck
 
-      - name: Install protocol generator
-        working-directory: protocol/app-server
-        run: pnpm install --frozen-lockfile
-
-      - name: Check generated App Server artifacts
-        working-directory: protocol/app-server
-        run: pnpm check
-
-      - name: Typecheck Rust-produced protocol fixtures
-        working-directory: protocol/app-server
-        run: pnpm typecheck
-
       # The integration suite drives the real binary over the real stdio
       # transport, so it must exist before the tests run.
       - name: Build the rustx binary
@@ -292,3 +280,76 @@ jobs:
       - name: Test
         working-directory: tui
         run: pnpm test
+
+  app-server-protocol:
+    name: App Server generated protocol
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install pinned protocol toolchain
+        working-directory: protocol/app-server
+        run: |
+          corepack enable
+          corepack install
+          pnpm install --frozen-lockfile
+      - name: Check schema and TypeScript drift
+        working-directory: protocol/app-server
+        run: pnpm check
+      - name: Typecheck Rust fixtures and reference intersections
+        working-directory: protocol/app-server
+        run: pnpm typecheck
+
+  web-console:
+    name: Developer Web Console
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install pinned browser toolchain
+        working-directory: web-console
+        run: |
+          corepack enable
+          corepack install
+          pnpm install --frozen-lockfile
+      - name: Typecheck
+        working-directory: web-console
+        run: pnpm typecheck
+      - name: Deterministic native client and presentation tests
+        working-directory: web-console
+        run: pnpm test
+      - name: Production build from checked-in source
+        working-directory: web-console
+        run: pnpm build
+      # These tools serve only the browser integration fixture. Rust-only jobs
+      # above remain independent of Node and of this frontend package.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - name: Prepare the existing provider emulator
+        working-directory: test-support/fake-provider
+        run: uv sync --frozen
+      - name: Build the real App Server and native Tool supervisors
+        run: cargo build --bins
+      - name: Install Chromium
+        working-directory: web-console
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Browser integration against the real App Server
+        working-directory: web-console
+        run: pnpm test:e2e
+      - name: Browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-console-browser-evidence
+          path: web-console/test-results/
+          if-no-files-found: ignore
