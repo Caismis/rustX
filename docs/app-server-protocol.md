@@ -19,6 +19,35 @@ The existing local TUI stdio endpoint and handwritten `tui/src/protocol/types.ts
 remain tied to the current TUI application until #290; they are not an App
 Server schema or a second supported App Server client contract.
 
+## One protocol, multiple transports
+
+#284's topology unifies semantics, not transports. #288 owns the versioned
+JSON-RPC DTOs, transport-neutral endpoint, generated client schemas and direct
+semantic conformance. #36 binds the same `AppServerConnection` endpoint to
+concrete stdio JSONL and WebSocket transports. Neither transport defines Session,
+execution, interaction, cancellation, history, residency, or replay semantics.
+
+After #290, ordinary local TUI mode uses first-class App Server stdio JSONL to a
+TUI-owned child; browser and existing/remote TUI clients use WebSocket to an
+externally managed server. The ordinary local TUI does not need a loopback
+WebSocket merely to consume the unified App Server protocol. This future stdio
+binding is not the old Runtime Client wire protocol currently carried by the TUI's
+pipes: #290 replaces those temporary semantics with the generated App Server DTOs.
+
+### Connection lifetime versus process ownership
+
+For either transport, connection EOF/close releases that connection's external
+attachments. It does not fabricate turn cancellation, interaction settlement,
+Session unload/delete, or server shutdown. Explicit detach has the same separation.
+
+In the planned local self-hosted mode, `rustx-tui` owns
+`rustx app-server --listen stdio`. Normal TUI exit explicitly shuts down that child
+under the #36/#291 process-lifecycle policy. This is owner-driven process shutdown,
+not transport EOF semantically cancelling work. Persistent execution across TUI
+exit requires an externally managed App Server; WebSocket/existing-server TUI
+disconnect never shuts down that process. The entry point and shutdown policy are
+follow-up work, not implemented here.
+
 ## JSON-RPC and initialization
 
 Requests use JSON-RPC 2.0: `jsonrpc: "2.0"`, a string or integer `id`, a `method`,
@@ -246,8 +275,27 @@ time. Timeouts serve only as liveness guards.
 
 ## Follow-up boundaries
 
-#36 supplies listener, framing, authentication and transport backpressure.
-#289 supplies the Developer Web Console. #290 migrates the TUI application and
-its current local stdio transport to this protocol. #291 supplies residency
+#36 supplies both stdio JSONL and WebSocket bindings, the standalone App Server
+process entry point, and framing/authentication/backpressure/process/connection
+concerns. #289 supplies the WebSocket Developer Web Console. #290 makes local TUI
+consume stdio JSONL to its owned child and existing/remote TUI consume WebSocket
+to an externally managed server, both using this protocol. #291 supplies residency
 policy, quotas, idle eviction and graceful process shutdown. None of those
 products or policies is implemented by this semantic endpoint.
+
+### Shared transport conformance
+
+`tests/support/app_server_conformance.rs` defines one small semantic parity scenario
+and a test-only `AppServerConformanceDriver`: concurrent typed `request` and
+`next_notification` calls. `tests/scripted/app_server/protocol.rs` runs it through
+the direct `AppServerConnection` adapter now. #36 can include the same support
+module via `#[path = "..."]`, supply a fresh connection and two idle Policy-mode
+Sessions, and implement drivers that exchange the same DTOs over stdio or WebSocket.
+
+The scenario checks version rejection/initialization, pipelined correlation,
+two-Session attachment routing, authoritative approval-setting changes and routed
+events/cursors, snapshots, and detach/reattach without changing incarnation or
+runtime settings. It needs no provider timing, framing, retries or network state.
+Adapters own transport mechanics, not expected semantic outcomes. This supplements
+the detailed owner/race tests; byte framing, limits and process/socket failures
+remain #36 tests, not a production transport framework in #288.

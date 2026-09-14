@@ -37,8 +37,8 @@
 //! envelope remains structurally capable of peer-initiated requests in a
 //! later protocol version.
 //!
-//! No transport lives here: JSONL/stdio framing is owned by Issue #38 and
-//! WebSocket transport in Issue #36 consumes App Server, not these envelopes.
+//! No transport lives here: the current local JSONL binding belongs to Issue #38.
+//! Both stdio JSONL and WebSocket in Issue #36 consume App Server, not these envelopes.
 //!
 //! Native Approval responses are deliberately finite and provider-neutral.
 //! They contain no replacement `ToolCall` identity or argument channel; the

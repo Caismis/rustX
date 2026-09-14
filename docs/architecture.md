@@ -5226,8 +5226,11 @@ The outermost layer exposes the runtime to humans and other systems:
 
 See [App Server protocol v1](app-server-protocol.md) for the method vocabulary,
 generated client schemas, connection multiplexing, weak attachment lifetime and
-headless interaction ownership. #36 adds network transport; it does not introduce
-another semantic endpoint. No REST or AG-UI frontend protocol is implemented.
+headless interaction ownership. #36 binds the same endpoint to stdio JSONL for a
+local TUI-owned child and WebSocket for browser/remote/existing-server clients;
+it does not introduce another semantic endpoint. #290 consumes those bindings,
+without requiring a loopback WebSocket for local TUI use. No REST or AG-UI frontend
+protocol is implemented.
 
 #### Runtime Client protocol implementation (Issue #37, revised by Issues #131, #130, #136, #140, and #144)
 
@@ -5255,8 +5258,9 @@ the wire contract: `RuntimeClientEvent` and `RuntimeClientSnapshot` are
 explicit runtime-owned projection types. Their public wire contract is versioned
 by `APP_SERVER_PROTOCOL_VERSION`, independently of journal, manifest, crate and
 the existing local TUI protocol version. Snapshot/cursor/attachment authority
-stays in the host; App Server does not copy its projection database. WebSocket
-in #36 wraps App Server. The existing `src/protocol` boundary remains the compiled
+stays in the host; App Server does not copy its projection database. Both stdio
+JSONL and WebSocket in #36 bind App Server, including its standalone process entry
+point. Neither binding owns domain semantics. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; it is not a frontend protocol.
 
 The following version history describes the existing local TUI stdio contract,
@@ -6249,8 +6253,10 @@ transport adapters                framing only; src/runtime_client/transport
 clients
 ```
 
-Issue #38 adds `src/runtime_client/transport/stdio.rs`. Adding Issue #36
-means adding a sibling module there; no semantic module moves.
+Issue #38 added `src/runtime_client/transport/stdio.rs` for this temporary local
+Runtime Client contract. #36 instead binds the App Server endpoint to first-class
+stdio JSONL and WebSocket transports; #290 replaces the TUI's old wire semantics,
+not stdio as a transport choice. The following describes the current #38 adapter.
 
 - **The endpoint remains the semantic owner.** A transport calls
   `RuntimeClientEndpoint::handle_request` and forwards
@@ -6327,8 +6333,10 @@ means adding a sibling module there; no semantic module moves.
 - **Conformance is transport-independent.** The Issue #38 scenario suite
   (`tests/support/runtime_client_conformance.rs`) drives one set of
   semantic scenarios through a direct-endpoint driver and the stdio
-  driver. Issue #36 adds a WebSocket driver and inherits every scenario
-  unchanged; byte-level framing tests stay transport-specific.
+  driver for the old Runtime Client contract. The new App Server parity scenario
+  is `tests/support/app_server_conformance.rs`: #36 supplies stdio and WebSocket
+  drivers for that shared semantic scenario, not the old protocol's scenarios.
+  Byte-level framing tests stay transport-specific.
 
 #### Runtime Client model semantics (Issue #42)
 

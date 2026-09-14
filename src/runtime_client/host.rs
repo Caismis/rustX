@@ -1963,8 +1963,9 @@ impl RuntimeClientHost {
 
     /// Creates the transport-neutral semantic endpoint of this runtime.
     ///
-    /// The endpoint is the boundary a transport (Issue #38 stdio/JSONL,
-    /// Issue #36 WebSocket) wraps: it accepts every
+    /// This endpoint serves the temporary pre-#290 local Runtime Client
+    /// binding (Issue #38 stdio/JSONL). Issue #36's stdio and WebSocket
+    /// bindings instead wrap `AppServerConnection`. This endpoint accepts every
     /// [`RuntimeClientRequest`](super::types::RuntimeClientRequest),
     /// including `initialize`, and returns the correlated
     /// [`RuntimeClientResponse`](super::types::RuntimeClientResponse). A

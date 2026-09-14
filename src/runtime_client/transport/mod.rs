@@ -17,8 +17,6 @@
 //!       |
 //!       +-- stdio / strict JSONL    (Issue #38)
 //!       |
-//!       +-- WebSocket               (Issue #36, later)
-//!       |
 //!       v
 //! clients
 //! ```
@@ -47,9 +45,9 @@
 //! backlog, and a stalled transport consumer costs one cursor rather than a
 //! growing queue.
 //!
-//! Adding a transport (Issue #36 WebSocket) means adding a sibling module
-//! here; no semantic module moves, and the transport-independent
-//! conformance scenarios apply unchanged.
+//! This is the temporary pre-#290 local Runtime Client binding. Issue #36
+//! binds both stdio JSONL and WebSocket to `AppServerConnection`, not this
+//! endpoint. Its shared parity scenario is `tests/support/app_server_conformance.rs`.
 
 pub mod stdio;
 

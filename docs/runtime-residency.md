@@ -192,7 +192,8 @@ single-runtime adapter remains operational over the same semantic composition;
 it is not an alternate App Server residency path.
 
 The [App Server protocol](app-server-protocol.md) defines the public connection
-boundary. Residency does not implement #36 WebSocket transport, #291 idle
+boundary. Residency does not implement #36 stdio JSONL/WebSocket bindings or the
+standalone App Server entry point, #291 idle
 TTL/quotas/resource governance, or distributed/multi-process ownership.
 
 ## Deterministic evidence

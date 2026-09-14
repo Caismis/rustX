@@ -4,6 +4,26 @@ use crate::app_server::connection::AppServerConnection;
 use crate::app_server::protocol::*;
 use crate::runtime_client::event::RuntimeClientEvent;
 
+#[path = "../../support/app_server_conformance.rs"]
+mod conformance;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn direct_connection_runs_shared_transport_neutral_conformance() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.manager.clone());
+        conformance::representative_scenario(
+            &conformance::DirectDriver(&connection),
+            [f.sessions[0].id.clone(), f.sessions[1].id.clone()],
+        )
+        .await;
+        assert_eq!(connection.attachment_counts(), (0, 0));
+        assert!(f.provider.request_bodies().is_empty());
+        f.close().await;
+    })
+    .await;
+}
+
 struct AskPolicy;
 impl crate::agent::PreToolPolicy for AskPolicy {
     fn evaluate<'a>(
