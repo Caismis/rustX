@@ -2358,9 +2358,21 @@
       ]
     },
     "FiniteNumber": {
-      "description": "The canonical rustX numeric domain: one finite IEEE-754 binary64 value.\n\n# Why binary64, and why exactly one domain\n\nMCP types an elicitation `number` bound as a binary64 —\n[`rmcp::model::NumberSchema`]'s `minimum` and `maximum` are `Option<f64>` —\nand a JavaScript `number` is a binary64 as well. Binary64 is therefore not\na convenience: it is the widest value *every* stage of the pipeline can\nhold without rounding, so it is the one domain all of them share.\n\n```text\nMCP NumberSchema bound (f64)\n  -> NumberAnswerSpecification bound (FiniteNumber)\n  -> Runtime Client wire: canonical binary64 text  \"43e0000000000000\"\n  -> client `number`, reconstructed exactly        (binary64)\n  -> NumberAnswer value          (FiniteNumber)\n  -> authoritative range comparison (FiniteNumber)\n  -> MCP accept.content JSON number (the same FiniteNumber)\n```\n\nNo stage holds a wider value than the next one, so there is no widening or\nnarrowing to hide a mismatch in.\n\n# Why the wire is not a JSON number\n\nThe three things this pipeline keeps apart are easy to conflate:\n\n```text\nhuman decimal spelling      client-local presentation (\"1.5e3\")\n  -> finite binary64        the semantic value        (1500.0)\n  -> canonical wire text    an exact encoding of the *value*\n```\n\nThe wire carries the **value**, never the spelling. A JSON number cannot\ndo that job, because a JavaScript client serializes a `number` through\n`JSON.stringify`, which prints the shortest decimal that round-trips —\nnot the exact integer the binary64 denotes. The exact binary64 `2^63` is\nthe mathematical integer\n\n```text\n9223372036854775808\n```\n\nand `JSON.stringify` emits\n\n```text\n9223372036854776000\n```\n\nThose are different integers. They happen to parse back to the same\nbinary64, but any reader that treats a JSON integer as an exact decimal\ninteger — as an earlier revision of this type did — sees a value it must\nrefuse, and a question whose only legal answer is `2^63` becomes\npublishable and unanswerable. Binary64 identity must therefore not depend\non a JSON number's decimal spelling at all.\n\n# The canonical wire form\n\nA [`FiniteNumber`] crosses the Runtime Client protocol, and is stored in\nthe Event Journal, as its IEEE-754 binary64 bit pattern written as exactly\n[`FINITE_NUMBER_WIRE_CHARS`] lowercase hexadecimal digits, most significant\nfirst:\n\n```text\n2^63   -> \"43e0000000000000\"\n-2^63  -> \"c3e0000000000000\"\n0.1    -> \"3fb999999999999a\"\n```\n\nThe properties that matters are that this is *exact* and *canonical*:\n\n- **exact** — the encoding is the value's own bits, so\n  `from_wire(to_wire(x)) == x` for every finite binary64 with no decimal\n  parser anywhere in the trust path, and no rounding step to disagree\n  about;\n- **canonical** — one semantic value has exactly one legal spelling, in\n  both languages, byte for byte. A shortest-round-trip *decimal* string is\n  deterministic within one language but Rust and JavaScript do not format\n  it identically, so it could not carry the \"one settled spelling per\n  value\" property [`ExactInteger`] already holds rustX to;\n- **bounded** — always 16 bytes, with no 700-digit expansion for a\n  subnormal and no locale, grouping, or exponent-notation variation;\n- **closed over the domain** — the wire alphabet *is* the domain. A\n  decimal a binary64 cannot hold, `9007199254740993`, has no wire\n  representation at all rather than one the runtime must detect and\n  refuse. A client's own refusal of such a spelling is a statement of the\n  same fact for the human, not the enforcement of it.\n\nThe representation is internal to the Runtime Client protocol and the\ndurable audit. It is never shown to a human — a client edits and displays\nordinary decimals — and it is never what reaches an MCP server, which\nreceives the ordinary JSON number built from the same bits by\n[`FiniteNumber::to_json_number`].\n\n# Negative zero\n\nrustX **canonicalizes** `-0.0` to `+0.0`. IEEE-754 gives the two distinct\nbit patterns, but every comparison this type takes part in — [`Eq`],\n[`PartialOrd`], and the authoritative range check — already treats them as\none value, so admitting two bit patterns would give one semantic value two\ncanonical wire spellings and make the encoding non-injective. The\nnormalization happens at construction, in [`FiniteNumber::try_new`], so\nthere is no stage at which a `-0.0` exists to be serialized, and\n`\"8000000000000000\"` is refused on the wire as a non-canonical spelling of\n`0.0` exactly as [`ExactInteger`] would refuse `\"-0\"`.\n\nNaN and infinity are unrepresentable by construction, which is what makes\n[`Eq`] sound here: every value this type can hold is reflexive.",
+      "description": "Canonical finite binary64 bits: lowercase hex, positive zero only; no NaN or infinity.",
       "type": "string",
-      "pattern": "^[0-9a-f]{16}$"
+      "minLength": 16,
+      "maxLength": 16,
+      "pattern": "^[0-9a-f]{16}$",
+      "not": {
+        "anyOf": [
+          {
+            "pattern": "^[7f]ff"
+          },
+          {
+            "const": "8000000000000000"
+          }
+        ]
+      }
     },
     "IntegerAnswer": {
       "description": "A whole-number answer.\n\nThe value is an [`ExactInteger`], which crosses the Runtime Client protocol\nas canonical decimal text, so an answer above the binary64 integer frontier\nround-trips exactly instead of being rounded by a client.",
@@ -2377,9 +2389,22 @@
       ]
     },
     "ExactInteger": {
-      "description": "The canonical rustX whole-number domain: one exact `i64`, carried across\nthe Runtime Client protocol as a canonical decimal **string**.\n\n# Why `i64`, and why a string on the wire\n\nMCP types an elicitation `integer` bound as an `i64`\n([`rmcp::model::IntegerSchema`]'s `minimum` and `maximum` are\n`Option<i64>`), so `i64` is exactly the domain the protocol hands rustX. No\nMCP integer schema can name a bound outside it, which is why refusing an\nout-of-domain integer schema is vacuous here rather than missing.\n\nThe Runtime Client protocol is the stage that cannot hold that domain: a\nJavaScript `number` is a binary64 and loses whole numbers above `2^53`. A\nquestion whose only legal answers are, say, `9007199254740992..=\n9007199254740993` would then be publishable by the runtime and\n*unanswerable* by any client — a published question with no faithful\nresponse representation.\n\nSo the value crosses the wire as its canonical decimal text and is parsed\nback to `i64` exactly once, by the runtime, which stays authoritative:\n\n```text\nMCP IntegerSchema bound (i64)\n  -> IntegerAnswerSpecification bound (ExactInteger)  \"9007199254740993\"\n  -> Runtime Client JSON string                       \"9007199254740993\"\n  -> TUI draft, edited as decimal text                 9007199254740993\n  -> ExactInteger::parse — the one authoritative parse (i64)\n  -> authoritative range comparison                    (i64)\n  -> MCP accept.content JSON integer                   9007199254740993\n```\n\nNo stage converts through a binary64, so no stage can round.",
+      "description": "Canonical i64 decimal text, from -9223372036854775808 through 9223372036854775807; zero is 0, never -0.",
       "type": "string",
-      "pattern": "^(0|-?[1-9][0-9]{0,18})$"
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "0"
+        },
+        {
+          "type": "string",
+          "pattern": "^([1-9][0-9]{0,17}|9223372036854775807|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-6][0-9]{0})$(?![\\s\\S])"
+        },
+        {
+          "type": "string",
+          "pattern": "^-([1-9][0-9]{0,17}|9223372036854775808|[1-8][0-9]{18}|9[0-1][0-9]{17}|92[0-1][0-9]{16}|922[0-2][0-9]{15}|9223[0-2][0-9]{14}|92233[0-6][0-9]{13}|922337[0-1][0-9]{12}|92233720[0-2][0-9]{10}|922337203[0-5][0-9]{9}|9223372036[0-7][0-9]{8}|92233720368[0-4][0-9]{7}|922337203685[0-3][0-9]{6}|9223372036854[0-6][0-9]{5}|92233720368547[0-6][0-9]{4}|922337203685477[0-4][0-9]{3}|9223372036854775[0-7][0-9]{2}|922337203685477580[0-7][0-9]{0})$(?![\\s\\S])"
+        }
+      ]
     },
     "BooleanAnswer": {
       "description": "A typed boolean answer.",

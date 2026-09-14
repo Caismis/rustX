@@ -375,8 +375,30 @@ pub struct TextAnswerSpecification {
 ///
 /// NaN and infinity are unrepresentable by construction, which is what makes
 /// [`Eq`] sound here: every value this type can hold is reflexive.
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, schemars::JsonSchema)]
-pub struct FiniteNumber(#[schemars(with = "String", pattern(r"^[0-9a-f]{16}$"))] f64);
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct FiniteNumber(f64);
+
+impl schemars::JsonSchema for FiniteNumber {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "FiniteNumber".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        // Schema acceptance must equal from_wire acceptance, not merely the
+        // binary64 spelling grammar. Exponent-all-ones means infinity or NaN.
+        schemars::json_schema!({
+            "type": "string",
+            "description": "Canonical finite binary64 bits: lowercase hex, positive zero only; no NaN or infinity.",
+            "minLength": 16,
+            "maxLength": 16,
+            "pattern": "^[0-9a-f]{16}$",
+            "not": { "anyOf": [
+                { "pattern": "^[7f]ff" },
+                { "const": "8000000000000000" }
+            ] }
+        })
+    }
+}
 
 impl Eq for FiniteNumber {}
 
@@ -566,8 +588,53 @@ impl<'de> Deserialize<'de> for FiniteNumber {
 /// ```
 ///
 /// No stage converts through a binary64, so no stage can round.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, schemars::JsonSchema)]
-pub struct ExactInteger(#[schemars(with = "String", pattern(r"^(0|-?[1-9][0-9]{0,18})$"))] i64);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct ExactInteger(i64);
+
+impl schemars::JsonSchema for ExactInteger {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ExactInteger".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        // Schema construction only, not another value parser. A magnitude is
+        // either shorter than the bound, equal to it, or first differs at a
+        // smaller digit. This expresses the inclusive integer bounds as text.
+        fn magnitude(bound: u64) -> String {
+            let bound = bound.to_string();
+            let mut alternatives = vec![
+                format!("[1-9][0-9]{{0,{}}}", bound.len() - 2),
+                bound.clone(),
+            ];
+            for (index, digit) in bound.bytes().enumerate() {
+                let low = if index == 0 { b'1' } else { b'0' };
+                if digit > low {
+                    alternatives.push(format!(
+                        "{}[{}-{}][0-9]{{{}}}",
+                        &bound[..index],
+                        char::from(low),
+                        char::from(digit - 1),
+                        bound.len() - index - 1,
+                    ));
+                }
+            }
+            format!("({})", alternatives.join("|"))
+        }
+        // The final assertion rejects even a trailing newline (ECMA `$` alone
+        // also matches before a final line terminator).
+        let positive = format!("^{}$(?![\\s\\S])", magnitude(i64::MAX.unsigned_abs()));
+        let negative = format!("^-{}$(?![\\s\\S])", magnitude(i64::MIN.unsigned_abs()));
+        schemars::json_schema!({
+            "type": "string",
+            "description": "Canonical i64 decimal text, from -9223372036854775808 through 9223372036854775807; zero is 0, never -0.",
+            "anyOf": [
+                { "type": "string", "const": "0" },
+                { "type": "string", "pattern": positive },
+                { "type": "string", "pattern": negative }
+            ]
+        })
+    }
+}
 
 impl ExactInteger {
     /// The exact whole number.
@@ -587,7 +654,8 @@ impl ExactInteger {
     /// This is the **one authoritative parse point** for an integer answer.
     /// The accepted syntax is an optional `-` followed by one or more ASCII
     /// digits, and nothing else: `1.5`, `1e3`, `+1`, `-`, `NaN`, `Infinity`,
-    /// and `12abc` are all refused, as is any value outside `i64`.
+    /// and `12abc` are all refused, as is any value outside `i64`. Leading
+    /// zeros and `-0` are noncanonical and refused; zero is spelled `0`.
     ///
     /// # Errors
     ///
@@ -599,6 +667,9 @@ impl ExactInteger {
             return Err(format!(
                 "{text:?} is not a decimal integer: write an optional \"-\" followed by digits"
             ));
+        }
+        if (digits.len() > 1 && digits.starts_with('0')) || text == "-0" {
+            return Err(format!("{text:?} is not a canonical decimal integer"));
         }
         text.parse::<i64>()
             .map(Self)

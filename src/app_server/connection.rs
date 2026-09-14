@@ -387,6 +387,8 @@ impl AppServerConnection {
                 node_id,
             } => {
                 let reservation = AttachReservation::new(&self.routes, &session_id)?;
+                // Reservation is request-scoped; once claimed, Loading is
+                // manager-scoped. Dropping this request does not roll it back.
                 let runtime = self
                     .manager
                     .load(&session_id, node_id.as_ref())

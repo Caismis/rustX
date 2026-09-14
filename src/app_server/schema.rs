@@ -241,6 +241,154 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Closed scalar schema acceptance must equal authoritative serde acceptance;
+    // every accepted spelling must serialize back identically (canonicality).
+    fn scalar_agrees<T: serde::de::DeserializeOwned + serde::Serialize>(
+        validator: &jsonschema::Validator,
+        text: &str,
+        expected: bool,
+    ) {
+        let wire = serde_json::json!(text);
+        assert_eq!(validator.is_valid(&wire), expected, "schema: {text:?}");
+        let parsed = serde_json::from_value::<T>(wire.clone());
+        assert_eq!(parsed.is_ok(), expected, "serde: {text:?}");
+        if let Ok(parsed) = parsed {
+            assert_eq!(serde_json::to_value(parsed).unwrap(), wire);
+        }
+    }
+
+    #[test]
+    fn finite_number_scalar_schema_equals_serde_domain() {
+        use crate::events::interaction::FiniteNumber;
+        let schema = protocol_schema();
+        let validator = jsonschema::validator_for(&schema["$defs"]["FiniteNumber"]).unwrap();
+        for text in [
+            "0000000000000000",
+            "0000000000000001",
+            "3ff0000000000000",
+            "7fefffffffffffff",
+            "ffefffffffffffff",
+        ] {
+            scalar_agrees::<FiniteNumber>(&validator, text, true);
+            assert_eq!(FiniteNumber::from_wire(text).unwrap().to_wire(), text);
+        }
+        for text in [
+            "7ff0000000000000",
+            "fff0000000000000",
+            "7ff8000000000000",
+            "7fffffffffffffff",
+            "fff8000000000000",
+            "ffffffffffffffff",
+            "8000000000000000",
+            "3FF0000000000000",
+            "3ff000000000000",
+            "03ff0000000000000",
+            "3ff0000000000000\n",
+            "",
+        ] {
+            scalar_agrees::<FiniteNumber>(&validator, text, false);
+            assert!(FiniteNumber::from_wire(text).is_err());
+        }
+        // Every sign/exponent combination, with zero, subnormal/payload, and
+        // maximal mantissas, exercises the schema's exponent exclusion.
+        for sign_exponent in 0_u64..4096 {
+            for mantissa in [0, 1, (1_u64 << 52) - 1] {
+                let text = format!("{:016x}", (sign_exponent << 52) | mantissa);
+                scalar_agrees::<FiniteNumber>(
+                    &validator,
+                    &text,
+                    FiniteNumber::from_wire(&text).is_ok(),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn exact_integer_scalar_schema_equals_serde_domain() {
+        use crate::events::interaction::ExactInteger;
+        let schema = protocol_schema();
+        let validator = jsonschema::validator_for(&schema["$defs"]["ExactInteger"]).unwrap();
+        for text in [
+            "0",
+            "1",
+            "-1",
+            "9007199254740993",
+            "9223372036854775807",
+            "-9223372036854775808",
+        ] {
+            scalar_agrees::<ExactInteger>(&validator, text, true);
+            assert_eq!(ExactInteger::parse(text).unwrap().to_string(), text);
+        }
+        for text in [
+            "9223372036854775808",
+            "-9223372036854775809",
+            "9999999999999999999",
+            "-9999999999999999999",
+            "+1",
+            "01",
+            "-01",
+            "-0",
+            "1.0",
+            "1e3",
+            "",
+            "1\n",
+            "0\n",
+            " 1",
+        ] {
+            scalar_agrees::<ExactInteger>(&validator, text, false);
+            assert!(ExactInteger::parse(text).is_err());
+        }
+        // Probe both sides of every decimal-prefix boundary in both signs.
+        for bound in [i128::from(i64::MIN), i128::from(i64::MAX)] {
+            for digits in 0..19 {
+                let scale = 10_i128.pow(digits);
+                for delta in -1..=1 {
+                    let value = (bound / scale) * scale + delta;
+                    scalar_agrees::<ExactInteger>(
+                        &validator,
+                        &value.to_string(),
+                        i64::try_from(value).is_ok(),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn public_questionnaire_requests_reject_impossible_scalar_values() {
+        let schema = protocol_schema();
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        let request = fixtures()
+            .into_iter()
+            .find_map(|fixture| match fixture {
+                ProtocolMessage::Request(request)
+                    if matches!(request.call, Method::InteractionRespond { .. }) =>
+                {
+                    Some(*request)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let wire = serde_json::to_value(request).unwrap();
+        assert!(validator.is_valid(&wire));
+        assert!(serde_json::from_value::<Request>(wire.clone()).is_ok());
+        for (index, invalid) in [
+            (0, "9223372036854775808"),
+            (0, "-0"),
+            (1, "7ff0000000000000"),
+            (1, "8000000000000000"),
+        ] {
+            let mut wire = wire.clone();
+            wire["params"]["response"]["response"]["value"]["answers"][index]["answer"]["value"]
+                ["value"] = serde_json::json!(invalid);
+            assert!(!validator.is_valid(&wire), "schema accepted {invalid}");
+            assert!(
+                serde_json::from_value::<Request>(wire).is_err(),
+                "serde accepted {invalid}"
+            );
+        }
+    }
     #[test]
     fn committed_rust_artifacts_are_current() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server");

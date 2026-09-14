@@ -522,7 +522,7 @@ async fn concurrent_final_slot_is_reserved_before_composition() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn cancelled_attach_releases_reservation_and_abandoned_operation_drains() {
+async fn cancelled_attach_releases_reservation_but_not_manager_owned_load() {
     bounded(async {
         use std::sync::Arc;
         let f = Fixture::new().await;
@@ -538,8 +538,48 @@ async fn cancelled_attach_releases_reservation_and_abandoned_operation_drains() 
         attaching.abort();
         assert!(attaching.await.unwrap_err().is_cancelled());
         assert_eq!(connection.attachment_counts(), (0, 0));
+        // Observe the already-claimed flight without initiating another load.
+        let id = f.id(0).await;
+        let flight = {
+            let registry = f.manager.registry.0.lock().unwrap();
+            let super::Entry::Loading(flight) = registry.entries.get(&id).unwrap() else {
+                panic!("manager-owned Loading flight")
+            };
+            flight.clone()
+        };
         probe.before_compose.release();
+        let resident = flight.wait().await.unwrap().unwrap();
+        assert_eq!(
+            f.manager.residency(resident.conversation_id()),
+            super::ResidencyState::Loaded
+        );
+        assert_eq!(connection.attachment_counts(), (0, 0));
+        assert_eq!(
+            probe.compositions.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
         let target = attach(&connection, &f, 0).await;
+        assert_eq!(target.runtime_incarnation, resident.incarnation_id());
+        assert_eq!(
+            probe.compositions.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        call(
+            &connection,
+            500,
+            Method::SessionDetach {
+                target: target.clone(),
+            },
+        )
+        .await;
+        let fresh = attach(&connection, &f, 0).await;
+        assert_ne!(fresh.attachment_id, target.attachment_id);
+        assert_eq!(fresh.runtime_incarnation, target.runtime_incarnation);
+        assert_eq!(
+            probe.compositions.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        let target = fresh;
         probe.before_operation.arm();
         let worker = connection.clone();
         let operation_target = target.clone();

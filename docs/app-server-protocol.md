@@ -106,8 +106,13 @@ Callers learn accepted message identity and inbound sequence from the result.
 The connection admits at most 32 active **plus reserved** attachments. A short
 routing-lock transaction reserves capacity before `load` can compose a cold
 Session. Success commits that reservation to a route; error or cancellation
-drops the reservation. A full connection therefore cannot make a rejected
-Session resident. Its map is locked only for local routing changes; no lock
+drops the reservation. A full connection therefore cannot make a capacity-rejected
+Session resident. Connection reservation is request-scoped; residency loading is
+manager-scoped once claimed. Cancelling an admitted cold attach releases its slot
+but does not roll back the manager-owned Loading flight: it may reach Loaded with
+zero external attachments. A later attach reuses that resident incarnation.
+Headless residency quotas/admission/idle eviction belong to #291, not request
+cancellation. Its map is locked only for local routing changes; no lock
 spans composition, provider work, interaction settlement or shutdown. Requests
 may run concurrently and finish out of order.
 One notification consumer uses bounded fan-in over native subscriptions;
@@ -260,7 +265,13 @@ Rust-produced client fixtures. CI runs both. Rust conformance tests round-trip
 the wire messages and validate them against the generated schema.
 Questionnaire `FiniteNumber` uses canonical hexadecimal binary64 strings and
 `ExactInteger` uses canonical decimal strings, preserving values beyond JS's
-safe integer range. They are not generated as JavaScript numbers.
+safe integer range. They are not generated as JavaScript numbers. Their custom
+Rust schemas describe exactly the serde domains: 16 lowercase hex digits excluding
+all NaNs, both infinities and negative zero; and decimal i64 text bounded by
+`-9223372036854775808..=9223372036854775807`, with no leading zeros, plus sign, or
+`-0`. Every scalar-schema-valid value must deserialize, and every canonical Rust
+serialization must validate. Negative tests check both scalar definitions and
+nested public Questionnaire requests.
 
 Deterministic App Server tests live under `tests/scripted/app_server/`. Native
 provider gates, projection gates and coordinator terminal gates prove overlap,

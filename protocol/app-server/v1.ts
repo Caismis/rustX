@@ -823,151 +823,11 @@ export type ToolInvocationId =
  */
 export type TextFormat = 'date' | 'date_time' | 'uri';
 /**
- * The canonical rustX numeric domain: one finite IEEE-754 binary64 value.
- *
- * # Why binary64, and why exactly one domain
- *
- * MCP types an elicitation `number` bound as a binary64 —
- * [`rmcp::model::NumberSchema`]'s `minimum` and `maximum` are `Option<f64>` —
- * and a JavaScript `number` is a binary64 as well. Binary64 is therefore not
- * a convenience: it is the widest value *every* stage of the pipeline can
- * hold without rounding, so it is the one domain all of them share.
- *
- * ```text
- * MCP NumberSchema bound (f64)
- *   -> NumberAnswerSpecification bound (FiniteNumber)
- *   -> Runtime Client wire: canonical binary64 text  "43e0000000000000"
- *   -> client `number`, reconstructed exactly        (binary64)
- *   -> NumberAnswer value          (FiniteNumber)
- *   -> authoritative range comparison (FiniteNumber)
- *   -> MCP accept.content JSON number (the same FiniteNumber)
- * ```
- *
- * No stage holds a wider value than the next one, so there is no widening or
- * narrowing to hide a mismatch in.
- *
- * # Why the wire is not a JSON number
- *
- * The three things this pipeline keeps apart are easy to conflate:
- *
- * ```text
- * human decimal spelling      client-local presentation ("1.5e3")
- *   -> finite binary64        the semantic value        (1500.0)
- *   -> canonical wire text    an exact encoding of the *value*
- * ```
- *
- * The wire carries the **value**, never the spelling. A JSON number cannot
- * do that job, because a JavaScript client serializes a `number` through
- * `JSON.stringify`, which prints the shortest decimal that round-trips —
- * not the exact integer the binary64 denotes. The exact binary64 `2^63` is
- * the mathematical integer
- *
- * ```text
- * 9223372036854775808
- * ```
- *
- * and `JSON.stringify` emits
- *
- * ```text
- * 9223372036854776000
- * ```
- *
- * Those are different integers. They happen to parse back to the same
- * binary64, but any reader that treats a JSON integer as an exact decimal
- * integer — as an earlier revision of this type did — sees a value it must
- * refuse, and a question whose only legal answer is `2^63` becomes
- * publishable and unanswerable. Binary64 identity must therefore not depend
- * on a JSON number's decimal spelling at all.
- *
- * # The canonical wire form
- *
- * A [`FiniteNumber`] crosses the Runtime Client protocol, and is stored in
- * the Event Journal, as its IEEE-754 binary64 bit pattern written as exactly
- * [`FINITE_NUMBER_WIRE_CHARS`] lowercase hexadecimal digits, most significant
- * first:
- *
- * ```text
- * 2^63   -> "43e0000000000000"
- * -2^63  -> "c3e0000000000000"
- * 0.1    -> "3fb999999999999a"
- * ```
- *
- * The properties that matters are that this is *exact* and *canonical*:
- *
- * - **exact** — the encoding is the value's own bits, so
- *   `from_wire(to_wire(x)) == x` for every finite binary64 with no decimal
- *   parser anywhere in the trust path, and no rounding step to disagree
- *   about;
- * - **canonical** — one semantic value has exactly one legal spelling, in
- *   both languages, byte for byte. A shortest-round-trip *decimal* string is
- *   deterministic within one language but Rust and JavaScript do not format
- *   it identically, so it could not carry the "one settled spelling per
- *   value" property [`ExactInteger`] already holds rustX to;
- * - **bounded** — always 16 bytes, with no 700-digit expansion for a
- *   subnormal and no locale, grouping, or exponent-notation variation;
- * - **closed over the domain** — the wire alphabet *is* the domain. A
- *   decimal a binary64 cannot hold, `9007199254740993`, has no wire
- *   representation at all rather than one the runtime must detect and
- *   refuse. A client's own refusal of such a spelling is a statement of the
- *   same fact for the human, not the enforcement of it.
- *
- * The representation is internal to the Runtime Client protocol and the
- * durable audit. It is never shown to a human — a client edits and displays
- * ordinary decimals — and it is never what reaches an MCP server, which
- * receives the ordinary JSON number built from the same bits by
- * [`FiniteNumber::to_json_number`].
- *
- * # Negative zero
- *
- * rustX **canonicalizes** `-0.0` to `+0.0`. IEEE-754 gives the two distinct
- * bit patterns, but every comparison this type takes part in — [`Eq`],
- * [`PartialOrd`], and the authoritative range check — already treats them as
- * one value, so admitting two bit patterns would give one semantic value two
- * canonical wire spellings and make the encoding non-injective. The
- * normalization happens at construction, in [`FiniteNumber::try_new`], so
- * there is no stage at which a `-0.0` exists to be serialized, and
- * `"8000000000000000"` is refused on the wire as a non-canonical spelling of
- * `0.0` exactly as [`ExactInteger`] would refuse `"-0"`.
- *
- * NaN and infinity are unrepresentable by construction, which is what makes
- * [`Eq`] sound here: every value this type can hold is reflexive.
+ * Canonical finite binary64 bits: lowercase hex, positive zero only; no NaN or infinity.
  */
 export type FiniteNumber = string;
-/**
- * The canonical rustX whole-number domain: one exact `i64`, carried across
- * the Runtime Client protocol as a canonical decimal **string**.
- *
- * # Why `i64`, and why a string on the wire
- *
- * MCP types an elicitation `integer` bound as an `i64`
- * ([`rmcp::model::IntegerSchema`]'s `minimum` and `maximum` are
- * `Option<i64>`), so `i64` is exactly the domain the protocol hands rustX. No
- * MCP integer schema can name a bound outside it, which is why refusing an
- * out-of-domain integer schema is vacuous here rather than missing.
- *
- * The Runtime Client protocol is the stage that cannot hold that domain: a
- * JavaScript `number` is a binary64 and loses whole numbers above `2^53`. A
- * question whose only legal answers are, say, `9007199254740992..=
- * 9007199254740993` would then be publishable by the runtime and
- * *unanswerable* by any client — a published question with no faithful
- * response representation.
- *
- * So the value crosses the wire as its canonical decimal text and is parsed
- * back to `i64` exactly once, by the runtime, which stays authoritative:
- *
- * ```text
- * MCP IntegerSchema bound (i64)
- *   -> IntegerAnswerSpecification bound (ExactInteger)  "9007199254740993"
- *   -> Runtime Client JSON string                       "9007199254740993"
- *   -> TUI draft, edited as decimal text                 9007199254740993
- *   -> ExactInteger::parse — the one authoritative parse (i64)
- *   -> authoritative range comparison                    (i64)
- *   -> MCP accept.content JSON integer                   9007199254740993
- * ```
- *
- * No stage converts through a binary64, so no stage can round.
- */
-export type ExactInteger = string;
+export type ExactInteger = '0' | string;
+export type ExactInteger1 = string;
 /**
  * The generic liveness deadline that fired for one started execution.
  *
@@ -2803,7 +2663,7 @@ export interface IntegerAnswer {
   /**
    * The typed value.
    */
-  value: string;
+  value: ('0' | string) & string;
 }
 /**
  * A typed boolean answer.
@@ -3816,11 +3676,11 @@ export interface QuestionSpecification {
         /**
          * The inclusive minimum, when the producer declares one.
          */
-        minimum?: ExactInteger | null;
+        minimum?: (ExactInteger & ExactInteger1) | null;
         /**
          * The inclusive maximum, when the producer declares one.
          */
-        maximum?: ExactInteger | null;
+        maximum?: (ExactInteger & ExactInteger1) | null;
         type: 'integer';
       }
     | {
