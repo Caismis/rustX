@@ -13562,6 +13562,11 @@ mod tests {
             Some(crate::runtime::subagent::ipc::ParentFrame::Delegate(_))
         ));
 
+        assert!(
+            runtime.idle_epoch().is_err(),
+            "an owned Subagent prevents idle residency even without a parent attempt"
+        );
+
         // The runtime then commits DurabilityFailed; the already-owned
         // child is not retroactively reclaimed.
         runtime.force_durability_failure_for_test(
@@ -16526,6 +16531,11 @@ mod tests {
         assert!(
             !fixture.runtime.has_current_attempt(),
             "the current-attempt slot is already clear at the parked exit boundary"
+        );
+
+        assert!(
+            fixture.runtime.idle_epoch().is_err(),
+            "idle residency also waits for the native attempt task exit"
         );
 
         let (done_tx, mut done_rx) = tokio::sync::oneshot::channel();

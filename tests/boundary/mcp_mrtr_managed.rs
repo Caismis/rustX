@@ -230,7 +230,7 @@ async fn a_real_managed_fastmcp_tool_completes_through_one_runtime_interaction()
     let audit = RecordingInteractionAudit::new(conversation_id.clone());
     let coordinator = Arc::new(InteractionCoordinator::new(
         conversation_id,
-        lifecycle,
+        lifecycle.clone(),
         audit.clone(),
     ));
     coordinator.set_provider_available(true);
@@ -277,6 +277,10 @@ async fn a_real_managed_fastmcp_tool_completes_through_one_runtime_interaction()
         result = &mut call => panic!("the call settled before asking: {result:?}"),
         request = pending.recv() => request.expect("one pending interaction"),
     };
+    assert!(
+        lifecycle.idle_epoch().is_none(),
+        "MCP interaction callback authority prevents an idle claim without a root attempt"
+    );
     let crate::runtime::interaction::InteractionKind::Questionnaire {
         requester,
         questionnaire,
