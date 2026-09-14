@@ -1290,3 +1290,57 @@ async fn close_linearizes_before_pending_attach_commit() {
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn admitted_mutation_survives_close_before_native_dispatch() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = std::sync::Arc::new(AppServerConnection::new(f.manager.clone()));
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let probe = f.manager.probe(&target.conversation_id);
+        probe.before_operation.arm();
+        let worker = connection.clone();
+        let pending = tokio::spawn(async move {
+            call(
+                &worker,
+                10,
+                Method::ApprovalModeSet {
+                    target,
+                    mode: crate::runtime::ApprovalMode::FullAccess,
+                },
+            )
+            .await
+        });
+        probe.before_operation.entered().await; // manager lease acquired, native call not executed
+        connection.close();
+        assert_eq!(connection.attachment_counts(), (0, 0));
+        let replacement = AppServerConnection::new(f.manager.clone());
+        initialize(&replacement).await;
+        let new = attach(&replacement, &f, 0).await;
+        probe.before_operation.release();
+        assert!(matches!(
+            pending.await.unwrap(),
+            MethodResult::ApprovalMode {
+                effective_approval_mode: crate::runtime::ApprovalMode::FullAccess,
+                ..
+            }
+        ));
+        let MethodResult::Snapshot { snapshot, .. } =
+            call(&replacement, 11, Method::SessionSnapshot { target: new }).await
+        else {
+            panic!("snapshot");
+        };
+        assert_eq!(
+            snapshot.effective_approval_mode,
+            crate::runtime::ApprovalMode::FullAccess
+        );
+        assert!(matches!(
+            rejected(&connection, Method::ServerInfo {}).await,
+            ErrorData::StaleAttachment
+        ));
+        replacement.close();
+        f.close().await;
+    })
+    .await;
+}

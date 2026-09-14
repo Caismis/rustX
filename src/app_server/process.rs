@@ -17,9 +17,10 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
-pub const USAGE: &str = "usage: rustx app-server [--models <models.toml>] [--runtime-root <path>] --listen <stdio|ws://IP:PORT> [--token-file <path>]\nUser settings: $XDG_CONFIG_HOME/rustx/settings.toml (default ~/.config/rustx/settings.toml).\n--models and --runtime-root override canonical user TOML source bindings.\nWebSocket requires a dedicated base64url token file. stdio requires owned pipes.";
+pub const USAGE: &str = "usage: rustx app-server [--user-settings <settings.toml>] [--models <models.toml>] [--runtime-root <path>] --listen <stdio|ws://IP:PORT> [--token-file <path>]\nUser settings default: $XDG_CONFIG_HOME/rustx/settings.toml (default ~/.config/rustx/settings.toml).\n--user-settings fixes the user TOML source for this process; relative CLI paths use launch cwd.\n--models and --runtime-root override canonical user TOML source bindings.\nWebSocket requires a dedicated base64url token file. stdio requires owned pipes.";
 
 struct Options {
+    settings: Option<PathBuf>,
     models: Option<PathBuf>,
     root: Option<PathBuf>,
     listen: String,
@@ -28,6 +29,7 @@ struct Options {
 impl Options {
     fn parse(arguments: Vec<String>) -> Result<Self, String> {
         let mut options = Self {
+            settings: None,
             models: None,
             root: None,
             listen: String::new(),
@@ -44,6 +46,7 @@ impl Options {
                 .filter(|value| !value.is_empty())
                 .ok_or("option requires a value")?;
             match flag.as_str() {
+                "--user-settings" => options.settings = Some(value.into()),
                 "--models" => options.models = Some(value.into()),
                 "--runtime-root" => options.root = Some(value.into()),
                 "--listen" => options.listen = value,
@@ -67,9 +70,20 @@ fn compose(options: &Options) -> Result<SessionRuntimeManager, String> {
             host.launch_directory.join(path)
         }
     };
+    let settings = options
+        .settings
+        .as_ref()
+        .map_or_else(|| host.config_directory.join("settings.toml"), absolute);
+    // Explicit selection is required; only the omitted canonical default may
+    // be absent. Parsing and canonical source binding remain in the shared owner.
+    if options.settings.is_some()
+        && !std::fs::metadata(&settings).is_ok_and(|metadata| metadata.is_file())
+    {
+        return Err("explicit user settings source must be an existing readable TOML file".into());
+    }
     let configuration = UserConfigManager::bootstrap(
         UserConfigSources {
-            settings: host.config_directory.join("settings.toml"),
+            settings,
             models: host.config_directory.join("models.toml"),
             runtime_root: host.state_directory.join("app-server"),
             home_directory: host.home_directory,

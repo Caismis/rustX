@@ -386,29 +386,6 @@ async fn app_server_bootstrap_fails_before_readiness_and_owner_may_kill_stdio_ch
 }
 
 #[tokio::test]
-async fn app_server_websocket_client_limit_preserves_admitted_clients() {
-    bounded(async {
-        let f = Fixture::new().await;
-        let (mut child, url) = f.ws().await;
-        let mut clients = Vec::new();
-        for _ in 0..rustx::app_server::transport::websocket::MAX_CLIENTS {
-            clients.push(driver::socket(&url).await);
-        }
-        assert!(
-            tokio_tungstenite::connect_async(url.as_str())
-                .await
-                .is_err()
-        );
-        clients[0].send(INITIALIZE.into()).await.unwrap();
-        assert_eq!(json_response(&mut clients[0]).await["id"], 1);
-        clients[1].send(INITIALIZE.into()).await.unwrap();
-        assert_eq!(json_response(&mut clients[1]).await["id"], 1);
-        child.kill().await.unwrap();
-    })
-    .await;
-}
-
-#[tokio::test]
 async fn app_server_stdio_broken_output_pipe_settles_with_input_still_open() {
     bounded(async {
         let f = Fixture::new().await;
@@ -420,6 +397,133 @@ async fn app_server_stdio_broken_output_pipe_settles_with_input_still_open() {
             .await
             .unwrap();
         assert!(child.wait().await.unwrap().success());
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn app_server_explicit_user_settings_are_authoritative_for_both_transports() {
+    bounded(async {
+        use app_server_conformance::AppServerConformanceDriver;
+        use rustx::app_server::protocol::*;
+        for ws in [false, true] {
+            for explicit in [false, true] {
+                let f = Fixture::new().await;
+                let ambient = f.root.path().join("home/.config/rustx");
+                let selected = f.root.path().join("selected");
+                std::fs::create_dir(&selected).unwrap();
+                std::fs::copy(ambient.join("models.toml"), selected.join("models.toml")).unwrap();
+                let settings = std::fs::read_to_string(ambient.join("settings.toml")).unwrap();
+                // Different model catalogs prove source ownership and that authored
+                // relative bindings use the selected document parent, not launch cwd.
+                std::fs::write(
+                    selected.join("settings.toml"),
+                    format!("models = \"models.toml\"\n{settings}"),
+                )
+                .unwrap();
+                std::fs::write(
+                    ambient.join("settings.toml"),
+                    format!("models = \"ambient-models.toml\"\n{settings}"),
+                )
+                .unwrap();
+                let catalog = std::fs::read_to_string(ambient.join("models.toml")).unwrap();
+                std::fs::write(
+                    ambient.join("ambient-models.toml"),
+                    catalog.replace("context_window = 128000", "context_window = 64000"),
+                )
+                .unwrap();
+                let mut command = f.command(if ws { "ws://127.0.0.1:0" } else { "stdio" });
+                if explicit {
+                    command.args(["--user-settings", "selected/settings.toml"]);
+                }
+                if ws {
+                    command.arg("--token-file").arg(f.root.path().join("token"));
+                }
+                let mut child = command.spawn().unwrap();
+                let client = if ws {
+                    let line = BufReader::new(child.stderr.take().unwrap())
+                        .lines()
+                        .next_line()
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    driver::websocket(line.strip_prefix("rustx app-server listening ").unwrap())
+                        .await
+                } else {
+                    driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap())
+                };
+                let init: Request = serde_json::from_str(INITIALIZE).unwrap();
+                assert!(matches!(client.request(init).await, Response::Success(_)));
+                // Both Sessions use the same process source binding.
+                for (index, session_id) in f.sessions.iter().enumerate() {
+                    let Response::Success(attached) = client
+                        .request(Request {
+                            jsonrpc: JsonRpcVersion::V2,
+                            id: RequestId::Integer(10 + i64::try_from(index).unwrap()),
+                            call: Method::SessionAttach {
+                                session_id: session_id.clone(),
+                                node_id: None,
+                            },
+                        })
+                        .await
+                    else {
+                        panic!("attach");
+                    };
+                    let MethodResult::Attached { target, .. } = attached.result else {
+                        panic!("attached");
+                    };
+                    let response = client
+                        .request(Request {
+                            jsonrpc: JsonRpcVersion::V2,
+                            id: RequestId::Integer(20 + i64::try_from(index).unwrap()),
+                            call: Method::ModelCatalog { target },
+                        })
+                        .await;
+                    let json = serde_json::to_string(&response).unwrap();
+                    assert!(
+                        json.contains(if explicit { "128000" } else { "64000" }),
+                        "{json}"
+                    );
+                    assert!(
+                        !json.contains(if explicit { "64000" } else { "128000" }),
+                        "{json}"
+                    );
+                }
+                client.close().await;
+                if ws {
+                    child.kill().await.unwrap();
+                } else {
+                    assert!(child.wait().await.unwrap().success());
+                }
+            }
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn app_server_explicit_user_settings_fail_before_readiness() {
+    bounded(async {
+        let f = Fixture::new().await;
+        for contents in [None, Some("secret-sentinel invalid TOML")] {
+            let path = f.root.path().join("selected.toml");
+            if let Some(contents) = contents {
+                std::fs::write(&path, contents).unwrap();
+            }
+            for listen in ["stdio", "ws://127.0.0.1:0"] {
+                let mut command = f.command(listen);
+                command.arg("--user-settings").arg(&path);
+                if listen != "stdio" {
+                    command.arg("--token-file").arg(f.root.path().join("token"));
+                }
+                let output = command.output().await.unwrap();
+                assert!(!output.status.success());
+                assert!(output.stdout.is_empty());
+                let error = String::from_utf8(output.stderr).unwrap();
+                assert!(!error.contains("listening"));
+                assert!(!error.contains("secret-sentinel"));
+            }
+        }
     })
     .await;
 }

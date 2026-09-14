@@ -55,13 +55,36 @@ pub async fn serve(
     credential: Credential,
     shutdown: CancellationToken,
 ) -> io::Result<()> {
+    serve_listener(
+        listener,
+        manager,
+        credential,
+        shutdown,
+        #[cfg(test)]
+        None,
+    )
+    .await
+}
+
+// The optional test observer reports slots only after the listener has reaped
+// tasks. It never participates in production admission or semantic ownership.
+pub(crate) async fn serve_listener(
+    listener: TcpListener,
+    manager: SessionRuntimeManager,
+    credential: Credential,
+    shutdown: CancellationToken,
+    #[cfg(test)] slots: Option<tokio::sync::watch::Sender<usize>>,
+) -> io::Result<()> {
     let mut clients = JoinSet::new();
     let stop = shutdown.child_token();
     let result = loop {
         tokio::select! {
             biased;
             () = shutdown.cancelled() => break Ok(()),
-            _ = clients.join_next(), if !clients.is_empty() => {},
+            _ = clients.join_next(), if !clients.is_empty() => {
+                #[cfg(test)]
+                if let Some(slots) = &slots { slots.send_replace(clients.len()); }
+            },
             accepted = listener.accept() => {
                 let (socket, _) = match accepted { Ok(value) => value, Err(error) => break Err(error) };
                 if clients.len() == MAX_CLIENTS { drop(socket); continue; }
@@ -75,6 +98,8 @@ pub async fn serve(
                         _ = connection(socket, manager, credential, stop.clone()) => {},
                     }
                 });
+                #[cfg(test)]
+                if let Some(slots) = &slots { slots.send_replace(clients.len()); }
             }
         }
     };

@@ -121,6 +121,12 @@ impl RuntimeAttachment {
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.access(true)?.subagent_workspace_dispose(id).await
     }
+    /// Capture native operation authority at admission. Only a server-owned
+    /// operation lease may retain this handle; it is not an external attachment.
+    pub(crate) fn operation_authority(&self) -> Result<Arc<ClientInner>, RuntimeClientError> {
+        self.access(true)
+    }
+
     fn access(&self, write: bool) -> Result<Arc<ClientInner>, RuntimeClientError> {
         if self.detached.load(Ordering::SeqCst) {
             return Err(RuntimeClientError::NotAttached);

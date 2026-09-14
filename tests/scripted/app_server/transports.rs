@@ -547,3 +547,167 @@ async fn one_pending_session_request_does_not_serialize_another_session() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn authenticated_websocket_capacity_is_released_after_client_reaping() {
+    bounded(async {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let f = Fixture::new().await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let stop = CancellationToken::new();
+        let (slots, mut observed) = tokio::sync::watch::channel(0);
+        let serving = tokio::spawn(websocket::serve_listener(
+            listener,
+            f.manager.clone(),
+            websocket::Credential::new(driver::TOKEN.into()).unwrap(),
+            stop.clone(),
+            Some(slots),
+        ));
+        let mut clients = Vec::new();
+        for _ in 0..websocket::MAX_CLIENTS {
+            clients.push(driver::socket(&url).await);
+        }
+        observed
+            .wait_for(|count| *count == websocket::MAX_CLIENTS)
+            .await
+            .unwrap();
+        let mut request = url.as_str().into_client_request().unwrap();
+        request.headers_mut().insert(
+            "sec-websocket-protocol",
+            format!("rustx.app-server.v1, rustx-token.{}", driver::TOKEN)
+                .parse()
+                .unwrap(),
+        );
+        let error = tokio_tungstenite::connect_async(request).await.unwrap_err();
+        // The listener drops excess sockets before HTTP admission, rather than
+        // returning the HTTP 401 used for invalid credentials.
+        assert!(matches!(
+            error,
+            tokio_tungstenite::tungstenite::Error::Io(_)
+                | tokio_tungstenite::tungstenite::Error::Protocol(
+                    tokio_tungstenite::tungstenite::error::ProtocolError::HandshakeIncomplete
+                )
+        ));
+        let mut released = clients.pop().unwrap();
+        released.close(None).await.unwrap();
+        observed
+            .wait_for(|count| *count == websocket::MAX_CLIENTS - 1)
+            .await
+            .unwrap();
+        clients.push(driver::socket(&url).await);
+        observed
+            .wait_for(|count| *count == websocket::MAX_CLIENTS)
+            .await
+            .unwrap();
+        stop.cancel();
+        serving.await.unwrap().unwrap();
+        f.close().await;
+    })
+    .await;
+}
+
+// A synchronous writer keeps draining and replenishes one native notification
+// per observed notification. Thus queue overflow cannot mask scheduling starvation.
+struct ReplenishingWriter {
+    native: crate::runtime::ConversationRuntime,
+    record: Vec<u8>,
+    notifications: usize,
+    stop: CancellationToken,
+}
+impl tokio::io::AsyncWrite for ReplenishingWriter {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+        bytes: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        self.record.extend_from_slice(bytes);
+        if self.record.last() == Some(&b'\n') {
+            let value: serde_json::Value = serde_json::from_slice(&self.record).unwrap();
+            self.record.clear();
+            if value.get("id").is_some() {
+                assert_eq!(value["id"], 99);
+                assert!(value.get("result").is_some(), "{value}");
+                assert!(self.notifications > 0, "observations also make progress");
+                self.stop.cancel();
+            } else {
+                self.notifications += 1;
+                assert!(
+                    self.notifications <= transport::IN_FLIGHT_REQUESTS + 1,
+                    "ready control request was starved by observations"
+                );
+                let mode = if self.notifications.is_multiple_of(2) {
+                    crate::runtime::ApprovalMode::Policy
+                } else {
+                    crate::runtime::ApprovalMode::FullAccess
+                };
+                self.native.approval_mode_set(mode).unwrap();
+            }
+        }
+        std::task::Poll::Ready(Ok(bytes.len()))
+    }
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+#[tokio::test]
+async fn ready_control_admission_does_not_wait_for_continuous_notifications() {
+    bounded(async {
+        use tokio::io::AsyncWriteExt;
+        let f = Fixture::new().await;
+        let connection = Arc::new(AppServerConnection::new(f.manager.clone()));
+        let direct = app_server_conformance::DirectDriver(&connection);
+        initialize(&direct).await;
+        let target = attach(&direct, &f).await;
+        let managed = f.manager.load(&target.session_id, None).await.unwrap();
+        let native = managed.inspect_runtime().unwrap();
+        // The ready backlog exceeds the fairness bound and is replenished by the
+        // writer. Input is already in the pipe before the shared serve core is polled.
+        for i in 0..64 {
+            native
+                .approval_mode_set(if i % 2 == 0 {
+                    crate::runtime::ApprovalMode::FullAccess
+                } else {
+                    crate::runtime::ApprovalMode::Policy
+                })
+                .unwrap();
+        }
+        let (mut client, input) = tokio::io::duplex(4096);
+        let request = Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(99),
+            call: Method::SessionDetach { target },
+        };
+        client
+            .write_all(format!("{}\n", serde_json::to_string(&request).unwrap()).as_bytes())
+            .await
+            .unwrap();
+        let stop = CancellationToken::new();
+        stdio::serve(
+            connection.clone(),
+            input,
+            ReplenishingWriter {
+                native,
+                record: Vec::new(),
+                notifications: 0,
+                stop: stop.clone(),
+            },
+            stop,
+        )
+        .await
+        .unwrap();
+        assert_eq!(connection.attachment_counts(), (0, 0));
+        f.close().await;
+    })
+    .await;
+}

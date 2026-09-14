@@ -58,18 +58,26 @@ is no global active Session and no fixed Conversation composed at launch.
 ```sh
 # Canonical user source: $XDG_CONFIG_HOME/rustx/settings.toml,
 # defaulting to ~/.config/rustx/settings.toml. Use rustx init to author it.
-rustx app-server --runtime-root /private/user/rustx-state --listen stdio
+rustx app-server --user-settings /private/user/settings.toml \
+  --runtime-root /private/user/rustx-state --listen stdio
 
 # Omit --runtime-root to use the user TOML binding, otherwise the default is
 # $XDG_STATE_HOME/rustx/app-server (default ~/.local/state/rustx/app-server).
-rustx app-server --listen ws://127.0.0.1:8080 --token-file /private/user/socket-token
+rustx app-server --user-settings /private/user/settings.toml \
+  --listen ws://127.0.0.1:8080 --token-file /private/user/socket-token
 ```
+
+`--user-settings <settings.toml>` explicitly fixes `UserConfigSources.settings`
+for this process and every Session it opens or creates. The selected file must
+exist and pass the shared TOML bootstrap before readiness. Omission retains the
+canonical XDG default. Hosts can select each process's user document directly;
+no HOME/XDG mutation or per-connection source switching is required.
 
 `--models <models.toml>` and `--runtime-root <path>` override source bindings using
 the existing configuration resolver. Relative CLI paths resolve at launch; paths
 authored in user settings resolve relative to that document. `--config` is
 intentionally absent here: in ordinary `rustx` it selects a Session/project override,
-not the canonical user source. Use the XDG user configuration binding for the server.
+not the canonical user source. Use `--user-settings` for that process-level binding.
 Session cwd and optional project configuration come from `session/create` settings;
 launch cwd is never substituted for Session cwd. Sessions retain the existing trust
 and configuration admission rules. Neither cwd nor transport authentication is a sandbox.
@@ -155,6 +163,14 @@ written. Request futures, current decoding/serialization, and library framing bu
 are additional bounded transport work. Native runtime state and result construction
 remain under their existing owners; these transport limits are not #291 residency quotas.
 
+Ready observations alternate with protocol progress (a completed response or
+incoming-message admission), starting with protocol progress. At most one ready
+notification precedes each progress step. Since there are at most 16 pending
+requests and only input admission can add another, ready input cannot wait behind
+more than 16 response completions plus 17 observations. Conversely, continuous
+input/response traffic cannot starve a ready notification. No backlog drain,
+sleep, queue expansion, or semantic bypass is needed.
+
 Each physical connection has one serialized writer. Requests can overlap across
 Sessions, and responses may finish out of order; clients correlate by JSON-RPC ID.
 The common serving layer never waits for queue capacity while retaining semantic
@@ -168,7 +184,10 @@ Reconnect with initialize/attach/snapshot/resync and inspect authoritative state
 linearizes close against attachment reservation/claim/commit, including pending loads.
 It releases exact external claims even if concurrent tasks retain an `Arc`; it never
 cancels execution, settles an interaction, unloads a runtime or edits history. Transport
-termination has one cleanup path. A stale attachment cannot control its replacement.
+termination has one cleanup path. A stale attachment cannot control its replacement. Native operation authority is
+captured under the close/admission lock and retained only in the manager-owned
+operation task; subsequent detach cannot revoke an already-admitted mutation.
+Connection-local subscription delivery still ends with the attachment.
 
 SIGINT/SIGTERM stops transport admission and settles connection tasks/attachments.
 It does not define a second runtime shutdown state machine or guarantee graceful drain

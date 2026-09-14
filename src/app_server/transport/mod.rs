@@ -74,15 +74,23 @@ where
     let write = writer(receiver);
     tokio::pin!(incoming, write);
     let mut requests: FuturesUnordered<BoxFuture<'_, _>> = FuturesUnordered::new();
+    // Alternate ready observations with protocol progress. Completion priority
+    // drains at most IN_FLIGHT_REQUESTS before input; new requests cannot appear
+    // without input admission. Neither direction can starve the other.
+    let mut observation_turn = false;
     loop {
         tokio::select! {
             biased;
             () = shutdown.cancelled() => return Ok(()),
             result = &mut write => return result,
+            notification = connection.next_notification(), if observation_turn => {
+                enqueue(&outgoing, &notification)?;
+                observation_turn = false;
+            }
             response = requests.next(), if !requests.is_empty() => {
                 if let Some(Some(response)) = response { enqueue(&outgoing, &response)?; }
+                observation_turn = true;
             }
-            notification = connection.next_notification() => enqueue(&outgoing, &notification)?,
             record = incoming.next() => {
                 let Some(record) = record else { return Ok(()); };
                 let record = record?;
@@ -90,6 +98,11 @@ where
                 if requests.len() == IN_FLIGHT_REQUESTS { return Err(failure("request capacity exhausted")); }
                 let connection = connection.clone();
                 requests.push(Box::pin(async move { connection.handle_json(&record).await }));
+                observation_turn = true;
+            }
+            notification = connection.next_notification(), if !observation_turn => {
+                enqueue(&outgoing, &notification)?;
+                observation_turn = false;
             }
         }
     }
