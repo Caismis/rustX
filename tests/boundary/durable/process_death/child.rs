@@ -42,7 +42,7 @@ use rustx::local_runtime::composition::{
 };
 use rustx::local_runtime::config::CurrentRuntimeConfig;
 use rustx::local_runtime::session::{SessionCatalog, SessionPersistentState};
-use rustx::local_runtime::supervisor::LocalSessionSupervisor;
+use rustx::local_runtime::supervisor::LocalSessionAttachment;
 
 use super::ROOT_ENV;
 use super::harness::{CONVERSATION, MODEL};
@@ -374,7 +374,10 @@ impl Child {
             registry,
             runtime_config.clone(),
             SessionPersistentState {
-                model: runtime_config.initial_model().clone().clone(),
+                model: Some(runtime_config.initial_model().clone().clone()),
+                ..SessionPersistentState::from_input(
+                    &crate::local_runtime::SessionConfigInput::new(std::path::PathBuf::from("/")),
+                )
             },
             conversation_id,
             artifacts_root,
@@ -520,19 +523,23 @@ fn spawn_observer(
 /// provider) and the Runtime Client host (this child answers no protocol
 /// input): the real `SessionCatalog` on the lab's runtime-private root, the
 /// real conversation runtime of whatever node the catalog says is active, and
-/// the real `LocalSessionSupervisor` with that runtime installed. `/fork` and
+/// the real `LocalSessionAttachment` with that runtime installed. `/fork` and
 /// `/branch` are then the production supervisor operations, not a harness
 /// re-implementation of them.
 async fn compose_session_child(
     root: &Path,
+    session: &str,
     scripts: Vec<Vec<FakeStep>>,
-) -> (Child, Arc<LocalSessionSupervisor>) {
+) -> (Child, Arc<LocalSessionAttachment>) {
     let paths = lab_paths(root);
     let config_bytes = std::fs::read(&paths.config).expect("read the lab runtime config");
     let runtime_config =
         CurrentRuntimeConfig::from_toml_slice(&config_bytes).expect("valid runtime config");
     let template = SessionPersistentState {
-        model: runtime_config.initial_model().clone().clone(),
+        model: Some(runtime_config.initial_model().clone().clone()),
+        ..SessionPersistentState::from_input(&crate::local_runtime::SessionConfigInput::new(
+            std::path::PathBuf::from("/"),
+        ))
     };
     let catalog = match SessionCatalog::open_existing(&paths.runtime_root)
         .expect("open the native Session catalog")
@@ -541,16 +548,20 @@ async fn compose_session_child(
         None => SessionCatalog::create(&paths.runtime_root, &template)
             .expect("publish the first native Session"),
     };
-    let (session_id, node, session_state) =
-        catalog.active_lineage().expect("an active Session lineage");
+    let (session_id, node, session_state) = catalog
+        .lineage(&crate::local_runtime::SessionId::new(session), None)
+        .map(|(node, state)| (crate::local_runtime::SessionId::new(session), node, state))
+        .expect("an active Session lineage");
     let database_path = catalog.database_path(&session_id, &node.conversation_id);
     let artifacts_root = database_path
         .parent()
         .expect("the active conversation database has a parent")
         .to_path_buf();
-    let supervisor = Arc::new(LocalSessionSupervisor::new(
+    let supervisor = Arc::new(LocalSessionAttachment::new(
         catalog,
-        session_state.model.clone(),
+        session_id,
+        session_state,
+        0,
     ));
     let child = Child::compose_lineage(
         root,
@@ -1223,7 +1234,12 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 registry,
                 runtime_config.clone(),
                 SessionPersistentState {
-                    model: runtime_config.initial_model().clone().clone(),
+                    model: Some(runtime_config.initial_model().clone().clone()),
+                    ..SessionPersistentState::from_input(
+                        &crate::local_runtime::SessionConfigInput::new(std::path::PathBuf::from(
+                            "/",
+                        )),
+                    )
                 },
                 ConversationId::new(CONVERSATION),
                 artifacts_root,
@@ -1426,6 +1442,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
             };
             let (child, supervisor) = compose_session_child(
                 root,
+                "session-1",
                 vec![
                     calling_turn(&bash),
                     vec![
@@ -1485,7 +1502,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
 
             let (revision, boundary) = human_boundary(&child, 3);
             let outcome = if scenario == SESSION_FORK {
-                supervisor.fork_active(revision, boundary).await
+                supervisor.fork_attached(revision, boundary).await
             } else {
                 supervisor.tree_branch(revision, boundary).await
             };
@@ -1503,6 +1520,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
             // all while answering normally.
             let (child, supervisor) = compose_session_child(
                 root,
+                "session-2",
                 vec![vec![
                     started(),
                     text("resumed on the cut lineage"),

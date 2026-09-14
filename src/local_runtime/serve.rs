@@ -38,7 +38,7 @@ use crate::runtime_client::transport::stdio::{StdioSessionEnd, serve_stdio_jsonl
 
 use super::cli::{USAGE, parse_arguments};
 use super::composition::{
-    LocalConversationInspection, LocalRuntimeDependencies, LocalSessionProduct, StartupSession,
+    LocalConversationInspection, LocalRuntimeDependencies, LocalSessionClient, StartupSession,
 };
 
 /// The deterministic terminal outcome of the local runtime process.
@@ -76,7 +76,7 @@ impl ProcessOutcome {
 }
 
 enum ServingRuntime {
-    Session(Box<LocalSessionProduct>),
+    Session(Box<LocalSessionClient>),
     Inspection(LocalConversationInspection),
 }
 
@@ -122,7 +122,7 @@ async fn serve_request(request: super::launch::LaunchRequest) -> ProcessOutcome 
                 Ok(paths) => paths,
                 Err(error) => return ProcessOutcome::StartupFailed(error),
             };
-            match LocalSessionProduct::compose(
+            match LocalSessionClient::compose(
                 &paths,
                 &LocalRuntimeDependencies {
                     startup_session: request.startup_session,

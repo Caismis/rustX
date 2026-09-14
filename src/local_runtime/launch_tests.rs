@@ -2,7 +2,7 @@
 #![allow(clippy::needless_pass_by_value, clippy::too_many_lines)] // linear fixture scenarios
 use super::configuration::*;
 use super::launch::*;
-use super::{LocalRuntimeDependencies, LocalSessionProduct};
+use super::{LocalRuntimeDependencies, LocalSessionClient};
 use crate::capabilities::{CapabilitySourceState, ToolSourceId};
 use crate::model::ModelCatalog;
 use serde_json::json;
@@ -497,7 +497,7 @@ async fn cfg236_gated_role_reload_cancels_or_publishes_one_complete_generation()
         "R1 body",
     );
     f.project(json!({"subagents": {}, "agent": {"agents": ["role"]}}));
-    let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&f.resolve(), &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     let r1 = product.runtime().runtime_resources();
@@ -1506,13 +1506,14 @@ async fn cfg233_provider_binding_uses_launch_snapshot_and_ignores_unused_missing
     )]);
     let launch = f.resolve();
     f.credentials = crate::credentials::CredentialSnapshot::default();
-    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     assert!(!format!("{launch:?}").contains("CFG233_PROVIDER_SENTINEL"));
     product.runtime().shutdown().await.unwrap();
+    drop(product); // Release native catalog ownership before the next launch.
     assert!(
-        LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+        LocalSessionClient::compose(&f.resolve(), &LocalRuntimeDependencies::default())
             .await
             .unwrap_err()
             .to_string()
@@ -1528,7 +1529,7 @@ async fn cfg233_enabled_missing_credentials_and_connection_failures_are_source_l
         "connection":{"enabled":true,"command":"/does/not/exist"},
         "disabled":{"enabled":false,"command":"/does/not/exist","sensitive_env":{"TOKEN":"$IGNORED_KEY"}}
     }, "agent": {"model": {"model":"host/one"}, "tools": {"sources":{"credential":"all","connection":"all","disabled":"all"}}}}));
-    let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&f.resolve(), &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     let sources = product.runtime().capability().availability();
@@ -1561,7 +1562,7 @@ async fn cfg271_missing_empty_and_unprepared_python_allow_native_startup() {
             }
         }
         let product =
-            LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+            LocalSessionClient::compose(&f.resolve(), &LocalRuntimeDependencies::default())
                 .await
                 .unwrap();
         assert_eq!(
@@ -1603,7 +1604,7 @@ async fn cfg233_native_composition_keeps_disabled_and_discovered_resources_inert
         "offline":{"enabled":false,"url":"http://127.0.0.1:1/mcp","sensitive_headers":{"Authorization":"$UNSET"}}
     }, "agent": {"model": {"model":"host/one"}}}));
     let launch = f.resolve();
-    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     assert!(
@@ -1692,7 +1693,7 @@ async fn cfg233_http_credential_failure_redacts_peer_echo_and_configuration() {
     });
     f.user(json!({"mcp_servers": {"authenticated":{"enabled":true,"url":format!("http://{endpoint}/mcp"),"sensitive_headers":{"Authorization":"$AUTH"}}}, "agent": {"model": {"model":"host/one"}, "tools": {"sources":{"authenticated":"all"}}}}));
     let launch = f.resolve();
-    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     peer.await.unwrap();
@@ -2061,7 +2062,7 @@ async fn minimal_native_composition_and_frozen_launch_ignore_later_config_edits(
     let launch = f.resolve();
     f.user(json!({"agent_id": "edited", "agent": {"model": {"model":"host/two"}}}));
     f.project(json!({"agent": {"model": {"model":"missing/model"}}}));
-    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     assert!(
@@ -2087,7 +2088,7 @@ async fn minimal_native_composition_and_frozen_launch_ignore_later_config_edits(
 async fn resolution_and_composition_failures_preserve_published_session_selection() {
     let f = Fixture::new();
     let launch = f.resolve();
-    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     product.runtime().shutdown().await.unwrap();
@@ -2522,7 +2523,7 @@ async fn project_resource_authority_rejects_every_declared_escape_but_preserves_
         f.resolve().provenance["skills"],
         Origin::Explicit { .. }
     ));
-    let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&f.resolve(), &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     let resources = product.runtime().runtime_resources();
@@ -2653,7 +2654,7 @@ async fn cfg280_launch_resolves_the_canonical_skill_sources_and_explicit_authori
 
     // The committed generation carries exactly those effective identities.
     f.request.skill_paths = vec![explicit];
-    let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&f.resolve(), &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     let resources = product.runtime().runtime_resources();
@@ -2687,7 +2688,7 @@ async fn project_symlink_escape_is_rechecked_before_composition_and_reload() {
             .contains("outside trusted workspace")
     );
     assert!(
-        LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+        LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
             .await
             .unwrap_err()
             .to_string()
@@ -2695,7 +2696,7 @@ async fn project_symlink_escape_is_rechecked_before_composition_and_reload() {
     );
     std::fs::remove_file(&source).unwrap();
     f.role(false, "x", json!({"description":"x"}), "trusted A");
-    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     let before = product.runtime().runtime_resources();
@@ -2804,7 +2805,7 @@ fn project_directory_symlinks_cannot_authorize_builtin_or_declared_resources() {
 async fn workspace_workflow_symlink_rejects_reload_without_reading_external_yaml() {
     let f = Fixture::new();
     let launch = f.resolve();
-    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     let before = product.runtime().runtime_resources();
@@ -3044,7 +3045,7 @@ async fn cfg280_an_unselected_skill_source_is_inert_at_startup_and_reload() {
         "{:?}",
         launch.skill_diagnostics()
     );
-    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     for stage in ["startup", "reload"] {
@@ -3093,7 +3094,7 @@ async fn cfg280_an_unselected_skill_source_is_inert_at_startup_and_reload() {
         "{:?}",
         launch.skill_diagnostics()
     );
-    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     for stage in ["startup", "reload"] {
@@ -3111,7 +3112,7 @@ async fn cfg280_an_unselected_skill_source_is_inert_at_startup_and_reload() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cfg271_all_catalogs_publish_together_and_failed_candidates_publish_nothing() {
     let f = Fixture::new();
-    let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&f.resolve(), &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     let before = product.runtime().runtime_resources();
@@ -3296,7 +3297,7 @@ async fn cfg274_skill_recovery_and_loss_publish_workflow_and_root_exposure_atomi
     f.role(false, "reviewer", json!({"description":"Review","skills":["review"],"tools":{"builtin":[]},"worktree":{"enabled":false}}), "Review");
     install_workflow(&f, &template_source("typed_agent"));
     f.project(json!({"agent":{"workflows":["example"],"tools":{"builtin":[]}}}));
-    let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+    let product = LocalSessionClient::compose(&f.resolve(), &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     let id = WorkflowId::parse("example").unwrap();
@@ -3554,7 +3555,7 @@ async fn cfg275_child_inspection_and_execution_share_frozen_r1_after_parent_relo
         launch.models.resolve(&f.credentials).unwrap(),
     )
     .unwrap();
-    let parent = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+    let parent = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
         .await
         .unwrap();
     let r1 = parent.runtime().runtime_resources();
@@ -3735,6 +3736,55 @@ async fn cfg275_child_inspection_and_execution_share_frozen_r1_after_parent_relo
 /// Shared source-owner regressions. CLI fixtures only author isolated inputs;
 /// every assertion below resolves through the same long-lived manager.
 mod session_resolution {
+    #[tokio::test]
+    async fn durable_omission_uses_current_sources_and_removed_explicit_model_fails_closed() {
+        let f = super::Fixture::new();
+        let (manager, input) = f.request.session_input(&f.host).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let catalog =
+            crate::local_runtime::session_controller::SessionController::open(root.path()).unwrap();
+        let omitted = crate::local_runtime::session::SessionPersistentState::from_input(&input);
+        let a = catalog.create_session(omitted).await.unwrap().session;
+        let mut explicit =
+            crate::local_runtime::session::SessionPersistentState::from_input(&input);
+        explicit.model = Some(crate::model::session::SessionModelConfig::of(
+            crate::model::catalog::ModelRef::parse("host/one").unwrap(),
+        ));
+        let b = catalog.create_session(explicit).await.unwrap().session;
+        drop(catalog);
+        let catalog =
+            crate::local_runtime::session_controller::SessionController::open(root.path()).unwrap();
+        let a = catalog.read_settings(&a.id).await.unwrap().1;
+        let b = catalog.read_settings(&b.id).await.unwrap().1;
+        f.user(serde_json::json!({"agent":{"model":{"model":"host/two"}}}));
+        assert_eq!(
+            manager
+                .resolve_session(&a.input())
+                .unwrap()
+                .config()
+                .initial_model()
+                .model
+                .to_string(),
+            "host/two"
+        );
+        assert_eq!(
+            manager
+                .resolve_session(&b.input())
+                .unwrap()
+                .config()
+                .initial_model()
+                .model
+                .to_string(),
+            "host/one"
+        );
+        let path = f.host.config_directory.join("models.toml");
+        let bytes = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(path, bytes.replace("one", "removed")).unwrap();
+        let ((), effects) = crate::local_runtime::static_effects::measure(|| {
+            assert!(manager.resolve_session(&b.input()).is_err());
+        });
+        assert_eq!(effects, [0; 13]);
+    }
     use super::*;
     use crate::model::{catalog::ModelRef, session::SessionModelConfig};
 
@@ -3941,7 +3991,7 @@ mod session_resolution {
         assert_eq!(a.project_context_files[0].content, "Captured guidance");
         assert_eq!(b.project_context_files[0].content, "Later guidance");
         let admitted = a.admit(|| f.credentials.clone()).unwrap();
-        let product = LocalSessionProduct::compose(&admitted, &LocalRuntimeDependencies::default())
+        let product = LocalSessionClient::compose(&admitted, &LocalRuntimeDependencies::default())
             .await
             .unwrap();
         let resources = product.runtime().runtime_resources();
@@ -4025,7 +4075,7 @@ mod session_resolution {
         std::fs::remove_file(&file).unwrap();
         let admitted_a = a.admit(|| f.credentials.clone()).unwrap();
         let product_a =
-            LocalSessionProduct::compose(&admitted_a, &LocalRuntimeDependencies::default())
+            LocalSessionClient::compose(&admitted_a, &LocalRuntimeDependencies::default())
                 .await
                 .unwrap();
         let resources_a = product_a.runtime().runtime_resources();
@@ -4050,7 +4100,7 @@ mod session_resolution {
         let inspection_b = b.inspection.clone();
         let admitted_b = b.admit(|| f.credentials.clone()).unwrap();
         let product_b =
-            LocalSessionProduct::compose(&admitted_b, &LocalRuntimeDependencies::default())
+            LocalSessionClient::compose(&admitted_b, &LocalRuntimeDependencies::default())
                 .await
                 .unwrap();
         let resources_b = product_b.runtime().runtime_resources();
@@ -4126,4 +4176,382 @@ mod session_resolution {
             }
         }
     }
+}
+
+#[tokio::test]
+async fn app286_cold_resume_retains_one_settings_revision_through_resolution() {
+    use super::session::{SessionCatalog, SessionPersistentState};
+    use super::session_controller::SessionController;
+    use crate::model::{ModelRef, session::SessionModelConfig};
+    let f = Fixture::new();
+    let launch = f.resolve();
+    let controller = SessionController::open(&launch.runtime_root).unwrap();
+    let mut a = SessionPersistentState::from_input(&launch.input);
+    a.model = Some(SessionModelConfig::of(ModelRef::parse("host/two").unwrap()));
+    a.tools = Some(vec!["read".into()]);
+    let session = controller.create_session(a.clone()).await.unwrap().session;
+    let mut b = a.clone();
+    b.model = Some(SessionModelConfig::of(ModelRef::parse("host/one").unwrap()));
+    b.tools = Some(vec!["glob".into()]);
+    drop(controller);
+    let gate = super::composition::cold_resume_test_support::arm(&launch.runtime_root);
+    let dependencies = LocalRuntimeDependencies {
+        startup_session: super::StartupSession::Select {
+            session: session.id.clone(),
+            node: None,
+        },
+        ..Default::default()
+    };
+    let worker_launch = launch.clone();
+    let resume =
+        tokio::spawn(
+            async move { LocalSessionClient::compose(&worker_launch, &dependencies).await },
+        );
+    gate.entered().await; // A captured; resolver has not run yet.
+    // The attempted B publisher cannot acquire native ownership. Short catalog
+    // reads remain available while the resolver is parked; no metadata lock spans it.
+    assert!(SessionController::open(&launch.runtime_root).is_err());
+    let observed = SessionCatalog::open_existing(&launch.runtime_root)
+        .unwrap()
+        .unwrap();
+    assert_eq!(observed.lineage(&session.id, None).unwrap().1, a);
+    assert_eq!(observed.settings_revision(&session.id).unwrap(), 0);
+    assert_eq!(observed.snapshot(&session.id).unwrap(), session);
+    gate.release();
+    let product = resume.await.unwrap().unwrap();
+    assert_eq!(product.runtime().model_config(), a.model.clone().unwrap());
+    let resources = product.runtime().runtime_resources();
+    let tool_names: Vec<_> = resources
+        .inspection()
+        .main
+        .as_ref()
+        .unwrap()
+        .tools
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect();
+    assert_eq!(tool_names, ["read"]);
+    drop(resources);
+    product.runtime().shutdown().await.unwrap();
+    drop(product);
+    drop(observed);
+    // B becomes admissible only after the A owner exits. Its subsequent cold
+    // load resolves the complete new revision, including the non-model selection.
+    let controller = SessionController::open(&launch.runtime_root).unwrap();
+    assert_eq!(
+        controller
+            .replace_settings(&session.id, 0, b.clone())
+            .await
+            .unwrap(),
+        1
+    );
+    drop(controller);
+    let product = LocalSessionClient::compose(
+        &launch,
+        &LocalRuntimeDependencies {
+            startup_session: super::StartupSession::Select {
+                session: session.id.clone(),
+                node: None,
+            },
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(product.runtime().model_config(), b.model.unwrap());
+    let resources = product.runtime().runtime_resources();
+    let tool_names: Vec<_> = resources
+        .inspection()
+        .main
+        .as_ref()
+        .unwrap()
+        .tools
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect();
+    assert_eq!(tool_names, ["glob"]);
+    product.runtime().shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn app286_cold_node_routes_do_not_publish_graph_focus() {
+    use super::session::{SessionCatalog, SessionPersistentState};
+    use super::session_controller::SessionController;
+    use crate::durable::ConversationStore;
+    use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock, UserSource};
+    use crate::runtime::identity::MessageId;
+    let f = Fixture::new();
+    let launch = f.resolve();
+    let controller = SessionController::open(&launch.runtime_root).unwrap();
+    let a = controller
+        .create_session(SessionPersistentState::from_input(&launch.input))
+        .await
+        .unwrap()
+        .session;
+    let access = controller.acquire_session(&a.id, None).await.unwrap();
+    let store = crate::durable::SqliteConversationStore::open(
+        a.active_conversation_id.clone(),
+        &access.database_path,
+    )
+    .unwrap();
+    let boundary = MessageId::new("route-boundary");
+    store
+        .append_canonical(&MessageBlock::User(UserMessageBlock {
+            id: boundary.clone(),
+            content: vec![],
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        }))
+        .unwrap();
+    let revision = store.load_head().unwrap().revision;
+    let b = controller
+        .branch_session_node(&a.id, &a.active_node, revision, &boundary)
+        .await
+        .unwrap()
+        .session;
+    let default = controller
+        .set_current_node(&a.id, &a.active_node)
+        .await
+        .unwrap();
+    let catalog_path = launch.runtime_root.join("sessions/catalog.json");
+    let bytes = std::fs::read(&catalog_path).unwrap();
+    drop(store);
+    drop(access);
+    drop(controller);
+    // Independent cold clients, including the TUI's explicit-default route.
+    for node in [
+        Some(b.active_node.clone()),
+        Some(a.active_node.clone()),
+        Some(b.active_node.clone()),
+        None,
+    ] {
+        let expected_conversation = if node.as_ref() == Some(&b.active_node) {
+            &b.active_conversation_id
+        } else {
+            &a.active_conversation_id
+        };
+        let product = LocalSessionClient::compose(
+            &launch,
+            &LocalRuntimeDependencies {
+                startup_session: super::StartupSession::Select {
+                    session: a.id.clone(),
+                    node,
+                },
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(product.runtime().conversation_id(), expected_conversation);
+        let response = crate::runtime_client::host::RuntimeClientSessionControl::handle(
+            product.supervisor().as_ref(),
+            crate::runtime_client::types::RuntimeClientSessionRequest::Get,
+        )
+        .await
+        .unwrap();
+        let crate::runtime_client::types::RuntimeClientResult::Session { session: view } = response
+        else {
+            panic!("Session Get projection")
+        };
+        assert_eq!(&view.active_conversation_id, expected_conversation);
+        let durable_default = &default.active_node;
+        assert_eq!(
+            &product.supervisor().current().await.unwrap().active_node,
+            durable_default
+        );
+
+        assert_eq!(product.supervisor().current().await.unwrap(), default);
+        assert_eq!(std::fs::read(&catalog_path).unwrap(), bytes);
+        let catalog = SessionCatalog::open_existing(&launch.runtime_root)
+            .unwrap()
+            .unwrap();
+        assert_eq!(catalog.snapshot(&a.id).unwrap(), default);
+        assert_eq!(
+            catalog.list_page(None, 0, 32).unwrap().sessions[0].active_node,
+            a.active_node
+        );
+        // The two routing projections may differ while both snapshots still
+        // report A as the durable graph default.
+        let route_a = product
+            .supervisor()
+            .select(a.id.clone(), Some(a.active_node.clone()))
+            .await
+            .unwrap();
+        let route_b = product
+            .supervisor()
+            .select(a.id.clone(), Some(b.active_node.clone()))
+            .await
+            .unwrap();
+        assert_eq!(route_a.session, route_b.session);
+        assert_ne!(route_a.node.id, route_b.node.id);
+        product.runtime().shutdown().await.unwrap();
+    }
+    let controller = SessionController::open(&launch.runtime_root).unwrap();
+    assert_eq!(controller.read_session(&a.id).await.unwrap(), default);
+    let changed = controller
+        .set_current_node(&a.id, &b.active_node)
+        .await
+        .unwrap();
+    assert_eq!(changed.active_node, b.active_node);
+    assert_ne!(std::fs::read(&catalog_path).unwrap(), bytes);
+    drop(controller);
+    let catalog = SessionCatalog::open_existing(&launch.runtime_root)
+        .unwrap()
+        .unwrap();
+    assert_eq!(catalog.snapshot(&a.id).unwrap(), changed);
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn app286_session_wire_results_compare_the_installed_route_without_rebinding() {
+    use super::session::SessionPersistentState;
+    use super::session_controller::SessionController;
+    use crate::durable::ConversationStore;
+    use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock, UserSource};
+    use crate::runtime::identity::MessageId;
+    use crate::runtime_client::host::RuntimeClientSessionControl;
+    use crate::runtime_client::types::{
+        RuntimeClientResult, RuntimeClientSessionRequest as Request,
+    };
+
+    let f = Fixture::new();
+    let launch = f.resolve();
+    let controller = SessionController::open(&launch.runtime_root).unwrap();
+    let original = controller
+        .create_session(SessionPersistentState::from_input(&launch.input))
+        .await
+        .unwrap()
+        .session;
+    let access = controller
+        .acquire_session(&original.id, None)
+        .await
+        .unwrap();
+    let store = crate::durable::SqliteConversationStore::open(
+        original.active_conversation_id.clone(),
+        &access.database_path,
+    )
+    .unwrap();
+    let message_id = MessageId::new("reattach-boundary");
+    store
+        .append_canonical(&MessageBlock::User(UserMessageBlock {
+            id: message_id.clone(),
+            content: vec![],
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        }))
+        .unwrap();
+    let surface_revision = store.load_head().unwrap().revision;
+    drop(store);
+    drop(access);
+    drop(controller);
+    let product = LocalSessionClient::compose(
+        &launch,
+        &LocalRuntimeDependencies {
+            startup_session: super::StartupSession::Select {
+                session: original.id.clone(),
+                node: None,
+            },
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let attachment = product.supervisor();
+    let runtime = product.runtime();
+    let lifecycle = runtime.lifecycle_state();
+    let history = runtime.historical_head_snapshot().unwrap();
+    let canonical = runtime.historical_canonical_history().unwrap();
+    let model = runtime.model_config();
+    for request in [
+        Request::New,
+        Request::Clone,
+        Request::Fork {
+            surface_revision,
+            message_id: message_id.clone(),
+        },
+        Request::TreeBranch {
+            surface_revision,
+            message_id,
+        },
+    ] {
+        let tree_branch = matches!(request, Request::TreeBranch { .. });
+        let RuntimeClientResult::SessionChanged {
+            session: target,
+            restart_required,
+            ..
+        } = attachment.handle(request).await.unwrap()
+        else {
+            panic!("route-changing result")
+        };
+        assert!(restart_required);
+        assert_ne!(
+            target.active_conversation_id,
+            original.active_conversation_id
+        );
+        assert_eq!(target.id == original.id.as_str(), tree_branch);
+        // Both another Session and another node in this Session require replacement.
+        let RuntimeClientResult::SessionChanged {
+            restart_required, ..
+        } = attachment
+            .handle(Request::Select {
+                session_id: target.id,
+                node_id: Some(target.active_node),
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("select result")
+        };
+        assert!(restart_required);
+        // Selecting the installed route is still a no-op, even after tree branch
+        // published a different durable graph default.
+        for node_id in [Some(original.active_node.as_str().to_owned()), None] {
+            let RuntimeClientResult::SessionChanged {
+                restart_required, ..
+            } = attachment
+                .handle(Request::Select {
+                    session_id: original.id.as_str().to_owned(),
+                    node_id: node_id.clone(),
+                })
+                .await
+                .unwrap()
+            else {
+                panic!("same Session select result")
+            };
+            assert_eq!(restart_required, tree_branch && node_id.is_none());
+        }
+        for request in [
+            Request::Get,
+            Request::Name("renamed".into()),
+            Request::Tree {
+                node_offset: 0,
+                history_offset: 0,
+                limit: 32,
+            },
+        ] {
+            let view = match attachment.handle(request).await.unwrap() {
+                RuntimeClientResult::Session { session }
+                | RuntimeClientResult::SessionTree { session, .. } => session,
+                RuntimeClientResult::SessionChanged {
+                    session,
+                    restart_required,
+                    ..
+                } => {
+                    assert!(!restart_required);
+                    session
+                }
+                other => panic!("unexpected metadata result: {other:?}"),
+            };
+            assert_eq!(view.id, original.id.as_str());
+            assert_eq!(view.active_conversation_id, original.active_conversation_id);
+        }
+        assert_eq!(runtime.conversation_id(), &original.active_conversation_id);
+        assert_eq!(runtime.lifecycle_state(), lifecycle, "no drain or shutdown");
+        assert_eq!(runtime.historical_head_snapshot().unwrap(), history);
+        assert_eq!(runtime.historical_canonical_history().unwrap(), canonical);
+        assert_eq!(runtime.model_config(), model);
+    }
+    runtime.shutdown().await.unwrap();
 }

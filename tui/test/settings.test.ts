@@ -14,7 +14,7 @@ it("CFG238 shares the native protocol fixture and explicit lifetimes", () => {
   // `effective_extensions.todo` member the fixture now carries in every state,
   // including the `todo_only` combination that proves the two extensions
   // project on independent axes.
-  assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 33);
+  assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 34);
   assert.equal(fixture.request.method, "default_save");
   if (fixture.request.method === "default_save") {
     assert.equal(fixture.request.scope, "user");
@@ -204,7 +204,7 @@ it("EXT256 historical inspection reports no effective extension composition", ()
 
 
 it("CFG275 renders the native generation fixture without resolving capability state", () => {
-  const facts: import("../src/protocol/types.ts").CapabilityInspection = JSON.parse(readFileSync(new URL("../../tests/fixtures/runtime-client/capabilities-v33.json", import.meta.url), "utf8"));
+  const facts: import("../src/protocol/types.ts").CapabilityInspection = JSON.parse(readFileSync(new URL("../../tests/fixtures/runtime-client/capabilities-v34.json", import.meta.url), "utf8"));
   const state = replaceFromSnapshot(snapshot({ resources: { revision: 7, inspection: facts } }), runtimeCursor(1));
   const original = JSON.stringify(facts);
   for (let index = 0; index < 3; index++) {
@@ -345,6 +345,6 @@ it("CFG275 redacted native causes match the TypeScript wire unions", () => {
     }
   ]
 };
-  const fixture = JSON.parse(readFileSync(new URL("../../tests/fixtures/runtime-client/redacted-diagnostics-v33.json", import.meta.url), "utf8"));
+  const fixture = JSON.parse(readFileSync(new URL("../../tests/fixtures/runtime-client/redacted-diagnostics-v34.json", import.meta.url), "utf8"));
   assert.deepEqual(fixture, expected);
 });

@@ -52,11 +52,7 @@ async fn disposal_race(preflight_first: bool, bind_store: bool) {
     catalog
         .publish_session(&other, SessionNodeOrigin::New)
         .unwrap();
-    assert_ne!(
-        catalog.active_lineage().unwrap().0,
-        session,
-        "the manager binds a historical Conversation, not the active selection"
-    );
+    assert_ne!(other.session_id, session, "independent catalog identities");
     let identity = ProductRoot::existing(root.path()).unwrap();
     let access = ConversationAccess::existing(
         &identity,

@@ -6718,6 +6718,10 @@ semantic normalization boundary. The frozen invariants:
   RuntimeEvent/Event Journal schema versioning.** Version negotiation is
   explicit at attachment admission; the current protocol is the sole
   supported version, and every superseded version is rejected explicitly.
+- **Runtime Client protocol v34 removes global Session focus.** Session summaries
+  omit `active`; strict initialization rejects v33 clients. Route-changing results
+  require reattachment whenever the returned Session/Conversation differs from
+  the installed runtime. Durable publication never shuts that runtime down.
 - **Runtime Client protocol v16 introduces the Issue #202 explicit tool
   outcome certainty projection.** The canonical `ToolExecutionStatus`
   replaces `interrupted` with `outcome_unknown` (carrying a bounded
@@ -7936,216 +7940,14 @@ Child processes must receive an explicit environment. Runtime-private secrets mu
 
 A stopped runtime may retain a writable filesystem layer as a warm cache, but the writable layer is never the source of truth for durable conversation facts.
 
-## Native local Session lifecycle and branching (M9.4 / Issue #88)
+## Native durable Session lifecycle and branching
 
-The user-facing `Session` owner is `LocalSessionSupervisor`, not
-`ConversationRuntime`, `RuntimeClient`, or the TUI. It owns the
-`SessionCatalog`, Session graph, active `SessionNode`, and exactly one linear
-`ConversationRuntime` attachment. Each graph node owns a distinct
-`ConversationId`; `ConversationSurface`, the Message Ledger, Request Snapshot,
-Event Journal, and runtime execution remain linear and branch-unaware.
-
-### Startup is not a resume
-
-A process start binds an **empty** Session. Without `--continue`, composition
-publishes one through the same prepare-then-publish protocol `/new` uses, and
-the Session the previous launch left active stays durable history reachable
-only through `/resume` and `/tree` — starting the product never reopens,
-rewinds, renames, or mutates it. `--continue` is the one request that binds
-the catalog's published active Session/node, and it is what a client repeats
-when it replaces the process to complete a Session transition that was
-already committed; the client never names the destination itself.
-
-An active Session that has never been used — exactly one `New` root node whose
-conversation is still at its initial Surface revision, with no canonical
-message and no durable inbound acceptance ever committed — already is that empty
-Session, so it is bound as-is. Durable acceptance counts as use on purpose:
-composing that lineage is what adopts an accepted-but-unadopted message, so
-reusing such a Session would resurrect a previous launch's prompt inside the
-empty Session the user asked for. Repeated
-launches therefore cannot accumulate empty internal shells, and a Session-local
-model choice made in such a Session survives the relaunch as ordinary
-Session-local state.
-
-### Used Sessions are resume-visible; untouched empty shells are not
-
-A published Session is durable immediately, but durability is not history.
-One lifecycle predicate — `SessionCatalog`'s unused classification — decides
-whether a persisted Session is an untouched empty shell, and startup, `/new`,
-and `/resume` all derive from that single definition rather than inventing
-their own notions of emptiness:
-
-```text
-Session shell created/published
-    |
-    | metadata only (name, Session-local model choice)
-    v
-unused internal shell -- hidden from `/resume`, reused by startup and `/new`
-    |
-    | durable Pending Inbound acceptance of user work
-    v
-used Session -- immediately resume-visible
-```
-
-The transition point is **durable acceptance of user work into Pending
-Inbound**, never canonical adoption, model invocation, or assistant output.
-A Session whose only durable fact is an accepted-but-unadopted prompt is used
-and resume-visible: that prompt is work the Session owns, recovery is what
-adopts it, and hiding the Session would strand it. Session-local metadata
-alone — a name, a model selection — never crosses the line: an otherwise
-untouched shell stays internal, stays reusable by `/new`, and stays hidden.
-
-The transition is **monotonic**: once used, a Session never classifies as
-unused again. The classifier asks the conversation's durable authority for
-one atomic monotonic fact — `ConversationStore::has_accepted_inbound`, the
-acceptance watermark that advances inside the acceptance commit and that
-adoption never rewinds — instead of combining two independently changing
-current-state projections (Surface head, Pending Inbox) whose interleaved
-reads could assemble a state that never existed and hide already-accepted
-work while the Agent Loop adopts it. Canonical adoption only moves the user
-work from Pending Inbound into canonical history; it cannot change the
-Session's usage classification.
-
-The classification is deliberately narrow so provenance can never be
-misclassified: anything beyond one untouched `New` root node — a branch node,
-a parent link, `Clone`/`Fork` origin — is user-owned history even when the
-selected destination conversation is legitimately empty at the chosen cut (a
-fork at the very first user message seeds exactly the empty lineage).
-
-The empty shell remains internally valid on purpose: the Session catalog and
-the conversation SQLite store are separate durable authorities, so the shell
-exists for crash-safe ownership and composition. It is simply not historical
-Session content until it owns durable user work.
-
-`/resume` lists resume-visible Sessions only. `SessionCatalog::list_page`
-classifies first and then applies search and offset/limit, so offsets and
-`next_offset` describe the visible matching set: hidden shells open no holes
-in pages, shift no offsets, duplicate no continuation rows, and are never
-matched by a query.
-
-`/new` over an unused active Session is a semantic no-op with respect to
-Session identity and runtime replacement: it reuses the empty shell,
-allocates no new `SessionId`/`SessionNodeId`/`ConversationId`, publishes no
-catalog row, and does not quiesce or replace the live runtime to exchange one
-empty shell for another. `/new` from a used Session keeps its transition
-semantics: the old used Session remains resumable and a fresh independent
-empty shell — internally durable, initially hidden — becomes active.
-
-Recovery follows the lineage, not the launch: an interrupted attempt in a
-Session this process does not open stays unreconciled until that lineage is
-composed again, when the ordinary per-conversation recovery pass runs. A
-launch never reconciles a Session it did not bind.
-
-### A Session name is display metadata, never an identity
-
-A Session is published **unnamed**, and nothing generates a label for it. The
-identity the catalog published is what every operation resolves — `--session`,
-`session_select`, `/resume`, `/tree`, and every replacement spawn — and no
-path anywhere resolves a Session by its name. Two Sessions may therefore carry
-the same name without ambiguity, because the name never had to distinguish
-them.
-
-What a name changes is one line of one row. An unnamed Session is identified
-in `/resume` by the bounded first ordinary user message of its **root**
-lineage: derived from that lineage's durable store when the page is built,
-never stored in the catalog, so the catalog holds no second copy of history
-that could disagree with the conversation itself. The root node is the subject
-because branch nodes are seeded copies — a row must not change what it says
-when the active node moves. A listed Session that has no first user message
-yet — its work is still only pending, or its lineage copy is empty — shows
-neither.
-
-Naming is metadata-only, and normalization is part of the contract: a name is
-collapsed to a single whitespace-normalized line, bounded to
-`SESSION_NAME_LIMIT` characters, and rejected when empty. What survives that
-is exactly what a row displays. The query behind `session_list` matches
-whatever a row can be recognized by — id, name, and the derived first-message
-line — so a search never hides a row it is showing.
-
-`--name` is `/name` moved to the command line. It names whichever Session the
-launch bound — empty, continued, or selected — strictly after that decision,
-so a name can never participate in choosing a Session. A replacement spawn
-drops it: the label belonged to the Session the user launched into, not to the
-Session a transition has just switched to.
-
-### Publication and replacement linearization
-
-The native replacement sequence has these ordered points:
-
-1. Source preparation selects an exact retained `SurfaceRevision` (or current
-   head) and materializes the immutable seed — **all three parts of it**, the
-   Surface at that revision, the canonical history it was projected from, and
-   the retained Surface operations that projected it (see *A lineage copy is a
-   copy of the conversation, not of its Surface*).
-   The source can mutate after this read without changing the prepared
-   destination.
-2. The old runtime reaches semantic quiescence only when
-   `ConversationRuntime::shutdown().await` returns successfully. Until that
-   happens, no replacement Session/node selection may become catalog-visible.
-3. Catalog visibility commits at `fs::rename(temp, catalog.json)` after the
-   temporary file has been written and fsynced.
-4. The post-rename parent-directory `File::open(parent).sync_all()` is the
-   durability barrier. It strengthens persistence but is after visibility.
-
-`CatalogCommitError::NotCommitted` means the rename did not happen: the old
-catalog file and in-memory document remain authoritative. A
-`CommittedButDurabilityUncertain` outcome means rename did happen. The catalog
-updates its in-memory document to the new document before returning that
-error, and callers must treat the publication as visible but durability
-uncertain. It is never represented as “nothing changed”. For a replacement,
-both outcomes after old-runtime quiescence enter the terminal
-`ReplacementRequired` attachment state; a fresh process must be composed from
-the catalog that is actually on disk. Metadata-only model/name mutations may
-continue after a pre-commit failure, but a post-commit durability uncertainty
-fences the attachment too, so a live runtime cannot silently diverge from
-published metadata.
-
-Session transitions therefore have three distinct product outcomes:
-
-1. **No visibility commit.** The source selection remains authoritative and a
-   prepared destination is not visible. If the old runtime was already
-   quiesced, the attachment is still terminal, but a fork/tree editor prompt
-   is not returned as though the transition succeeded.
-2. **Committed and durable.** `session_changed` carries the newly authoritative
-   Session and, for fork/tree, the selected user content as transient editor
-   content. The prompt is not part of the destination's canonical seed.
-3. **Committed with durability uncertain.**
-   `session_committed_restart_required` carries the committed Session identity,
-   the same transient editor content when applicable, and a diagnostic. It is
-   a typed semantic result, not a generic failure. After restart the TUI reads
-   `session_get` from the new Rust process, verifies the authoritative
-   Session/node selection, and only then restores the carried prompt. The
-   prompt remains non-canonical until the user submits it.
-
-The supervisor attachment state is explicit and absorbing:
-
-```text
-NotInstalled -> Live(runtime) -> ReplacementRequired
-```
-
-Only composition may perform `NotInstalled -> Live`. Replacement operations
-first prepare and preflight privately, then quiesce the old runtime, then
-publish. Once quiescence succeeds, duplicate/stale runtime-dependent requests,
-including selecting the same node, return typed replacement-required failure;
-they cannot treat the missing runtime as a healthy `Option::None`. Read-only
-Session list and active metadata remain available while terminal so the
-restarting owner can inspect authoritative state. Runtime-backed tree/history
-and execution/model operations are fenced.
-
-The Runtime Client preserves this distinction with
-`session_restart_required` beside ordinary `session_failure`. The TUI stops
-input, detaches/closes the stale attachment, waits for the old process to
-exit, restarts through the existing Rust-owned catalog, attaches to the
-lineage selected by the restarted process, refreshes `session_get`, and only
-then resumes presentation. It never derives the destination from stale
-picker/component state. Transport loss and ordinary cancellation remain
-separate lifecycle outcomes.
-
-Fork/tree editor restoration is currently explicitly text-only. A selected
-canonical image or file block is rejected at native seed preparation rather
-than being silently rewritten as `[image]` or `[file]`; the typed payload
-remains a block list so a structured editor can be added by a later
-architecture decision.
+`SessionController` is the durable owner, independent of client focus and live
+runtime residency. One root may have zero or many independently addressed
+Sessions. No catalog-global active Session exists. Creation never replaces an
+unused Session. Metadata reads never resolve configuration or compose resources.
+The [durable Session contract](durable-sessions.md) defines explicit input fields,
+schema refusal, settings CAS, allocation exclusion and catalog commit points.
 
 ### A lineage copy is a copy of the conversation, not of its Surface
 
@@ -8276,9 +8078,8 @@ kept.
 ### Bounded native projections
 
 The native owner, not TypeScript rendering, enforces the projection bounds.
-`session_list` pages and searches the resume-visible set only — unused
-internal shells are classified out before query and offset/limit are applied,
-so offsets and `next_offset` count visible matching rows alone. The optional
+`session_list` pages and searches all durable Sessions, including unused ones.
+Offsets and `next_offset` count matching rows, with no global active marker. The optional
 case-insensitive query matches a visible row's
 identity, its name, and the derived first-message line an unnamed row shows,
 plus a bounded `limit` and offset continuation. Rows are ordered by ascending

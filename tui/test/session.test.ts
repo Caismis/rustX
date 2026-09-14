@@ -547,6 +547,22 @@ describe("RuntimeClientAttachment", () => {
     });
   });
 
+  it("honors the server reattachment flag independently of cached route identity", async () => {
+    const { peer, session } = connect();
+    await attach(peer, session);
+
+    for (const [index, required] of [false, true].entries()) {
+      const switching = session.forkSession(7, "user-exact-7f3b");
+      await peer.awaitRequests(3 + index);
+      peer.respond(3 + index, {
+        type: "session_changed",
+        session: sessionView(),
+        restart_required: required,
+      });
+      assert.equal((await switching).restartRequired, required);
+    }
+  });
+
   it("preserves a committed transition draft in the typed attachment result", async () => {
     const { peer, session } = connect();
     await attach(peer, session);

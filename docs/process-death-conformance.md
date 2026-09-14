@@ -278,7 +278,7 @@ durable half-generation to recover, only a fresh load.
 ### Lineage authority: the cut, and what history may not resurrect
 
 These rows compose the **real** native `SessionCatalog` and
-`LocalSessionSupervisor` over the lab's runtime-private root, so `/fork` and
+`LocalSessionAttachment` over the lab's runtime-private root, so `/fork` and
 `/branch` are the production supervisor operations rather than a harness
 re-implementation. The child scripts its provider and answers no protocol
 input; everything else — the catalog transaction, the seed `initialize`, the

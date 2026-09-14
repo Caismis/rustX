@@ -45,7 +45,7 @@
 //! - child interaction waiters, pending state, audit, cancellation,
 //!   settlement, or execution authority;
 //! - SessionCatalog/SessionGraph ownership (the optional native Session
-//!   control seam forwards to `LocalSessionSupervisor`);
+//!   control seam forwards to `LocalSessionAttachment`);
 //! - cancellation terminal settlement (`AgentExecution` remains the attempt
 //!   execution/terminal authority);
 //! - background/subagent lifecycle.
@@ -216,7 +216,7 @@ impl std::error::Error for HostConstructionError {}
 
 /// The typed native Session control seam installed by the local product
 /// composition. Runtime Client owns only protocol adaptation; the
-/// implementation remains in `LocalSessionSupervisor`.
+/// implementation remains in `LocalSessionAttachment`.
 pub type SessionControlFuture =
     Pin<Box<dyn Future<Output = Result<RuntimeClientResult, RuntimeClientError>> + Send>>;
 
@@ -2442,7 +2442,7 @@ mod tests {
     use crate::durable::{ConversationStore, SqliteConversationStore};
     use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
     use crate::local_runtime::session::SessionPersistentState;
-    use crate::local_runtime::{CurrentRuntimeConfig, LocalSessionSupervisor, SessionCatalog};
+    use crate::local_runtime::{CurrentRuntimeConfig, LocalSessionAttachment, SessionCatalog};
     use crate::message::content::TextBlock;
     use crate::message::types::{
         AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, InboundKind, MessageBlock,
@@ -4071,7 +4071,16 @@ mod tests {
         let catalog = SessionCatalog::open_existing(catalog_root)
             .expect("open catalog")
             .expect("catalog exists");
-        let (session_id, node, _) = catalog.active_lineage().expect("active lineage");
+        let (session_id, node, _) = catalog
+            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+            .map(|(node, state)| {
+                (
+                    crate::local_runtime::SessionId::new("session-1"),
+                    node,
+                    state,
+                )
+            })
+            .expect("active lineage");
         let store = SqliteConversationStore::open(
             node.conversation_id.clone(),
             &catalog.database_path(&session_id, &node.conversation_id),
@@ -7218,7 +7227,7 @@ mod tests {
         Arc<GatedAdapter>,
         RuntimeOnlyFixture,
         RuntimeClientEndpoint,
-        Arc<LocalSessionSupervisor>,
+        Arc<LocalSessionAttachment>,
         tempfile::TempDir,
         CurrentRuntimeConfig,
     ) {
@@ -7247,13 +7256,20 @@ model = "scripted/scripted"
         let catalog = SessionCatalog::create(
             catalog_root.path(),
             &SessionPersistentState {
-                model: config.initial_model().clone().clone(),
+                model: Some(config.initial_model().clone().clone()),
+                ..SessionPersistentState::from_input(
+                    &crate::local_runtime::SessionConfigInput::new(std::path::PathBuf::from("/")),
+                )
             },
         )
         .expect("catalog");
-        let supervisor = Arc::new(LocalSessionSupervisor::new(
+        let supervisor = Arc::new(LocalSessionAttachment::new(
             catalog,
-            config.initial_model().clone().clone(),
+            crate::local_runtime::SessionId::new("session-1"),
+            SessionPersistentState::from_input(&crate::local_runtime::SessionConfigInput::new(
+                catalog_root.path().to_path_buf(),
+            )),
+            0,
         ));
         let host = RuntimeClientHost::new_with_session_control(
             RuntimeClientHostConfig {
@@ -7288,126 +7304,48 @@ model = "scripted/scripted"
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)]
-    async fn catalog_publication_outcomes_fence_the_runtime_client_typed() {
-        for post_rename in [false, true] {
-            let (_adapter, _fixture, endpoint, supervisor, catalog_root, _config) =
+    async fn catalog_publication_outcomes_leave_other_session_attachment_live() {
+        for post in [false, true] {
+            let (_, _, endpoint, supervisor, root, _) =
                 local_session_endpoint(Vec::new(), None).await;
             initialize_endpoint(&endpoint);
-            let initial = endpoint
-                .handle_request_async(RuntimeClientRequest::SessionGet {
-                    id: crate::runtime_client::RequestId::new(10),
-                })
-                .await;
-            let Some(RuntimeClientResult::Session { session: initial }) = initial.result else {
-                panic!("initial metadata must be readable: {initial:?}");
-            };
-            // `/new` is a semantic no-op over an untouched empty shell, so
-            // the transition this test fences needs the root Session to own
-            // durable user work first. Durable Pending Inbound acceptance in
-            // the catalog-owned store is exactly that boundary.
-            accept_catalog_pending_inbound(catalog_root.path(), "root work");
-            if post_rename {
+            if post {
                 supervisor.arm_catalog_write_fault_after_rename().await;
             } else {
                 supervisor.arm_catalog_write_fault_before_rename().await;
             }
-
             let response = endpoint
                 .handle_request_async(RuntimeClientRequest::SessionNew {
                     id: crate::runtime_client::RequestId::new(2),
                 })
                 .await;
-            if post_rename {
+            if post {
                 assert!(matches!(
                     response.result,
-                    Some(RuntimeClientResult::SessionCommittedRestartRequired {
-                        editor_content: None,
-                        ..
-                    })
+                    Some(RuntimeClientResult::SessionCommittedRestartRequired { .. })
                 ));
-                assert!(
-                    response.error.is_none(),
-                    "committed transition is typed success"
-                );
             } else {
-                assert!(
-                    matches!(
-                        response.error,
-                        Some(RuntimeClientError::SessionRestartRequired { .. })
-                    ),
-                    "unexpected pre-commit transition response: {response:?}"
-                );
+                assert!(matches!(
+                    response.error,
+                    Some(RuntimeClientError::SessionFailure { .. })
+                ));
             }
-
-            // A repeated replacement request is fenced by the absorbing
-            // supervisor state, rather than being treated as another normal
-            // Session failure.
-            let duplicate = endpoint
-                .handle_request_async(RuntimeClientRequest::SessionNew {
-                    id: crate::runtime_client::RequestId::new(3),
-                })
-                .await;
-            assert!(matches!(
-                duplicate.error,
-                Some(RuntimeClientError::SessionRestartRequired { .. })
-            ));
-
-            let stale_snapshot = endpoint.handle_request(RuntimeClientRequest::SnapshotGet {
-                id: crate::runtime_client::RequestId::new(4),
-            });
-            assert!(matches!(
-                stale_snapshot.error,
-                Some(RuntimeClientError::SessionRestartRequired { .. })
-            ));
-
-            let same_node = endpoint
-                .handle_request_async(RuntimeClientRequest::SessionSelect {
-                    id: crate::runtime_client::RequestId::new(11),
-                    session_id: initial.id,
-                    node_id: Some(initial.active_node),
-                })
-                .await;
-            assert!(matches!(
-                same_node.error,
-                Some(RuntimeClientError::SessionRestartRequired { .. })
-            ));
-
-            let list = endpoint
-                .handle_request_async(RuntimeClientRequest::SessionList {
-                    id: crate::runtime_client::RequestId::new(5),
-                    query: None,
-                    offset: 0,
-                    limit: crate::local_runtime::SESSION_LIST_PAGE_LIMIT,
-                })
-                .await;
-            let Some(RuntimeClientResult::SessionList { sessions, .. }) = list.result else {
-                panic!("bounded metadata remains readable: {list:?}");
-            };
-            assert_eq!(
-                sessions.len(),
-                1,
-                "the used source is the only resume-visible Session either way"
+            assert!(
+                endpoint
+                    .handle_request(RuntimeClientRequest::SnapshotGet {
+                        id: crate::runtime_client::RequestId::new(3)
+                    })
+                    .error
+                    .is_none(),
+                "catalog failures do not quiesce the attached runtime"
             );
-
-            if post_rename {
-                let reopened = SessionCatalog::open_existing(catalog_root.path())
-                    .expect("open visible catalog")
-                    .expect("reopen visible catalog");
-                assert_eq!(
-                    reopened.persisted_session_ids().len(),
-                    2,
-                    "post-rename failure still leaves the new catalog visible"
-                );
-                assert_eq!(
-                    reopened
-                        .list_page(None, 0, crate::local_runtime::SESSION_LIST_PAGE_LIMIT)
-                        .expect("reopened page")
-                        .sessions
-                        .len(),
-                    1,
-                    "the published empty shell is durable, not resume history"
-                );
-            }
+            let catalog = SessionCatalog::open_existing(root.path()).unwrap().unwrap();
+            assert_eq!(
+                catalog.persisted_session_ids().len(),
+                if post { 2 } else { 1 }
+            );
+            assert_eq!(supervisor.current().await.unwrap().id.as_str(), "session-1");
+            assert!(supervisor.new_session().await.is_ok());
         }
     }
 
@@ -7418,121 +7356,25 @@ model = "scripted/scripted"
     /// switch.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)]
-    async fn session_new_over_an_unused_session_is_a_semantic_noop() {
-        let (_adapter, _fixture, endpoint, _supervisor, catalog_root, _config) =
-            local_session_endpoint(Vec::new(), None).await;
+    async fn session_new_always_creates_an_independent_identity() {
+        let (_, _, endpoint, supervisor, root, _) = local_session_endpoint(Vec::new(), None).await;
         initialize_endpoint(&endpoint);
-        let initial = endpoint
-            .handle_request_async(RuntimeClientRequest::SessionGet {
-                id: crate::runtime_client::RequestId::new(10),
-            })
-            .await;
-        let Some(RuntimeClientResult::Session { session: initial }) = initial.result else {
-            panic!("initial metadata must be readable: {initial:?}");
-        };
-        let catalog_path = catalog_root.path().join("sessions").join("catalog.json");
-        let catalog_before = std::fs::read(&catalog_path).expect("catalog before /new");
-
-        let noop = endpoint
-            .handle_request_async(RuntimeClientRequest::SessionNew {
-                id: crate::runtime_client::RequestId::new(2),
-            })
-            .await;
-        let Some(RuntimeClientResult::SessionChanged {
-            session,
-            editor_content,
-            restart_required,
-        }) = noop.result
-        else {
-            panic!("session_new over an unused Session must succeed: {noop:?}");
-        };
-        assert!(noop.error.is_none());
+        let initial = supervisor.current().await.unwrap();
+        let a = supervisor.new_session().await.unwrap();
+        let b = supervisor.new_session().await.unwrap();
+        assert_ne!(a.session.id, initial.id);
+        assert_ne!(b.session.id, a.session.id);
+        assert_eq!(supervisor.current().await.unwrap(), initial);
+        let catalog = SessionCatalog::open_existing(root.path()).unwrap().unwrap();
+        assert_eq!(catalog.list_page(None, 0, 32).unwrap().sessions.len(), 3);
         assert!(
-            !restart_required,
-            "reusing the empty shell replaces no runtime"
-        );
-        assert_eq!(editor_content, None);
-        assert_eq!(session.id, initial.id, "no new SessionId");
-        assert_eq!(
-            session.active_node, initial.active_node,
-            "no new SessionNodeId"
-        );
-        assert_eq!(
-            session.active_conversation_id, initial.active_conversation_id,
-            "no new ConversationId"
-        );
-        assert_eq!(
-            std::fs::read(&catalog_path).expect("catalog after /new"),
-            catalog_before,
-            "the no-op publishes no catalog row and moves no ordinal"
-        );
-
-        // The runtime was not quiesced to exchange one empty shell for
-        // another: a repeated `/new` no-ops again instead of hitting the
-        // absorbing replacement fence, and ordinary submission through the
-        // same live runtime still works.
-        let repeated = endpoint
-            .handle_request_async(RuntimeClientRequest::SessionNew {
-                id: crate::runtime_client::RequestId::new(3),
-            })
-            .await;
-        assert!(
-            matches!(
-                repeated.result,
-                Some(RuntimeClientResult::SessionChanged {
-                    restart_required: false,
-                    ..
+            endpoint
+                .handle_request(RuntimeClientRequest::SnapshotGet {
+                    id: crate::runtime_client::RequestId::new(4)
                 })
-            ),
-            "a repeated /new over the still-unused Session no-ops: {repeated:?}"
+                .error
+                .is_none()
         );
-        let submitted = endpoint
-            .handle_request_async(RuntimeClientRequest::SubmitInbound {
-                id: crate::runtime_client::RequestId::new(4),
-                content: submit_content("real work"),
-            })
-            .await;
-        assert!(
-            matches!(
-                submitted.result,
-                Some(RuntimeClientResult::InboundAccepted { .. })
-            ),
-            "the same live runtime still accepts work: {submitted:?}"
-        );
-
-        // Durable Pending Inbound acceptance — in the catalog-owned store,
-        // the classification authority — made the Session used: `/resume`
-        // lists it immediately, and `/new` is a real switch again.
-        accept_catalog_pending_inbound(catalog_root.path(), "real work");
-        let list = endpoint
-            .handle_request_async(RuntimeClientRequest::SessionList {
-                id: crate::runtime_client::RequestId::new(5),
-                query: None,
-                offset: 0,
-                limit: crate::local_runtime::SESSION_LIST_PAGE_LIMIT,
-            })
-            .await;
-        let Some(RuntimeClientResult::SessionList { sessions, .. }) = list.result else {
-            panic!("the used Session is resume-visible: {list:?}");
-        };
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].id, initial.id);
-
-        let switched = endpoint
-            .handle_request_async(RuntimeClientRequest::SessionNew {
-                id: crate::runtime_client::RequestId::new(6),
-            })
-            .await;
-        let Some(RuntimeClientResult::SessionChanged {
-            session: new_session,
-            restart_required,
-            ..
-        }) = switched.result
-        else {
-            panic!("session_new over a used Session must switch: {switched:?}");
-        };
-        assert!(restart_required);
-        assert_ne!(new_session.id, initial.id);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -7550,7 +7392,7 @@ model = "scripted/scripted"
         let source = SessionCatalog::open_existing(catalog_root.path())
             .expect("open source catalog")
             .expect("source catalog")
-            .active_snapshot()
+            .snapshot(&crate::local_runtime::SessionId::new("session-1"))
             .expect("source snapshot");
 
         supervisor.arm_catalog_write_fault_before_rename().await;
@@ -7563,7 +7405,7 @@ model = "scripted/scripted"
             .await;
         assert!(matches!(
             response.error,
-            Some(RuntimeClientError::SessionRestartRequired { .. })
+            Some(RuntimeClientError::SessionFailure { .. })
         ));
         assert!(
             response.result.is_none(),
@@ -7575,7 +7417,7 @@ model = "scripted/scripted"
             .expect("reopen source");
         assert_eq!(
             reopened
-                .active_snapshot()
+                .snapshot(&crate::local_runtime::SessionId::new("session-1"))
                 .expect("active source after failure")
                 .id,
             source.id
@@ -7608,7 +7450,7 @@ model = "scripted/scripted"
             .await;
         assert!(matches!(
             duplicate.error,
-            Some(RuntimeClientError::SessionRestartRequired { .. })
+            Some(RuntimeClientError::SessionFailure { .. })
         ));
     }
 
@@ -7627,7 +7469,7 @@ model = "scripted/scripted"
         let source = SessionCatalog::open_existing(catalog_root.path())
             .expect("open source catalog")
             .expect("source catalog")
-            .active_snapshot()
+            .snapshot(&crate::local_runtime::SessionId::new("session-1"))
             .expect("source snapshot");
 
         supervisor.arm_catalog_write_fault_after_rename().await;
@@ -7653,7 +7495,9 @@ model = "scripted/scripted"
         let reopened = SessionCatalog::open_existing(catalog_root.path())
             .expect("open fork")
             .expect("reopen fork");
-        let authoritative = reopened.active_snapshot().expect("authoritative fork");
+        let authoritative = reopened
+            .snapshot(&crate::local_runtime::SessionId::new(&session.id))
+            .expect("authoritative fork");
         assert_eq!(authoritative.id.as_str(), session.id);
         assert_ne!(
             authoritative.active_conversation_id,
@@ -7693,10 +7537,10 @@ model = "scripted/scripted"
                 id: crate::runtime_client::RequestId::new(31),
             })
             .await;
-        assert!(matches!(
-            duplicate.error,
-            Some(RuntimeClientError::SessionRestartRequired { .. })
-        ));
+        assert!(
+            duplicate.error.is_none(),
+            "a committed fork does not fence other Sessions"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -7710,7 +7554,7 @@ model = "scripted/scripted"
         let source = SessionCatalog::open_existing(catalog_root.path())
             .expect("open source catalog")
             .expect("source catalog")
-            .active_snapshot()
+            .snapshot(&crate::local_runtime::SessionId::new("session-1"))
             .expect("source snapshot");
 
         supervisor.arm_catalog_write_fault_after_rename().await;
@@ -7738,7 +7582,9 @@ model = "scripted/scripted"
         let reopened = SessionCatalog::open_existing(catalog_root.path())
             .expect("open tree")
             .expect("reopen tree");
-        let authoritative = reopened.active_snapshot().expect("authoritative tree node");
+        let authoritative = reopened
+            .snapshot(&crate::local_runtime::SessionId::new("session-1"))
+            .expect("authoritative tree node");
         assert_eq!(authoritative.id, source.id);
         assert_eq!(authoritative.active_node.as_str(), session.active_node);
         assert_eq!(authoritative.node_count, 2);
@@ -7789,9 +7635,19 @@ model = "scripted/scripted"
         let reopened = SessionCatalog::open_existing(catalog_root.path())
             .expect("open catalog")
             .expect("reopen catalog");
-        let (_, _, reopened_config) = reopened.active_lineage().expect("active lineage");
+        let (_, _, reopened_config) = reopened
+            .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+            .map(|(node, state)| {
+                (
+                    crate::local_runtime::SessionId::new("session-1"),
+                    node,
+                    state,
+                )
+            })
+            .expect("active lineage");
         assert_eq!(
-            reopened_config.model, candidate,
+            reopened_config.model,
+            Some(candidate),
             "the catalog crossed visibility even though its durability barrier was uncertain"
         );
         let stale = endpoint.handle_request(RuntimeClientRequest::SnapshotGet {
@@ -7804,76 +7660,40 @@ model = "scripted/scripted"
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn session_switch_waits_for_real_attempt_task_quiescence_before_catalog_visibility() {
+    async fn session_create_publishes_while_another_session_provider_is_blocked() {
         let (release_tx, release_rx) = model_release();
-        let attempt_exit_gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
-        attempt_exit_gate.arm();
-        let (adapter, fixture, _endpoint, supervisor, catalog_root, _config) =
-            local_session_endpoint(
-                vec![vec![
-                    GatedStep::Emit(ModelEvent::Started),
-                    GatedStep::ParkUntilReleased(release_rx),
-                    GatedStep::Emit(ModelEvent::Completed {
-                        finish_reason: ModelFinishReason::Stop,
-                        usage: None,
-                    }),
-                ]],
-                Some(CoordinatorProbe {
-                    attempt_exit_gate: Some(attempt_exit_gate.clone()),
-                    parent_guidance_seal_gate: None,
-                    ..CoordinatorProbe::default()
+        let (adapter, fixture, _, supervisor, root, _) = local_session_endpoint(
+            vec![vec![
+                GatedStep::Emit(ModelEvent::Started),
+                GatedStep::ParkUntilReleased(release_rx),
+                GatedStep::Emit(ModelEvent::Completed {
+                    finish_reason: ModelFinishReason::Stop,
+                    usage: None,
                 }),
-            )
-            .await;
-        // `/new` no-ops over an untouched empty shell, so the catalog's
-        // active Session must own durable user work before the switch below
-        // is a real transition at all.
-        accept_catalog_pending_inbound(catalog_root.path(), "catalog work");
-        let before = SessionCatalog::open_existing(catalog_root.path())
-            .expect("open catalog before switch")
-            .expect("catalog before switch")
-            .active_snapshot()
-            .expect("active snapshot before switch");
-
+            ]],
+            None,
+        )
+        .await;
         fixture
             .runtime
             .submit_inbound(submit_content("unsettled turn"))
-            .expect("real turn accepted");
+            .unwrap();
         await_adapter_request_count(&adapter, 1).await;
-
-        let switch_supervisor = supervisor.clone();
-        let switch = tokio::spawn(async move { switch_supervisor.new_session().await });
-        let entered = {
-            let gate = attempt_exit_gate.clone();
-            tokio::task::spawn_blocking(move || gate.wait_entered())
-        };
-        entered.await.expect("attempt exit gate entered");
-
-        let observed = SessionCatalog::open_existing(catalog_root.path())
-            .expect("observe catalog while old task is unsettled")
-            .expect("catalog while old task is unsettled")
-            .active_snapshot()
-            .expect("active snapshot while old task is unsettled");
-        assert_eq!(observed.id, before.id);
-        assert!(!switch.is_finished(), "switch waits for quiescence");
-
-        // The provider is cancellation-aware; releasing the model gate is
-        // not what completes the switch. The attempt-exit gate is the exact
-        // runtime ownership boundary that shutdown must await.
+        let before = supervisor.current().await.unwrap();
+        let created = supervisor.new_session().await.unwrap();
+        assert_ne!(created.session.id, before.id);
+        assert_eq!(supervisor.current().await.unwrap(), before);
+        assert_eq!(
+            SessionCatalog::open_existing(root.path())
+                .unwrap()
+                .unwrap()
+                .persisted_session_ids()
+                .len(),
+            2
+        );
+        assert_eq!(adapter.requests().len(), 1);
         let _ = release_tx.send(true);
-        let release_exit = {
-            let gate = attempt_exit_gate.clone();
-            tokio::task::spawn_blocking(move || gate.release())
-        };
-        release_exit.await.expect("release attempt task exit");
-        let result = switch.await.expect("switch task");
-        assert!(result.is_ok(), "quiescence precedes successful publication");
-        let after = SessionCatalog::open_existing(catalog_root.path())
-            .expect("open catalog after switch")
-            .expect("reopen catalog after switch")
-            .active_snapshot()
-            .expect("active snapshot after switch");
-        assert_ne!(after.id, before.id);
+        fixture.runtime.shutdown().await.unwrap();
     }
 
     /// A marker-bearing alternate session model configuration.

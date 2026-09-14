@@ -611,14 +611,14 @@ describe("CommandDispatcher", () => {
           name: "current",
           updated_at: "2026-08-21T00:00:00Z",
           active_node: "node-1",
-          active: true,
+
         },
         {
           id: "session-2",
           name: "saved review",
           updated_at: "2026-08-20T00:00:00Z",
           active_node: "node-2",
-          active: false,
+
         },
       ],
     });
@@ -1355,7 +1355,6 @@ describe("CLI arguments", () => {
   it("parses repeatable Skills and forwards startup controls without interpretation", () => {
     const parsed = parseArguments([
       ...complete,
-      "--continue",
       "--skill",
       "/user/skills/one",
       "--skill",
@@ -1371,7 +1370,7 @@ describe("CLI arguments", () => {
     assert.deepEqual(parsed.startup, {
       model: undefined,
       trust: undefined,
-      continueActiveSession: true,
+      continueActiveSession: false,
       inspectConversation: undefined,
       session: undefined,
       node: undefined,
@@ -1385,7 +1384,7 @@ describe("CLI arguments", () => {
     });
   });
 
-  it("continues the active Session on a replacement spawn, never on a launch", () => {
+  it("replacement leaves the destination to explicit client routing", () => {
     // A launch starts on an empty Session; the spawn that completes a
     // published Session transition asks for the catalog's active selection
     // instead, and changes nothing else about the startup contract.
@@ -1393,7 +1392,7 @@ describe("CLI arguments", () => {
     assert.equal(launch.startup.continueActiveSession, false);
 
     const replacement = replacementArguments(launch);
-    assert.equal(replacement.startup.continueActiveSession, true);
+    assert.equal(replacement.startup.continueActiveSession, false);
     assert.deepEqual(replacement.paths, launch.paths);
     assert.equal(replacement.binary, launch.binary);
     assert.deepEqual(
@@ -1406,11 +1405,8 @@ describe("CLI arguments", () => {
       "the launch arguments are not mutated",
     );
 
-    assert.equal(
-      replacementArguments(parseArguments([...complete, "--continue"])).startup
-        .continueActiveSession,
-      true,
-    );
+    assert.throws(() => parseArguments([...complete, "--continue"]), /explicit|--session/);
+
   });
 
   it("parses a durable conversation inspection target without Session controls", () => {
@@ -1428,11 +1424,11 @@ describe("CLI arguments", () => {
 
     assert.throws(
       () => parseArguments([...complete, "--inspect-conversation", "child", "--continue"]),
-      /cannot be combined/,
+      /cannot be combined|--session/,
     );
     assert.throws(
       () => parseArguments([...complete, "--inspect-conversation", "child", "--name", "parent"]),
-      /cannot be combined/,
+      /cannot be combined|--session/,
     );
   });
 
@@ -1460,7 +1456,7 @@ describe("CLI arguments", () => {
     // decides the rest.
     const resumed = parseArguments([...complete, "--resume"]);
     assert.equal(resumed.openSessionSelector, true);
-    assert.equal(resumed.startup.continueActiveSession, true);
+    assert.equal(resumed.startup.continueActiveSession, false);
     assert.equal(resumed.startup.session, undefined);
 
     // A replacement completes a transition the runtime already published, so
@@ -1469,7 +1465,7 @@ describe("CLI arguments", () => {
     const replacement = replacementArguments(node);
     assert.equal(replacement.startup.session, undefined);
     assert.equal(replacement.startup.node, undefined);
-    assert.equal(replacement.startup.continueActiveSession, true);
+    assert.equal(replacement.startup.continueActiveSession, false);
     assert.equal(replacementArguments(resumed).openSessionSelector, false);
     assert.equal(node.startup.session, "session-3", "the launch arguments are not mutated");
   });

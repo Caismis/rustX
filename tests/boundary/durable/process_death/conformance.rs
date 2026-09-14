@@ -2219,7 +2219,12 @@ fn assert_cut_lineage(scenario: &str) {
 
     // The catalog is the durable authority for *which* lineage is active. The
     // cut made the new one active, and the source keeps its own identity.
-    let (active_session, active_node) = lab.active_lineage();
+    let (active_session, active_node) =
+        lab.session_node(&SessionId::new(if scenario == child::SESSION_FORK {
+            "session-2"
+        } else {
+            "session-1"
+        }));
     let source_conversation = ConversationId::new("conversation-1");
     assert_ne!(
         active_node.conversation_id, source_conversation,
@@ -2445,7 +2450,11 @@ fn assert_publication_is_atomic(
     let source_conversation = ConversationId::new("conversation-1");
     let destination_session = SessionId::new(destination.0);
     let destination_conversation = ConversationId::new(destination.1);
-    let (active_session, active_node) = lab.active_lineage();
+    let (active_session, active_node) = lab.session_node(if committed {
+        &destination_session
+    } else {
+        &source_session
+    });
 
     // The destination database exists on **both** sides of the boundary:
     // `prepare_*` seeds it before the catalog transaction opens. What the
@@ -2565,7 +2574,7 @@ fn a_cut_lineage_never_resolves_the_copied_source_identities() {
     );
 
     // The copied prefix really does name the source's live work.
-    let (active_session, active_node) = lab.active_lineage();
+    let (active_session, active_node) = lab.session_node(&SessionId::new("session-2"));
     let seeded = lab.lineage(&active_session, &active_node.conversation_id);
     let copied = canonical_text(&seeded.canonical());
     for identity in [

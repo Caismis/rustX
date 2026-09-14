@@ -453,11 +453,25 @@ async fn agent_dirty_bytes_reach_exact_tool_context_after_child_settlement_with_
     let catalog = crate::local_runtime::session::SessionCatalog::create(
         &dir.path().join("subagents"),
         &crate::local_runtime::session::SessionPersistentState {
-            model: SessionModelConfig::of(ModelRef::parse("local/model").unwrap()),
+            model: Some(SessionModelConfig::of(
+                ModelRef::parse("local/model").unwrap(),
+            )),
+            ..crate::local_runtime::session::SessionPersistentState::from_input(
+                &crate::local_runtime::SessionConfigInput::new(std::path::PathBuf::from("/")),
+            )
         },
     )
     .unwrap();
-    let (session, node, _) = catalog.active_lineage().unwrap();
+    let (session, node, _) = catalog
+        .lineage(&crate::local_runtime::SessionId::new("session-1"), None)
+        .map(|(node, state)| {
+            (
+                crate::local_runtime::SessionId::new("session-1"),
+                node,
+                state,
+            )
+        })
+        .unwrap();
     let store = Arc::new(
         crate::durable::SqliteConversationStore::open(
             node.conversation_id.clone(),

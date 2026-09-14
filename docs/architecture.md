@@ -5262,6 +5262,11 @@ events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
 The current Runtime Client protocol is defined by `RUNTIME_CLIENT_PROTOCOL_VERSION`.
+
+Runtime Client protocol 34 removes the obsolete global `SessionSummaryView.active`
+field. Strict initialization rejects v33 clients; Session route changes report
+reattachment requirements against the installed single-runtime attachment.
+
 Version 24 added the typed question
 vocabulary, its canonical scalar domains — a finite-binary64 `Number` carried
 as canonical binary64 text and an `Integer` carried as canonical decimal text,
@@ -6381,65 +6386,20 @@ stream by the existing projection owner, under the same coordinator lock that
 owns attempt admission. There is no second event stream and no second cursor
 domain.
 
-### Layer 8: The local conversation runtime process (Issue #42, Issue #61)
+### Layer 8: Local conversation composition and durable Sessions
 
-```text
-CLI intent + captured host environment + user-owned project trust
-        |
-bounded launch resolution: explicit layers -> domain defaults -> validation
-        |
-AdmittedSessionConfig (frozen catalog/config, locations, identity, provenance)
-        |
-ModelCatalog + CurrentRuntimeConfig + selected SessionPersistentState
-        |
-        +--> SessionCatalog / SessionGraph (native product authority)
-        +--> active SessionNode -> one ConversationId
-        +--> LocalConversationCore (one linear runtime composition)
-        |       +--> SessionModelState (authoritative session model)
-        |       +--> ConversationToolRuntime (workspace, artifacts, mailbox,
-        |       |                              background registry)
-        |       +--> RuntimeResourceSnapshot + compatible CapabilitySnapshot
-        |       |       / context / Surface / status
-        |       +--> RuntimeClientHost + LocalSessionSupervisor control
-        |       +--> exactly one active ConversationRuntime
-        |
-        +-- session switch: quiesce old runtime -> publish selection
-                -> process attachment restart -> ordinary lineage recovery
-```
-
-`LocalSessionProduct::compose` is the native local product composition owner.
-It loads the durable `SessionCatalog`, resolves the `SessionNode` this launch
-starts on, and composes exactly one linear `ConversationRuntime` for that
-node. A launch is not a resume: without `--continue` the process publishes and
-binds an empty Session, and the catalog's previously active Session stays
-durable history reachable through `/resume`. `--continue`
-(`StartupSession::ContinueActive`) binds the published active Session/node
-instead, which is how a client completes a switch that required a process
-replacement. An active Session that was never used — one `New` root node whose
-conversation is still at its initial Surface revision, with no canonical
-message and no committed durable inbound acceptance — already *is* that empty Session, so it
-is reused and repeated launches cannot accumulate empty internal shells. Deferred lineage recovery follows from this: an interrupted
-attempt in a Session this launch does not open is reconciled by the ordinary
-per-conversation recovery pass the next time that lineage is composed, not by
-an unrelated launch. The lower
-`LocalConversationRuntime::compose` and `HeadlessConversationRuntime::compose`
-paths remain available for non-session composition callers. A product session
-switch reaches native quiescence before catalog publication; the TUI then
-restarts its process attachment and the new process performs ordinary
-per-conversation recovery. The startup capability commit still happens
-*before* the conversation runtime is constructed, so it is not subject to the
-runtime's lifecycle gate.
+`SessionController` owns one user's durable catalog independently of runtime
+composition. `LocalSessionClient` composes an explicitly addressed Session for the
+local CLI and binds `LocalSessionAttachment` as its client-local command adapter.
+#287 owns concurrent runtime residency. See [durable Sessions](durable-sessions.md)
+for fields, allocation guards, commit points and the schema 8 contract.
 
 #### Issue #96 ownership and activation boundary
 
-The durable Session catalog persists Session identity, timestamps, graph
-nodes, ConversationId lineage, durable history, and intentionally
-Session-local choices. Its persisted state currently contains only the
-selected `SessionModelConfig`. It does not contain a copy of the current
-runtime/project configuration. In particular, MCP definitions, Tool or Skill
-activation, Skill roots/resources, environment, context policy, Agent Status
-settings (including the Time timezone), agent settings, and future
-capability-source settings are launch-scoped inputs.
+The durable catalog persists only explicit `SessionPersistentState` inputs,
+identity and graph state. Current source defaults and live/effective resources
+remain outside it. The exact classification is in
+[durable Sessions](durable-sessions.md#persisted-configuration-classification).
 
 `--config <rustx.toml>` and project resources are read and validated once on
 every process start before ordinary request admission. Composition combines that current
@@ -6512,209 +6472,13 @@ leaving the catalog pointed at the old root. Background ownership captures
 the effective environment before detachment; execution ownership cannot
 retarget capability resources.
 
-#### Native Session lifecycle and branching (M9.4 / Issue #88)
+#### Native Session lifecycle and branching
 
-`LocalSessionSupervisor` is the only native user-level Session owner. It owns
-the persisted `SessionCatalog`, Session metadata, the Session graph, the
-active Session/SessionNode selection, and the explicit runtime attachment
-state:
-
-```text
-Runtime Client / TUI intent
-          |
-          v
-LocalSessionSupervisor
-  +-- SessionCatalog + SessionGraph
-  +-- active SessionId / SessionNodeId
-  +-- SessionNode -> ConversationId
-  +-- RuntimeAttachmentState: Live(runtime) or ReplacementRequired
-          |
-          v
-linear Conversation Ledger + ConversationSurface + snapshots + journal
-```
-
-The graph is not a ConversationSurface graph. Every node has a distinct
-`ConversationId`, and every ConversationSurface remains linear. Inactive
-sessions are durable state only; they do not retain a live runtime, attempt,
-tool runner, background registry, pending inbound queue, or cancellation
-state. The catalog is stored under the native runtime root, while every node's
-SQLite conversation database is independently bound to its own
-`ConversationId`.
-
-Launching the runtime is not one of these transitions. A process start
-without `--continue` publishes an empty Session through the same
-prepare-then-publish protocol `/new` uses and binds that, so nothing about a
-previous Session is reopened, rewound, or renamed by starting the product;
-persisted Sessions are reachable only through `/resume` and `/tree`. Because
-an unused active Session already satisfies that, it is bound as-is rather than
-publishing another empty one beside it.
-
-A published empty Session is an **internal durable shell**, not history: the
-Session catalog and the conversation SQLite store are separate durable
-authorities, and the shell exists for crash-safe ownership and composition.
-One lifecycle predicate — the catalog's unused classification — is shared by
-startup, `/new`, and `/resume`. A Session crosses from unused to used exactly
-once, at durable acceptance of user work into Pending Inbound, and never
-crosses back: the classifier reads the conversation store's monotonic
-acceptance watermark (`ConversationStore::has_accepted_inbound`), one atomic
-durable fact that adoption cannot rewind, rather than assembling usage from
-independently changing Surface and Pending-Inbox snapshots. Canonical
-adoption, model invocation, and assistant output all happen later and change
-nothing about the classification, and Session-local metadata (a name, a model
-choice) never crosses it. Branch/clone/fork provenance is always user-owned
-history, even when the selected destination lineage is legitimately empty at
-the chosen cut.
-
-`/resume` therefore lists only Sessions that own durable user work:
-`SessionCatalog::list_page` classifies resume-visible Sessions first, then
-applies search and offset/limit over that visible set, so hidden shells open
-no holes in pages and `next_offset` continuations never duplicate or skip
-visible rows. `/new` over an unused active Session is a semantic no-op — it
-reuses the shell, allocates no new Session/node/conversation identity,
-publishes no catalog row, and does not quiesce or replace the live runtime —
-while `/new` from a used Session publishes a fresh independent empty shell
-and leaves the used Session resumable.
-
-A Session is published **unnamed**. A name is display metadata a user
-chooses, never an identity: `--session`, `/resume`, and every switch resolve
-the identity the catalog published, and nothing anywhere resolves a name. An
-unnamed Session is therefore a complete, ordinary Session, and `/resume`
-identifies it by the bounded first user message of its root lineage, derived
-per page from that lineage's durable store and never copied into the catalog.
-A name, once given, replaces that line in the row and changes nothing else.
-`--name <text>` is the startup form of `/name`: it names whichever Session the
-launch bound — empty, continued, or selected — after that decision has been
-made, so naming can never be part of making it. A replacement spawn drops it,
-because it labelled the Session the user launched into.
-
-`/new` asks for an empty Session: over a used Session it prepares an empty
-private destination and publishes a new Session and
-root node only after its durable conversation seed is valid, while over an
-unused active Session it is the no-op described above. `/name` commits
-metadata only. `/resume` selects persisted metadata, `/tree` selects a node or
-prepares a new node, and both replace the active process attachment only after
-`ConversationRuntime::shutdown()` has returned successfully. The supervisor's
-runtime attachment is explicit: it is `NotInstalled` during composition,
-`Live(runtime)` while usable, and `ReplacementRequired` after old-runtime
-quiescence or any terminal publication outcome. The last state is absorbing;
-`Option<ConversationRuntime>` is not used as an implicit lifecycle state.
-
-The TUI renders typed projections and owns only picker query/focus/editor
-state; it never opens the catalog or a conversation database. Ordinary
-Session metadata is a bounded native projection: `/resume` accepts an optional
-case-insensitive query over what a visible row can be recognized by — its id,
-its
-name, and the first-message line an unnamed row shows — and an offset with a
-native maximum page size, and returns a continuation offset. Visibility
-classification precedes query and pagination, so offsets and the continuation
-describe the resume-visible matching set alone. Rows are ordered by Session identity.
-`/session` returns active metadata only,
-not the graph. `/tree` returns independently bounded node and historical
-user-message pages with deterministic continuations. Older Sessions and
-historical boundaries remain reachable by continuation; there is no arbitrary
-global Session cap. The node and history continuations are independent. Once
-one continuation is absent, that stream is exhausted for the selector
-snapshot; later requests use only its loaded-length no-op offset while the
-other stream continues, so an earlier page is never fetched again. Tree search
-remains a presentation filter over the bounded rows already loaded.
-
-Historical materialization is an explicit durable boundary:
-
-```text
-snapshot_at_surface_revision(R)
-snapshot_before_user_message(R, M)
-        -> HistoricalConversationSnapshot / ConversationSeed
-        -> destination-owned canonical identities
-        -> private SQLite seed
-        -> catalog/graph publication
-```
-
-The snapshot reads retained Message Ledger and Surface facts. It does not run
-current Context Assembly, Skills, capability discovery, workflow/goal logic,
-provider code, or model invocation. `/clone` selects the current committed
-Surface revision before seeding; `/fork` selects an exact historical revision
-and user message, seeds the prefix before that message, and returns the
-original content as uncommitted editor text. Source changes after selection
-cannot change the destination seed.
-
-This is a historical prefix projection, never executable runtime authority.
-Earlier Agent Status observations in the selected prefix remain ordinary
-historical facts; the selected human message and context/status admitted for
-that old turn or later are excluded. The destination's next request uses its
-freshly composed/current Runtime Resource Snapshot, not project instructions,
-Skill guidance, Tool definitions, or control state inferred from source
-history.
-
-Destination seeds remap `MessageId` and `ToolCallId` once, preserving internal
-tool-result correlations. They do not copy AttemptIds, Request Snapshots,
-Event Journal lifecycle facts, Pending Inbound, cancellation state, active or
-background executions, or live interactions. Historical `ToolExecutionId`,
-`SubagentId`, and background identifiers retained inside message bodies remain
-opaque historical references: destination composition never resolves, adopts,
-restarts, or recovers their former owners. Current Session-local intent comes
-from the source Session's current state at materialization, never from an old
-node/message. A prepared destination becomes
-catalog-visible at the rename commit after private seed creation; the
-publication operation reports full success only after the parent-directory
-durability barrier. A pre-rename failure leaves at most an unreferenced
-private directory, while a post-rename barrier failure is the explicit
-visible-but-durability-uncertain outcome described below.
-
-The execution-recovery pending unresolved-output pointer is deliberately not
-part of `LineageSeed`. It is neither canonical history nor Surface meaning.
-`initialize_lineage` creates every clone, fork, and tree destination with
-`pending_unresolved_output_stream_id = NULL`, even when the source has an
-unresolved audit waiting for a later primary request. Carryover belongs only
-to the source lineage's own next eligible request.
-
-The Runtime Client exposes three different transition outcomes. A
-pre-rename failure has no transition result: the source remains authoritative,
-and a quiesced old attachment still requires replacement. A successful
-publication returns `session_changed`; fork/tree may include the selected user
-content as transient editor data, never as canonical destination history. A
-rename followed by a failed directory barrier returns
-`session_committed_restart_required` with the committed Session snapshot, the
-same transient editor payload, and a bounded diagnostic. The TUI detaches and
-restarts, refreshes `session_get` from the new Rust process, verifies the
-authoritative Session/node selection, and only then restores that payload. A
-prompt in this payload is not canonical until a later user submission.
-
-The current editor contract rejects fork/tree selections containing image or
-file blocks at native preparation. This prevents a placeholder string from
-being mistaken for the selected canonical content; the wire payload is already
-a `UserContentBlock` list for a future structured editor.
-
-The linearization points are explicit and ordered:
-
-1. **Source snapshot selection.** Clone/fork/tree preparation reads an exact
-   retained `SurfaceRevision` (or the current head) and materializes the
-   immutable source messages before destination preparation. Later source
-   mutations cannot change that seed.
-2. **Old-runtime quiescence.** A replacement awaits
-   `ConversationRuntime::shutdown()`. Its successful return is the point at
-   which the old runtime no longer owns unsettled execution. No active
-   Session/node selection is published before this await completes.
-3. **Catalog visibility commit.** `SessionCatalog` writes and fsyncs a
-   temporary document, then `fs::rename(temp, catalog.json)` makes the next
-   document visible. Rename is the publication commit point, not the later
-   directory barrier.
-4. **Catalog durability barrier.** The catalog opens its parent directory and
-   calls `sync_all()` after rename. A failure here is
-   `CommittedButDurabilityUncertain`: the new document is already visible, the
-   in-memory catalog adopts it, and the owning operation returns a typed
-   replacement-required outcome. It is never reported as an ordinary
-   pre-commit failure or as “nothing changed”.
-
-`NotCommitted` means rename did not complete; the previous file and in-memory
-document remain authoritative. Once old-runtime quiescence has succeeded,
-even a `NotCommitted` destination publication failure leaves the process
-attachment `ReplacementRequired`, because the old runtime is gone. Session
-recovery then opens the catalog's actually authoritative selected
-`ConversationId`; the restarted Rust process/native composition is the
-authority, and the TUI refreshes metadata after attaching rather than
-reconstructing the result from stale client assumptions. Historical
-nonterminal provider/tool work is not auto-run merely because its node was
-previously active.
+The durable owner is `SessionController`, with zero or more Sessions and no
+process-global selection. Client focus, runtime residency and durable graph state
+are separate. See [durable Sessions](durable-sessions.md) for explicit operations,
+lineage snapshot exclusion, visibility/durability, deletion and settings CAS.
+The retained lineage-cut semantics below remain authoritative for copies.
 
 Startup failure ownership (Issue #81): failures that prove the core runtime
 itself cannot be constructed — startup files, model catalog/credentials/
@@ -6770,7 +6534,7 @@ never published.
 
 The governing invariant for the active node is:
 
-> One local runtime process owns one active linear ConversationRuntime. That
+> Each resident Conversation owns one linear ConversationRuntime. That
 > runtime owns one authoritative mutable session-model configuration, one
 > `ConversationToolRuntime` identity, one `CapabilityCoordinator`, one context
 > policy/Surface domain, and one ConversationId. Runtime Client attachments
@@ -9533,7 +9297,7 @@ See [the complete source contract](source-activation.md).
 ### Crash-safe Session deletion control
 
 Protocol 28 routes finite deletion preview, revision-bound execution and explicit
-recovery through LocalSessionSupervisor. Catalog schema 7 owns both live membership
+recovery through LocalSessionAttachment. Catalog schema 7 owns both live membership
 and pending frozen deletion records in one generation-checked atomic publication.
 Completed cleanup records are durably removed; native high-water marks prevent
 identity reuse independently. Runtime Client owns bounded deletion DTOs mapped

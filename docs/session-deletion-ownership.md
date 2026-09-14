@@ -158,7 +158,7 @@ using barriers before removal and between worktree and branch removal.
 proves the local manager supplies spanning authority when its semantic store has
 no local lifecycle binding; no fake lock capability is implemented by the store.
 
-A live product controlling A can call `LocalSessionSupervisor::deletion_preflight`
+A live product controlling A can call `LocalSessionAttachment::deletion_preflight`
 for historical B without switching, detaching or restarting A. A's controller
 admission and Conversation access do not conflict with B's target locks.
 Unrelated live children likewise do not block B. Actual target access does.

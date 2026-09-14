@@ -26,7 +26,7 @@ pub enum Readiness {
     Unresolved,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Diagnostic {
     pub classification: &'static str,
     pub category: &'static str,

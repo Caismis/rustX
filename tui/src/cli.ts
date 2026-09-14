@@ -5,7 +5,7 @@
  * rustx-tui --binary <path> [--models <path>] [--config <path>]
  *           [--workspace <dir>] [--runtime-root <dir>] [--model <provider/model>]
  *           [--trust grant|revoke]
- *           [--inspect-conversation <id> | --continue | --resume | --session <id> [--node <id>]]
+ *           [--inspect-conversation <id> | --resume | --session <id> [--node <id>]]
  *           [--name <text>] [--skill <path>] [--no-automatic-skills]
  *           [--no-builtin-tools] [--no-direct-tools]
  *           [--tools <a,b,c>] [--exclude-tools <a,b,c>]
@@ -14,13 +14,12 @@
  * Without a Session request the runtime starts on an empty Session and every
  * persisted Session stays reachable through `/resume`. Conversation inspection
  * is a separate read-only attachment by known conversation identity. The
- * remaining three requests change the startup Session, and they are mutually
+ * following requests determine the startup attachment, and they are mutually
  * exclusive with inspection:
  *
- * - `--continue` starts on the Session the previous launch left active;
  * - `--session <id>` (optionally `--node <id>`) starts on a named persisted
  *   Session;
- * - `--resume` opens the `/resume` selector over the continued Session as
+ * - `--resume` opens the `/resume` selector over a fresh Session as
  *   soon as the client attaches, so a Session can be chosen instead of named.
  * - `--inspect-conversation <id>` opens the ordinary Runtime Client projection
  *   for that conversation, attaching to a running child's live projection or
@@ -31,11 +30,8 @@
  * bound, whichever one that is, and it is forwarded to Rust like every other
  * startup control — a Session is never opened by its name.
  *
- * Only `--resume` is a client behaviour, and only because drawing a picker is
- * what a terminal client is for: it forwards `--continue`, then issues the
- * ordinary `/resume` selection for whatever the user picks. Every other part
- * of the decision is Rust's — this client neither reads the catalog nor
- * resolves an identity it was given.
+ * The client owns focus. A picker result supplies the explicit Session/node
+ * identity for its next subprocess attachment; no focus is published durably.
  *
  * Optional runtime path overrides are passed straight through to the Rust binary. This
  * client never opens, parses, validates, or defaults any of them: `models.toml`
@@ -52,7 +48,7 @@ import type {
 export const USAGE = `usage: rustx-tui --binary <rustx> [--models <models.toml>] \\
                  [--config <rustx.toml>] [--workspace <dir>] [--runtime-root <dir>] \\
                  [--model <provider/model>] [--trust grant|revoke] \\
-                 [--inspect-conversation <conversation-id> | --continue | --resume | --session <id> [--node <id>]] \\
+                 [--inspect-conversation <conversation-id> | --resume | --session <id> [--node <id>]] \\
                  [--name <text>] [--skill <path>] [--no-automatic-skills] [--no-builtin-tools] [--no-direct-tools] \\
                  [--tools <a,b,c>] [--exclude-tools <a,b,c>]`;
 
@@ -61,10 +57,8 @@ export interface TuiArguments {
   paths: RuntimePaths;
   startup: RuntimeStartupOptions;
   /**
-   * Open the `/resume` selector as soon as the client attaches. This is the
-   * only startup Session decision the client makes, and it makes none of it
-   * alone: the picker is drawn over the continued Session and the choice
-   * becomes an ordinary `/resume` selection Rust publishes.
+   * Open the `/resume` selector over the initial fresh attachment. The chosen
+   * identity is client routing state for the next subprocess.
    */
   openSessionSelector: boolean;
 }
@@ -163,6 +157,7 @@ export function parseArguments(argv: readonly string[]): TuiArguments {
   const session = values.get("--session");
   const node = values.get("--node");
   const inspectConversation = values.get("--inspect-conversation");
+  if (booleans.has("--continue")) throw new ArgumentError("use --session <id> or --resume; there is no global Session focus");
   const resume = booleans.has("--resume");
   const requests = [
     booleans.has("--continue") ? "--continue" : undefined,
@@ -201,7 +196,7 @@ export function parseArguments(argv: readonly string[]): TuiArguments {
       // active, so it publishes nothing of its own: cancelling the selector
       // leaves that Session bound rather than stranding an empty one in the
       // catalog beside it.
-      continueActiveSession: booleans.has("--continue") || resume,
+      continueActiveSession: false,
       inspectConversation,
       session,
       node,
@@ -219,16 +214,8 @@ export function parseArguments(argv: readonly string[]): TuiArguments {
 /**
  * The arguments of a **replacement** spawn.
  *
- * A replacement is never a new launch: it completes a Session transition the
- * runtime has already published durably, so it continues the catalog's active
- * selection however this client was started. The destination is not named
- * here — the catalog stays the authority for it — which is exactly why a
- * launch-time `--session`/`--node` is dropped rather than repeated: replaying
- * it would re-select the Session the user has just switched away from. A
- * launch-time `--resume` is dropped for the same reason: the selector is the
- * choice this replacement is already carrying out. `--name` is dropped
- * because it named the Session the user launched into: repeating it would
- * put that label on whichever Session they switched to next.
+ * Clear launch-only routing and naming. The caller supplies the chosen
+ * Session/node explicitly for the next subprocess; the catalog has no focus.
  */
 export function replacementArguments(parsed: TuiArguments): TuiArguments {
   return {
@@ -236,7 +223,7 @@ export function replacementArguments(parsed: TuiArguments): TuiArguments {
     openSessionSelector: false,
     startup: {
       ...parsed.startup,
-      continueActiveSession: true,
+      continueActiveSession: false,
       inspectConversation: undefined,
       session: undefined,
       node: undefined,

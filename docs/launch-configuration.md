@@ -608,7 +608,7 @@ lifetimes](effective-settings.md) for the full ownership matrix.
 
 Discovery never implies resume. Fresh/unused empty Session startup remains the
 default; `--continue`, `--session` and valid `--node` selection remain explicit.
-`LocalSessionProduct::compose` plans the destination, composes and recovers an
+`LocalSessionClient::compose` plans the destination, composes and recovers an
 inactive core, binds its client host, and calls `commit_startup` once before
 infallible activation. Failed resolution/validation cannot create Session state;
 failed composition cannot publish another selection. Existing behavior may
@@ -668,3 +668,8 @@ There is no initial-composition reread of settings/model/project TOML, root or
 named Agent instruction files, ordinary AGENTS content, Workflow programs, or
 Skill metadata after successful prospective resolution. Runtime history and
 external executable/package preparation reads are intentionally owned separately.
+
+## Durable Session inputs
+
+Schema 8 persists only explicit Session input, preserving omitted model and Tool
+selections. See [durable Session fields and their rationale](durable-sessions.md#persisted-configuration-classification). Cold resume uses these inputs with the same current-source resolver; effective configuration is never catalog authority.

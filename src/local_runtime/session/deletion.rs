@@ -73,7 +73,6 @@ pub(crate) struct SessionDeletePreview {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum DeletionBlocker {
-    CurrentSession,
     InUse,
     Workspace { resources: Vec<String> },
     InvalidOwnership { detail: String },
@@ -217,9 +216,6 @@ impl SessionCatalog {
             return Err(SessionDeleteResult::NotFound {
                 session_id: id.clone(),
             });
-        }
-        if self.document.active_session == *id {
-            return Err(blocked(DeletionBlocker::CurrentSession));
         }
         let preflight = self.deletion_preflight(id).map_err(|e| {
             blocked(if e.kind() == std::io::ErrorKind::WouldBlock {

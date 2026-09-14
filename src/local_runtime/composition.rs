@@ -49,14 +49,10 @@
 //!
 //! The governing invariant:
 //!
-//! > `LocalSessionProduct` owns the native SessionCatalog/SessionGraph and
-//! > exactly one active linear ConversationRuntime. The active runtime owns
-//! > one ConversationId, one ConversationToolRuntime identity, one
-//! > CapabilityCoordinator, one context policy domain, and one linear
-//! > ConversationSurface. A Session switch quiesces and releases that
-//! > runtime before the product publishes a replacement and reconnects.
-//! > Runtime Client attachments may come and go without replacing the
-//! > semantic owners of the active lineage.
+//! > Durable Session identity and graph state belong to `SessionController`.
+//! > `LocalSessionClient` is a single-runtime CLI attachment, with explicit
+//! > Session identity and client-local routing. Catalog commands do not quiesce
+//! > or replace a runtime. Concurrent residency belongs to #287.
 //!
 //! A client — including the Issue #39 TUI — owns the child process
 //! lifecycle and nothing else. It never assembles provider adapters, model
@@ -153,29 +149,16 @@ use super::session::{
     SessionCatalog, SessionError, SessionId, SessionNodeId, SessionNodeOrigin,
     SessionPersistentState,
 };
-use super::supervisor::{LocalSessionSupervisor, SessionSupervisorError};
+use super::supervisor::{LocalSessionAttachment, SessionAttachmentError};
 
-/// Which Session a launch binds.
-///
-/// Startup is not a resume. A process begins on an empty Session and leaves
-/// every persisted Session as history reachable through `/resume`; binding a
-/// persisted one is an explicit request, in exactly two forms. Continuing the
-/// published active selection is the one a client repeats when it replaces
-/// the process to complete a Session switch that was already published
-/// durably; naming a Session is what a launch does when the user already
-/// knows where they want to be.
+/// Explicit client-local startup routing, never a catalog-global selection.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum StartupSession {
-    /// Start on an empty Session, publishing one when the active Session has
-    /// already been used.
+    /// Create an independent empty Session for this CLI attachment.
     #[default]
     Empty,
-    /// Bind the Session/node the catalog publishes as active.
-    ContinueActive,
-    /// Bind the named persisted Session — and the named lineage node when
-    /// one is given. The selection is *planned* before the runtime is
-    /// composed and published with it: a launch that cannot compose the
-    /// Session it named leaves the active selection where it found it.
+    /// Bind an explicitly named Session and optionally choose its graph node.
+    /// Reading the default node does not mutate the catalog.
     Select {
         /// The persisted Session to bind.
         session: SessionId,
@@ -1032,9 +1015,7 @@ impl LocalConversationCore {
             dependencies,
             registry,
             runtime_config.clone(),
-            SessionPersistentState {
-                model: runtime_config.initial_model().clone(),
-            },
+            SessionPersistentState::from_input(&paths.input),
             ConversationId::new("conversation-standalone"),
             lifecycle.root().join("artifacts"),
             lifecycle,
@@ -1068,7 +1049,13 @@ impl LocalConversationCore {
                 .map_err(|detail| LocalRuntimeError::Capability { detail })?;
             let project_context_files = paths.project_context_files.clone();
             SessionModelState::new(registry.clone(), runtime_config.initial_model().clone())?;
-            let model = SessionModelState::new(registry.clone(), session_state.model.clone())?;
+            let model = SessionModelState::new(
+                registry.clone(),
+                session_state
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| runtime_config.initial_model().clone()),
+            )?;
 
             // The root Agent's native Agent Extension composition freeze point
             // (Issues #256, #259). It is resolved once, here, from this launch's
@@ -1866,29 +1853,29 @@ impl LocalConversationCore {
     }
 }
 
-/// The native local product composition: one SessionCatalog/Graph owner plus
-/// exactly one active linear `ConversationRuntime` and its Runtime Client host.
-pub struct LocalSessionProduct {
+/// Single-runtime local CLI composition. Durable authority is independently owned
+/// by `SessionController`; this adapter owns only its attached runtime and host.
+pub struct LocalSessionClient {
     runtime: LocalConversationRuntime,
-    supervisor: Arc<LocalSessionSupervisor>,
+    supervisor: Arc<LocalSessionAttachment>,
 }
 
-impl std::fmt::Debug for LocalSessionProduct {
+impl std::fmt::Debug for LocalSessionClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LocalSessionProduct")
+        f.debug_struct("LocalSessionClient")
             .field("conversation_id", self.runtime.runtime().conversation_id())
             .finish_non_exhaustive()
     }
 }
 
-impl LocalSessionProduct {
+impl LocalSessionClient {
     /// Loads the native catalog, resolves the Session this launch starts on,
     /// composes that `ConversationRuntime`, binds typed Session control, and
     /// activates the runtime before serving protocol input.
     ///
     /// The startup Session is an empty one unless
-    /// [`LocalRuntimeDependencies::startup_session`] asks for the catalog's
-    /// published active selection or names a persisted Session. Whichever
+    /// [`LocalRuntimeDependencies::startup_session`] explicitly names a persisted
+    /// Session. Whichever
     /// it is, the catalog transition is planned first and committed once,
     /// after composition and host binding have succeeded, so a launch that
     /// fails changes no published catalog state at all — including a first
@@ -1901,10 +1888,50 @@ impl LocalSessionProduct {
     /// Returns [`LocalRuntimeError`] when startup configuration, catalog
     /// loading, capability composition, runtime recovery, or host binding
     /// fails.
+    #[allow(clippy::too_many_lines)]
     pub async fn compose(
         paths: &AdmittedSessionConfig,
         dependencies: &LocalRuntimeDependencies,
     ) -> Result<Self, LocalRuntimeError> {
+        // /new uses this client's explicit launch inputs, not settings copied
+        // from the Session that a cold resume is about to resolve.
+        let new_session_settings = SessionPersistentState::from_input(&paths.input);
+        // Admit the one native catalog owner before reading any persisted input.
+        // Retain it through resolution/composition, without a catalog mutex.
+        let lifecycle = Arc::new(
+            crate::runtime::local_storage::ProductController::acquire(&paths.runtime_root)
+                .map_err(|e| LocalRuntimeError::ToolRuntime {
+                    detail: e.to_string(),
+                })?,
+        );
+        let existing_catalog = SessionCatalog::open_existing(lifecycle.root())?;
+
+        let resumed;
+        let paths = if let StartupSession::Select { session, node } = &dependencies.startup_session
+        {
+            let catalog = existing_catalog.as_ref().ok_or_else(|| {
+                LocalRuntimeError::SessionCatalog(SessionError::UnknownSession {
+                    session_id: session.clone(),
+                })
+            })?;
+            let (_, settings) = catalog.lineage(session, node.as_ref())?;
+            #[cfg(test)]
+            cold_resume_test_support::park(lifecycle.root()).await;
+
+            let manager = super::configuration::UserConfigManager::new(paths.sources.clone())
+                .map_err(|detail| LocalRuntimeError::Capability { detail })?;
+            resumed = manager
+                .resolve_session(&settings.input())
+                .map_err(|error| LocalRuntimeError::SessionConfiguration {
+                    session_id: session.clone(),
+                    diagnostic: error.diagnostic,
+                })?
+                .admit(|| paths.credentials.clone())
+                .map_err(|detail| LocalRuntimeError::Capability { detail })?;
+            &resumed
+        } else {
+            paths
+        };
         // The current runtime/project configuration and current ModelCatalog
         // are resolved before opening or creating durable Session state. A
         // failed first launch therefore cannot publish an invalid initial
@@ -1912,9 +1939,7 @@ impl LocalSessionProduct {
         let runtime_config = paths.config.as_ref().clone();
         let registry = load_model_registry(paths, dependencies)?;
         SessionModelState::new(registry.clone(), runtime_config.initial_model().clone())?;
-        let state = SessionPersistentState {
-            model: runtime_config.initial_model().clone(),
-        };
+        let state = SessionPersistentState::from_input(&paths.input);
         // A first launch builds the root Session in memory and publishes
         // nothing yet. `catalog.json` is written by the one startup
         // transaction below, together with whatever else this launch
@@ -1922,16 +1947,9 @@ impl LocalSessionProduct {
         // runtime root with no catalog at all. The seeded conversation
         // database it leaves behind is not published state: nothing names
         // it, so it is neither selectable nor resumable.
-        let lifecycle = Arc::new(
-            crate::runtime::local_storage::ProductController::acquire(&paths.runtime_root)
-                .map_err(|e| LocalRuntimeError::ToolRuntime {
-                    detail: e.to_string(),
-                })?,
-        );
-        let mut catalog = if let Some(catalog) = SessionCatalog::open_existing(lifecycle.root())? {
-            catalog
-        } else {
-            SessionCatalog::create_unpublished(lifecycle.root(), &state)?
+        let mut catalog = match existing_catalog {
+            Some(catalog) => catalog,
+            None => SessionCatalog::create_unpublished(lifecycle.root(), &state)?,
         };
         catalog.retain_lifecycle(lifecycle.clone());
         for id in catalog.pending_deletion_ids() {
@@ -1945,43 +1963,23 @@ impl LocalSessionProduct {
             };
             tracing::debug!(?result, "Session deletion recovery");
         }
-        catalog.recover_storage(&lifecycle)?;
-        // Startup is not a resume. A launch begins on an empty Session and
-        // leaves every persisted Session as history reachable through
-        // `/resume`; only an explicit request binds a persisted one. An
-        // active Session that was never used is that empty Session already,
-        // so repeated launches publish nothing and cannot accumulate empty
-        // rows.
-        //
-        // A named Session takes the catalog transition `/resume` takes,
-        // decided ahead of composition rather than published ahead of it.
-        // It is *planned* here and committed at the end: composing the destination is what can still fail — a
-        // Session whose recorded model no longer exists in `models.toml`,
-        // a database that will not open — and a launch that fails must not
-        // leave the active selection somewhere the user never asked for.
-        // A replacement spawn that continues the active selection therefore
-        // lands on it without naming it, and an unknown identity fails the
-        // launch instead of quietly opening something else.
-        //
-        // `prepare_session` still seeds its destination database here. That
-        // is not a published fact: a seeded conversation the catalog does
-        // not name is unreachable — neither selectable nor resumable — so
-        // an abandoned plan leaves an inert orphan and nothing else.
+        // The local client chooses its destination explicitly. Existing Sessions
+        // are read without publishing focus; new private storage is published
+        // only after this client's runtime composition succeeds.
         let planned = match &dependencies.startup_session {
             StartupSession::Empty => {
-                if catalog.active_is_unused()? {
-                    catalog.plan_unchanged()
-                } else {
+                if catalog.is_published() {
                     let prepared = catalog.prepare_session(&state, &[])?;
                     catalog.plan_session(&prepared, SessionNodeOrigin::New)?
+                } else {
+                    catalog.plan_unchanged(&SessionId::new("session-1"))
                 }
             }
-            StartupSession::ContinueActive => catalog.plan_unchanged(),
             StartupSession::Select { session, node } => {
-                catalog.plan_select(session, node.as_ref())?
+                catalog.plan_attachment(session, node.as_ref())?
             }
             StartupSession::InspectConversation { .. } => {
-                unreachable!("durable conversation inspection uses its dedicated composition path")
+                unreachable!("dedicated inspection composition")
             }
         };
         // `--name` names the Session this launch bound, whichever one that
@@ -2000,7 +1998,7 @@ impl LocalSessionProduct {
         // The destination is read from the plan, not from the catalog on
         // disk: this is where the launch is about to compose.
         let (session_id, node, session_state) = planned
-            .active_lineage()
+            .destination_lineage()
             .map_err(LocalRuntimeError::SessionCatalog)?;
         let database_path = catalog.database_path(&session_id, &node.conversation_id);
         let artifacts_root = database_path
@@ -2015,7 +2013,6 @@ impl LocalSessionProduct {
         // Everything fallible happens against the planned destination and
         // before the catalog changes: composition, recovery, and the
         // Runtime Client host binding. The runtime is left inert.
-        let default_model = runtime_config.initial_model().clone();
         let core = LocalConversationCore::compose_from_config(
             paths,
             dependencies,
@@ -2027,21 +2024,25 @@ impl LocalSessionProduct {
             lifecycle,
         )
         .await?;
-        let supervisor = Arc::new(LocalSessionSupervisor::new(catalog, default_model));
+        let supervisor = Arc::new(LocalSessionAttachment::new(
+            catalog,
+            session_id,
+            new_session_settings,
+            planned.settings_revision(),
+        ));
         let runtime = core.into_bound_with_session_control(supervisor.clone())?;
 
         // The one catalog transaction of startup. Before this line the
         // catalog is byte-for-byte what the launch found; after it, the
-        // published selection and the composed runtime describe the same
-        // lineage.
+        // intentional metadata change is visible. Routing alone writes nothing.
         supervisor
             .commit_startup(planned)
             .await
             .map_err(LocalRuntimeError::SessionCatalog)?;
 
         // Past the commit, nothing may fail on its own terms: the lineage
-        // check below compares the committed selection with the runtime
-        // composed from that same plan, and activation is infallible.
+        // check below verifies graph membership of the explicitly routed
+        // Conversation, and activation is infallible.
         supervisor
             .install_runtime(runtime.runtime().clone())
             .await
@@ -2053,7 +2054,7 @@ impl LocalSessionProduct {
         })
     }
 
-    /// The one active linear `ConversationRuntime`.
+    /// This client attachment's linear `ConversationRuntime`.
     #[must_use]
     pub const fn runtime(&self) -> &ConversationRuntime {
         self.runtime.runtime()
@@ -2061,7 +2062,7 @@ impl LocalSessionProduct {
 
     /// The native Session supervisor.
     #[must_use]
-    pub fn supervisor(&self) -> &Arc<LocalSessionSupervisor> {
+    pub fn supervisor(&self) -> &Arc<LocalSessionAttachment> {
         &self.supervisor
     }
 
@@ -2465,6 +2466,11 @@ fn load_model_registry(
 /// before any protocol frame exists. No variant carries a credential value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LocalRuntimeError {
+    /// Current sources rejected an explicitly persisted Session selection.
+    SessionConfiguration {
+        session_id: SessionId,
+        diagnostic: Box<super::diagnostics::Diagnostic>,
+    },
     /// A startup file could not be read.
     Io {
         /// The path that failed.
@@ -2536,7 +2542,7 @@ pub enum LocalRuntimeError {
     /// The native SessionCatalog/Graph could not be loaded or published.
     SessionCatalog(SessionError),
     /// The native Session supervisor could not install or drain a lineage.
-    SessionSupervisor(SessionSupervisorError),
+    SessionSupervisor(SessionAttachmentError),
 }
 
 impl std::fmt::Display for LocalRuntimeError {
@@ -2574,6 +2580,14 @@ impl std::fmt::Display for LocalRuntimeError {
             Self::Observation { detail } => {
                 write!(f, "runtime observation subscription: {detail}")
             }
+            Self::SessionConfiguration {
+                session_id,
+                diagnostic,
+            } => write!(
+                f,
+                "Session {session_id} configuration at {}: {} ({})",
+                diagnostic.path, diagnostic.reason, diagnostic.correction
+            ),
             Self::SessionCatalog(error) => write!(f, "session catalog: {error}"),
             Self::SessionSupervisor(error) => write!(f, "session supervisor: {error}"),
         }
@@ -2618,8 +2632,8 @@ impl From<SessionError> for LocalRuntimeError {
     }
 }
 
-impl From<SessionSupervisorError> for LocalRuntimeError {
-    fn from(error: SessionSupervisorError) -> Self {
+impl From<SessionAttachmentError> for LocalRuntimeError {
+    fn from(error: SessionAttachmentError) -> Self {
         Self::SessionSupervisor(error)
     }
 }
@@ -4495,9 +4509,7 @@ compat = { chat_reasoning_replay = "omit" }
             &LocalRuntimeDependencies::default(),
             registry,
             runtime_config.clone(),
-            super::super::session::SessionPersistentState {
-                model: runtime_config.initial_model().clone(),
-            },
+            super::super::session::SessionPersistentState::from_input(&launch.input),
             ConversationId::new("conv-163-composition"),
             controller.root().join("artifacts"),
             controller,
@@ -4885,5 +4897,52 @@ mod source_demand_tests {
         let second = admitted_source_demand(&config, &agents, &WorkflowCatalog::empty(), empty());
         assert_eq!(first.sources, [shared].into());
         assert_eq!(first.sources, second.sources);
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod cold_resume_test_support {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex, Weak};
+    use tokio::sync::watch;
+
+    pub(crate) struct Gate {
+        entered: watch::Sender<bool>,
+        release: watch::Sender<bool>,
+    }
+    static GATES: Mutex<Vec<(PathBuf, Weak<Gate>)>> = Mutex::new(Vec::new());
+    pub(crate) fn arm(runtime_root: &Path) -> Arc<Gate> {
+        let gate = Arc::new(Gate {
+            entered: watch::channel(false).0,
+            release: watch::channel(false).0,
+        });
+        let mut gates = GATES.lock().unwrap();
+        gates.retain(|(path, weak)| path != runtime_root && weak.strong_count() > 0);
+        gates.push((runtime_root.into(), Arc::downgrade(&gate)));
+        gate
+    }
+    impl Gate {
+        pub(crate) async fn entered(&self) {
+            self.entered
+                .subscribe()
+                .wait_for(|entered| *entered)
+                .await
+                .unwrap();
+        }
+        pub(crate) fn release(&self) {
+            self.release.send_replace(true);
+        }
+    }
+    pub(crate) async fn park(runtime_root: &Path) {
+        let gate = GATES
+            .lock()
+            .unwrap()
+            .iter()
+            .find_map(|(path, weak)| (path == runtime_root).then(|| weak.upgrade()).flatten());
+        if let Some(gate) = gate {
+            let mut release = gate.release.subscribe();
+            gate.entered.send_replace(true);
+            release.wait_for(|released| *released).await.unwrap();
+        }
     }
 }

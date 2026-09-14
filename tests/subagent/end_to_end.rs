@@ -135,7 +135,7 @@ struct Process {
 impl Process {
     /// Spawns the binary with explicit startup arguments.
     fn spawn(root: &std::path::Path, models: &str, session: &str, key: &str) -> Self {
-        Self::launch(root, models, session, key, false, None, false)
+        Self::launch(root, models, session, key, None, None, false)
     }
 
     /// Spawns the parent over an explicit logical workspace. This is used by
@@ -148,7 +148,7 @@ impl Process {
         session: &str,
         key: &str,
     ) -> Self {
-        Self::launch_at_workspace(root, workspace, models, session, key, false, None, false)
+        Self::launch_at_workspace(root, workspace, models, session, key, None, None, false)
     }
 
     /// Spawns a parent whose real child process receives the deterministic
@@ -160,14 +160,18 @@ impl Process {
         session: &str,
         key: &str,
     ) -> Self {
-        Self::launch(root, models, session, key, false, None, true)
+        Self::launch(root, models, session, key, None, None, true)
     }
 
-    /// Reopens the Session this runtime root already published as active. A
-    /// launch is not a resume, so recovering a durable conversation across a
-    /// process death is an explicit `--continue`.
-    fn reopen(root: &std::path::Path, models: &str, session: &str, key: &str) -> Self {
-        Self::launch(root, models, session, key, true, None, false)
+    /// Reopens the explicitly identified Session after process death.
+    fn reopen(
+        root: &std::path::Path,
+        models: &str,
+        session: &str,
+        key: &str,
+        session_id: &str,
+    ) -> Self {
+        Self::launch(root, models, session, key, Some(session_id), None, false)
     }
 
     /// Opens one durable child conversation through the ordinary local
@@ -185,7 +189,7 @@ impl Process {
             models,
             session,
             key,
-            false,
+            None,
             Some(conversation_id),
             false,
         )
@@ -196,7 +200,7 @@ impl Process {
         models: &str,
         session: &str,
         key: &str,
-        continue_active: bool,
+        resume_session: Option<&str>,
         inspect_conversation: Option<&str>,
         fail_live_inspection: bool,
     ) -> Self {
@@ -207,7 +211,7 @@ impl Process {
             models,
             session,
             key,
-            continue_active,
+            resume_session,
             inspect_conversation,
             fail_live_inspection,
         )
@@ -220,7 +224,7 @@ impl Process {
         models: &str,
         session: &str,
         key: &str,
-        continue_active: bool,
+        resume_session: Option<&str>,
         inspect_conversation: Option<&str>,
         fail_live_inspection: bool,
     ) -> Self {
@@ -259,8 +263,8 @@ impl Process {
         if fail_live_inspection {
             command.env("RUSTX_TEST_LIVE_INSPECTION_BIND_FAILURE", "1");
         }
-        if continue_active {
-            command.arg("--continue");
+        if let Some(session_id) = resume_session {
+            command.arg("--session").arg(session_id);
         }
         if let Some(conversation_id) = inspect_conversation {
             command.arg("--inspect-conversation").arg(conversation_id);
@@ -1096,7 +1100,7 @@ async fn subagent_process_stack(alias_root: bool) {
         let session = SessionCatalog::open_existing(&alias)
             .unwrap()
             .unwrap()
-            .active_snapshot()
+            .snapshot(&rustx::local_runtime::SessionId::new("session-1"))
             .unwrap()
             .id;
         let preflight = SessionDeletionPreflight::acquire(&alias, &session).unwrap();
@@ -1761,6 +1765,15 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
         "initial parent must initialize: {response:?}"
     );
     let response = parent
+        .request(|id| RuntimeClientRequest::SessionGet {
+            id: rustx::runtime_client::RequestId::new(id),
+        })
+        .await;
+    let Some(RuntimeClientResult::Session { session }) = response.result else {
+        panic!("the parent exposes its explicit Session identity")
+    };
+    let session_id = session.id;
+    let response = parent
         .request(|id| RuntimeClientRequest::SubmitInbound {
             id: rustx::runtime_client::RequestId::new(id),
             content: vec![rustx::message::types::UserContentBlock::Text(
@@ -1809,7 +1822,13 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
 
     // Reopen the same durable conversation. Recovery has no child process to
     // adopt and publishes one Runtime-authored Interrupted inbound.
-    let mut recovered = Process::reopen(root.path(), &models, SESSION_TOML, "subagent-secret");
+    let mut recovered = Process::reopen(
+        root.path(),
+        &models,
+        SESSION_TOML,
+        "subagent-secret",
+        &session_id,
+    );
     let response = recovered
         .request(|id| RuntimeClientRequest::Initialize {
             id: rustx::runtime_client::RequestId::new(id),
@@ -1891,7 +1910,13 @@ async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
 
     // A second restart must observe the absorbing terminal identity and must
     // not publish a second Runtime notice or relaunch anything.
-    let mut repeated = Process::reopen(root.path(), &models, SESSION_TOML, "subagent-secret");
+    let mut repeated = Process::reopen(
+        root.path(),
+        &models,
+        SESSION_TOML,
+        "subagent-secret",
+        &session_id,
+    );
     let response = repeated
         .request(|id| RuntimeClientRequest::Initialize {
             id: rustx::runtime_client::RequestId::new(id),

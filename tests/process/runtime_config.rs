@@ -205,7 +205,14 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
     )
     .expect("config v2");
 
-    let resumed = (startup)
+    let resumed_startup = LaunchFixture {
+        startup_session: rustx::local_runtime::StartupSession::Select {
+            session: rustx::local_runtime::SessionId::new("session-1"),
+            node: None,
+        },
+        ..startup.clone()
+    };
+    let resumed = (resumed_startup)
         .compose(&dependencies())
         .await
         .expect("resumed product");
@@ -307,11 +314,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
             .iter()
             .any(|tool| tool.name == "todo")
     );
-    // `/new` over an untouched empty Session is a semantic no-op, so the
-    // switch this test fences needs the active Session to own durable user
-    // work first. Durable Pending Inbound acceptance is exactly that
-    // boundary; the attempt against the unreachable provider then fails and
-    // settles on its own.
+    // Accept durable user work before creating an independent Session.
     let submitted = resumed_endpoint
         .handle_request_async(RuntimeClientRequest::SubmitInbound {
             id: RequestId::new(6),
@@ -345,6 +348,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         "unexpected SessionNew response: {new_session:?}"
     );
     drop(snapshot);
+    resumed.runtime().shutdown().await.unwrap();
     drop(resumed_endpoint);
     drop(resumed);
     let fresh = (startup)
@@ -434,7 +438,10 @@ async fn invalid_first_boot_model_does_not_publish_a_poisoned_session() {
 
     let catalog = std::fs::read_to_string(startup.runtime_root.join("sessions/catalog.json"))
         .expect("corrected startup published a root Session");
-    assert!(catalog.contains("local/model-a"));
+    assert!(
+        !catalog.contains("local/model-a"),
+        "source defaults remain omitted durable input"
+    );
     assert!(!catalog.contains("local/missing"));
 }
 
@@ -547,7 +554,7 @@ fn extension_config(enabled: bool, timezone: &str) -> String {
     .unwrap()
 }
 
-/// Attaches one `LocalSessionProduct` endpoint and returns the
+/// Attaches one `LocalSessionClient` endpoint and returns the
 /// effective-extension projection its `initialize` snapshot carries.
 fn attached_projection(
     endpoint: &rustx::runtime_client::RuntimeClientEndpoint,
@@ -687,7 +694,10 @@ async fn ext256_reload_cannot_recompose_extensions_but_the_next_launch_does() {
     // through the existing resolver, binding the Session the catalog
     // publishes as active.
     let mut restart = paths(root.path(), &config_path);
-    restart.startup_session = rustx::local_runtime::StartupSession::ContinueActive;
+    restart.startup_session = rustx::local_runtime::StartupSession::Select {
+        session: rustx::local_runtime::SessionId::new("session-1"),
+        node: None,
+    };
     let resumed = (restart)
         .compose(&dependencies())
         .await
@@ -714,6 +724,7 @@ async fn ext256_reload_cannot_recompose_extensions_but_the_next_launch_does() {
         .shutdown()
         .await
         .expect("resumed runtime shuts down");
+    resumed.runtime().shutdown().await.unwrap();
     drop(resumed_endpoint);
     drop(resumed);
 

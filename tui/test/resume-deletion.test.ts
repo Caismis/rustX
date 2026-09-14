@@ -13,7 +13,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 const turn = () => new Promise<void>((resolve) => setImmediate(resolve));
-const row = (id: string): SessionSummaryView => ({ id, name: id, active_node: id, active: false, updated_at: "2026-09-11" });
+const row = (id: string): SessionSummaryView => ({ id, name: id, active_node: id, updated_at: "2026-09-11" });
 const preview = (id = "b", revision = "revision-1"): SessionDeleteResult => ({ status: "preview", preview: { session_id: id, name: id, target_revision: revision, owned_node_count: 1, owned_conversation_count: 2, owned_child_count: 1 } });
 const down = "\x1b[B", del = "\x04", esc = "\x1b";
 const confirm = (view: ResumeSelector) => { view.handleInput("\t"); view.handleInput("\r"); };
@@ -67,7 +67,7 @@ for (const [reason, text] of [
   [{ kind: "current_session" }, /\/new/], [{ kind: "in_use" }, /currently in use/],
   [{ kind: "workspace", resource_count: 3 }, /3 retained.*disposal/], [{ kind: "invalid_ownership" }, /ownership.*blocked/],
 ] as const) test(`8–10: native ${reason.kind} is a non-executable blocker`, async () => {
-  const h = harness({ rows: [{ ...row("b"), active: true }] });
+  const h = harness({ rows: [{ ...row("b"), }] });
   h.view.handleInput(del);
   assert.deepEqual(h.previews, ["b"], "active flag cannot bypass Rust preview");
   h.previewResponse.resolve({ status: "blocked", session_id: "b", reason }); await turn();

@@ -1,797 +1,386 @@
-//! Native local Session supervisor (Issue #88).
-//!
-//! [`LocalSessionSupervisor`] is the product owner above one active
-//! `ConversationRuntime`. It serializes session control, chooses durable
-//! historical boundaries, waits for the old runtime's semantic quiescence,
-//! and only then publishes a new active selection. It does not duplicate
-//! attempt, cancellation, recovery, or tool lifecycle state.
-//!
-//! v1 deliberately uses a typed process-boundary switch. A switch leaves the
-//! old runtime quiescent and returns `restart_required`; the client then
-//! reconnects, and ordinary composition/recovery opens the newly selected
-//! `ConversationId`. A visibility commit followed by an uncertain directory
-//! barrier returns a typed committed-transition result, including any
-//! transient fork/tree editor payload. The catalog publication is authoritative
-//! throughout.
-//!
-//! `/new` over an active Session that is still an untouched empty shell is
-//! not a switch at all: the shared `SessionCatalog` unused classification
-//! makes it a semantic no-op that reuses the shell and leaves the live
-//! runtime, the catalog, and every identity allocator untouched.
-
-use std::sync::Arc;
-
+//! Narrow single-runtime local client attachment. Its identity is routing state,
+//! never catalog authority. Durable operations belong to `SessionController`.
+use super::session::{
+    HistoricalConversationSnapshot, SessionCatalog, SessionError, SessionId, SessionListPage,
+    SessionNodeId, SessionPersistentState, SessionSnapshot, SessionSummary,
+    SessionUserMessageBoundary,
+};
+use super::session_controller::SessionController;
 use crate::conversation::SurfaceRevision;
-use crate::message::types::UserContentBlock;
 use crate::model::session::SessionModelConfig;
-use crate::runtime::conversation_runtime::{ConversationRuntime, ShutdownError};
+use crate::runtime::conversation_runtime::ConversationRuntime;
 use crate::runtime::identity::MessageId;
 use crate::runtime_client::host::{RuntimeClientSessionControl, SessionControlFuture};
 use crate::runtime_client::types::{
     RuntimeClientError, RuntimeClientResult, RuntimeClientSessionRequest, SessionNodeOriginView,
     SessionNodeView, SessionSummaryView, SessionUserMessageBoundaryView, SessionView,
 };
+use std::sync::Arc;
 
-use super::session::{
-    HistoricalConversationSnapshot, SessionCatalog, SessionError, SessionId, SessionListPage,
-    SessionNodeId, SessionSnapshot, SessionSummary, SessionUserMessageBoundary,
-};
-
-/// The result of a product transition that changes the active lineage.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SessionSwitchResult {
-    /// Newly published active Session metadata.
-    pub session: SessionSnapshot,
-    /// A forked prompt that belongs in the new editor, but is not canonical.
-    pub editor_content: Option<Vec<UserContentBlock>>,
-    /// v1 switches replace the one Runtime Client process attachment.
-    pub restart_required: bool,
-    /// A post-visibility durability failure crossed the catalog commit point.
-    /// The transition is authoritative and this diagnostic is carried in the
-    /// typed committed-transition result, never collapsed into a generic
-    /// pre-commit failure.
-    pub committed_restart_diagnostic: Option<String>,
-}
-
-/// The native `/tree` read projection.
+pub use super::session_controller::SessionTransitionResult;
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionTreeResult {
-    /// Current Session graph metadata.
     pub session: SessionSnapshot,
-    /// Bounded graph-node page.
     pub nodes: Vec<super::session::SessionNode>,
-    /// Offset for the next graph-node page.
     pub next_node_offset: Option<usize>,
-    /// Historical user-message boundaries available for a new node.
     pub branchable_messages: Vec<SessionUserMessageBoundary>,
-    /// Offset for the next historical-boundary page.
     pub next_history_offset: Option<usize>,
 }
-
-/// The explicit runtime attachment state owned by the Session supervisor.
-///
-/// `NotInstalled` exists only during native composition, before the one
-/// recovered runtime is handed to the supervisor. Once `Live` quiesces for a
-/// replacement, the state is absorbing for this process attachment: it can
-/// never silently become live again.
-enum RuntimeAttachmentState {
-    NotInstalled,
-    Live(ConversationRuntime),
-    ReplacementRequired { detail: String },
+/// Client routing projection. The durable Session snapshot keeps its graph default.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionRoute {
+    pub session: SessionSnapshot,
+    pub node: super::session::SessionNode,
 }
-
-struct SupervisorState {
-    catalog: SessionCatalog,
-    /// Current runtime default used only when creating a new Session.
-    default_model: SessionModelConfig,
-    runtime: RuntimeAttachmentState,
+/// Call-site-local attachment for the existing Runtime Client protocol (#288).
+/// Opening another Session returns its identity; it never shuts down this runtime.
+#[derive(Clone, Debug)]
+pub struct LocalSessionAttachment {
+    controller: SessionController,
+    session_id: SessionId,
+    template: SessionPersistentState,
+    settings_revision: Arc<std::sync::atomic::AtomicU64>,
+    model_publication_uncertain: Arc<std::sync::atomic::AtomicBool>,
+    runtime: Arc<std::sync::OnceLock<ConversationRuntime>>,
 }
-
-/// The single local product owner of session metadata, graph state, active
-/// selection, and one live `ConversationRuntime`.
-#[derive(Clone)]
-pub struct LocalSessionSupervisor {
-    state: Arc<tokio::sync::Mutex<SupervisorState>>,
-}
-
-impl std::fmt::Debug for LocalSessionSupervisor {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LocalSessionSupervisor")
-            .finish_non_exhaustive()
+impl LocalSessionAttachment {
+    pub(crate) fn new(
+        catalog: SessionCatalog,
+        session_id: SessionId,
+        template: SessionPersistentState,
+        revision: u64,
+    ) -> Self {
+        Self {
+            controller: SessionController::new(catalog),
+            session_id,
+            template,
+            settings_revision: Arc::new(std::sync::atomic::AtomicU64::new(revision)),
+            model_publication_uncertain: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            runtime: Arc::new(std::sync::OnceLock::new()),
+        }
     }
-}
-
-impl LocalSessionSupervisor {
-    /// Freeze a historical Session target without detaching the active runtime.
-    /// The returned snapshot retains OS exclusion until dropped.
     /// # Errors
-    /// Live target access or uncertain durable ownership fails closed.
+    /// Identity, storage and attachment failures are returned explicitly.
     pub async fn deletion_preflight(
         &self,
         id: &SessionId,
     ) -> std::io::Result<super::session_deletion::SessionDeletionPreflight> {
-        self.state.lock().await.catalog.deletion_preflight(id)
+        self.controller.catalog.lock().await.deletion_preflight(id)
     }
-
-    /// Preview releases every guard before returning to the caller.
     pub(crate) async fn delete_preview(
         &self,
         id: &SessionId,
     ) -> super::session::deletion::SessionDeleteResult {
-        self.state.lock().await.catalog.delete_preview(id)
+        self.controller.delete_preview(id).await
     }
-
-    /// Commit under fresh exclusion, then run blocking cleanup outside the
-    /// catalog mutex. Cancellation leaves the committed work recoverable.
-    /// # Errors
-    /// Only failures before logical visibility are ordinary Session errors.
     pub(crate) async fn delete_session(
         &self,
         id: &SessionId,
         revision: &str,
     ) -> Result<super::session::deletion::SessionDeleteResult, SessionError> {
-        let work = {
-            let mut state = self.state.lock().await;
-            match state.catalog.commit_delete(id, revision)? {
-                Ok(work) => work,
-                Err(result) => return Ok(result),
-            }
-        };
-        Ok(self.clean_deletion(work).await)
+        self.controller.delete_session(id, revision).await
     }
-
-    /// Explicit recovery boundary; retries the persisted record without discovery.
     pub(crate) async fn recover_deletion(
         &self,
         id: &SessionId,
     ) -> super::session::deletion::SessionDeleteResult {
-        let work = {
-            let mut state = self.state.lock().await;
-            match state.catalog.recover_delete(id) {
-                Ok(work) => work,
-                Err(result) => return result,
-            }
-        };
-        self.clean_deletion(work).await
+        self.controller.recover_deletion(id).await
     }
-
-    async fn clean_deletion(
-        &self,
-        work: super::session::deletion::CleanupWork,
-    ) -> super::session::deletion::SessionDeleteResult {
-        let fallback = work.record.clone();
-        match tokio::task::spawn_blocking(move || {
-            let result = work.run();
-            (work, result)
-        })
-        .await
-        {
-            Ok((work, result)) => self
-                .state
-                .lock()
-                .await
-                .catalog
-                .finish_delete(&work.record, result),
-            Err(error) => self
-                .state
-                .lock()
-                .await
-                .catalog
-                .finish_delete(&fallback, Err(std::io::Error::other(error))),
-        }
-    }
-
-    /// Creates a supervisor under the product composition's retained OS writer
-    /// guard. This is not a public unguarded storage-controller constructor.
-    /// The active runtime
-    /// is installed by the local product composition after ordinary recovery.
-    #[must_use]
-    pub(crate) fn new(catalog: SessionCatalog, default_model: SessionModelConfig) -> Self {
-        Self {
-            state: Arc::new(tokio::sync::Mutex::new(SupervisorState {
-                catalog,
-                default_model,
-                runtime: RuntimeAttachmentState::NotInstalled,
-            })),
-        }
-    }
-
-    /// Commits the startup catalog transition this launch planned.
-    ///
-    /// This is the one durable catalog write of composition, and it is
-    /// deliberately the *last* fallible step: the runtime for the planned
-    /// destination is already composed and bound by the time it runs, so a
-    /// composition failure can never leave a launch that did not start
-    /// having moved the active selection, published an empty Session, or
-    /// renamed one. Everything after this commit — installing the runtime,
-    /// activating it — is structurally infallible for a freshly composed
-    /// supervisor.
-    ///
-    /// # Errors
-    ///
-    /// Returns the catalog commit failure, including the distinct
-    /// committed-but-durability-uncertain outcome, unchanged.
     pub(crate) async fn commit_startup(
         &self,
         planned: super::session::PlannedCatalog,
     ) -> Result<(), SessionError> {
-        self.state.lock().await.catalog.commit_planned(planned)
+        self.controller.catalog.lock().await.commit_planned(planned)
     }
-
-    /// Arms a deterministic pre-visibility catalog fault for unit tests.
     #[cfg(test)]
     pub(crate) async fn arm_catalog_write_fault_before_rename(&self) {
-        self.state
+        self.controller
+            .catalog
             .lock()
             .await
-            .catalog
             .arm_write_fault_before_rename();
     }
-
-    /// Arms a deterministic post-visibility durability fault for unit tests.
     #[cfg(test)]
     pub(crate) async fn arm_catalog_write_fault_after_rename(&self) {
-        self.state
+        self.controller
+            .catalog
             .lock()
             .await
-            .catalog
             .arm_write_fault_after_rename();
     }
-
-    /// Installs the one active runtime after it has been composed and
-    /// activated. Replacing a live runtime is rejected by construction.
-    ///
     /// # Errors
-    ///
-    /// Returns [`SessionSupervisorError`] if a runtime is already installed
-    /// or its conversation identity does not match the active node.
+    /// Identity, storage and attachment failures are returned explicitly.
     pub async fn install_runtime(
         &self,
         runtime: ConversationRuntime,
-    ) -> Result<(), SessionSupervisorError> {
-        let mut state = self.state.lock().await;
-        if !matches!(&state.runtime, RuntimeAttachmentState::NotInstalled) {
-            return match &state.runtime {
-                RuntimeAttachmentState::Live(_) => {
-                    Err(SessionSupervisorError::RuntimeAlreadyInstalled)
-                }
-                RuntimeAttachmentState::ReplacementRequired { detail } => {
-                    Err(SessionSupervisorError::RestartRequired {
-                        detail: detail.clone(),
-                    })
-                }
-                RuntimeAttachmentState::NotInstalled => unreachable!(),
-            };
-        }
-        let (_, node, _) = state.catalog.active_lineage()?;
-        if node.conversation_id != *runtime.conversation_id() {
-            return Err(SessionSupervisorError::ConversationMismatch {
-                selected: node.conversation_id,
-                runtime: runtime.conversation_id().clone(),
-            });
-        }
-        state.runtime = RuntimeAttachmentState::Live(runtime);
-        Ok(())
+    ) -> Result<(), SessionAttachmentError> {
+        self.controller
+            .catalog
+            .lock()
+            .await
+            .conversation_lineage(&self.session_id, runtime.conversation_id())?;
+        self.runtime.set(runtime).map_err(|_| {
+            SessionAttachmentError::Session(SessionError::Catalog {
+                detail: "attachment already installed".into(),
+            })
+        })
     }
-
-    /// Returns one bounded `/resume` metadata page.
-    ///
     /// # Errors
-    ///
-    /// Returns [`SessionSupervisorError`] when the native page bound is
-    /// invalid or the catalog cannot be read.
+    /// Identity, storage and attachment failures are returned explicitly.
     pub async fn list(
         &self,
         query: Option<String>,
         offset: usize,
         limit: usize,
-    ) -> Result<SessionListPage, SessionSupervisorError> {
+    ) -> Result<SessionListPage, SessionAttachmentError> {
         Ok(self
-            .state
+            .controller
+            .list_sessions(query.as_deref(), offset, limit)
+            .await?)
+    }
+    /// # Errors
+    /// Identity, storage and attachment failures are returned explicitly.
+    pub async fn current(&self) -> Result<SessionSnapshot, SessionAttachmentError> {
+        Ok(self.controller.read_session(&self.session_id).await?)
+    }
+    /// # Errors
+    /// Identity, storage and attachment failures are returned explicitly.
+    pub async fn rename(&self, name: String) -> Result<SessionSnapshot, SessionAttachmentError> {
+        Ok(self
+            .controller
+            .rename_session(&self.session_id, &name)
+            .await?)
+    }
+    /// # Errors
+    /// Identity, storage and attachment failures are returned explicitly.
+    pub async fn new_session(&self) -> Result<SessionTransitionResult, SessionAttachmentError> {
+        Ok(self
+            .controller
+            .create_session(self.template.clone())
+            .await?)
+    }
+    /// # Errors
+    /// Identity, storage and attachment failures are returned explicitly.
+    pub async fn select(
+        &self,
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+    ) -> Result<SessionRoute, SessionAttachmentError> {
+        let catalog = self.controller.catalog.lock().await;
+        let (node, _) = catalog.lineage(&session_id, node_id.as_ref())?;
+        Ok(SessionRoute {
+            session: catalog.snapshot(&session_id)?,
+            node,
+        })
+    }
+    // The existing wire spells a route as active_node. Keep that translation
+    // at the client adapter, never by rewriting a durable SessionSnapshot.
+    async fn attachment_view(
+        &self,
+        session: SessionSnapshot,
+    ) -> Result<SessionView, SessionAttachmentError> {
+        let runtime = self.runtime.get().ok_or_else(|| SessionError::Catalog {
+            detail: "client attachment is not installed".into(),
+        })?;
+        let (node, _) = self
+            .controller
+            .catalog
             .lock()
             .await
-            .catalog
-            .list_page(query.as_deref(), offset, limit)?)
+            .conversation_lineage(&self.session_id, runtime.conversation_id())?;
+        Ok(route_view(SessionRoute { session, node }))
+    }
+    fn requires_reattach(&self, target: &SessionView) -> bool {
+        self.session_id.as_str() != target.id
+            || self
+                .runtime
+                .get()
+                .is_none_or(|runtime| runtime.conversation_id() != &target.active_conversation_id)
     }
 
-    /// Returns the authoritative `/session` metadata projection.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SessionSupervisorError`] when the catalog has no coherent
-    /// active Session.
-    pub async fn current(&self) -> Result<SessionSnapshot, SessionSupervisorError> {
-        Ok(self.state.lock().await.catalog.active_snapshot()?)
+    fn source(
+        &self,
+        revision: Option<SurfaceRevision>,
+    ) -> Result<HistoricalConversationSnapshot, SessionAttachmentError> {
+        let runtime = self.runtime.get().ok_or_else(|| {
+            SessionAttachmentError::Session(SessionError::Catalog {
+                detail: "client attachment is not installed".into(),
+            })
+        })?;
+        let (surface_revision, messages) = match revision {
+            Some(revision) => (
+                revision,
+                runtime
+                    .historical_surface_snapshot(revision)
+                    .map_err(SessionAttachmentError::Store)?,
+            ),
+            None => runtime
+                .historical_head_snapshot()
+                .map_err(SessionAttachmentError::Store)?,
+        };
+        Ok(HistoricalConversationSnapshot {
+            conversation_id: runtime.conversation_id().clone(),
+            surface_revision,
+            messages,
+            canonical: runtime
+                .historical_canonical_history()
+                .map_err(SessionAttachmentError::Store)?,
+            surface_history: runtime
+                .historical_surface_history(surface_revision)
+                .map_err(SessionAttachmentError::Store)?,
+        })
     }
-
-    /// Returns the current graph plus exact branchable user boundaries.
-    ///
     /// # Errors
-    ///
-    /// Returns [`SessionSupervisorError`] when the active runtime or durable
-    /// historical surface cannot be read.
+    /// Identity, storage and attachment failures are returned explicitly.
     pub async fn tree(
         &self,
         node_offset: usize,
         history_offset: usize,
         limit: usize,
-    ) -> Result<SessionTreeResult, SessionSupervisorError> {
-        let state = self.state.lock().await;
-        let session = state.catalog.active_snapshot()?;
-        let source = current_head(&state)?;
-        let node_page = state.catalog.node_page(&session.id, node_offset, limit)?;
-        let history_page = branchable_messages(&source, &state.runtime, history_offset, limit)?;
+    ) -> Result<SessionTreeResult, SessionAttachmentError> {
+        let source = self.source(None)?;
+        let runtime = self.runtime.get().ok_or_else(|| {
+            SessionAttachmentError::Session(SessionError::Catalog {
+                detail: "attachment not installed".into(),
+            })
+        })?;
+        let history = runtime
+            .historical_user_message_boundaries_page(source.surface_revision, history_offset, limit)
+            .map_err(SessionAttachmentError::Store)?;
+        let catalog = self.controller.catalog.lock().await;
+        let nodes = catalog.node_page(&self.session_id, node_offset, limit)?;
         Ok(SessionTreeResult {
-            session,
-            nodes: node_page.nodes,
-            next_node_offset: node_page.next_offset,
-            branchable_messages: history_page.boundaries,
-            next_history_offset: history_page.next_offset,
-        })
-    }
-
-    /// Renames metadata only. No runtime or canonical conversation operation
-    /// is involved.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SessionSupervisorError`] when the name or catalog update is
-    /// invalid.
-    pub async fn rename(&self, name: String) -> Result<SessionSnapshot, SessionSupervisorError> {
-        let mut state = self.state.lock().await;
-        ensure_live(&state.runtime)?;
-        let session_id = state.catalog.active_snapshot()?.id;
-        match state.catalog.rename(&session_id, &name) {
-            Ok(snapshot) => Ok(snapshot),
-            Err(error) if error.committed() => {
-                let detail = error.to_string();
-                mark_replacement_required(&mut state, detail.clone());
-                Err(SessionSupervisorError::RestartRequired { detail })
-            }
-            Err(error) => Err(error.into()),
-        }
-    }
-
-    /// Creates a new empty Session and switches to it.
-    ///
-    /// `/new` asks for an empty Session, and an active Session that is still
-    /// an untouched empty shell already *is* one — the same
-    /// `SessionCatalog::active_is_unused` invariant startup and `/resume`
-    /// share. The command is then a semantic no-op: it allocates no new
-    /// `SessionId`/`SessionNodeId`/`ConversationId`, publishes no catalog
-    /// row, and does not quiesce or replace the live runtime to exchange one
-    /// empty shell for another. From a used Session, `/new` publishes a fresh
-    /// independent empty shell and leaves the used Session resumable.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SessionSupervisorError`] when seed preparation, runtime
-    /// quiescence, or catalog publication fails.
-    pub async fn new_session(&self) -> Result<SessionSwitchResult, SessionSupervisorError> {
-        let mut state = self.state.lock().await;
-        ensure_live(&state.runtime)?;
-        if state.catalog.active_is_unused()? {
-            return Ok(SessionSwitchResult {
-                session: state.catalog.active_snapshot()?,
-                editor_content: None,
-                restart_required: false,
-                committed_restart_diagnostic: None,
-            });
-        }
-        let template = super::session::SessionPersistentState {
-            model: state.default_model.clone(),
-        };
-        let prepared = state.catalog.prepare_session(&template, &[])?;
-        let origin = super::session::SessionNodeOrigin::New;
-        state
-            .catalog
-            .preflight_publish_session(&prepared, origin.clone())?;
-        self.quiesce_old(&mut state).await?;
-        let session_id = prepared.session_id.clone();
-        match state.catalog.publish_session(&prepared, origin) {
-            Ok(snapshot) => {
-                debug_assert_eq!(snapshot.id, session_id);
-                Ok(SessionSwitchResult {
-                    session: snapshot,
-                    editor_content: None,
-                    restart_required: true,
-                    committed_restart_diagnostic: None,
-                })
-            }
-            Err(error) if error.committed() => committed_switch(&state, &session_id, None, &error),
-            Err(error) => Err(publication_failure(&error)),
-        }
-    }
-
-    /// Switches to an existing persisted Session/node after validating its
-    /// durable conversation first.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SessionSupervisorError`] when the selected lineage is
-    /// unknown, invalid, or the old runtime cannot quiesce.
-    pub async fn select(
-        &self,
-        session_id: SessionId,
-        node_id: Option<SessionNodeId>,
-    ) -> Result<SessionSwitchResult, SessionSupervisorError> {
-        let mut state = self.state.lock().await;
-        ensure_live(&state.runtime)?;
-        let current = state.catalog.active_snapshot()?;
-        let requested_node = match node_id.clone() {
-            Some(node_id) => node_id,
-            None => state.catalog.snapshot(&session_id)?.active_node,
-        };
-        if current.id == session_id && current.active_node == requested_node {
-            return Ok(SessionSwitchResult {
-                session: current,
-                editor_content: None,
-                restart_required: false,
-                committed_restart_diagnostic: None,
-            });
-        }
-        state
-            .catalog
-            .validate_storage(&session_id, Some(&requested_node))?;
-        state
-            .catalog
-            .preflight_select(&session_id, Some(&requested_node))?;
-        self.quiesce_old(&mut state).await?;
-        match state.catalog.select(&session_id, Some(&requested_node)) {
-            Ok(snapshot) => Ok(SessionSwitchResult {
-                session: snapshot,
-                editor_content: None,
-                restart_required: true,
-                committed_restart_diagnostic: None,
-            }),
-            Err(error) if error.committed() => committed_switch(&state, &session_id, None, &error),
-            Err(error) => Err(publication_failure(&error)),
-        }
-    }
-
-    /// Clones the exact committed current Surface head into a new Session.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SessionSupervisorError`] when historical materialization,
-    /// quiescence, or destination publication fails.
-    pub async fn clone_active(&self) -> Result<SessionSwitchResult, SessionSupervisorError> {
-        let mut state = self.state.lock().await;
-        ensure_live(&state.runtime)?;
-        let (source_session, source_node, template) = state.catalog.active_lineage()?;
-        let source = current_head(&state)?;
-        let prepared = state.catalog.prepare_clone_session(&template, &source)?;
-        let origin = super::session::SessionNodeOrigin::Clone {
-            source_session: source_session.clone(),
-            source_node: source_node.id.clone(),
-            source_surface_revision: source.surface_revision,
-        };
-        state
-            .catalog
-            .preflight_publish_session(&prepared, origin.clone())?;
-        self.quiesce_old(&mut state).await?;
-        let session_id = prepared.session_id.clone();
-        match state.catalog.publish_session(&prepared, origin) {
-            Ok(snapshot) => Ok(SessionSwitchResult {
-                session: snapshot,
-                editor_content: None,
-                restart_required: true,
-                committed_restart_diagnostic: None,
-            }),
-            Err(error) if error.committed() => committed_switch(&state, &session_id, None, &error),
-            Err(error) => Err(publication_failure(&error)),
-        }
-    }
-
-    /// Forks at an exact historical user-message boundary into a new Session.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SessionSupervisorError`] when the revision/boundary is not
-    /// durable, the old runtime cannot quiesce, or publication fails.
-    pub async fn fork_active(
-        &self,
-        surface_revision: SurfaceRevision,
-        message_id: MessageId,
-    ) -> Result<SessionSwitchResult, SessionSupervisorError> {
-        let mut state = self.state.lock().await;
-        ensure_live(&state.runtime)?;
-        let (source_session, source_node, template) = state.catalog.active_lineage()?;
-        let source = historical_snapshot(&state, surface_revision)?;
-        let (prepared, editor_content) =
-            state
-                .catalog
-                .prepare_fork_session(&template, &source, &message_id)?;
-        let origin = super::session::SessionNodeOrigin::Fork {
-            source_session: source_session.clone(),
-            source_node: source_node.id.clone(),
-            source_surface_revision: surface_revision,
-            source_user_message: message_id.clone(),
-        };
-        state
-            .catalog
-            .preflight_publish_session(&prepared, origin.clone())?;
-        self.quiesce_old(&mut state).await?;
-        let session_id = prepared.session_id.clone();
-        match state.catalog.publish_session(&prepared, origin) {
-            Ok(snapshot) => Ok(SessionSwitchResult {
-                session: snapshot,
-                editor_content: Some(editor_content),
-                restart_required: true,
-                committed_restart_diagnostic: None,
-            }),
-            Err(error) if error.committed() => {
-                committed_switch(&state, &session_id, Some(editor_content), &error)
-            }
-            Err(error) => Err(publication_failure(&error)),
-        }
-    }
-
-    /// Creates a new independent node under the active Session from an exact
-    /// historical user-message boundary.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SessionSupervisorError`] when the revision/boundary is not
-    /// durable, the old runtime cannot quiesce, or publication fails.
-    pub async fn tree_branch(
-        &self,
-        surface_revision: SurfaceRevision,
-        message_id: MessageId,
-    ) -> Result<SessionSwitchResult, SessionSupervisorError> {
-        let mut state = self.state.lock().await;
-        ensure_live(&state.runtime)?;
-        let (source_session, source_node, template) = state.catalog.active_lineage()?;
-        let source = historical_snapshot(&state, surface_revision)?;
-        let (prepared, editor_content) = state.catalog.prepare_tree_node_at_user_message(
-            &source_session,
-            &template,
-            &source,
-            &message_id,
-        )?;
-        let origin = super::session::SessionNodeOrigin::Fork {
-            source_session: source_session.clone(),
-            source_node: source_node.id.clone(),
-            source_surface_revision: surface_revision,
-            source_user_message: message_id.clone(),
-        };
-        state.catalog.preflight_publish_node(
-            &source_session,
-            &prepared,
-            source_node.id.clone(),
-            origin.clone(),
-        )?;
-        self.quiesce_old(&mut state).await?;
-        match state
-            .catalog
-            .publish_node(&source_session, &prepared, source_node.id.clone(), origin)
-        {
-            Ok(snapshot) => Ok(SessionSwitchResult {
-                session: snapshot,
-                editor_content: Some(editor_content),
-                restart_required: true,
-                committed_restart_diagnostic: None,
-            }),
-            Err(error) if error.committed() => {
-                committed_switch(&state, &source_session, Some(editor_content), &error)
-            }
-            Err(error) => Err(publication_failure(&error)),
-        }
-    }
-
-    async fn quiesce_old(&self, state: &mut SupervisorState) -> Result<(), SessionSupervisorError> {
-        let runtime = match &state.runtime {
-            RuntimeAttachmentState::Live(runtime) => runtime.clone(),
-            RuntimeAttachmentState::NotInstalled => {
-                return Err(SessionSupervisorError::RestartRequired {
-                    detail: "the local Session attachment has no installed runtime".to_owned(),
-                });
-            }
-            RuntimeAttachmentState::ReplacementRequired { detail } => {
-                return Err(SessionSupervisorError::RestartRequired {
-                    detail: detail.clone(),
-                });
-            }
-        };
-        // `ConversationRuntime::shutdown` is the linearization point for
-        // replacement: success means no attempt, foreground tool,
-        // conversation background, or admission worker remains owned by the
-        // old runtime. Catalog active selection is committed only after this
-        // await returns.
-        runtime
-            .shutdown()
-            .await
-            .map_err(SessionSupervisorError::Shutdown)?;
-        mark_replacement_required(
-            state,
-            "the old ConversationRuntime reached quiescence; this attachment must be replaced"
-                .to_owned(),
-        );
-        Ok(())
-    }
-}
-
-fn current_head(
-    state: &SupervisorState,
-) -> Result<HistoricalConversationSnapshot, SessionSupervisorError> {
-    let runtime = live_runtime(&state.runtime)?;
-    let (surface_revision, messages) = runtime
-        .historical_head_snapshot()
-        .map_err(SessionSupervisorError::Store)?;
-    // Both halves of the source lineage, never only the model-visible one:
-    // the Surface at the selected revision, and the canonical history that
-    // revision was projected from. See `HistoricalConversationSnapshot`.
-    let canonical = runtime
-        .historical_canonical_history()
-        .map_err(SessionSupervisorError::Store)?;
-    let surface_history = runtime
-        .historical_surface_history(surface_revision)
-        .map_err(SessionSupervisorError::Store)?;
-    Ok(HistoricalConversationSnapshot {
-        conversation_id: runtime.conversation_id().clone(),
-        surface_revision,
-        messages,
-        canonical,
-        surface_history,
-    })
-}
-
-fn historical_snapshot(
-    state: &SupervisorState,
-    surface_revision: SurfaceRevision,
-) -> Result<HistoricalConversationSnapshot, SessionSupervisorError> {
-    let runtime = live_runtime(&state.runtime)?;
-    let messages = runtime
-        .historical_surface_snapshot(surface_revision)
-        .map_err(SessionSupervisorError::Store)?;
-    let canonical = runtime
-        .historical_canonical_history()
-        .map_err(SessionSupervisorError::Store)?;
-    let surface_history = runtime
-        .historical_surface_history(surface_revision)
-        .map_err(SessionSupervisorError::Store)?;
-    Ok(HistoricalConversationSnapshot {
-        conversation_id: runtime.conversation_id().clone(),
-        surface_revision,
-        messages,
-        canonical,
-        surface_history,
-    })
-}
-
-fn branchable_messages(
-    head: &HistoricalConversationSnapshot,
-    state: &RuntimeAttachmentState,
-    offset: usize,
-    limit: usize,
-) -> Result<super::session::SessionUserMessageBoundaryPage, SessionSupervisorError> {
-    let runtime = live_runtime(state)?;
-    runtime
-        .historical_user_message_boundaries_page(head.surface_revision, offset, limit)
-        .map_err(SessionSupervisorError::Store)
-        .map(|page| super::session::SessionUserMessageBoundaryPage {
-            boundaries: page
+            session: catalog.snapshot(&self.session_id)?,
+            nodes: nodes.nodes,
+            next_node_offset: nodes.next_offset,
+            branchable_messages: history
                 .boundaries
                 .into_iter()
-                .map(|boundary| SessionUserMessageBoundary {
-                    surface_revision: boundary.surface_revision,
-                    message: boundary.message,
+                .map(|b| SessionUserMessageBoundary {
+                    surface_revision: b.surface_revision,
+                    message: b.message,
                 })
                 .collect(),
-            next_offset: page.next_offset,
+            next_history_offset: history.next_offset,
         })
-}
-
-fn live_runtime(
-    state: &RuntimeAttachmentState,
-) -> Result<&ConversationRuntime, SessionSupervisorError> {
-    match state {
-        RuntimeAttachmentState::Live(runtime) => Ok(runtime),
-        RuntimeAttachmentState::NotInstalled => Err(SessionSupervisorError::RestartRequired {
-            detail: "the local Session attachment has no installed runtime".to_owned(),
-        }),
-        RuntimeAttachmentState::ReplacementRequired { detail } => {
-            Err(SessionSupervisorError::RestartRequired {
-                detail: detail.clone(),
-            })
-        }
+    }
+    /// # Errors
+    /// Identity, storage and attachment failures are returned explicitly.
+    pub async fn clone_attached(&self) -> Result<SessionTransitionResult, SessionAttachmentError> {
+        self.branch(None, None, false).await
+    }
+    /// # Errors
+    /// Identity, storage and attachment failures are returned explicitly.
+    pub async fn fork_attached(
+        &self,
+        revision: SurfaceRevision,
+        message: MessageId,
+    ) -> Result<SessionTransitionResult, SessionAttachmentError> {
+        self.branch(Some(revision), Some(message), false).await
+    }
+    /// # Errors
+    /// Identity, storage and attachment failures are returned explicitly.
+    pub async fn tree_branch(
+        &self,
+        revision: SurfaceRevision,
+        message: MessageId,
+    ) -> Result<SessionTransitionResult, SessionAttachmentError> {
+        self.branch(Some(revision), Some(message), true).await
+    }
+    async fn branch(
+        &self,
+        revision: Option<SurfaceRevision>,
+        message: Option<MessageId>,
+        tree: bool,
+    ) -> Result<SessionTransitionResult, SessionAttachmentError> {
+        let _preparation = self.controller.preparation.lock().await;
+        let source = self.source(revision)?;
+        let snapshot = self.controller.catalog.lock().await.clone();
+        let (node, template) =
+            snapshot.conversation_lineage(&self.session_id, &source.conversation_id)?;
+        let (prepared, editor, origin) = if let Some(message) = message {
+            let (prepared, editor) = if tree {
+                snapshot.prepare_tree_node_at_user_message(
+                    &self.session_id,
+                    &template,
+                    &source,
+                    &message,
+                )?
+            } else {
+                snapshot.prepare_fork_session(&template, &source, &message)?
+            };
+            (
+                prepared,
+                Some(editor),
+                super::session::SessionNodeOrigin::Fork {
+                    source_session: self.session_id.clone(),
+                    source_node: node.id.clone(),
+                    source_surface_revision: source.surface_revision,
+                    source_user_message: message,
+                },
+            )
+        } else {
+            (
+                snapshot.prepare_clone_session(&template, &source)?,
+                None,
+                super::session::SessionNodeOrigin::Clone {
+                    source_session: self.session_id.clone(),
+                    source_node: node.id.clone(),
+                    source_surface_revision: source.surface_revision,
+                },
+            )
+        };
+        let mut catalog = self.controller.catalog.lock().await;
+        let result = if tree {
+            catalog.publish_node(&self.session_id, &prepared, node.id, origin)
+        } else {
+            catalog.publish_session(&prepared, origin)
+        };
+        let (session, durability_diagnostic) = match result {
+            Ok(session) => (session, None),
+            Err(error) if error.committed() => (
+                catalog.snapshot(if tree {
+                    &self.session_id
+                } else {
+                    &prepared.session_id
+                })?,
+                Some(error.to_string()),
+            ),
+            Err(error) => return Err(error.into()),
+        };
+        Ok(SessionTransitionResult {
+            session,
+            editor_content: editor,
+            durability_diagnostic,
+        })
     }
 }
-
-fn ensure_live(state: &RuntimeAttachmentState) -> Result<(), SessionSupervisorError> {
-    live_runtime(state).map(|_| ())
-}
-
-fn mark_replacement_required(state: &mut SupervisorState, detail: String) {
-    state.runtime = RuntimeAttachmentState::ReplacementRequired { detail };
-}
-
-/// A native Session-supervisor failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SessionSupervisorError {
-    /// A catalog/graph/materialization operation failed.
+pub enum SessionAttachmentError {
     Session(SessionError),
-    /// The source/destination durable read failed.
     Store(crate::durable::ConversationStoreError),
-    /// The old runtime did not reach quiescence.
-    Shutdown(ShutdownError),
-    /// The process attachment has no usable live runtime and must be
-    /// replaced. This covers both a completed quiescent switch and a catalog
-    /// mutation whose visibility commit crossed but whose durability barrier
-    /// was uncertain.
-    RestartRequired { detail: String },
-    /// A second runtime was offered to one product instance.
-    RuntimeAlreadyInstalled,
-    /// The selected node and composed runtime disagree.
-    ConversationMismatch {
-        selected: crate::runtime::identity::ConversationId,
-        runtime: crate::runtime::identity::ConversationId,
-    },
 }
-
-impl From<SessionError> for SessionSupervisorError {
-    fn from(error: SessionError) -> Self {
-        Self::Session(error)
+impl From<SessionError> for SessionAttachmentError {
+    fn from(e: SessionError) -> Self {
+        Self::Session(e)
     }
 }
-
-impl core::fmt::Display for SessionSupervisorError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl std::fmt::Display for SessionAttachmentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Session(error) => error.fmt(f),
-            Self::Store(error) => write!(f, "session history: {error}"),
-            Self::Shutdown(error) => write!(f, "runtime did not reach quiescence: {error:?}"),
-            Self::RestartRequired { detail } => write!(
-                f,
-                "this Session attachment requires process replacement: {detail}"
-            ),
-            Self::RuntimeAlreadyInstalled => {
-                f.write_str("the local product already owns an active ConversationRuntime")
-            }
-            Self::ConversationMismatch { selected, runtime } => write!(
-                f,
-                "selected node maps to conversation {selected}, but runtime is {runtime}"
-            ),
+            Self::Session(e) => e.fmt(f),
+            Self::Store(e) => e.fmt(f),
         }
     }
 }
+impl std::error::Error for SessionAttachmentError {}
 
-impl std::error::Error for SessionSupervisorError {}
-
-fn publication_failure(error: &SessionError) -> SessionSupervisorError {
-    SessionSupervisorError::RestartRequired {
-        detail: error.to_string(),
-    }
-}
-
-fn committed_switch(
-    state: &SupervisorState,
-    session_id: &SessionId,
-    editor_content: Option<Vec<UserContentBlock>>,
-    error: &SessionError,
-) -> Result<SessionSwitchResult, SessionSupervisorError> {
-    debug_assert!(error.committed());
-    let session = state.catalog.snapshot(session_id).map_err(|snapshot_error| {
-        SessionSupervisorError::RestartRequired {
-            detail: format!(
-                "catalog visibility committed, but the committed Session snapshot could not be read: {snapshot_error}; original durability outcome: {error}"
-            ),
-        }
-    })?;
-    Ok(SessionSwitchResult {
-        session,
-        editor_content,
-        restart_required: true,
-        committed_restart_diagnostic: Some(error.to_string()),
-    })
-}
-
-impl RuntimeClientSessionControl for LocalSessionSupervisor {
+impl RuntimeClientSessionControl for LocalSessionAttachment {
     #[allow(clippy::too_many_lines)]
     fn handle(&self, request: RuntimeClientSessionRequest) -> SessionControlFuture {
         let supervisor = self.clone();
         Box::pin(async move {
-            let result = match request {
+            let mut result = match request {
                 RuntimeClientSessionRequest::DeletePreview { session_id } => {
                     RuntimeClientResult::SessionDeletion {
                         result: project_session_deletion(
@@ -840,12 +429,15 @@ impl RuntimeClientSessionControl for LocalSessionSupervisor {
                     }
                 }
                 RuntimeClientSessionRequest::Get => RuntimeClientResult::Session {
-                    session: session_view(
-                        supervisor
-                            .current()
-                            .await
-                            .map_err(|error| session_error(&error))?,
-                    ),
+                    session: supervisor
+                        .attachment_view(
+                            supervisor
+                                .current()
+                                .await
+                                .map_err(|error| session_error(&error))?,
+                        )
+                        .await
+                        .map_err(|error| session_error(&error))?,
                 },
                 RuntimeClientSessionRequest::Tree {
                     node_offset,
@@ -857,7 +449,10 @@ impl RuntimeClientSessionControl for LocalSessionSupervisor {
                         .await
                         .map_err(|error| session_error(&error))?;
                     RuntimeClientResult::SessionTree {
-                        session: session_view(tree.session),
+                        session: supervisor
+                            .attachment_view(tree.session)
+                            .await
+                            .map_err(|error| session_error(&error))?,
                         nodes: tree.nodes.into_iter().map(session_node_view).collect(),
                         next_node_offset: tree.next_node_offset,
                         branchable_messages: tree
@@ -872,12 +467,15 @@ impl RuntimeClientSessionControl for LocalSessionSupervisor {
                     }
                 }
                 RuntimeClientSessionRequest::Name(name) => RuntimeClientResult::SessionChanged {
-                    session: session_view(
-                        supervisor
-                            .rename(name)
-                            .await
-                            .map_err(|error| session_error(&error))?,
-                    ),
+                    session: supervisor
+                        .attachment_view(
+                            supervisor
+                                .rename(name)
+                                .await
+                                .map_err(|error| session_error(&error))?,
+                        )
+                        .await
+                        .map_err(|error| session_error(&error))?,
                     editor_content: None,
                     restart_required: false,
                 },
@@ -890,15 +488,20 @@ impl RuntimeClientSessionControl for LocalSessionSupervisor {
                 RuntimeClientSessionRequest::Select {
                     session_id,
                     node_id,
-                } => changed_view(
-                    supervisor
+                } => {
+                    let route = supervisor
                         .select(SessionId::new(session_id), node_id.map(SessionNodeId::new))
                         .await
-                        .map_err(|error| session_error(&error))?,
-                ),
+                        .map_err(|error| session_error(&error))?;
+                    RuntimeClientResult::SessionChanged {
+                        session: route_view(route),
+                        editor_content: None,
+                        restart_required: false,
+                    }
+                }
                 RuntimeClientSessionRequest::Clone => changed_view(
                     supervisor
-                        .clone_active()
+                        .clone_attached()
                         .await
                         .map_err(|error| session_error(&error))?,
                 ),
@@ -907,7 +510,7 @@ impl RuntimeClientSessionControl for LocalSessionSupervisor {
                     message_id,
                 } => changed_view(
                     supervisor
-                        .fork_active(surface_revision, message_id)
+                        .fork_attached(surface_revision, message_id)
                         .await
                         .map_err(|error| session_error(&error))?,
                 ),
@@ -921,51 +524,69 @@ impl RuntimeClientSessionControl for LocalSessionSupervisor {
                         .map_err(|error| session_error(&error))?,
                 ),
             };
+            // Durable publication does not rebind this single-runtime attachment.
+            // Compare every returned route, including metadata projections, here.
+            if let RuntimeClientResult::SessionChanged {
+                session,
+                restart_required,
+                ..
+            } = &mut result
+            {
+                *restart_required = supervisor.requires_reattach(session);
+            }
             Ok(result)
         })
     }
 
-    fn persist_model(
-        &self,
-        config: crate::model::session::SessionModelConfig,
-    ) -> Result<(), RuntimeClientError> {
-        // Model updates arrive through the synchronous Runtime Client path.
-        // Do not block a runtime worker or call `blocking_lock` inside an
-        // async executor: a concurrent Session transition fails explicitly,
-        // while the normal idle path acquires this product lock immediately.
-        let mut state = self
-            .state
-            .try_lock()
-            .map_err(|_| RuntimeClientError::SessionFailure {
-                message: "a Session transition is already in progress".to_owned(),
-            })?;
-        ensure_live(&state.runtime).map_err(|error| session_error(&error))?;
-        match state.catalog.persist_active_model(config) {
-            Ok(()) => Ok(()),
+    fn persist_model(&self, config: SessionModelConfig) -> Result<(), RuntimeClientError> {
+        use std::sync::atomic::Ordering;
+        let mut catalog =
+            self.controller
+                .catalog
+                .try_lock()
+                .map_err(|_| RuntimeClientError::SessionFailure {
+                    message: "Session metadata is busy".into(),
+                })?;
+        let expected = self.settings_revision.load(Ordering::Acquire);
+        let (_, mut settings) = catalog.lineage(&self.session_id, None).map_err(|e| {
+            RuntimeClientError::SessionFailure {
+                message: e.to_string(),
+            }
+        })?;
+        settings.model = Some(config);
+        match catalog.replace_settings(&self.session_id, expected, settings) {
+            Ok(revision) => {
+                self.settings_revision.store(revision, Ordering::Release);
+                Ok(())
+            }
             Err(error) if error.committed() => {
-                let detail = error.to_string();
-                mark_replacement_required(&mut state, detail.clone());
-                Err(RuntimeClientError::SessionRestartRequired { message: detail })
+                self.model_publication_uncertain
+                    .store(true, Ordering::Release);
+                Err(RuntimeClientError::SessionRestartRequired {
+                    message: error.to_string(),
+                })
             }
             Err(error) => Err(RuntimeClientError::SessionFailure {
                 message: error.to_string(),
             }),
         }
     }
-
     fn ensure_live(&self) -> Result<(), RuntimeClientError> {
-        let state = self
-            .state
-            .try_lock()
-            .map_err(|_| RuntimeClientError::SessionFailure {
-                message: "a Session transition is already in progress".to_owned(),
-            })?;
-        ensure_live(&state.runtime).map_err(|error| session_error(&error))
+        if self
+            .model_publication_uncertain
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            Err(RuntimeClientError::SessionRestartRequired {
+                message: "this attachment's model publication has uncertain durability".into(),
+            })
+        } else {
+            Ok(())
+        }
     }
 }
 
-fn changed_view(change: SessionSwitchResult) -> RuntimeClientResult {
-    if let Some(diagnostic) = change.committed_restart_diagnostic {
+fn changed_view(change: SessionTransitionResult) -> RuntimeClientResult {
+    if let Some(diagnostic) = change.durability_diagnostic {
         RuntimeClientResult::SessionCommittedRestartRequired {
             session: session_view(change.session),
             editor_content: change.editor_content,
@@ -975,7 +596,7 @@ fn changed_view(change: SessionSwitchResult) -> RuntimeClientResult {
         RuntimeClientResult::SessionChanged {
             session: session_view(change.session),
             editor_content: change.editor_content,
-            restart_required: change.restart_required,
+            restart_required: false,
         }
     }
 }
@@ -987,8 +608,14 @@ fn session_summary_view(summary: SessionSummary) -> SessionSummaryView {
         preview: summary.preview,
         updated_at: summary.updated_at,
         active_node: summary.active_node.as_str().to_owned(),
-        active: summary.active,
     }
+}
+
+fn route_view(route: SessionRoute) -> SessionView {
+    let mut view = session_view(route.session);
+    route.node.id.as_str().clone_into(&mut view.active_node);
+    view.active_conversation_id = route.node.conversation_id;
+    view
 }
 
 fn session_view(snapshot: SessionSnapshot) -> SessionView {
@@ -1034,42 +661,28 @@ fn session_node_view(node: super::session::SessionNode) -> SessionNodeView {
     }
 }
 
-fn session_error(error: &SessionSupervisorError) -> RuntimeClientError {
-    match error {
-        SessionSupervisorError::RestartRequired { detail } => {
-            RuntimeClientError::SessionRestartRequired {
-                message: detail.clone(),
-            }
-        }
-        _ => RuntimeClientError::SessionFailure {
-            message: error.to_string(),
-        },
+fn session_error(error: &SessionAttachmentError) -> RuntimeClientError {
+    RuntimeClientError::SessionFailure {
+        message: error.to_string(),
     }
 }
-
 #[cfg(test)]
 pub(crate) async fn assert_deletion_cleanup_releases_catalog(
     catalog: SessionCatalog,
     mut work: super::session::deletion::CleanupWork,
-    model: SessionModelConfig,
+    _model: SessionModelConfig,
 ) {
     let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
     let release = gate.arm_scoped();
     work.cleanup_gate = Some(gate.clone());
-    let supervisor = LocalSessionSupervisor::new(catalog, model);
-    let worker = supervisor.clone();
+    let controller = super::session_controller::SessionController::new(catalog);
+    let worker = controller.clone();
     let task = tokio::spawn(async move { worker.clean_deletion(work).await });
     tokio::task::spawn_blocking(move || gate.wait_entered())
         .await
         .unwrap();
-    assert!(!task.is_finished(), "Deleted cannot precede cleanup");
-    {
-        let state = supervisor
-            .state
-            .try_lock()
-            .expect("cleanup released catalog mutex");
-        assert!(state.catalog.active_snapshot().is_ok());
-    }
+    assert!(!task.is_finished());
+    assert!(controller.catalog.try_lock().is_ok());
     drop(release);
     assert!(matches!(
         task.await.unwrap(),
@@ -1121,7 +734,6 @@ pub(crate) fn project_session_deletion(
         Native::Blocked { session_id, reason } => Wire::Blocked {
             session_id: session_id.to_string(),
             reason: match reason {
-                Blocker::CurrentSession => Reason::CurrentSession,
                 Blocker::InUse => Reason::InUse,
                 Blocker::Workspace { resources } => Reason::Workspace {
                     resource_count: resources.len() as u64,

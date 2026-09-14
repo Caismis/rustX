@@ -170,7 +170,7 @@ operations. Positive `ttlMs` cannot answer a refresh from cache, nor can an erro
 be converted into stale cached success. The committed rustX capability snapshot
 remains the only semantic capability cache (PR #244).
 
-Runtime Client protocol 33 projects inactive decisions (`disabled`,
+Runtime Client protocol 34 projects inactive decisions (`disabled`,
 `unconfigured`, `untrusted`), enabled/unprepared, preparation failure
 (`unavailable`, without external error payloads), and available (`ready`) through the
 existing source availability owner. These states are not Tool identities.
