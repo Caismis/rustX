@@ -50,6 +50,7 @@ pub mod schemas;
 pub mod serve;
 pub mod session;
 pub mod session_controller;
+pub mod session_runtime_manager;
 pub mod settings;
 #[cfg(test)]
 pub(crate) mod static_effects;

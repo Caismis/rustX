@@ -6391,8 +6391,12 @@ domain.
 `SessionController` owns one user's durable catalog independently of runtime
 composition. `LocalSessionClient` composes an explicitly addressed Session for the
 local CLI and binds `LocalSessionAttachment` as its client-local command adapter.
-#287 owns concurrent runtime residency. See [durable Sessions](durable-sessions.md)
-for fields, allocation guards, commit points and the schema 8 contract.
+`SessionRuntimeManager` owns concurrent runtime residency and retains the native
+allocation guards through each live composition. In v1 each Session has at most
+one resident Conversation/node; different Sessions remain concurrent. Its public
+client handles are non-owning and cannot retain allocation after unload. See [runtime residency](runtime-residency.md)
+for single-flight, unload, replacement and client lifetime boundaries, and
+[durable Sessions](durable-sessions.md) for catalog commit points and schema 8.
 
 #### Issue #96 ownership and activation boundary
 

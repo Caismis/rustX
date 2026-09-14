@@ -3622,6 +3622,37 @@ impl ConversationRuntime {
             .admission_gate = Some(gate);
     }
 
+    #[cfg(test)]
+    pub(crate) fn install_activation_gate(&self, gate: Arc<Gate>) {
+        self.inner
+            .probe
+            .lock()
+            .expect("probe lock")
+            .get_or_insert_with(CoordinatorProbe::default)
+            .activation_gate = Some(gate);
+    }
+
+    /// Install the existing owner-boundary probes on a natively composed runtime.
+    #[cfg(test)]
+    pub(crate) fn install_residency_probe(
+        &self,
+        submit: Option<Arc<Gate>>,
+        attempt_exit: Option<Arc<Gate>>,
+    ) {
+        let mut probe = self.inner.probe.lock().expect("probe lock");
+        let probe = probe.get_or_insert_with(CoordinatorProbe::default);
+        probe.submit_gate = submit;
+        probe.attempt_exit_gate = attempt_exit;
+    }
+
+    /// Inject at the existing native settlement-failure callback, not at the
+    /// manager's shutdown result, so residency tests exercise the real drain.
+    #[cfg(test)]
+    pub(crate) fn fail_residency_settlement(&self) {
+        self.inner
+            .fence_mcp_settlement_failure("residency test settlement failure".into());
+    }
+
     /// The conversation identity of this runtime.
     #[must_use]
     pub fn conversation_id(&self) -> &ConversationId {

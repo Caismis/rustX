@@ -17,12 +17,16 @@ unused Sessions and have no global active marker. The monotonic accepted-inbound
 usage classifier remains available by identity; it no longer controls creation
 or catalog visibility.
 
-Runtime residency is a separate lifetime. #287 owns single-flight load/unload,
-multiple resident runtimes, and one writable live runtime per Conversation.
+Runtime residency is a separate lifetime. `SessionRuntimeManager` owns single-flight
+load/unload, multiple resident runtimes, and one writable live incarnation per
+Conversation. In v1, one Session may have only one resident Conversation/node;
+different Sessions remain concurrent. Successful unload releases composition and
+allocation even when stale client handles remain. See [runtime residency](runtime-residency.md) for synchronization and
+client lifetime contracts.
 `SessionAccess` provides the Session snapshot, selected node, explicit settings
 and revision, plus retained Conversation allocation access. Different
 Conversations can hold these accesses concurrently. Allocation access is
-necessary destructive exclusion, not a replacement for #287's single-writer
+necessary destructive exclusion, not a replacement for the manager's single-writer
 runtime admission.
 
 Client focus is routing/UI state. `LocalSessionClient` and
@@ -40,8 +44,7 @@ stays inside the local adapter until #288. CLI cold resume requires `--session`
 transition vocabulary is temporarily retained until #288; ordinary transitions
 return `restart_required: false`. The wire's committed-durability result still
 carries an exact fork editor payload. The local TUI routes by the returned identity when reopening its own subprocess;
-it never asks the catalog for a global focus. Shared-process runtime residency
-is not implemented by this catalog change.
+it never asks the catalog for a global focus. Shared-process runtime residency belongs to `SessionRuntimeManager`, not this CLI adapter.
 
 ## Persisted configuration classification
 

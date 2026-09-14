@@ -57,6 +57,8 @@ pub struct SessionAccess {
 #[derive(Clone, Debug)]
 pub struct SessionController {
     pub(crate) catalog: Arc<tokio::sync::Mutex<SessionCatalog>>,
+    // Allocation of the one process runtime owner, not ownership of its registry.
+    pub(crate) runtime_owner: Arc<std::sync::OnceLock<()>>,
     pub(crate) preparation: Arc<tokio::sync::Mutex<()>>,
     #[cfg(test)]
     create_gate: Arc<std::sync::Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>>,
@@ -86,6 +88,7 @@ impl SessionController {
     pub(crate) fn new(catalog: SessionCatalog) -> Self {
         Self {
             catalog: Arc::new(tokio::sync::Mutex::new(catalog)),
+            runtime_owner: Arc::default(),
             preparation: Arc::new(tokio::sync::Mutex::new(())),
             #[cfg(test)]
             create_gate: Arc::new(std::sync::Mutex::new(None)),
@@ -94,6 +97,13 @@ impl SessionController {
             #[cfg(test)]
             copy_gate: Arc::new(std::sync::Mutex::new(None)),
         }
+    }
+    #[cfg(test)]
+    pub(crate) fn install_delete_cleanup_gate(
+        &self,
+        gate: Arc<crate::runtime::conversation_runtime::Gate>,
+    ) {
+        *self.cleanup_gate.lock().unwrap() = Some(gate);
     }
     /// # Errors
     /// Unknown identities are rejected without configuration resolution.
