@@ -136,9 +136,16 @@ pub async fn websocket(url: &str) -> Driver {
     use futures_util::SinkExt;
     let (mut writer, reader) = socket(url).await.split();
     let incoming = reader.filter_map(|message| async move {
-        match message.unwrap() {
-            tokio_tungstenite::tungstenite::Message::Text(text) => Some(text.to_string()),
-            _ => None,
+        use tokio_tungstenite::tungstenite::{Error, Message, error::ProtocolError};
+        match message {
+            Ok(Message::Text(text)) => Some(text.to_string()),
+            Ok(_)
+            | Err(
+                Error::ConnectionClosed
+                | Error::AlreadyClosed
+                | Error::Protocol(ProtocolError::ResetWithoutClosingHandshake),
+            ) => None,
+            Err(error) => panic!("unexpected socket failure: {error}"),
         }
     });
     Driver::new(incoming, |mut receiver| async move {

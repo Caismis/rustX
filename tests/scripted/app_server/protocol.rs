@@ -10,7 +10,7 @@ use super::app_server_conformance as conformance;
 async fn direct_connection_runs_shared_transport_neutral_conformance() {
     bounded(async {
         let f = Fixture::new().await;
-        let connection = AppServerConnection::new(f.manager.clone());
+        let connection = AppServerConnection::new(f.host.clone());
         conformance::representative_scenario(
             &conformance::DirectDriver(&connection),
             [f.sessions[0].id.clone(), f.sessions[1].id.clone()],
@@ -104,7 +104,7 @@ async fn rejected(connection: &AppServerConnection, method: Method) -> ErrorData
 async fn failed_unload_reclaims_route_without_notification_polling() {
     bounded(async {
         let f = Fixture::new().await;
-        let connection = AppServerConnection::new(f.manager.clone());
+        let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let old = attach(&connection, &f, 0).await;
         assert_eq!(connection.attachment_counts(), (1, 0));
@@ -154,7 +154,7 @@ async fn failed_unload_reclaims_route_without_notification_polling() {
 async fn detach_during_unloading_needs_no_operation_lease() {
     bounded(async {
         let f = Fixture::new().await;
-        let connection = AppServerConnection::new(f.manager.clone());
+        let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let old = attach(&connection, &f, 0).await;
         let probe = f.manager.probe(&old.conversation_id);
@@ -182,7 +182,7 @@ async fn detach_during_unloading_needs_no_operation_lease() {
 async fn stale_detach_cannot_remove_replacement_route() {
     bounded(async {
         let f = Fixture::new().await;
-        let connection = AppServerConnection::new(f.manager.clone());
+        let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let old = attach(&connection, &f, 0).await;
         call(
@@ -213,7 +213,7 @@ async fn admitted_async_operation_drains_before_unload_releases_resources() {
         use crate::local_runtime::session::deletion::SessionDeleteResult;
         use std::sync::Arc;
         let f = Fixture::new().await;
-        let connection = Arc::new(AppServerConnection::new(f.manager.clone()));
+        let connection = Arc::new(AppServerConnection::new(f.host.clone()));
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;
         let identity = f.manager.load(&target.session_id, None).await.unwrap();
@@ -306,7 +306,7 @@ async fn admitted_async_operation_drains_before_unload_releases_resources() {
 async fn unload_claim_rejects_late_operations_and_old_incarnations() {
     bounded(async {
         let f = Fixture::new().await;
-        let connection = AppServerConnection::new(f.manager.clone());
+        let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let old = attach(&connection, &f, 0).await;
         let probe = f.manager.probe(&old.conversation_id);
@@ -392,7 +392,14 @@ async fn attach_session(
 async fn capacity_rejection_never_composes_and_unload_reclaims_without_notifications() {
     bounded(async {
         let f = Fixture::new().await;
-        let connection = AppServerConnection::new(f.manager.clone());
+        f.manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .policy
+            .max_resident_runtimes = 64;
+        let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let sessions = cold_sessions(&f, 34).await;
         let mut targets = Vec::new();
@@ -409,7 +416,7 @@ async fn capacity_rejection_never_composes_and_unload_reclaims_without_notificat
                 }
             )
             .await,
-            ErrorData::InvalidState
+            ErrorData::AttachmentCapacity
         );
         assert_eq!(
             f.manager
@@ -446,7 +453,14 @@ async fn concurrent_final_slot_is_reserved_before_composition() {
     bounded(async {
         use std::sync::Arc;
         let f = Fixture::new().await;
-        let connection = Arc::new(AppServerConnection::new(f.manager.clone()));
+        f.manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .policy
+            .max_resident_runtimes = 64;
+        let connection = Arc::new(AppServerConnection::new(f.host.clone()));
         initialize(&connection).await;
         let sessions = cold_sessions(&f, 33).await;
         for session in &sessions[..31] {
@@ -490,7 +504,7 @@ async fn concurrent_final_slot_is_reserved_before_composition() {
             loser,
             Response::Failure(Failure {
                 error: RpcError {
-                    data: Some(ErrorData::InvalidState),
+                    data: Some(ErrorData::AttachmentCapacity),
                     ..
                 },
                 ..
@@ -525,7 +539,7 @@ async fn cancelled_attach_releases_reservation_but_not_manager_owned_load() {
     bounded(async {
         use std::sync::Arc;
         let f = Fixture::new().await;
-        let connection = Arc::new(AppServerConnection::new(f.manager.clone()));
+        let connection = Arc::new(AppServerConnection::new(f.host.clone()));
         initialize(&connection).await;
         let probe = f.manager.probe(&f.id(0).await);
         probe.before_compose.arm();
@@ -631,7 +645,7 @@ async fn attach(connection: &AppServerConnection, f: &Fixture, index: usize) -> 
 async fn initialize_and_malformed_wire_are_transactional() {
     bounded(async {
         let f = Fixture::new().await;
-        let connection = AppServerConnection::new(f.manager.clone());
+        let connection = AppServerConnection::new(f.host.clone());
         let before = connection.handle_json(r#"{"jsonrpc":"2.0","id":0,"method":"server/info","params":{}}"#).await.unwrap();
         assert!(matches!(before, Response::Failure(Failure { error: RpcError { data: Some(ErrorData::NotInitialized), .. }, .. })));
         let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":99,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
@@ -668,7 +682,7 @@ async fn durable_session_operations_never_compose_a_runtime() {
     bounded(async {
         use crate::runtime_client::session_deletion::RuntimeClientSessionDeletionResult as Deletion;
         let f = Fixture::new().await;
-        let connection = AppServerConnection::new(f.manager.clone());
+        let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let settings = crate::local_runtime::session::SessionPersistentState::from_input(
             &crate::local_runtime::configuration::SessionConfigInput::new(f.workspaces[0].clone()),
@@ -816,7 +830,7 @@ async fn durable_session_operations_never_compose_a_runtime() {
 async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keeps_execution() {
     bounded(async {
         let f = Fixture::new().await;
-        let connection = AppServerConnection::new(f.manager.clone());
+        let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let (a, b) = tokio::join!(attach(&connection, &f, 0), attach(&connection, &f, 1));
         let (reply_a, reply_b) = tokio::join!(
@@ -852,7 +866,7 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
                 seen.insert(target.session_id);
             }
         }
-        let rival = AppServerConnection::new(f.manager.clone());
+        let rival = AppServerConnection::new(f.host.clone());
         initialize(&rival).await;
         let response = rival
             .handle_request(Request {
@@ -929,7 +943,7 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
 async fn stale_connection_cannot_retain_or_control_replacement() {
     bounded(async {
         let f = Fixture::new().await;
-        let connection = AppServerConnection::new(f.manager.clone());
+        let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let old = attach(&connection, &f, 0).await;
         let identity = f.manager.load(&old.session_id, None).await.unwrap();
@@ -975,7 +989,7 @@ async fn headless_approval_and_questionnaire_survive_detach_and_settle_once() {
         for tool in ["read", "ask_user"] {
             for cancel_first in [false, true] {
                 let f = Fixture::with_tool(Some(tool)).await;
-                let connection = Arc::new(AppServerConnection::new(f.manager.clone()));
+                let connection = Arc::new(AppServerConnection::new(f.host.clone()));
                 initialize(&connection).await;
                 let initial = attach(&connection, &f, 0).await;
                 let identity = f.manager.load(&initial.session_id, None).await.unwrap();
@@ -1123,7 +1137,7 @@ async fn attach_snapshot_and_subscription_share_the_publication_cut() {
                 .install_projection_probe(probe.clone());
         }
         probe.arm_snapshot();
-        let connection = Arc::new(AppServerConnection::new(f.manager.clone()));
+        let connection = Arc::new(AppServerConnection::new(f.host.clone()));
         initialize(&connection).await;
         let worker = connection.clone();
         let session_id = f.sessions[0].id.clone();
@@ -1233,13 +1247,13 @@ async fn attach_snapshot_and_subscription_share_the_publication_cut() {
 async fn explicit_close_is_idempotent_and_revokes_claims_despite_retained_arc() {
     bounded(async {
         let f = Fixture::new().await;
-        let connection = std::sync::Arc::new(AppServerConnection::new(f.manager.clone()));
+        let connection = std::sync::Arc::new(AppServerConnection::new(f.host.clone()));
         initialize(&connection).await;
         let old = attach(&connection, &f, 0).await;
         let retained = connection.clone();
         connection.close();
         assert_eq!(connection.attachment_counts(), (0, 0));
-        let replacement = AppServerConnection::new(f.manager.clone());
+        let replacement = AppServerConnection::new(f.host.clone());
         initialize(&replacement).await;
         let new = attach(&replacement, &f, 0).await;
         assert_eq!(old.runtime_incarnation, new.runtime_incarnation);
@@ -1262,7 +1276,7 @@ async fn close_linearizes_before_pending_attach_commit() {
         let f = Fixture::new().await;
         let probe = f.manager.probe(&f.id(0).await);
         probe.before_compose.arm();
-        let connection = std::sync::Arc::new(AppServerConnection::new(f.manager.clone()));
+        let connection = std::sync::Arc::new(AppServerConnection::new(f.host.clone()));
         initialize(&connection).await;
         let pending = connection.clone();
         let session_id = f.sessions[0].id.clone();
@@ -1282,7 +1296,7 @@ async fn close_linearizes_before_pending_attach_commit() {
         probe.before_compose.release();
         assert_eq!(request.await.unwrap(), ErrorData::StaleAttachment);
         assert_eq!(connection.attachment_counts(), (0, 0));
-        let replacement = AppServerConnection::new(f.manager.clone());
+        let replacement = AppServerConnection::new(f.host.clone());
         initialize(&replacement).await;
         attach(&replacement, &f, 0).await;
         replacement.close();
@@ -1295,7 +1309,7 @@ async fn close_linearizes_before_pending_attach_commit() {
 async fn admitted_mutation_survives_close_before_native_dispatch() {
     bounded(async {
         let f = Fixture::new().await;
-        let connection = std::sync::Arc::new(AppServerConnection::new(f.manager.clone()));
+        let connection = std::sync::Arc::new(AppServerConnection::new(f.host.clone()));
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;
         let probe = f.manager.probe(&target.conversation_id);
@@ -1315,7 +1329,7 @@ async fn admitted_mutation_survives_close_before_native_dispatch() {
         probe.before_operation.entered().await; // manager lease acquired, native call not executed
         connection.close();
         assert_eq!(connection.attachment_counts(), (0, 0));
-        let replacement = AppServerConnection::new(f.manager.clone());
+        let replacement = AppServerConnection::new(f.host.clone());
         initialize(&replacement).await;
         let new = attach(&replacement, &f, 0).await;
         probe.before_operation.release();
@@ -1340,6 +1354,51 @@ async fn admitted_mutation_survives_close_before_native_dispatch() {
             ErrorData::StaleAttachment
         ));
         replacement.close();
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn host_request_owner_outlives_dropped_protocol_waiter() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = std::sync::Arc::new(AppServerConnection::new(f.host.clone()));
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let probe = f.manager.probe(&target.conversation_id);
+        probe.before_operation.arm();
+        let worker = connection.clone();
+        let waiter =
+            tokio::spawn(
+                async move { call(&worker, 91, Method::SessionSnapshot { target }).await },
+            );
+        probe.before_operation.entered().await;
+        waiter.abort();
+        assert!(waiter.await.unwrap_err().is_cancelled());
+        assert!(
+            f.host
+                .forced_resources(false)
+                .contains("pending_protocol_operations=1")
+        );
+        f.host.begin_drain();
+        assert_eq!(
+            rejected(&connection, Method::ServerInfo {}).await,
+            ErrorData::ServerDraining
+        );
+        let host = f.host.clone();
+        let mut drain = Box::pin(host.drain());
+        assert!(futures_util::poll!(&mut drain).is_pending());
+        assert!(f.host.finish_drain().is_err());
+        probe.before_operation.release();
+        assert!(drain.await.is_empty());
+        assert!(
+            f.host
+                .forced_resources(false)
+                .contains("pending_protocol_operations=0")
+        );
+        connection.close();
+        f.host.finish_drain().unwrap();
         f.close().await;
     })
     .await;

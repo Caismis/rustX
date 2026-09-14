@@ -62,6 +62,7 @@ macro_rules! partial {
 // never a TOML null value.
 partial!(RuntimeLayer {
     models: PathBuf, runtime_root: PathBuf, schema_version: u32,
+    app_server: super::app_server_policy::AppServerPolicy,
     agent_id: crate::runtime::identity::AgentId,
     approval_mode: crate::runtime::ApprovalMode, agent: AgentProfileLayer,
     context: ContextLayer, model_timeout_policy: TimeoutLayer, tool_deadline_policy: ToolDeadlineLayer,
@@ -592,6 +593,7 @@ impl RuntimeLayer {
     pub fn resources_only(&mut self) {
         self.models = None;
         self.runtime_root = None;
+        self.app_server = None;
         self.schema_version = None;
         self.agent_id = None;
         if let Some(agent) = &mut self.agent {

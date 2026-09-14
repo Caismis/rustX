@@ -163,6 +163,47 @@
       ],
       "type": "string"
     },
+    "AppServerPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "idle_grace_ms": {
+          "default": 300000,
+          "format": "uint64",
+          "maximum": 86400000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_connections": {
+          "default": 32,
+          "format": "uint",
+          "maximum": 1024,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_external_attachments": {
+          "default": 64,
+          "format": "uint",
+          "maximum": 4096,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_resident_runtimes": {
+          "default": 8,
+          "format": "uint",
+          "maximum": 256,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "shutdown_deadline_ms": {
+          "default": 30000,
+          "format": "uint64",
+          "maximum": 3600000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "ApprovalMode": {
       "description": "The runtime-wide control state for tool approval behavior.\n\n`Policy` consults each resolved Tool's\n[`ToolApprovalPolicy`](crate::tools::types::ToolApprovalPolicy).\n`FullAccess` changes only the effective approval result to `Never`; it\nnever changes availability, activation, execution ownership, concurrency,\nor tool authority.",
       "oneOf": [
@@ -939,6 +980,13 @@
       "anyOf": [
         {
           "$ref": "#/$defs/AgentId"
+        }
+      ]
+    },
+    "app_server": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AppServerPolicy"
         }
       ]
     },

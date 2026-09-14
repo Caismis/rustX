@@ -18,8 +18,12 @@ use super::diagnostics::LaunchFailure;
 use crate::model::catalog::ModelCatalog;
 
 pub(super) const USER_PATH_FIELDS: &[&str] = &["models", "runtime_root"];
-pub(super) const HOST_POLICY_FIELDS: &[&str] =
-    &["approval_mode", "native_tools", "mcp_tool_policies"];
+pub(super) const HOST_POLICY_FIELDS: &[&str] = &[
+    "app_server",
+    "approval_mode",
+    "native_tools",
+    "mcp_tool_policies",
+];
 pub(super) const MCP_SECRET_FIELDS: &[&str] = &["sensitive_env", "sensitive_headers"];
 
 /// Filesystem locations and controls produced by the launch resolver.
@@ -254,6 +258,18 @@ impl UserConfigManager {
     #[must_use]
     pub fn runtime_root(&self) -> &Path {
         &self.sources.runtime_root
+    }
+
+    /// Read process policy from the canonical user document only.
+    /// # Errors
+    /// Invalid user authoring or policy is rejected before traffic admission.
+    pub fn app_server_policy(&self) -> Result<super::app_server_policy::AppServerPolicy, String> {
+        let policy = read_layer(&self.sources.settings, false, false)
+            .map_err(|error| error.to_string())?
+            .app_server
+            .unwrap_or_default();
+        policy.validate()?;
+        Ok(policy)
     }
 
     /// Validate the selected model catalog before publishing a server listener.
@@ -1097,6 +1113,7 @@ pub(super) fn parse_layer(
     }
     if project {
         for (field, present) in [
+            ("app_server", layer.app_server.is_some()),
             ("approval_mode", layer.approval_mode.is_some()),
             ("native_tools", layer.native_tools.is_some()),
             ("mcp_tool_policies", layer.mcp_tool_policies.is_some()),

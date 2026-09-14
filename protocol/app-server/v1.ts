@@ -136,6 +136,10 @@ export type Request1 =
       params: {};
     }
   | {
+      method: 'server/diagnostics';
+      params: {};
+    }
+  | {
       method: 'session/list';
       params: {
         query?: string | null;
@@ -545,6 +549,10 @@ export type ReviewDecision =
 export type Response = Success | Failure;
 export type MethodResult =
   | {
+      snapshot: ServerDiagnostics;
+      type: 'diagnostics';
+    }
+  | {
       document: DefaultDocument;
       type: 'defaults';
     }
@@ -676,6 +684,11 @@ export type MethodResult =
       capability_revision: CapabilityRevision;
       type: 'resources_reloaded';
     };
+export type ServerLifecycle = 'Accepting' | 'Draining' | 'Terminated';
+/**
+ * Residency only; execution and interaction state remain runtime-owned.
+ */
+export type ResidencyState = 'Unloaded' | 'Loading' | 'Loaded' | 'Unloading';
 /**
  * A fully qualified catalog model reference: `provider-id/model-id`.
  *
@@ -1714,6 +1727,18 @@ export type InboundSequence = string;
  */
 export type CapabilityRevision = string;
 export type ErrorData =
+  | {
+      kind: 'request_capacity';
+    }
+  | {
+      kind: 'residency_capacity';
+    }
+  | {
+      kind: 'attachment_capacity';
+    }
+  | {
+      kind: 'server_draining';
+    }
   | {
       session_id: SessionId;
       kind: 'unknown_session';
@@ -2801,6 +2826,52 @@ export interface Success {
   jsonrpc: JsonRpcVersion;
   id: RequestId;
   result: MethodResult;
+}
+export interface ServerDiagnostics {
+  lifecycle: ServerLifecycle;
+  policy: AppServerPolicy;
+  loaded: number;
+  loading: number;
+  unloading: number;
+  active_roots: number;
+  external_attachments: number;
+  sessions: SessionResidencyDiagnostic[];
+  admission_refusals: {
+    [k: string]: string;
+  };
+  shutdown_failures: string;
+  shutdown_timeouts: string;
+  unload_failures: string;
+  transport: TransportDiagnostics;
+}
+export interface AppServerPolicy {
+  max_resident_runtimes?: number;
+  max_connections?: number;
+  max_external_attachments?: number;
+  idle_grace_ms?: number;
+  shutdown_deadline_ms?: number;
+}
+export interface SessionResidencyDiagnostic {
+  session_id: SessionId;
+  conversation_id: ConversationId;
+  residency: ResidencyState;
+  incarnation?: RuntimeIncarnationId | null;
+  external_attachments: number;
+  operations: number;
+  active_root: boolean;
+  idle_for_ms?: string | null;
+  idle_remaining_ms?: string | null;
+}
+export interface TransportDiagnostics {
+  websocket_connections: number;
+  stdio_connections: number;
+  connection_refusals: string;
+  delivery_failures: string;
+  max_message_bytes: number;
+  outbound_queue_messages: number;
+  outbound_queue_bytes: number;
+  in_flight_requests: number;
+  write_deadline_ms: string;
 }
 export interface DefaultDocument {
   scope: DefaultScope;

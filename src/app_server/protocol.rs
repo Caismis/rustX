@@ -147,6 +147,8 @@ pub enum Method {
     Initialize(InitializeParams),
     #[serde(rename = "server/info")]
     ServerInfo {},
+    #[serde(rename = "server/diagnostics")]
+    ServerDiagnostics {},
     #[serde(rename = "session/list")]
     SessionList {
         query: Option<String>,
@@ -240,6 +242,10 @@ pub enum Method {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ErrorData {
+    RequestCapacity,
+    ResidencyCapacity,
+    AttachmentCapacity,
+    ServerDraining,
     UnknownSession {
         session_id: SessionId,
     },
@@ -309,6 +315,9 @@ pub struct Failure {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MethodResult {
+    Diagnostics {
+        snapshot: crate::app_server::host::ServerDiagnostics,
+    },
     Defaults {
         document: crate::runtime_client::settings::DefaultDocument,
     },

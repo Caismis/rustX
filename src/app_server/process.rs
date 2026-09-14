@@ -1,4 +1,5 @@
 //! Standalone user-scoped composition, independent of the local Session launcher.
+use super::host::AppServerHost;
 use super::{
     connection::AppServerConnection,
     transport::{stdio, websocket},
@@ -7,7 +8,7 @@ use crate::local_runtime::{
     configuration::{UserConfigManager, UserConfigSources},
     launch::HostEnvironment,
     session_controller::SessionController,
-    session_runtime_manager::SessionRuntimeManager,
+    session_runtime_manager::{RuntimeResidencyPolicy, SessionRuntimeManager},
 };
 use std::{
     io::{self, Read},
@@ -61,7 +62,7 @@ impl Options {
     }
 }
 
-fn compose(options: &Options) -> Result<SessionRuntimeManager, String> {
+fn compose(options: &Options) -> Result<AppServerHost, String> {
     let host = HostEnvironment::capture()?;
     let absolute = |path: &PathBuf| {
         if path.is_absolute() {
@@ -97,69 +98,150 @@ fn compose(options: &Options) -> Result<SessionRuntimeManager, String> {
     configuration.validate_catalog()?;
     let sessions =
         SessionController::open(configuration.runtime_root()).map_err(|error| error.to_string())?;
-    SessionRuntimeManager::new(
+    let policy = configuration.app_server_policy()?;
+    let manager = SessionRuntimeManager::new(
         sessions,
         configuration,
         crate::credentials::CredentialSnapshot::capture(),
         crate::local_runtime::composition::LocalRuntimeDependencies::default(),
+        RuntimeResidencyPolicy {
+            max_resident_runtimes: policy.max_resident_runtimes,
+            idle_grace_ms: policy.idle_grace_ms,
+        },
     )
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?;
+    Ok(AppServerHost::new(manager, policy))
+}
+
+async fn serve_transport(
+    options: Options,
+    host: AppServerHost,
+    shutdown: CancellationToken,
+) -> io::Result<()> {
+    if options.listen == "stdio" {
+        let _connection = host
+            .admit_connection(false)
+            .ok_or_else(|| io::Error::other("server draining"))?;
+        // Tokio's io::stdin uses an uncancellable blocking read. Reactor-owned
+        // pipe FDs instead let disconnect/shutdown drop every pending I/O.
+        let input = std::io::stdin().as_fd().try_clone_to_owned()?;
+        let output = std::io::stdout().as_fd().try_clone_to_owned()?;
+        let reader = tokio::net::unix::pipe::Receiver::from_owned_fd(input)?;
+        let writer = tokio::net::unix::pipe::Sender::from_owned_fd(output)?;
+        stdio::serve(
+            Arc::new(AppServerConnection::new(host)),
+            reader,
+            writer,
+            shutdown.clone(),
+        )
+        .await
+    } else {
+        let address: std::net::SocketAddr = options
+            .listen
+            .strip_prefix("ws://")
+            .ok_or_else(|| io::Error::other("listen must be stdio or ws://IP:PORT"))?
+            .parse()
+            .map_err(io::Error::other)?;
+        let path = options
+            .token
+            .ok_or_else(|| io::Error::other("WebSocket requires --token-file"))?;
+        let mut token = String::new();
+        std::fs::File::open(path)?
+            .take(130)
+            .read_to_string(&mut token)?;
+        if token.len() > 129 {
+            return Err(io::Error::other("transport token file exceeds limit"));
+        }
+        let credential =
+            websocket::Credential::new(token.strip_suffix('\n').unwrap_or(&token).to_owned())?;
+        let listener = tokio::net::TcpListener::bind(address).await?;
+        eprintln!("rustx app-server listening ws://{}", listener.local_addr()?);
+        websocket::serve(listener, host, credential, shutdown.clone()).await
+    }
 }
 
 async fn run(options: Options) -> Result<(), String> {
     // All user-scoped owners and signal listeners exist before readiness.
-    let manager = compose(&options)?;
+    let host = compose(&options)?;
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
         .map_err(|error| error.to_string())?;
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .map_err(|error| error.to_string())?;
     let shutdown = CancellationToken::new();
-    let serving = async {
-        if options.listen == "stdio" {
-            // Tokio's io::stdin uses an uncancellable blocking read. Reactor-owned
-            // pipe FDs instead let disconnect/shutdown drop every pending I/O.
-            let input = std::io::stdin().as_fd().try_clone_to_owned()?;
-            let output = std::io::stdout().as_fd().try_clone_to_owned()?;
-            let reader = tokio::net::unix::pipe::Receiver::from_owned_fd(input)?;
-            let writer = tokio::net::unix::pipe::Sender::from_owned_fd(output)?;
-            stdio::serve(
-                Arc::new(AppServerConnection::new(manager)),
-                reader,
-                writer,
-                shutdown.clone(),
-            )
-            .await
-        } else {
-            let address: std::net::SocketAddr = options
-                .listen
-                .strip_prefix("ws://")
-                .ok_or_else(|| io::Error::other("listen must be stdio or ws://IP:PORT"))?
-                .parse()
-                .map_err(io::Error::other)?;
-            let path = options
-                .token
-                .ok_or_else(|| io::Error::other("WebSocket requires --token-file"))?;
-            let mut token = String::new();
-            std::fs::File::open(path)?
-                .take(130)
-                .read_to_string(&mut token)?;
-            if token.len() > 129 {
-                return Err(io::Error::other("transport token file exceeds limit"));
-            }
-            let credential =
-                websocket::Credential::new(token.strip_suffix('\n').unwrap_or(&token).to_owned())?;
-            let listener = tokio::net::TcpListener::bind(address).await?;
-            eprintln!("rustx app-server listening ws://{}", listener.local_addr()?);
-            websocket::serve(listener, manager, credential, shutdown.clone()).await
+    let transport_host = host.clone();
+    let transport_stop = shutdown.clone();
+    let stdio_mode = options.listen == "stdio";
+    let mut serving = tokio::spawn(serve_transport(options, transport_host, transport_stop));
+    let reaper_host = host.clone();
+    let reaper_stop = CancellationToken::new();
+    let stop = reaper_stop.clone();
+    let reaper = tokio::spawn(async move { reaper_host.manager().run_idle_reaper(stop).await });
+    let mut transport_finished = false;
+    let mut transport_failure = None;
+    loop {
+        tokio::select! {
+            result = &mut serving, if !transport_finished => {
+                transport_finished = true;
+                match result {
+                    Ok(Ok(())) => {},
+                    Ok(Err(error)) => { transport_failure = Some(error.to_string()); },
+                    Err(error) => { transport_failure = Some(error.to_string()); },
+                }
+                if !stdio_mode { break; }
+                // EOF is only detachment. An owned child must receive SIGTERM
+                // (or SIGINT) from its owner to request semantic drain.
+                eprintln!("rustx app-server: stdio detached; awaiting explicit owner shutdown");
+            },
+            _ = interrupt.recv() => break,
+            _ = terminate.recv() => break,
         }
+    }
+    host.begin_drain();
+    let deadline = tokio::time::Instant::now()
+        + std::time::Duration::from_millis(host.policy().shutdown_deadline_ms);
+    reaper_stop.cancel();
+    eprintln!("rustx app-server: Draining; new semantic admission closed");
+    let graceful = async {
+        let (failures, reaper_result) = tokio::join!(host.drain(), reaper);
+        shutdown.cancel();
+        if !transport_finished {
+            match (&mut serving).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => transport_failure = Some(error.to_string()),
+                Err(error) => transport_failure = Some(error.to_string()),
+            }
+        }
+        if !failures.is_empty() {
+            return Err(format!(
+                "runtime settlement failed: {}",
+                failures.join("; ")
+            ));
+        }
+        if let Some(error) = transport_failure {
+            return Err(format!("transport failed: {error}"));
+        }
+        reaper_result.map_err(|error| format!("idle reaper failed: {error}"))?;
+        host.finish_drain()
     };
-    tokio::pin!(serving);
-    let result = tokio::select! {
-        result = &mut serving => result,
-        _ = interrupt.recv() => { shutdown.cancel(); serving.await },
-        _ = terminate.recv() => { shutdown.cancel(); serving.await },
-    };
-    result.map_err(|error| error.to_string())
+    tokio::pin!(graceful);
+    tokio::select! {
+        result = &mut graceful => result,
+        () = tokio::time::sleep_until(deadline) => {
+            force_exit("drain deadline exceeded", &host)
+        },
+        _ = interrupt.recv() => force_exit("second termination request", &host),
+        _ = terminate.recv() => force_exit("second termination request", &host),
+    }
+}
+
+// Executor destruction may wait on blocking operations. Forced host exit
+// bypasses destruction; it neither claims nor fabricates semantic settlement.
+fn force_exit(phase: &str, host: &AppServerHost) -> ! {
+    eprintln!(
+        "rustx app-server: forced host termination: {phase}; runtime settlement unproven: {:?}",
+        host.forced_resources(phase == "drain deadline exceeded")
+    );
+    std::process::exit(3)
 }
 
 /// Run the explicit App Server command. Diagnostics never reach protocol stdout.

@@ -1,9 +1,6 @@
 //! WebSocket admission and framing. Each admitted socket gets its own endpoint.
 use super::{MAX_MESSAGE_BYTES, WRITE_TIMEOUT, failure};
-use crate::{
-    app_server::connection::AppServerConnection,
-    local_runtime::session_runtime_manager::SessionRuntimeManager,
-};
+use crate::{app_server::connection::AppServerConnection, app_server::host::AppServerHost};
 use futures_util::{SinkExt, StreamExt};
 use std::{io, sync::Arc, time::Duration};
 use tokio::{net::TcpListener, task::JoinSet};
@@ -18,6 +15,7 @@ use tokio_tungstenite::{
 use tokio_util::sync::CancellationToken;
 
 /// Includes sockets still completing admission; excess sockets are dropped.
+#[cfg(test)]
 pub const MAX_CLIENTS: usize = 32;
 /// Incomplete/authentication handshakes cannot retain slots indefinitely.
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -51,13 +49,13 @@ impl Credential {
 /// Returns listener accept failures after settling existing connections.
 pub async fn serve(
     listener: TcpListener,
-    manager: SessionRuntimeManager,
+    host: AppServerHost,
     credential: Credential,
     shutdown: CancellationToken,
 ) -> io::Result<()> {
     serve_listener(
         listener,
-        manager,
+        host,
         credential,
         shutdown,
         #[cfg(test)]
@@ -70,7 +68,7 @@ pub async fn serve(
 // tasks. It never participates in production admission or semantic ownership.
 pub(crate) async fn serve_listener(
     listener: TcpListener,
-    manager: SessionRuntimeManager,
+    host: AppServerHost,
     credential: Credential,
     shutdown: CancellationToken,
     #[cfg(test)] slots: Option<tokio::sync::watch::Sender<usize>>,
@@ -87,16 +85,17 @@ pub(crate) async fn serve_listener(
             },
             accepted = listener.accept() => {
                 let (socket, _) = match accepted { Ok(value) => value, Err(error) => break Err(error) };
-                if clients.len() == MAX_CLIENTS { drop(socket); continue; }
-                let manager = manager.clone();
+                let Some(lease) = host.admit_connection(true) else {
+                    // A rejected socket never enters JSON-RPC or a task queue.
+                    let _ = socket.try_write(b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+                    continue;
+                };
+                let host = host.clone();
                 let credential = credential.clone();
                 let stop = stop.clone();
                 clients.spawn(async move {
-                    tokio::select! {
-                        biased;
-                        () = stop.cancelled() => {},
-                        _ = connection(socket, manager, credential, stop.clone()) => {},
-                    }
+                    let _lease = lease;
+                    let _ = connection(socket, host, credential, stop).await;
                 });
                 #[cfg(test)]
                 if let Some(slots) = &slots { slots.send_replace(clients.len()); }
@@ -110,7 +109,7 @@ pub(crate) async fn serve_listener(
 
 pub(crate) async fn connection<S>(
     socket: S,
-    manager: SessionRuntimeManager,
+    host: AppServerHost,
     credential: Credential,
     shutdown: CancellationToken,
 ) -> io::Result<()>
@@ -149,25 +148,30 @@ where
         );
         Ok(response)
     };
-    let socket = tokio::time::timeout(
+    let socket = tokio::select! {
+        () = shutdown.cancelled() => return Ok(()),
+        socket = async { tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
         accept_hdr_async_with_config(socket, callback, Some(config)),
     )
     .await
     .map_err(|_| failure("WebSocket handshake deadline exceeded"))?
-    .map_err(io::Error::other)?;
+    .map_err(io::Error::other) } => socket?,
+    };
     let (mut writer, reader) = socket.split();
-    let incoming = reader.filter_map(|message| async move {
-        match message {
-            Ok(Message::Text(text)) => Some(Ok(text.to_string())),
-            Ok(Message::Binary(_)) => Some(Err(failure("binary protocol message rejected"))),
-            Ok(Message::Close(_)) => Some(Err(failure("WebSocket closed"))),
-            Ok(_) => None,
-            Err(error) => Some(Err(io::Error::other(error))),
-        }
-    });
-    super::serve(
-        Arc::new(AppServerConnection::new(manager)),
+    let incoming = reader
+        .take_while(|message| std::future::ready(!matches!(message, Ok(Message::Close(_)))))
+        .filter_map(|message| async move {
+            match message {
+                Ok(Message::Text(text)) => Some(Ok(text.to_string())),
+                Ok(Message::Binary(_)) => Some(Err(failure("binary protocol message rejected"))),
+                Ok(_) => None,
+                Err(error) => Some(Err(io::Error::other(error))),
+            }
+        });
+    let endpoint = Arc::new(AppServerConnection::new(host));
+    let result = super::serve(
+        endpoint.clone(),
         incoming,
         |mut receiver| async move {
             while let Some(record) = receiver.recv().await {
@@ -176,11 +180,18 @@ where
                     .map_err(|_| failure("WebSocket write deadline exceeded"))?
                     .map_err(io::Error::other)?;
             }
-            Ok(())
+            tokio::time::timeout(WRITE_TIMEOUT, writer.close())
+                .await
+                .map_err(|_| failure("WebSocket close deadline exceeded"))?
+                .map_err(io::Error::other)
         },
         shutdown,
     )
-    .await
+    .await;
+    if result.is_err() {
+        endpoint.transport_failure();
+    }
+    result
 }
 
 #[cfg(test)]

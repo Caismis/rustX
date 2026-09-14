@@ -5,7 +5,7 @@
 //! are plain runtime-owned data and never reference provider SDK or storage
 //! types.
 
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use chrono::{DateTime, Utc};
@@ -81,6 +81,7 @@ struct LifecycleInner {
     /// crossed an admission boundary and have not yet returned. A drain
     /// waits for this to reach zero before observing quiescence.
     admissions: AtomicUsize,
+    activity: AtomicU64,
     /// Serializes the short native commit sections that do not take the
     /// conversation coordinator lock. A drain takes this boundary before
     /// publishing `Draining`; a background ownership or capability commit
@@ -126,6 +127,7 @@ impl Default for ConversationLifecycle {
             inner: Arc::new(LifecycleInner {
                 state: AtomicU8::new(ConversationLifecycleState::INACTIVE),
                 admissions: AtomicUsize::new(0),
+                activity: AtomicU64::new(0),
                 commit_boundary: Mutex::new(()),
                 changed: tokio::sync::Notify::new(),
             }),
@@ -213,6 +215,36 @@ impl ConversationLifecycle {
             .is_ok()
     }
 
+    /// A change token, never a copy of subsystem ownership. An idle probe
+    /// must inspect native owners and then validate this token.
+    pub(crate) fn idle_epoch(&self) -> Option<u64> {
+        let _boundary = self
+            .inner
+            .commit_boundary
+            .lock()
+            .expect("lifecycle boundary");
+        (self.is_running() && self.inner.admissions.load(Ordering::Acquire) == 0)
+            .then(|| self.inner.activity.load(Ordering::Acquire))
+    }
+
+    /// The native idle claim closes autonomous admission only if no owner
+    /// entered since the probe. All admission increments share this boundary.
+    pub(crate) fn begin_idle_drain(&self, epoch: u64) -> bool {
+        let Ok(_boundary) = self.inner.commit_boundary.try_lock() else {
+            return false;
+        };
+        if !self.is_running()
+            || self.inner.admissions.load(Ordering::Acquire) != 0
+            || self.inner.activity.load(Ordering::Acquire) != epoch
+        {
+            return false;
+        }
+        self.inner
+            .state
+            .store(ConversationLifecycleState::DRAINING, Ordering::Release);
+        true
+    }
+
     /// Linearizes an unrecoverable runtime-owned physical-settlement failure
     /// before activation. This is deliberately distinct from ordinary
     /// shutdown: an inactive runtime has no healthy work to cancel, but the
@@ -253,6 +285,7 @@ impl ConversationLifecycle {
         if self.state() != ConversationLifecycleState::Running {
             return Err(self.state());
         }
+        self.inner.activity.fetch_add(1, Ordering::AcqRel);
         self.inner.admissions.fetch_add(1, Ordering::AcqRel);
         let admission = LifecycleAdmission {
             inner: Arc::clone(&self.inner),
@@ -284,6 +317,7 @@ impl ConversationLifecycle {
         if self.state() != ConversationLifecycleState::Running {
             return Err(self.state());
         }
+        self.inner.activity.fetch_add(1, Ordering::AcqRel);
         self.inner.admissions.fetch_add(1, Ordering::AcqRel);
         let admission = LifecycleAdmission {
             inner: Arc::clone(&self.inner),
@@ -299,9 +333,15 @@ impl ConversationLifecycle {
     pub(crate) fn try_enter_running(
         &self,
     ) -> Result<LifecycleAdmission, ConversationLifecycleState> {
+        let _boundary = self
+            .inner
+            .commit_boundary
+            .lock()
+            .expect("lifecycle commit boundary poisoned");
         if self.state() != ConversationLifecycleState::Running {
             return Err(self.state());
         }
+        self.inner.activity.fetch_add(1, Ordering::AcqRel);
         self.inner.admissions.fetch_add(1, Ordering::AcqRel);
         if self.state() == ConversationLifecycleState::Running {
             return Ok(LifecycleAdmission {
@@ -321,6 +361,11 @@ impl ConversationLifecycle {
     pub(crate) fn try_enter_preparation(
         &self,
     ) -> Result<LifecycleAdmission, ConversationLifecycleState> {
+        let _boundary = self
+            .inner
+            .commit_boundary
+            .lock()
+            .expect("lifecycle commit boundary poisoned");
         let state = self.state();
         if !matches!(
             state,
@@ -328,6 +373,7 @@ impl ConversationLifecycle {
         ) {
             return Err(state);
         }
+        self.inner.activity.fetch_add(1, Ordering::AcqRel);
         self.inner.admissions.fetch_add(1, Ordering::AcqRel);
         let after = self.state();
         if matches!(
@@ -367,6 +413,7 @@ impl ConversationLifecycle {
         ) {
             return Err(state);
         }
+        self.inner.activity.fetch_add(1, Ordering::AcqRel);
         self.inner.admissions.fetch_add(1, Ordering::AcqRel);
         Ok(LifecycleAdmission {
             inner: Arc::clone(&self.inner),
@@ -609,6 +656,13 @@ impl DurabilityGate {
             .expect("durability gate lock poisoned")
             .failure
             .is_some()
+    }
+
+    /// Idle claims cannot wait behind another subsystem's durable write.
+    pub(crate) fn healthy_for_idle_claim(&self) -> bool {
+        self.state
+            .try_lock()
+            .is_ok_and(|state| state.failure.is_none())
     }
 
     /// Acquires the ownership-commit permission for one new

@@ -1330,6 +1330,16 @@ impl ConversationBackgroundRegistry {
 
     /// The non-terminal (Starting/Running/Cancelling/PublishingTerminal)
     /// snapshots in execution allocation order. Terminal executions never
+    /// Includes private preparations as well as committed live records.
+    pub(crate) fn owns_idle_work(&self) -> bool {
+        let state = self.state();
+        !state.prepared.is_empty()
+            || state
+                .records
+                .iter()
+                .any(|record| record.lifecycle.is_active())
+    }
+
     /// appear here.
     #[must_use]
     pub fn active_snapshot(&self) -> Vec<BackgroundExecutionSnapshot> {
