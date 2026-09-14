@@ -50,7 +50,7 @@ where
             Ok(record(&mut reader).await?.map(|record| (record, reader)))
         });
     let result = super::serve(
-        connection,
+        connection.clone(),
         incoming,
         |mut receiver| async move {
             while let Some(record) = receiver.recv().await {
@@ -67,6 +67,9 @@ where
         shutdown,
     )
     .await;
+    if result.is_err() {
+        connection.transport_failure();
+    }
     match result {
         Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
         other => other,

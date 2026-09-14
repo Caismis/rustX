@@ -451,6 +451,16 @@ impl GoalDomain {
         Ok(result)
     }
 
+    /// Armed activation owns authority to admit future autonomous work.
+    /// Capability presence and recovered durable Goal state do not.
+    pub(crate) fn owns_autonomous_work(&self) -> bool {
+        *self
+            .inner
+            .armed
+            .lock()
+            .expect("Goal activation lock poisoned")
+    }
+
     pub(crate) fn disarm(&self) {
         let mut armed = self
             .inner

@@ -133,7 +133,7 @@ impl Fixture {
             .arg(self.root.path().join("token"))
             .spawn()
             .unwrap();
-        let line = BufReader::new(child.stderr.take().unwrap())
+        let line = BufReader::new(child.stderr.as_mut().unwrap())
             .lines()
             .next_line()
             .await
@@ -142,7 +142,7 @@ impl Fixture {
         (
             child,
             line.strip_prefix("rustx app-server listening ")
-                .unwrap()
+                .unwrap_or_else(|| panic!("server startup: {line}"))
                 .to_owned(),
         )
     }
@@ -152,6 +152,24 @@ async fn bounded<T>(future: impl Future<Output = T>) -> T {
         .await
         .expect("outer liveness guard")
 }
+fn terminate(child: &Child) {
+    kill(
+        Pid::from_raw(i32::try_from(child.id().unwrap()).unwrap()),
+        Signal::SIGTERM,
+    )
+    .unwrap();
+}
+async fn detach_then_shutdown(child: &mut Child) {
+    let mut lines = BufReader::new(child.stderr.as_mut().unwrap()).lines();
+    let line = lines.next_line().await.unwrap().unwrap();
+    assert!(line.contains("stdio detached"), "{line}");
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "EOF must not shut down the host"
+    );
+    terminate(child);
+}
+
 const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":1,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
@@ -162,6 +180,7 @@ async fn app_server_stdio_real_process_shared_conformance() {
         let driver = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
         app_server_conformance::representative_scenario(&driver, f.sessions.clone()).await;
         driver.close().await;
+        detach_then_shutdown(&mut child).await;
         assert!(child.wait().await.unwrap().success());
     })
     .await;
@@ -322,6 +341,7 @@ async fn app_server_stdio_protocol_errors_are_records_but_framing_is_terminal() 
             serde_json::from_str(&output.next_line().await.unwrap().unwrap()).unwrap();
         assert_eq!(reply["id"], 1);
         drop(input);
+        detach_then_shutdown(&mut child).await;
         assert!(child.wait().await.unwrap().success());
         assert!(output.next_line().await.unwrap().is_none());
         for bytes in [
@@ -333,6 +353,7 @@ async fn app_server_stdio_protocol_errors_are_records_but_framing_is_terminal() 
             let mut input = child.stdin.take().unwrap();
             let _ = input.write_all(&bytes).await;
             drop(input);
+            detach_then_shutdown(&mut child).await;
             let output = child.wait_with_output().await.unwrap();
             assert!(!output.status.success());
             assert!(output.stdout.is_empty());
@@ -396,6 +417,7 @@ async fn app_server_stdio_broken_output_pipe_settles_with_input_still_open() {
             .write_all(format!("{INITIALIZE}\n").as_bytes())
             .await
             .unwrap();
+        detach_then_shutdown(&mut child).await;
         assert!(child.wait().await.unwrap().success());
     })
     .await;
@@ -493,6 +515,7 @@ async fn app_server_explicit_user_settings_are_authoritative_for_both_transports
                 if ws {
                     child.kill().await.unwrap();
                 } else {
+                    detach_then_shutdown(&mut child).await;
                     assert!(child.wait().await.unwrap().success());
                 }
             }
@@ -525,5 +548,191 @@ async fn app_server_explicit_user_settings_fail_before_readiness() {
             }
         }
     })
+    .await;
+}
+
+async fn rpc(
+    client: &driver::Driver,
+    id: i64,
+    call: rustx::app_server::protocol::Method,
+) -> rustx::app_server::protocol::Response {
+    use app_server_conformance::AppServerConformanceDriver;
+    use rustx::app_server::protocol::*;
+    client
+        .request(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(id),
+            call,
+        })
+        .await
+}
+async fn initialize_client(client: &driver::Driver) {
+    let request: rustx::app_server::protocol::Request = serde_json::from_str(INITIALIZE).unwrap();
+    assert!(matches!(
+        rpc(client, 1, request.call).await,
+        rustx::app_server::protocol::Response::Success(_)
+    ));
+}
+async fn attach(
+    client: &driver::Driver,
+    session: SessionId,
+    id: i64,
+) -> rustx::app_server::protocol::AttachmentTarget {
+    use rustx::app_server::protocol::*;
+    let Response::Success(response) = rpc(
+        client,
+        id,
+        Method::SessionAttach {
+            session_id: session,
+            node_id: None,
+        },
+    )
+    .await
+    else {
+        panic!("attach")
+    };
+    let MethodResult::Attached { target, .. } = response.result else {
+        panic!("attached")
+    };
+    target
+}
+
+#[tokio::test]
+async fn app_server_owned_stdio_shutdown_cold_resumes_multiple_sessions() {
+    bounded(async {
+        use rustx::app_server::protocol::*;
+        let f = Fixture::new().await;
+        for _ in 0..2 {
+            let mut child = f.command("stdio").spawn().unwrap();
+            let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+            initialize_client(&client).await;
+            let a = attach(&client, f.sessions[0].clone(), 2).await;
+            attach(&client, f.sessions[1].clone(), 3).await;
+            assert!(matches!(
+                rpc(&client, 4, Method::SessionDetach { target: a }).await,
+                Response::Success(_)
+            ));
+            let Response::Success(response) = rpc(&client, 5, Method::ServerDiagnostics {}).await
+            else {
+                panic!("diagnostics")
+            };
+            let MethodResult::Diagnostics { snapshot } = response.result else {
+                panic!("snapshot")
+            };
+            assert_eq!(snapshot.loaded, 2, "focus change is not unload");
+            terminate(&child);
+            let output = child.wait_with_output().await.unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                String::from_utf8_lossy(&output.stderr)
+                    .contains("Draining; new semantic admission closed")
+            );
+            client.close().await;
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn app_server_websocket_drain_supervises_active_root_and_cold_resume() {
+    Box::pin(bounded(async {
+        use rustx::app_server::protocol::*;
+        use tokio::io::AsyncReadExt;
+        for forced in [false, true] {
+            let f = Fixture::new().await;
+            if forced {
+                let settings = f.root.path().join("home/.config/rustx/settings.toml");
+                let mut text = std::fs::read_to_string(&settings).unwrap();
+                text.push_str("\n[app_server]\nshutdown_deadline_ms = 2000\n");
+                std::fs::write(settings, text).unwrap();
+            }
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let models = f.root.path().join("home/.config/rustx/models.toml");
+            let text = std::fs::read_to_string(&models)
+                .unwrap()
+                .replace("127.0.0.1:9", &listener.local_addr().unwrap().to_string());
+            std::fs::write(models, text).unwrap();
+            let controller = SessionController::open(&f.root.path().join("runtime")).unwrap();
+            let database = controller
+                .acquire_session(&f.sessions[0], None)
+                .await
+                .unwrap()
+                .database_path;
+            drop(controller);
+            let (mut child, url) = f.ws().await;
+            let client = driver::websocket(&url).await;
+            initialize_client(&client).await;
+            let a = attach(&client, f.sessions[0].clone(), 2).await;
+            attach(&client, f.sessions[1].clone(), 3).await;
+            let content = vec![rustx::message::types::UserContentBlock::Text(
+                rustx::message::content::TextBlock {
+                    text: "owned root".into(),
+                },
+            )];
+            assert!(matches!(
+                rpc(&client, 4, Method::TurnStart { target: a, content }).await,
+                Response::Success(_)
+            ));
+            let (mut request, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 4096];
+            assert!(
+                request.read(&mut bytes).await.unwrap() > 0,
+                "provider request really started"
+            );
+            // Hold durable terminal publication at a real boundary. Native drain
+            // still owns the attempt; refusing new input needs no storage lock.
+            let database = rusqlite::Connection::open(database).unwrap();
+            database.execute_batch("BEGIN IMMEDIATE").unwrap();
+            terminate(&child);
+            let mut lines = BufReader::new(child.stderr.as_mut().unwrap()).lines();
+            let line = lines.next_line().await.unwrap().unwrap();
+            assert!(
+                line.contains("Draining; new semantic admission closed"),
+                "{line}"
+            );
+            let Response::Failure(response) = rpc(
+                &client,
+                5,
+                Method::SessionAttach {
+                    session_id: f.sessions[0].clone(),
+                    node_id: None,
+                },
+            )
+            .await
+            else {
+                panic!("post-drain admission")
+            };
+            assert_eq!(response.error.data, Some(ErrorData::ServerDraining));
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "settlement not yet proven"
+            );
+            if forced {
+                let output = child.wait_with_output().await.unwrap();
+                assert_eq!(output.status.code(), Some(3));
+                assert!(
+                    String::from_utf8_lossy(&output.stderr).contains("runtime settlement unproven")
+                );
+                database.execute_batch("ROLLBACK").unwrap();
+            } else {
+                database.execute_batch("ROLLBACK").unwrap();
+                assert!(child.wait().await.unwrap().success());
+            }
+            drop(request);
+            client.close().await;
+            let (mut replacement, url) = f.ws().await;
+            let client = driver::websocket(&url).await;
+            initialize_client(&client).await;
+            attach(&client, f.sessions[0].clone(), 6).await;
+            attach(&client, f.sessions[1].clone(), 7).await;
+            terminate(&replacement);
+            assert!(replacement.wait().await.unwrap().success());
+            client.close().await;
+        }
+    }))
     .await;
 }

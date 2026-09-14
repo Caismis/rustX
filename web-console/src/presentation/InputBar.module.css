@@ -1,0 +1,94 @@
+/* Selected DeepSeek Harness presentation rules; see PROVENANCE.md. */
+.root {
+display: flex;
+  flex-direction: column;
+  align-items: center;
+
+  padding: 0 var(--dsh-composer-side-clearance) 8px;
+}
+
+.card {
+box-sizing: border-box;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+
+  gap: 12px;
+  width: 100%;
+  max-width: var(--dsh-composer-card-max-width);
+  padding-top: 8px;
+
+  border: 0;
+  --dsw-elevation-stroke-color: var(--dsw-alias-border-l2);
+  border-radius: 22px;
+  background: var(--dsw-specific-input-major);
+  box-shadow: var(--dsw-elevation-soft);
+
+  font-size: var(--dsh-content-font-size, 14px);
+  line-height: calc(24px + var(--dsh-content-font-delta, 0px));
+
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+}
+
+.scroll {
+max-height: var(--dsh-composer-text-max-height);
+  overflow-y: auto;
+
+  margin-right: 4px;
+}
+
+.scroll::-webkit-scrollbar-track {
+margin-top: 8px;
+}
+
+.grow {
+position: relative;
+}
+
+.input {
+box-sizing: border-box;
+
+  min-height: 36px;
+  padding: 4px 8px 0 14px;
+  font-family: var(--dsw-font-family);
+  font-size: inherit;
+  line-height: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  outline: none;
+  color: var(--dsw-alias-label-primary);
+
+  caret-color: var(--dsw-alias-state-business-primary);
+}
+
+.row {
+display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+
+  padding: 2px 8px 6px;
+  min-width: 0;
+
+  container-type: inline-size;
+}
+
+.trailing {
+display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.trailing {
+flex: none;
+
+  margin-left: auto;
+  gap: 12px;
+}
+
+.input { width: 100%; border: none; background: transparent; resize: vertical; max-height: 260px; }
+.card { border: 1px solid var(--dsw-alias-border-l3); }
+.row { container-type: normal; }

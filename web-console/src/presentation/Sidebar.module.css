@@ -1,0 +1,49 @@
+/* Selected DeepSeek Harness presentation rules; see PROVENANCE.md. */
+.root {
+--dsh-sidebar-inline-padding: 12px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 6px var(--dsh-sidebar-inline-padding);
+  box-sizing: border-box;
+  background: var(--dsw-specific-sidebar-fill);
+  color: var(--dsw-alias-label-primary);
+  font-size: 14px;
+
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+}
+
+.logoRow {
+flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  height: 60px;
+  padding: 8px 0 8px 4px;
+  margin-bottom: 8px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.regionArea {
+flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin-left: -4px;
+  margin-right: calc(-1 * var(--dsh-sidebar-inline-padding));
+  padding-left: 4px;
+  overflow: hidden;
+}
+
+.footArea {
+flex: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.logoRow { justify-content: flex-start; height: auto; min-height: 80px; flex-wrap: wrap; }
+.regionArea { flex: 1; overflow: auto; min-height: 0; }
+.footArea { padding: 12px 2px; }

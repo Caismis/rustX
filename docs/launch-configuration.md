@@ -679,3 +679,13 @@ external executable/package preparation reads are intentionally owned separately
 
 Schema 8 persists only explicit Session input, preserving omitted model and Tool
 selections. See [durable Session fields and their rationale](durable-sessions.md#persisted-configuration-classification). Cold resume uses these inputs with the same current-source resolver; effective configuration is never catalog authority.
+
+### App Server process policy
+
+The user-only `[app_server]` table configures bounded runtime residency, physical
+connections, external attachments, idle grace and the host shutdown deadline.
+It is parsed through `RuntimeLayer` and validated by `UserConfigManager` before
+App Server readiness. It is not an effective Conversation configuration field,
+resource reload input, or durable Session selection. Project overrides are
+rejected. See [App Server process residency and drain](app-server-protocol.md#process-residency-and-drain-policy-291)
+for defaults, limits, refusal semantics and ownership invariants.

@@ -1,0 +1,180 @@
+{
+  "repository": "https://github.com/deepseek-ai/deepseek-harness",
+  "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+  "files": [
+    {
+      "upstream": "packages/client/ui-primitives/src/Button.tsx",
+      "destination": "web-console/src/presentation/primitives/Button.tsx",
+      "treatment": "retained mostly intact",
+      "upstream_sha256": "5f1db06042fa372c45d777feffaab3b1d0c9395a89fa00b735bd9cbc8a389371"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/Button.module.css",
+      "destination": "web-console/src/presentation/primitives/Button.module.css",
+      "treatment": "retained mostly intact",
+      "upstream_sha256": "a32017eff252569cef883d7d3308b2ca01fc41b167b568ad00b923603a902f99"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/Input.tsx",
+      "destination": "web-console/src/presentation/primitives/Input.tsx",
+      "treatment": "retained mostly intact",
+      "upstream_sha256": "dcb73dad681f3f37975c08ed3aa97922a1f5337548b406806324877a5d398c51"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/Input.module.css",
+      "destination": "web-console/src/presentation/primitives/Input.module.css",
+      "treatment": "retained mostly intact",
+      "upstream_sha256": "f13333abf03b98d52bd65702ac34fbbf00b3c4fc3d8985b793d5e912a3e22b2e"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/Pill.tsx",
+      "destination": "web-console/src/presentation/primitives/Pill.tsx",
+      "treatment": "retained mostly intact",
+      "upstream_sha256": "851727b4f745755f8553a92bc5881e54d0479ea680d1686533ba210cb943ca2f"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/Pill.module.css",
+      "destination": "web-console/src/presentation/primitives/Pill.module.css",
+      "treatment": "retained mostly intact",
+      "upstream_sha256": "c1c39eb6adc0e40326f7a33598a32195b388cb9db2627a9c723c009b44a94dab"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/StateDot.tsx",
+      "destination": "web-console/src/presentation/primitives/StateDot.tsx",
+      "treatment": "retained mostly intact",
+      "upstream_sha256": "94e287b278d5481d6812dae820a95afee6856d34b4056bfd84017f43a5b43ad2"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/StateDot.module.css",
+      "destination": "web-console/src/presentation/primitives/StateDot.module.css",
+      "treatment": "retained mostly intact",
+      "upstream_sha256": "21c9dca85dffbae6e31da3bfd4c4578739282f9ed3b9a3bbf68b6b12338879de"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/DisclosureRow.tsx",
+      "destination": "web-console/src/presentation/primitives/DisclosureRow.tsx",
+      "treatment": "retained mostly intact",
+      "upstream_sha256": "0c65c0f0f14f9fdaf4dda6aeea6c73bf803c4591d64f53784928aaa559cc9b96"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/DisclosureRow.module.css",
+      "destination": "web-console/src/presentation/primitives/DisclosureRow.module.css",
+      "treatment": "retained mostly intact",
+      "upstream_sha256": "40cdcab1f8821760ba2a59ff859b4c4fb894ea373b27083076c0e4f995373712"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/icons/props.ts",
+      "destination": "web-console/src/presentation/primitives/icons/props.ts",
+      "treatment": "retained mostly intact",
+      "upstream_sha256": "98d350861746bca58f07d5301a0caff7270035c9331ed5b605e702d7f590f1fb"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/icons/index.tsx",
+      "destination": "web-console/src/presentation/primitives/icons/index.tsx",
+      "treatment": "adapted: four generic glyphs only",
+      "upstream_sha256": "c0035537e5c3ffe75614daeca9d3b163d70048023e897a670cfa6fb70238df80"
+    },
+    {
+      "upstream": "packages/client/ui-theme/src/styles/base.css",
+      "destination": "web-console/src/presentation/theme/base.css",
+      "treatment": "retained mostly intact",
+      "upstream_sha256": "85f8970d2650108ad47d66da1db3ba00ebbe3f26aaec00551cfa69dd029347a3"
+    },
+    {
+      "upstream": "packages/client/ui-theme/src/styles/design-platform.css",
+      "destination": "web-console/src/presentation/theme/tokens.css",
+      "treatment": "adapted: generic tokens; brand token renamed accent",
+      "upstream_sha256": "ba4f1ec7f164756c67f33101c6851ec5e8fa26d61cff7e0be61e30c4f58db28c"
+    },
+    {
+      "upstream": "packages/client/ui-layout/src/client/AppFrame.tsx",
+      "destination": "web-console/src/presentation/AppFrame.tsx",
+      "treatment": "substantially refactored: presentation extracted; native rustX bindings",
+      "upstream_sha256": "69f66f2c725120000014c7fc25b66f79632b3b4bb6899b1b81b0678819158841"
+    },
+    {
+      "upstream": "packages/client/ui-layout/src/client/AppFrame.module.css",
+      "destination": "web-console/src/presentation/AppFrame.module.css",
+      "treatment": "substantially refactored: presentation extracted; native rustX bindings",
+      "upstream_sha256": "3ea2d3c3035a26484ee5e7760f5f6d53719b5a665cac1e09dca96bf88e8e44ec"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar/src/client/SidebarRoot.tsx",
+      "destination": "web-console/src/presentation/Sidebar.tsx",
+      "treatment": "substantially refactored: presentation extracted; native rustX bindings",
+      "upstream_sha256": "9b9df86191667670fcbe81d9d8d23f654e01e83cec8571b36edcd55842a96f2b"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar/src/client/SidebarRoot.module.css",
+      "destination": "web-console/src/presentation/Sidebar.module.css",
+      "treatment": "substantially refactored: presentation extracted; native rustX bindings",
+      "upstream_sha256": "aa6b29bceab34a49e00c7c10c0448eaab288acedc1adedf27b96235db4e6265e"
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/chat/MessageItem.tsx",
+      "destination": "web-console/src/presentation/MessageItem.tsx",
+      "treatment": "substantially refactored: presentation extracted; native rustX bindings",
+      "upstream_sha256": "634797fd0b3145ada0e6206fdafc323605d901aabfaa2391a0074601d1dbd0dc"
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/chat/MessageItem.module.css",
+      "destination": "web-console/src/presentation/MessageItem.module.css",
+      "treatment": "substantially refactored: presentation extracted; native rustX bindings",
+      "upstream_sha256": "ed4aea46312d0161c98305514b111158f688219f952860a12bc270e2bae62de5"
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
+      "destination": "web-console/src/presentation/InputBar.tsx",
+      "treatment": "substantially refactored: presentation extracted; native rustX bindings",
+      "upstream_sha256": "98fd669d20af309e31bf2cf0cc591b247905acf9ae02c98a3248c02429742477"
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.module.css",
+      "destination": "web-console/src/presentation/InputBar.module.css",
+      "treatment": "substantially refactored: presentation extracted; native rustX bindings",
+      "upstream_sha256": "f7483b4349fe46089ae368d5b785d3576d16c284077c64ec039d19bd50dae2ae"
+    },
+    {
+      "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.tsx",
+      "destination": "web-console/src/presentation/ToolRow.tsx",
+      "treatment": "substantially refactored: presentation extracted; native rustX bindings",
+      "upstream_sha256": "895df84f71e8efd25256843ee16afaa53d609e93e12c973f02c478d615d33137"
+    },
+    {
+      "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.module.css",
+      "destination": "web-console/src/presentation/ToolRow.module.css",
+      "treatment": "substantially refactored: presentation extracted; native rustX bindings",
+      "upstream_sha256": "84b5078051034c194b743b4fd3b607acaa847fff3b1adad717342ff40acac439"
+    },
+    {
+      "upstream": "packages/client/ui-approval/src/client/ApprovalPanel.tsx",
+      "destination": "web-console/src/presentation/ApprovalPanel.tsx",
+      "treatment": "substantially refactored: presentation extracted; native rustX bindings",
+      "upstream_sha256": "e108d9a196672dc99613d5789569c6bd3f49ef689aa1e33817bc6cecfa03e6aa"
+    },
+    {
+      "upstream": "packages/client/ui-approval/src/client/ApprovalPanel.module.css",
+      "destination": "web-console/src/presentation/ApprovalPanel.module.css",
+      "treatment": "substantially refactored: presentation extracted; native rustX bindings",
+      "upstream_sha256": "d2baf40fcc375fa4189322bf1b91b84e2d3335704a06fe0d294a9803817bdd64"
+    },
+    {
+      "upstream": "packages/client/ui-user-questions/src/client/QuestionComposer.tsx",
+      "destination": "web-console/src/presentation/QuestionComposer.tsx",
+      "treatment": "substantially refactored: presentation extracted; native rustX bindings",
+      "upstream_sha256": "9a3f529576191c8424544273c562e6f84741bd667b2a8efefac9c26dbaf82a02"
+    },
+    {
+      "upstream": "packages/client/ui-user-questions/src/client/QuestionComposer.module.css",
+      "destination": "web-console/src/presentation/QuestionComposer.module.css",
+      "treatment": "substantially refactored: presentation extracted; native rustX bindings",
+      "upstream_sha256": "2f1f5a9b40b7df4645f9cd2f858806333400cf1ac8c0a8d45029b0bb6799b50c"
+    },
+    {
+      "upstream": "LICENSE",
+      "destination": "web-console/public/LICENSE-DeepSeek-Harness.txt",
+      "treatment": "retained mostly intact",
+      "upstream_sha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be"
+    }
+  ]
+}

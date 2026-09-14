@@ -10,12 +10,12 @@ use super::protocol::{
 };
 use crate::local_runtime::session::SessionId;
 use crate::local_runtime::session_controller::SessionController;
-use crate::local_runtime::session_runtime_manager::{
-    ManagedRuntimeClient, RuntimeManagerError, SessionRuntimeManager,
-};
+use crate::local_runtime::session_runtime_manager::{ManagedRuntimeClient, RuntimeManagerError};
 use crate::runtime_client::attachment::RuntimeAttachment;
 use crate::runtime_client::host::EventDelivery;
 use crate::runtime_client::types::{RuntimeClientError, RuntimeClientResult};
+
+use super::host::{AppServerHost, AttachmentPermit, HostAdmissionError};
 
 const MAX_ATTACHMENTS: usize = 32;
 
@@ -37,7 +37,11 @@ struct AttachReservation {
 }
 
 impl AttachReservation {
-    fn new(table: &Arc<Mutex<RouteTable>>, session: &SessionId) -> Result<Self, RpcError> {
+    fn new(
+        table: &Arc<Mutex<RouteTable>>,
+        session: &SessionId,
+        host: &AppServerHost,
+    ) -> Result<Self, RpcError> {
         let mut routes = table.lock().expect("routes mutex");
         if routes.closed {
             return Err(domain(ErrorData::StaleAttachment));
@@ -46,7 +50,8 @@ impl AttachReservation {
             return Err(domain(ErrorData::ControllerInUse));
         }
         if routes.active.len() + routes.reserved.len() >= MAX_ATTACHMENTS {
-            return Err(domain(ErrorData::InvalidState));
+            host.attachment_capacity_refused();
+            return Err(domain(ErrorData::AttachmentCapacity));
         }
         routes.reserved.insert(session.clone());
         Ok(Self {
@@ -96,6 +101,8 @@ fn release_route(table: &Mutex<RouteTable>, route: &Arc<Route>) {
     {
         routes.active.remove(&route.target.session_id);
         route.attachment.detach();
+        route.external.release();
+        route.capacity.release();
     }
 }
 
@@ -103,21 +110,32 @@ struct Route {
     target: AttachmentTarget,
     client: ManagedRuntimeClient,
     attachment: RuntimeAttachment,
+    external: crate::local_runtime::session_runtime_manager::RuntimeResidencyPin,
+    capacity: AttachmentPermit,
 }
 
 /// A transport may share this connection across concurrent request handlers.
 /// A single notification consumer drives fan-in directly, without pump tasks.
+#[derive(Clone)]
 pub struct AppServerConnection {
-    manager: SessionRuntimeManager,
+    host: AppServerHost,
     sessions: SessionController,
-    initialized: Mutex<Option<InitializeParams>>,
+    initialized: Arc<Mutex<Option<InitializeParams>>>,
     routes: Arc<Mutex<RouteTable>>,
     changed: Arc<tokio::sync::Notify>,
-    reader: tokio::sync::Mutex<()>,
-    next_route: std::sync::atomic::AtomicUsize,
+    reader: Arc<tokio::sync::Mutex<()>>,
+    next_route: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl AppServerConnection {
+    pub(crate) fn server_draining(&self) -> bool {
+        self.host.server_draining()
+    }
+
+    pub(crate) fn transport_failure(&self) {
+        self.host.transport_failure();
+    }
+
     #[cfg(test)]
     pub(crate) fn attachment_counts(&self) -> (usize, usize) {
         let routes = self.routes.lock().expect("routes mutex");
@@ -125,15 +143,15 @@ impl AppServerConnection {
     }
 
     #[must_use]
-    pub fn new(manager: SessionRuntimeManager) -> Self {
+    pub fn new(host: AppServerHost) -> Self {
         Self {
-            sessions: manager.session_controller(),
-            manager,
-            initialized: Mutex::new(None),
+            sessions: host.manager().session_controller(),
+            host,
+            initialized: Arc::new(Mutex::new(None)),
             routes: Arc::new(Mutex::new(RouteTable::default())),
             changed: Arc::new(tokio::sync::Notify::new()),
-            reader: tokio::sync::Mutex::new(()),
-            next_route: std::sync::atomic::AtomicUsize::new(0),
+            reader: Arc::new(tokio::sync::Mutex::new(())),
+            next_route: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -148,6 +166,8 @@ impl AppServerConnection {
         routes.closed = true;
         for (_, route) in std::mem::take(&mut routes.active) {
             route.attachment.detach();
+            route.external.release();
+            route.capacity.release();
         }
         self.changed.notify_one();
     }
@@ -215,7 +235,27 @@ impl AppServerConnection {
         if !valid_request_id(&id) {
             return failure(None, domain(ErrorData::InvalidParams));
         }
-        match Box::pin(self.dispatch(request.call)).await {
+        // Catalog mutations retain their owner if the protocol waiter leaves.
+        // Runtime operations already transfer ownership at start_operation;
+        // attachment reservations intentionally remain caller-cancellable.
+        let result = if matches!(
+            &request.call,
+            Method::SessionCreate { .. }
+                | Method::SessionName { .. }
+                | Method::SessionDelete { .. }
+                | Method::SessionFork { .. }
+                | Method::SessionBranch { .. }
+                | Method::SessionRecoverDeletion { .. }
+                | Method::SettingsReplace { .. }
+        ) {
+            let connection = self.clone();
+            tokio::spawn(async move { Box::pin(connection.dispatch(request.call)).await })
+                .await
+                .unwrap_or_else(|_| Err(domain(ErrorData::OperationFailed)))
+        } else {
+            Box::pin(self.dispatch(request.call)).await
+        };
+        match result {
             Ok(result) => Response::Success(Box::new(Success {
                 jsonrpc: JsonRpcVersion::V2,
                 id,
@@ -256,6 +296,11 @@ impl AppServerConnection {
         if self.initialized.lock().expect("initialize mutex").is_none() {
             return Err(domain(ErrorData::NotInitialized));
         }
+        if matches!(method, Method::ServerDiagnostics {}) {
+            return Ok(MethodResult::Diagnostics {
+                snapshot: self.host.diagnostics(),
+            });
+        }
         if let Some(target) = runtime_target(&method) {
             let route = self.route(target)?;
             let client = route.client.clone();
@@ -270,29 +315,39 @@ impl AppServerConnection {
                 {
                     return Err(domain(ErrorData::StaleAttachment));
                 }
-                // Close cannot revoke authority after operation admission. The
-                // captured native owner lives only inside the manager-owned task.
-                client
-                    .start_operation(move || {
-                        let authority = route.attachment.operation_authority();
-                        async move {
-                            dispatch_runtime(
-                                method,
-                                route,
-                                authority.map_err(client_error)?,
-                                changed,
-                            )
-                            .await
-                        }
+                // Route close -> host drain -> residency claim: host drain
+                // cannot interpose after request admission but before its native
+                // operation lease. Only capture authority here; execution is
+                // owned by the manager task outside these admission locks.
+                self.host
+                    .admit_request(|request_owner| {
+                        client.start_operation(move || {
+                            let authority = route.attachment.operation_authority();
+                            async move {
+                                let _request = request_owner;
+                                dispatch_runtime(
+                                    method,
+                                    route,
+                                    authority.map_err(client_error)?,
+                                    changed,
+                                )
+                                .await
+                            }
+                        })
                     })
+                    .map_err(host_error)?
                     .map_err(manager_error)?
             };
             return receiver
                 .await
                 .map_err(|_| domain(ErrorData::OperationFailed))?;
         }
+        let request_owner = self
+            .host
+            .admit_request(std::convert::identity)
+            .map_err(host_error)?;
         match method {
-            Method::Initialize(_) => unreachable!(),
+            Method::Initialize(_) | Method::ServerDiagnostics {} => unreachable!(),
             Method::SessionDetach { target } => {
                 // Removing a connection relationship needs no live-runtime lease.
                 let route = self.route(&target)?;
@@ -311,12 +366,13 @@ impl AppServerConnection {
                 .map_err(session_error),
             Method::SessionUnload { target } => {
                 let route = self.route(&target)?;
-                let manager = self.manager.clone();
+                let manager = self.host.manager().clone();
                 let routes = self.routes.clone();
                 let changed = self.changed.clone();
                 let (sender, receiver) = tokio::sync::oneshot::channel();
                 // Cleanup is server-owned even if the initiating caller goes away.
                 tokio::spawn(async move {
+                    let _request = request_owner;
                     let result = manager
                         .unload_incarnation(&target.conversation_id, target.runtime_incarnation)
                         .await
@@ -440,21 +496,26 @@ impl AppServerConnection {
                 session_id,
                 node_id,
             } => {
-                let reservation = AttachReservation::new(&self.routes, &session_id)?;
+                let capacity = self.host.admit_attachment().map_err(host_error)?;
+                let reservation = AttachReservation::new(&self.routes, &session_id, &self.host)?;
                 // Reservation is request-scoped; once claimed, Loading is
                 // manager-scoped. Dropping this request does not roll it back.
                 let runtime = self
-                    .manager
+                    .host
+                    .manager()
                     .load(&session_id, node_id.as_ref())
                     .await
                     .map_err(manager_error)?;
                 let result = reservation.commit(|| {
                     let client = runtime.client();
-                    let crate::runtime_client::attachment::AttachedSnapshot {
-                        attachment,
-                        snapshot,
-                        cursor,
-                    } = client.attach().map_err(manager_error)?;
+                    let (
+                        crate::runtime_client::attachment::AttachedSnapshot {
+                            attachment,
+                            snapshot,
+                            cursor,
+                        },
+                        external,
+                    ) = client.attach().map_err(manager_error)?;
                     let target = AttachmentTarget {
                         session_id: session_id.clone(),
                         conversation_id: runtime.conversation_id().clone(),
@@ -466,6 +527,8 @@ impl AppServerConnection {
                             target: target.clone(),
                             client,
                             attachment,
+                            external,
+                            capacity,
                         }),
                         MethodResult::Attached {
                             target,
@@ -584,7 +647,9 @@ impl AppServerConnection {
 
 impl Drop for AppServerConnection {
     fn drop(&mut self) {
-        self.close();
+        if Arc::strong_count(&self.initialized) == 1 {
+            self.close();
+        }
     }
 }
 
@@ -819,6 +884,7 @@ fn client_error(error: RuntimeClientError) -> RpcError {
 }
 fn manager_error(error: RuntimeManagerError) -> RpcError {
     match error {
+        RuntimeManagerError::ResidencyCapacity => domain(ErrorData::ResidencyCapacity),
         RuntimeManagerError::StaleIncarnation => domain(ErrorData::StaleRuntime),
         RuntimeManagerError::Client(error) => client_error(error),
         _ => domain(ErrorData::OperationFailed),
@@ -858,5 +924,13 @@ fn failure(id: Option<RequestId>, error: RpcError) -> Response {
         jsonrpc: JsonRpcVersion::V2,
         id,
         error,
+    })
+}
+
+fn host_error(error: HostAdmissionError) -> RpcError {
+    domain(match error {
+        HostAdmissionError::ServerDraining => ErrorData::ServerDraining,
+        HostAdmissionError::RequestCapacity => ErrorData::RequestCapacity,
+        HostAdmissionError::AttachmentCapacity => ErrorData::AttachmentCapacity,
     })
 }

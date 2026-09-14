@@ -100,6 +100,11 @@ to stdio JSONL with a TUI-owned App Server child and existing/remote TUI to
 WebSocket with an externally managed server. Ordinary local use needs no loopback
 WebSocket. Connection detach is separate from owner-driven child-process shutdown.
 
+The [Developer Web Console](web-console/README.md) uses this App Server directly.
+It adapts a pinned subset of DeepSeek Harness presentation source for concurrent
+Sessions, native interactions and a bounded raw JSON-RPC inspector. No Harness
+backend is required.
+
 ## Filesystem and native tools
 
 `--workspace` establishes the runtime's authoritative execution cwd and the

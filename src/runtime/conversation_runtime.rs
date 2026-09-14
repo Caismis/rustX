@@ -966,6 +966,22 @@ struct DrainCompletion {
     notify: tokio::sync::Notify,
 }
 
+/// Conservative native idle refusal; no App Server copy of execution state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IdleBusyReason {
+    LifecycleOwner,
+    Foreground,
+    Recovery,
+    Capability,
+    Durability,
+    AutonomousExtension,
+    Inbound,
+    Interaction,
+    Background,
+    Subagent,
+    AdmissionChanged,
+}
+
 /// The narrow set of operations that can start the one runtime drain.
 ///
 /// An MCP settlement failure is a drain trigger rather than a separate
@@ -1407,6 +1423,53 @@ impl RuntimeInner {
     /// acceptance, model updates, and attempt admission. The shared
     /// lifecycle admission guards serialize it with background ownership and
     /// capability commits that have their own native synchronization owner.
+    fn idle_epoch_locked(&self, state: &CoordinatorState) -> Result<u64, IdleBusyReason> {
+        use IdleBusyReason as Busy;
+        let epoch = self.lifecycle.idle_epoch().ok_or(Busy::LifecycleOwner)?;
+        if state.current_attempt.is_some() || state.manual_compaction.is_some() {
+            return Err(Busy::Foreground);
+        }
+        if state.resource_reload_in_progress {
+            return Err(Busy::Capability);
+        }
+        if state.recovered_continuation {
+            return Err(Busy::Recovery);
+        }
+        if self.durability_gate.is_failed()
+            || state.mcp_settlement_failure.is_some()
+            || state.admission_durability_cycle.pending_retry.is_some()
+        {
+            return Err(Busy::Durability);
+        }
+        if self
+            .tool_runtime
+            .goal()
+            .is_some_and(crate::goal::GoalDomain::owns_autonomous_work)
+        {
+            return Err(Busy::AutonomousExtension);
+        }
+        if self.mailbox.has_pending().map_err(|_| Busy::Durability)? {
+            return Err(Busy::Inbound);
+        }
+        if !self.interaction.pending_snapshot().is_empty() {
+            return Err(Busy::Interaction);
+        }
+        if self.tool_runtime.background().owns_idle_work() {
+            return Err(Busy::Background);
+        }
+        if self
+            .subagents
+            .as_ref()
+            .is_some_and(|s| !s.unsettled_snapshot().is_empty())
+        {
+            return Err(Busy::Subagent);
+        }
+        if self.lifecycle.idle_epoch() != Some(epoch) {
+            return Err(Busy::AdmissionChanged);
+        }
+        Ok(epoch)
+    }
+
     fn begin_drain(self: &Arc<Self>) -> Result<Arc<DrainCompletion>, ShutdownError> {
         self.begin_drain_internal(DrainTrigger::RuntimeShutdown)
     }
@@ -1444,8 +1507,9 @@ impl RuntimeInner {
                     if !mcp_failure {
                         return Err(ShutdownError::Inactive);
                     }
+                    let transitioned = self.lifecycle.begin_failure_drain();
                     debug_assert!(
-                        self.lifecycle.begin_failure_drain(),
+                        transitioned,
                         "the coordinator lock owns the inactive failure transition"
                     );
                     first = true;
@@ -1471,8 +1535,9 @@ impl RuntimeInner {
                             .cancellation
                             .request_cancel(CancellationReason::RuntimeShutdown);
                     }
+                    let transitioned = self.lifecycle.begin_drain();
                     debug_assert!(
-                        self.lifecycle.begin_drain(),
+                        transitioned,
                         "the coordinator lock owns the runtime drain transition"
                     );
                     first = true;
@@ -1489,7 +1554,21 @@ impl RuntimeInner {
                     }
                     self.wake.close();
                 }
-                ConversationLifecycleState::Draining | ConversationLifecycleState::Quiescent => {}
+                ConversationLifecycleState::Draining => {
+                    // An idle claim has already closed admission without starting
+                    // external teardown under the manager registry lock.
+                    first = !self.drain_started.load(Ordering::Acquire);
+                    if first {
+                        self.observe(ConversationObservation::Shutdown);
+                    }
+                    self.wake.close();
+                }
+                ConversationLifecycleState::Quiescent => {}
+            }
+            if first {
+                // Reserve the existing supervisor under the same coordinator
+                // boundary. A second shutdown cannot repeat external teardown.
+                first = !self.drain_started.swap(true, Ordering::AcqRel);
             }
             // This test-only park is deliberately inside the coordinator
             // critical section. It proves that an MCP failure cannot expose
@@ -1550,20 +1629,14 @@ impl RuntimeInner {
             // keep the physical runtime alive until those owners settle, but
             // the generation itself no longer blocks drain indefinitely.
             self.capability.retire_current_mcp_runtimes();
-            if self
-                .drain_started
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                let inner = Arc::clone(self);
-                let completion_for_task = completion.clone();
-                self.executor.spawn(async move {
-                    let result = inner
-                        .drain_to_quiescence(completion_for_task.clone(), interaction_cancel_reason)
-                        .await;
-                    completion_for_task.complete(result);
-                });
-            }
+            let inner = Arc::clone(self);
+            let completion_for_task = completion.clone();
+            self.executor.spawn(async move {
+                let result = inner
+                    .drain_to_quiescence(completion_for_task.clone(), interaction_cancel_reason)
+                    .await;
+                completion_for_task.complete(result);
+            });
         }
         Ok(completion)
     }
@@ -4947,6 +5020,41 @@ impl ConversationRuntime {
         self.inner.lock_state().model.config().clone()
     }
 
+    pub(crate) fn has_current_attempt(&self) -> bool {
+        self.inner
+            .state
+            .lock()
+            .expect("runtime lock")
+            .current_attempt
+            .is_some()
+    }
+
+    pub(crate) fn idle_epoch(&self) -> Result<u64, IdleBusyReason> {
+        self.inner.idle_epoch_locked(&self.inner.lock_state())
+    }
+
+    /// Closes native admission through the existing shared drain owner. No
+    /// busy owner is cancelled by an idle claim. Settlement remains asynchronous.
+    pub(crate) fn claim_idle(&self, epoch: u64) -> bool {
+        // Residency holds its own publication lock. Never wait there behind
+        // coordinator storage work: contention is a conservative idle refusal.
+        let Ok(state) = self.inner.state.try_lock() else {
+            return false;
+        };
+        if state.current_attempt.is_some()
+            || state.manual_compaction.is_some()
+            || state.conversation.is_none()
+            || state.resource_reload_in_progress
+            || state.recovered_continuation
+            || !self.inner.durability_gate.healthy_for_idle_claim()
+            || state.mcp_settlement_failure.is_some()
+            || state.admission_durability_cycle.pending_retry.is_some()
+        {
+            return false;
+        }
+        self.inner.lifecycle.begin_idle_drain(epoch)
+    }
+
     /// Drains the conversation runtime to quiescence.
     ///
     /// Successful completion means the current attempt, all conversation-
@@ -6179,16 +6287,6 @@ impl ConversationRuntime {
             .conversation
             .as_ref()
             .map(|conversation| conversation.active_ids().to_vec())
-    }
-
-    #[allow(dead_code)] // used by the race regression tests
-    pub(crate) fn has_current_attempt(&self) -> bool {
-        self.inner
-            .state
-            .lock()
-            .expect("runtime lock")
-            .current_attempt
-            .is_some()
     }
 
     /// Whether idle maintenance currently owns the conversation state.
@@ -13481,6 +13579,11 @@ mod tests {
             Some(crate::runtime::subagent::ipc::ParentFrame::Delegate(_))
         ));
 
+        assert!(
+            runtime.idle_epoch().is_err(),
+            "an owned Subagent prevents idle residency even without a parent attempt"
+        );
+
         // The runtime then commits DurabilityFailed; the already-owned
         // child is not retroactively reclaimed.
         runtime.force_durability_failure_for_test(
@@ -16447,6 +16550,11 @@ mod tests {
             "the current-attempt slot is already clear at the parked exit boundary"
         );
 
+        assert!(
+            fixture.runtime.idle_epoch().is_err(),
+            "idle residency also waits for the native attempt task exit"
+        );
+
         let (done_tx, mut done_rx) = tokio::sync::oneshot::channel();
         let shutdown_runtime = fixture.runtime.clone();
         tokio::spawn(async move {
@@ -16813,6 +16921,10 @@ mod tests {
                 panic!("workflow child was cancelled before admission")
             }
         };
+        assert!(
+            runtime.idle_epoch().is_err(),
+            "workflow child ownership prevents idle claim"
+        );
         assert!(matches!(
             crate::runtime::subagent::ipc::read_parent_frame(&mut peer)
                 .await
