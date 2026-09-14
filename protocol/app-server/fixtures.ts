@@ -48,7 +48,7 @@ export const fixtures = [
       "target": {
         "session_id": "session-fixture",
         "conversation_id": "conversation-fixture",
-        "runtime_incarnation": 1,
+        "runtime_incarnation": "9007199254740993",
         "attachment_id": "attachment-fixture"
       },
       "interaction": {
@@ -92,10 +92,10 @@ export const fixtures = [
       "target": {
         "session_id": "session-fixture",
         "conversation_id": "conversation-fixture",
-        "runtime_incarnation": 1,
+        "runtime_incarnation": "9007199254740993",
         "attachment_id": "attachment-fixture"
       },
-      "cursor": 1,
+      "cursor": "9007199254740993",
       "event": {
         "type": "attempt_started",
         "attempt_id": "attempt-fixture",
@@ -111,7 +111,7 @@ export const fixtures = [
       "target": {
         "session_id": "session-fixture",
         "conversation_id": "conversation-fixture",
-        "runtime_incarnation": 1,
+        "runtime_incarnation": "9007199254740993",
         "attachment_id": "attachment-fixture"
       }
     }
@@ -129,6 +129,170 @@ export const fixtures = [
         "active_node": "node-fixture",
         "active_conversation_id": "conversation-fixture",
         "node_count": 1
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "session/subscribe",
+    "params": {
+      "target": {
+        "session_id": "session-fixture",
+        "conversation_id": "conversation-fixture",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "after_cursor": "9007199254740993"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "session/transcript",
+    "params": {
+      "target": {
+        "session_id": "session-fixture",
+        "conversation_id": "conversation-fixture",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "before": "9007199254740993",
+      "limit": 32
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "session/fork",
+    "params": {
+      "session_id": "session-fixture",
+      "node_id": null,
+      "surface_revision": "9007199254740993",
+      "boundary": null
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "goal/control",
+    "params": {
+      "target": {
+        "session_id": "session-fixture",
+        "conversation_id": "conversation-fixture",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "control": {
+        "action": "mutate",
+        "expected": {
+          "id": "goal-fixture",
+          "revision": "9007199254740993"
+        },
+        "mutation": {
+          "action": "pause"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "result": {
+      "type": "settings_replaced",
+      "revision": "9007199254740993"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "result": {
+      "type": "resources_reloaded",
+      "resource_revision": "9007199254740993",
+      "capability_revision": "9007199254740993"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "result": {
+      "type": "inbound_accepted",
+      "message_id": "message-fixture",
+      "inbound_sequence": "9007199254740993"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "result": {
+      "type": "approval_mode",
+      "effective_approval_mode": "policy",
+      "pending_approval_mode": null,
+      "revision": "9007199254740993"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "stale-settings",
+    "error": {
+      "code": -32000,
+      "message": "Stale settings",
+      "data": {
+        "kind": "stale_settings",
+        "expected": "9007199254740993",
+        "actual": "9007199254740994"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "session/event",
+    "params": {
+      "target": {
+        "session_id": "session-fixture",
+        "conversation_id": "conversation-fixture",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "cursor": "9007199254740993",
+      "event": {
+        "type": "workflows_updated",
+        "workflows": {
+          "revision": "9007199254740993",
+          "runs": [
+            {
+              "id": {
+                "conversation_id": "conversation-fixture",
+                "attempt_id": "attempt-fixture",
+                "invocation": "9007199254740993"
+              },
+              "workflow_id": "workflow-fixture",
+              "program_digest": "digest-fixture",
+              "resource_revision": "9007199254740993",
+              "tool_call_id": "call-fixture",
+              "state": {
+                "type": "running"
+              },
+              "instances": [],
+              "omitted_instances": 0,
+              "steps_consumed": 1,
+              "steps_max": 10,
+              "agents_consumed": 0,
+              "candidate": {
+                "run": {
+                  "conversation_id": "conversation-fixture",
+                  "attempt_id": "attempt-fixture",
+                  "invocation": "9007199254740993"
+                },
+                "version": "9007199254740993",
+                "content": "content-fixture"
+              },
+              "candidate_users": 0,
+              "handoff": null
+            }
+          ],
+          "omitted_runs": 0
+        }
       }
     }
   }

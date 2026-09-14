@@ -109,10 +109,13 @@ impl ModelRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ModelUsage {
     /// Input tokens consumed by the request.
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub input_tokens: u64,
     /// Output tokens produced by the response.
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub output_tokens: u64,
     /// Total tokens, where the provider reports or can derive them.
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub total_tokens: u64,
     /// Optional normalized usage details.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -124,9 +127,11 @@ pub struct ModelUsage {
 pub struct UsageDetails {
     /// Tokens consumed by reasoning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub reasoning_tokens: Option<u64>,
     /// Input tokens served from cache.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub cached_input_tokens: Option<u64>,
 }
 

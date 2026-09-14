@@ -63,7 +63,7 @@ pub struct AttachmentTarget {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(remote = "Self", deny_unknown_fields)]
 pub struct Request {
     pub jsonrpc: JsonRpcVersion,
     pub id: RequestId,
@@ -284,9 +284,9 @@ pub struct RpcError {
 
 /// Success and failure are exclusive, including on deserialization.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(untagged)]
-pub enum Response<R> {
-    Success(Success<R>),
+#[serde(remote = "Self", untagged)]
+pub enum Response {
+    Success(Box<Success<MethodResult>>),
     Failure(Failure),
 }
 
@@ -432,7 +432,7 @@ impl Default for ServerCapabilities {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(remote = "Self", deny_unknown_fields)]
 pub struct Notification {
     pub jsonrpc: JsonRpcVersion,
     #[serde(flatten)]
@@ -462,7 +462,7 @@ pub enum NotificationMethod {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum ProtocolMessage {
-    Request(Request),
-    Response(Response<MethodResult>),
+    Request(Box<Request>),
+    Response(Response),
     Notification(Notification),
 }

@@ -546,6 +546,7 @@ pub enum RuntimeClientAttemptFailure {
         /// The normalized human-readable message.
         message: String,
         /// The retry hint, when the provider reported one.
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
         retry_after_ms: Option<u64>,
     },
     /// A runtime failure.

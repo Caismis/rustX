@@ -531,6 +531,7 @@ pub struct RuntimeClientContextView {
     /// Runtime Client projection statistic: the number of committed
     /// compaction completions folded into this read model. The compaction
     /// generation remains the conversation-owned identity.
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub compaction_count: u64,
     /// The latest committed compaction metadata, when compaction occurred.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -556,6 +557,7 @@ pub struct RuntimeClientCompactionView {
     /// The pre-compaction input measurement and its provenance.
     pub tokens_before: TokenMeasurement,
     /// The deterministic estimate of the rebuilt request context.
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub estimated_tokens_after: u64,
 }
 
@@ -1242,6 +1244,7 @@ pub struct RuntimeClientContextFile {
     /// The canonical absolute host path the runtime read.
     pub path: String,
     /// The exact byte length of the loaded content.
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub bytes: u64,
 }
 

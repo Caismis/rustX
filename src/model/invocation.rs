@@ -640,6 +640,7 @@ pub struct ModelInvocationView {
     /// The protocol of the binding.
     pub protocol: ModelProtocol,
     /// The model's context window in tokens.
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub context_window: u64,
     /// The model's configured maximum output tokens.
     pub model_max_output_tokens: u32,

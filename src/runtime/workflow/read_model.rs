@@ -34,6 +34,7 @@ pub struct WorkflowRevision(pub u64);
 pub struct WorkflowSnapshot {
     pub revision: WorkflowRevision,
     pub runs: Vec<WorkflowRunView>,
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub omitted_runs: u64,
 }
 
@@ -48,6 +49,7 @@ pub struct WorkflowRunView {
     pub tool_call_id: ToolCallId,
     pub state: WorkflowState,
     pub instances: Vec<WorkflowInstanceView>,
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub omitted_instances: u64,
     pub steps_consumed: usize,
     pub steps_max: usize,

@@ -31,10 +31,7 @@ async fn call(connection: &AppServerConnection, id: i64, call: Method) -> Method
         })
         .await;
     let validator = SCHEMA.get_or_init(|| {
-        jsonschema::validator_for(
-            &serde_json::to_value(schemars::schema_for!(ProtocolMessage)).unwrap(),
-        )
-        .unwrap()
+        jsonschema::validator_for(&crate::app_server::schema::protocol_schema()).unwrap()
     });
     let wire = serde_json::to_value(&response).unwrap();
     assert!(
@@ -62,6 +59,389 @@ async fn initialize(connection: &AppServerConnection) {
             presentation: PresentationCapabilities::default(),
         }),
     )
+    .await;
+}
+
+async fn rejected(connection: &AppServerConnection, method: Method) -> ErrorData {
+    let Response::Failure(Failure {
+        error: RpcError {
+            data: Some(data), ..
+        },
+        ..
+    }) = connection
+        .handle_request(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(999),
+            call: method,
+        })
+        .await
+    else {
+        panic!("expected typed rejection")
+    };
+    data
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn admitted_async_operation_drains_before_unload_releases_resources() {
+    bounded(async {
+        use crate::local_runtime::session::deletion::SessionDeleteResult;
+        use std::sync::Arc;
+        let f = Fixture::new().await;
+        let connection = Arc::new(AppServerConnection::new(f.manager.clone()));
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let identity = f.manager.load(&target.session_id, None).await.unwrap();
+        let weak_runtime = identity.inspect_runtime().unwrap().weak_inner();
+        let weak_host = {
+            let resident = identity.resident.upgrade().unwrap();
+            let composition = resident.composition.lock().unwrap();
+            composition.as_ref().unwrap().host().weak_inner()
+        };
+        let probe = f.manager.probe(&target.conversation_id);
+        probe.before_operation.arm();
+        let worker = connection.clone();
+        let operation_target = target.clone();
+        let operation = tokio::spawn(async move {
+            call(
+                &worker,
+                200,
+                Method::DefaultsRead {
+                    target: operation_target,
+                    scope: crate::runtime_client::settings::DefaultScope::User,
+                },
+            )
+            .await
+        });
+        probe.before_operation.entered().await;
+        let worker = connection.clone();
+        let unload_target = target.clone();
+        let unload = tokio::spawn(async move {
+            call(
+                &worker,
+                201,
+                Method::SessionUnload {
+                    target: unload_target,
+                },
+            )
+            .await
+        });
+        probe
+            .draining_operations
+            .subscribe()
+            .wait_for(|draining| *draining)
+            .await
+            .unwrap();
+        assert_eq!(
+            f.manager.residency(&target.conversation_id),
+            super::ResidencyState::Unloading
+        );
+        assert!(
+            !unload.is_finished(),
+            "unload is waiting on the admitted operation, not the client"
+        );
+        assert!(weak_runtime.upgrade().is_some());
+        assert_eq!(
+            rejected(
+                &connection,
+                Method::TurnStart {
+                    target: target.clone(),
+                    content: input("must not run")
+                }
+            )
+            .await,
+            ErrorData::StaleRuntime
+        );
+        probe.before_operation.release();
+        assert!(matches!(
+            operation.await.unwrap(),
+            MethodResult::Defaults { .. }
+        ));
+        assert!(matches!(
+            unload.await.unwrap(),
+            MethodResult::Unloaded { .. }
+        ));
+        assert!(weak_host.upgrade().is_none());
+        assert!(weak_runtime.upgrade().is_none());
+        assert_eq!(connection.attachment_counts(), (0, 0));
+        assert!(f.provider.request_bodies().is_empty());
+        assert!(
+            matches!(
+                f.manager.sessions.delete_preview(&target.session_id).await,
+                SessionDeleteResult::Preview { .. }
+            ),
+            "allocation authority released with all passive client state retained"
+        );
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unload_claim_rejects_late_operations_and_old_incarnations() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.manager.clone());
+        initialize(&connection).await;
+        let old = attach(&connection, &f, 0).await;
+        let probe = f.manager.probe(&old.conversation_id);
+        probe.before_shutdown.arm();
+        let unload = super::unload_task(&f, old.conversation_id.clone());
+        probe.before_shutdown.entered().await;
+        for _ in 0..2 {
+            assert_eq!(
+                rejected(
+                    &connection,
+                    Method::TurnStart {
+                        target: old.clone(),
+                        content: input("never execute")
+                    }
+                )
+                .await,
+                ErrorData::StaleRuntime
+            );
+        }
+        assert!(
+            !*probe.before_operation.entered.borrow(),
+            "late operation never admitted"
+        );
+        assert!(f.provider.request_bodies().is_empty());
+        probe.before_shutdown.release();
+        unload.await.unwrap().unwrap();
+        let replacement = f.manager.load(&old.session_id, None).await.unwrap();
+        assert_ne!(old.runtime_incarnation, replacement.incarnation_id());
+        assert_eq!(
+            rejected(&connection, Method::ResourcesReload { target: old }).await,
+            ErrorData::StaleRuntime
+        );
+        assert!(f.provider.request_bodies().is_empty());
+        f.close().await;
+    })
+    .await;
+}
+
+async fn cold_sessions(
+    f: &Fixture,
+    count: usize,
+) -> Vec<crate::local_runtime::session::SessionSnapshot> {
+    let mut sessions = Vec::new();
+    for _ in 0..count {
+        sessions.push(
+            f.manager
+                .sessions
+                .create_session(
+                    crate::local_runtime::session::SessionPersistentState::from_input(
+                        &crate::local_runtime::configuration::SessionConfigInput::new(
+                            f.workspaces[0].clone(),
+                        ),
+                    ),
+                )
+                .await
+                .unwrap()
+                .session,
+        );
+    }
+    sessions
+}
+
+async fn attach_session(
+    connection: &AppServerConnection,
+    session: &crate::local_runtime::session::SessionSnapshot,
+) -> AttachmentTarget {
+    let MethodResult::Attached { target, .. } = call(
+        connection,
+        300,
+        Method::SessionAttach {
+            session_id: session.id.clone(),
+            node_id: None,
+        },
+    )
+    .await
+    else {
+        panic!("attached")
+    };
+    target
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn capacity_rejection_never_composes_and_unload_reclaims_without_notifications() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.manager.clone());
+        initialize(&connection).await;
+        let sessions = cold_sessions(&f, 34).await;
+        let mut targets = Vec::new();
+        for session in &sessions[..32] {
+            targets.push(attach_session(&connection, session).await);
+        }
+        assert_eq!(connection.attachment_counts(), (32, 0));
+        assert_eq!(
+            rejected(
+                &connection,
+                Method::SessionAttach {
+                    session_id: sessions[32].id.clone(),
+                    node_id: None
+                }
+            )
+            .await,
+            ErrorData::InvalidState
+        );
+        assert_eq!(
+            f.manager
+                .probe(&sessions[32].active_conversation_id)
+                .compositions
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        assert_eq!(
+            f.manager.residency(&sessions[32].active_conversation_id),
+            super::ResidencyState::Unloaded
+        );
+        for target in targets.drain(..2) {
+            call(&connection, 301, Method::SessionUnload { target }).await;
+        }
+        assert_eq!(connection.attachment_counts(), (30, 0));
+        // No next_notification call: unload's response is the terminal acknowledgement.
+        for session in &sessions[32..] {
+            targets.push(attach_session(&connection, session).await);
+        }
+        assert_eq!(connection.attachment_counts(), (32, 0));
+        assert!(f.provider.request_bodies().is_empty());
+        for target in targets {
+            call(&connection, 302, Method::SessionUnload { target }).await;
+        }
+        assert_eq!(connection.attachment_counts(), (0, 0));
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_final_slot_is_reserved_before_composition() {
+    bounded(async {
+        use std::sync::Arc;
+        let f = Fixture::new().await;
+        let connection = Arc::new(AppServerConnection::new(f.manager.clone()));
+        initialize(&connection).await;
+        let sessions = cold_sessions(&f, 33).await;
+        for session in &sessions[..31] {
+            attach_session(&connection, session).await;
+        }
+        let probes = [
+            f.manager.probe(&sessions[31].active_conversation_id),
+            f.manager.probe(&sessions[32].active_conversation_id),
+        ];
+        for probe in &probes {
+            probe.before_compose.arm();
+        }
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let mut tasks = Vec::new();
+        for session in &sessions[31..] {
+            let worker = connection.clone();
+            let barrier = barrier.clone();
+            let session_id = session.id.clone();
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                worker
+                    .handle_request(Request {
+                        jsonrpc: JsonRpcVersion::V2,
+                        id: RequestId::Integer(400),
+                        call: Method::SessionAttach {
+                            session_id,
+                            node_id: None,
+                        },
+                    })
+                    .await
+            }));
+        }
+        barrier.wait().await;
+        let winner = tokio::select! {
+            () = probes[0].before_compose.entered() => 0,
+            () = probes[1].before_compose.entered() => 1,
+        };
+        assert_eq!(connection.attachment_counts(), (31, 1));
+        let loser = tasks.remove(1 - winner).await.unwrap();
+        assert!(matches!(
+            loser,
+            Response::Failure(Failure {
+                error: RpcError {
+                    data: Some(ErrorData::InvalidState),
+                    ..
+                },
+                ..
+            })
+        ));
+        assert_eq!(
+            probes[1 - winner]
+                .compositions
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        probes[winner].before_compose.release();
+        assert!(matches!(
+            tasks.remove(0).await.unwrap(),
+            Response::Success(_)
+        ));
+        assert_eq!(connection.attachment_counts(), (32, 0));
+        assert!(f.provider.request_bodies().is_empty());
+        for session in &sessions {
+            f.manager
+                .unload(&session.active_conversation_id)
+                .await
+                .unwrap();
+        }
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancelled_attach_releases_reservation_and_abandoned_operation_drains() {
+    bounded(async {
+        use std::sync::Arc;
+        let f = Fixture::new().await;
+        let connection = Arc::new(AppServerConnection::new(f.manager.clone()));
+        initialize(&connection).await;
+        let probe = f.manager.probe(&f.id(0).await);
+        probe.before_compose.arm();
+        let worker = connection.clone();
+        let session = f.sessions[0].clone();
+        let attaching = tokio::spawn(async move { attach_session(&worker, &session).await });
+        probe.before_compose.entered().await;
+        assert_eq!(connection.attachment_counts(), (0, 1));
+        attaching.abort();
+        assert!(attaching.await.unwrap_err().is_cancelled());
+        assert_eq!(connection.attachment_counts(), (0, 0));
+        probe.before_compose.release();
+        let target = attach(&connection, &f, 0).await;
+        probe.before_operation.arm();
+        let worker = connection.clone();
+        let operation_target = target.clone();
+        let operation = tokio::spawn(async move {
+            call(
+                &worker,
+                501,
+                Method::DefaultsRead {
+                    target: operation_target,
+                    scope: crate::runtime_client::settings::DefaultScope::User,
+                },
+            )
+            .await
+        });
+        probe.before_operation.entered().await;
+        operation.abort();
+        assert!(operation.await.unwrap_err().is_cancelled());
+        let unload = super::unload_task(&f, target.conversation_id.clone());
+        probe
+            .draining_operations
+            .subscribe()
+            .wait_for(|v| *v)
+            .await
+            .unwrap();
+        assert!(!unload.is_finished());
+        probe.before_operation.release();
+        unload.await.unwrap().unwrap();
+        f.close().await;
+    })
     .await;
 }
 
@@ -99,12 +479,15 @@ async fn initialize_and_malformed_wire_are_transactional() {
             (r#"{"jsonrpc":"1.0","id":3,"method":"session/create","params":{}}"#, -32600),
             (r#"{"jsonrpc":"2.0","id":4,"method":"session/create","params":{},"extra":true}"#, -32600),
             ("{", -32700),
+            (r#"{"jsonrpc":"2.0","id":9007199254740993,"method":"session/create","params":{}}"#, -32600),
+            (r#"{"jsonrpc":"2.0","id":9,"method":"session/list","params":{"offset":9007199254740993,"limit":32}}"#, -32602),
             (r#"{"jsonrpc":"2.0","id":8,"method":"session/name","params":{"session_id":"s","name":"first","name":"second"}}"#, -32602),
             (r#"{"jsonrpc":"2.0","id":6,"method":"settings/saveDefault","params":{"target":{"session_id":"s","conversation_id":"c","runtime_incarnation":1,"attachment_id":"a"},"scope":"user","expected_revision":"r","setting":"settings/saveDefault"}}"#, -32602),
             (r#"{"jsonrpc":"2.0","id":7,"method":"turn/start","params":{"target":{"session_id":"s","conversation_id":"c","runtime_incarnation":1,"attachment_id":"a"},"content":[{"type":"text","text":"never","extra":true}]}}"#, -32602),
         ] {
             let Response::Failure(failure) = connection.handle_json(json).await.unwrap() else { panic!("invalid request accepted") };
             assert_eq!(failure.error.code, expected_code);
+            serde_json::to_value(Response::Failure(failure)).expect("even invalid correlation IDs produce a serializable error");
         }
         assert!(connection.handle_json(r#"{"jsonrpc":"2.0","method":"session/create","params":{}}"#).await.is_none());
         let MethodResult::Sessions { sessions, .. } = call(&connection, 5, Method::SessionList { query: None, offset: 0, limit: 32 }).await else { panic!("list") };

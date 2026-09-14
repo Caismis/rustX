@@ -278,7 +278,7 @@ export type Request1 =
       method: 'settings/replace';
       params: {
         session_id: SessionId;
-        expected_revision: number;
+        expected_revision: string;
         settings: SessionPersistentState;
       };
     }
@@ -299,7 +299,7 @@ export type ConversationId = string;
 /**
  * Process-local live composition identity. Never a durable or transport identity.
  */
-export type RuntimeIncarnationId = number;
+export type RuntimeIncarnationId = string;
 /**
  * The identity of one Runtime Client attachment.
  *
@@ -316,7 +316,7 @@ export type DefaultTarget = 'model_selection' | 'approval_mode';
 /**
  * The cursor domain of durable transcript paging.
  */
-export type RuntimeClientTranscriptCursor = number;
+export type RuntimeClientTranscriptCursor = string;
 /**
  * The identity of one reasoning profile declared by a model.
  *
@@ -417,7 +417,7 @@ export type SessionNodeId = string;
  * or a `CapabilityRevision`: none of those identify a Surface state, and
  * none of them may be substituted for one.
  */
-export type SurfaceRevision = number;
+export type SurfaceRevision = string;
 /**
  * Identifies a committed canonical message block.
  */
@@ -443,7 +443,7 @@ export type MessageId = string;
  * Runtime Client projection) together with event publication; overflow
  * fails explicitly and never wraps.
  */
-export type RuntimeClientCursor = number;
+export type RuntimeClientCursor = string;
 /**
  * A content block inside a `UserMessageBlock`.
  */
@@ -566,7 +566,7 @@ export type MethodResult =
   | {
       effective_approval_mode: ApprovalMode;
       pending_approval_mode?: ApprovalMode | null;
-      revision: number;
+      revision: string;
       type: 'approval_mode';
     }
   | {
@@ -663,16 +663,16 @@ export type MethodResult =
       type: 'interaction_settled';
     }
   | {
-      revision: number;
+      revision: string;
       settings: SessionPersistentState;
       type: 'settings';
     }
   | {
-      revision: number;
+      revision: string;
       type: 'settings_replaced';
     }
   | {
-      resource_revision: number;
+      resource_revision: string;
       capability_revision: CapabilityRevision;
       type: 'resources_reloaded';
     };
@@ -1176,7 +1176,7 @@ export type SettingOrigin =
  * capability set). A resource-only change may advance this revision while
  * retaining an identical capability revision.
  */
-export type RuntimeResourceRevision = number;
+export type RuntimeResourceRevision = string;
 export type WorkflowState =
   | {
       type: 'pending';
@@ -1756,7 +1756,7 @@ export type SkillDiagnostic =
  * Pending Inbound Inbox owns allocation, and the first successful
  * acceptance of a conversation receives `1`.
  */
-export type InboundSequence = number;
+export type InboundSequence = string;
 /**
  * A monotonic revision counter for the capability set observed by an attempt.
  *
@@ -1765,7 +1765,7 @@ export type InboundSequence = number;
  * not a provider-specific string: every capability mutation atomically swaps
  * the whole capability set and increments the revision.
  */
-export type CapabilityRevision = number;
+export type CapabilityRevision = string;
 export type ErrorData =
   | {
       session_id: SessionId;
@@ -1777,8 +1777,8 @@ export type ErrorData =
       kind: 'unknown_node';
     }
   | {
-      expected: number;
-      actual: number;
+      expected: string;
+      actual: string;
       kind: 'stale_settings';
     }
   | {
@@ -2174,7 +2174,7 @@ export type RuntimeClientEvent =
       /**
        * The cursor domain of durable transcript paging.
        */
-      transcript_cursor: number;
+      transcript_cursor: string;
       type: 'interaction_audit_requested';
     }
   | {
@@ -2182,7 +2182,7 @@ export type RuntimeClientEvent =
       /**
        * The cursor domain of durable transcript paging.
        */
-      transcript_cursor: number;
+      transcript_cursor: string;
       type: 'interaction_audit_settled';
     }
   | {
@@ -2203,7 +2203,7 @@ export type RuntimeClientEvent =
       /**
        * The monotonic control-plane revision.
        */
-      revision: number;
+      revision: string;
       type: 'approval_mode_changed';
     }
   | {
@@ -2367,7 +2367,7 @@ export type RuntimeClientEvent =
       /**
        * The cursor domain of durable transcript paging.
        */
-      transcript_cursor: number;
+      transcript_cursor: string;
       type: 'assistant_publication_settled';
     }
   | {
@@ -2475,7 +2475,7 @@ export type RuntimeClientEvent =
        * Pending Inbound Inbox owns allocation, and the first successful
        * acceptance of a conversation receives `1`.
        */
-      sequence: number;
+      sequence: string;
       message: UserMessageBlock2;
       /**
        * The durable transcript position allocated at acceptance, absent
@@ -2495,7 +2495,7 @@ export type RuntimeClientEvent =
        * Pending Inbound Inbox owns allocation, and the first successful
        * acceptance of a conversation receives `1`.
        */
-      watermark: number;
+      watermark: string;
       /**
        * The number of drained items.
        */
@@ -2615,7 +2615,7 @@ export interface SessionModelConfig {
  */
 export interface GoalRef {
   id: string;
-  revision: number;
+  revision: string;
 }
 export interface InitializeParams {
   protocol_version: number;
@@ -2704,7 +2704,7 @@ export interface WorkflowRunId {
   /**
    * WorkflowRuntime-owned invocation ordinal, allocated at run admission.
    */
-  invocation: number;
+  invocation: string;
 }
 /**
  * Static source location; never a concrete execution authority.
@@ -3270,7 +3270,7 @@ export interface CapabilityView {
   /**
    * The active monotonic capability revision.
    */
-  revision: number;
+  revision: string;
   /**
    * The deterministic active Tool catalog in registry order. Model
    * requests and execution use exactly this set.
@@ -3451,7 +3451,7 @@ export interface RuntimeClientCompactionView {
    * The compaction generation maintained in the current Conversation
    * Surface head.
    */
-  generation: number;
+  generation: string;
   /**
    * Identifies a committed canonical message block.
    */
@@ -3469,7 +3469,7 @@ export interface RuntimeClientCompactionView {
    * or a `CapabilityRevision`: none of those identify a Surface state, and
    * none of them may be substituted for one.
    */
-  surface_revision: number;
+  surface_revision: string;
   tokens_before: TokenMeasurement;
   /**
    * The deterministic estimate of the rebuilt request context.
@@ -3509,7 +3509,7 @@ export interface RuntimeClientTranscriptEntry {
   /**
    * The cursor domain of durable transcript paging.
    */
-  cursor: number;
+  cursor: string;
   /**
    * The typed item resolved from a canonical durable owner.
    */
@@ -3725,7 +3725,7 @@ export interface ReviewSpecification {
  */
 export interface CandidateReference {
   run: WorkflowRunId;
-  version: number;
+  version: string;
   content: string;
 }
 export interface ReviewFact {
@@ -4234,7 +4234,7 @@ export interface SubagentObservation {
    * The child-owned projection revision; strictly increasing per applied
    * transition.
    */
-  revision: number;
+  revision: string;
   /**
    * What the child is observably doing right now.
    */
@@ -4559,7 +4559,7 @@ export interface SessionNode {
          * or a `CapabilityRevision`: none of those identify a Surface state, and
          * none of them may be substituted for one.
          */
-        source_surface_revision: number;
+        source_surface_revision: string;
         type: 'clone';
       }
     | {
@@ -4584,7 +4584,7 @@ export interface SessionNode {
          * or a `CapabilityRevision`: none of those identify a Surface state, and
          * none of them may be substituted for one.
          */
-        source_surface_revision: number;
+        source_surface_revision: string;
         /**
          * Identifies a committed canonical message block.
          */
@@ -4671,7 +4671,7 @@ export interface RuntimeClientSnapshot {
   /**
    * The runtime control-plane revision of the mode state.
    */
-  approval_mode_revision?: number;
+  approval_mode_revision?: string;
   /**
    * The runtime's durable-authority failure, when it has entered the
    * explicit degraded state. While set, no new durable admission/execution
@@ -4925,7 +4925,7 @@ export interface SettingsLifetimes {
  * Bounded native Workflow state, never reconstructed from the journal.
  */
 export interface WorkflowSnapshot {
-  revision: number;
+  revision: string;
   runs: WorkflowRunView[];
   omitted_runs: number;
 }
@@ -5593,7 +5593,7 @@ export interface InboundItemView {
   /**
    * The mailbox-assigned inbound sequence.
    */
-  sequence: number;
+  sequence: string;
   message: UserMessageBlock1;
 }
 /**
@@ -5724,7 +5724,7 @@ export interface InboundDrainView {
   /**
    * The highest selected inbound sequence.
    */
-  watermark: number;
+  watermark: string;
   /**
    * The number of drained items.
    */
@@ -6032,7 +6032,7 @@ export interface RuntimeClientTodoStatusTask {
   /**
    * The conversation-owned task id.
    */
-  id: number;
+  id: string;
   /**
    * The bounded task subject.
    */
@@ -6085,7 +6085,7 @@ export interface CapabilityView1 {
   /**
    * The active monotonic capability revision.
    */
-  revision: number;
+  revision: string;
   /**
    * The deterministic active Tool catalog in registry order. Model
    * requests and execution use exactly this set.
@@ -6131,7 +6131,7 @@ export interface RuntimeClientResourcesView {
    * capability set). A resource-only change may advance this revision while
    * retaining an identical capability revision.
    */
-  revision?: number;
+  revision?: number & string;
   /**
    * The runtime-loaded project instruction files, root-most to
    * workspace, in the exact order the runtime concatenated them.
@@ -6250,7 +6250,7 @@ export interface TodoSnapshot {
   /**
    * The id the next created task will receive.
    */
-  next_id: number;
+  next_id: string;
 }
 /**
  * One task of the conversation's list.
@@ -6263,7 +6263,7 @@ export interface TodoTask {
    * the list it belongs to lives — not for as long as the conversation
    * does.
    */
-  id: number;
+  id: string;
   /**
    * The imperative one-line subject.
    */
@@ -6284,7 +6284,7 @@ export interface TodoTask {
   /**
    * The ids this task waits on, ascending and deduplicated.
    */
-  blocked_by?: number[];
+  blocked_by?: string[];
   /**
    * Optional free-form owner label.
    */
@@ -6307,7 +6307,7 @@ export interface RpcError {
   data?: ErrorData | null;
 }
 export interface WorkflowSnapshot1 {
-  revision: number;
+  revision: string;
   runs: WorkflowRunView[];
   omitted_runs: number;
 }
@@ -7044,7 +7044,7 @@ export interface CapabilityView2 {
   /**
    * The active monotonic capability revision.
    */
-  revision: number;
+  revision: string;
   /**
    * The deterministic active Tool catalog in registry order. Model
    * requests and execution use exactly this set.
@@ -7084,7 +7084,7 @@ export interface CapabilityView3 {
   /**
    * The active monotonic capability revision.
    */
-  revision: number;
+  revision: string;
   /**
    * The deterministic active Tool catalog in registry order. Model
    * requests and execution use exactly this set.
@@ -7122,7 +7122,7 @@ export interface RuntimeClientResourcesView1 {
    * capability set). A resource-only change may advance this revision while
    * retaining an identical capability revision.
    */
-  revision?: number;
+  revision?: number & string;
   /**
    * The runtime-loaded project instruction files, root-most to
    * workspace, in the exact order the runtime concatenated them.

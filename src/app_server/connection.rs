@@ -19,6 +19,72 @@ use crate::runtime_client::types::{RuntimeClientError, RuntimeClientResult};
 
 const MAX_ATTACHMENTS: usize = 32;
 
+fn valid_request_id(id: &RequestId) -> bool {
+    !matches!(id, RequestId::Integer(n) if !(-9_007_199_254_740_991..=9_007_199_254_740_991).contains(n))
+}
+
+#[derive(Default)]
+struct RouteTable {
+    active: BTreeMap<SessionId, Arc<Route>>,
+    reserved: std::collections::BTreeSet<SessionId>,
+}
+
+struct AttachReservation {
+    table: Arc<Mutex<RouteTable>>,
+    session: SessionId,
+    committed: bool,
+}
+
+impl AttachReservation {
+    fn new(table: &Arc<Mutex<RouteTable>>, session: &SessionId) -> Result<Self, RpcError> {
+        let mut routes = table.lock().expect("routes mutex");
+        if routes.active.contains_key(session) || routes.reserved.contains(session) {
+            return Err(domain(ErrorData::ControllerInUse));
+        }
+        if routes.active.len() + routes.reserved.len() >= MAX_ATTACHMENTS {
+            return Err(domain(ErrorData::InvalidState));
+        }
+        routes.reserved.insert(session.clone());
+        Ok(Self {
+            table: table.clone(),
+            session: session.clone(),
+            committed: false,
+        })
+    }
+
+    fn commit(mut self, route: Arc<Route>) {
+        let mut routes = self.table.lock().expect("routes mutex");
+        routes.reserved.remove(&self.session);
+        routes.active.insert(self.session.clone(), route);
+        self.committed = true;
+    }
+}
+
+impl Drop for AttachReservation {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        self.table
+            .lock()
+            .expect("routes mutex")
+            .reserved
+            .remove(&self.session);
+    }
+}
+
+fn release_route(table: &Mutex<RouteTable>, route: &Arc<Route>) {
+    let mut routes = table.lock().expect("routes mutex");
+    if routes
+        .active
+        .get(&route.target.session_id)
+        .is_some_and(|current| Arc::ptr_eq(current, route))
+    {
+        routes.active.remove(&route.target.session_id);
+        route.attachment.detach();
+    }
+}
+
 struct Route {
     target: AttachmentTarget,
     client: ManagedRuntimeClient,
@@ -31,21 +97,27 @@ pub struct AppServerConnection {
     manager: SessionRuntimeManager,
     sessions: SessionController,
     initialized: Mutex<Option<InitializeParams>>,
-    routes: Mutex<BTreeMap<SessionId, Arc<Route>>>,
-    changed: tokio::sync::Notify,
+    routes: Arc<Mutex<RouteTable>>,
+    changed: Arc<tokio::sync::Notify>,
     reader: tokio::sync::Mutex<()>,
     next_route: std::sync::atomic::AtomicUsize,
 }
 
 impl AppServerConnection {
+    #[cfg(test)]
+    pub(crate) fn attachment_counts(&self) -> (usize, usize) {
+        let routes = self.routes.lock().expect("routes mutex");
+        (routes.active.len(), routes.reserved.len())
+    }
+
     #[must_use]
     pub fn new(manager: SessionRuntimeManager) -> Self {
         Self {
             sessions: manager.session_controller(),
             manager,
             initialized: Mutex::new(None),
-            routes: Mutex::new(BTreeMap::new()),
-            changed: tokio::sync::Notify::new(),
+            routes: Arc::new(Mutex::new(RouteTable::default())),
+            changed: Arc::new(tokio::sync::Notify::new()),
             reader: tokio::sync::Mutex::new(()),
             next_route: std::sync::atomic::AtomicUsize::new(0),
         }
@@ -55,7 +127,7 @@ impl AppServerConnection {
     /// Notifications never receive responses and do not invoke request-only methods.
     /// # Panics
     /// Panics if a connection routing mutex is poisoned.
-    pub async fn handle_json(&self, json: &str) -> Option<Response<MethodResult>> {
+    pub async fn handle_json(&self, json: &str) -> Option<Response> {
         let value: serde_json::Value = match serde_json::from_str(json) {
             Ok(value) => value,
             Err(_) => return Some(failure(None, rpc_error(-32700, "Parse error", None))),
@@ -65,7 +137,8 @@ impl AppServerConnection {
         };
         let id = object
             .get("id")
-            .and_then(|value| serde_json::from_value::<RequestId>(value.clone()).ok());
+            .and_then(|value| serde_json::from_value::<RequestId>(value.clone()).ok())
+            .filter(valid_request_id);
         if object.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0")
             || !object
                 .get("method")
@@ -108,18 +181,17 @@ impl AppServerConnection {
     /// Correlation is preserved even when unrelated requests complete out of order.
     /// # Panics
     /// Panics if a connection routing mutex is poisoned.
-    pub async fn handle_request(&self, request: Request) -> Response<MethodResult> {
+    pub async fn handle_request(&self, request: Request) -> Response {
         let id = request.id;
-        if matches!(&id, RequestId::Integer(n) if !(-9_007_199_254_740_991..=9_007_199_254_740_991).contains(n))
-        {
-            return failure(Some(id), domain(ErrorData::InvalidParams));
+        if !valid_request_id(&id) {
+            return failure(None, domain(ErrorData::InvalidParams));
         }
         match Box::pin(self.dispatch(request.call)).await {
-            Ok(result) => Response::Success(Success {
+            Ok(result) => Response::Success(Box::new(Success {
                 jsonrpc: JsonRpcVersion::V2,
                 id,
                 result,
-            }),
+            })),
             Err(error) => failure(Some(id), error),
         }
     }
@@ -152,101 +224,52 @@ impl AppServerConnection {
         if self.initialized.lock().expect("initialize mutex").is_none() {
             return Err(domain(ErrorData::NotInitialized));
         }
+        if let Some(target) = runtime_target(&method) {
+            let route = self.route(target)?;
+            let client = route.client.clone();
+            let routes = self.routes.clone();
+            let changed = self.changed.clone();
+            let receiver = client
+                .start_operation(move || async move {
+                    dispatch_runtime(method, route, routes, changed).await
+                })
+                .map_err(manager_error)?;
+            return receiver
+                .await
+                .map_err(|_| domain(ErrorData::OperationFailed))?;
+        }
         match method {
             Method::Initialize(_) => unreachable!(),
-            Method::DefaultsRead { target, scope } => {
-                native_result(self.route(&target)?.attachment.defaults_read(scope).await)
-            }
-            Method::DefaultSave {
-                target,
-                scope,
-                expected_revision,
-                setting,
-            } => native_result(
-                self.route(&target)?
-                    .attachment
-                    .defaults_save(scope, expected_revision, setting)
-                    .await,
-            ),
+            Method::SessionDelete {
+                session_id,
+                expected_target_revision,
+            } => self
+                .sessions
+                .delete_session(&session_id, &expected_target_revision)
+                .await
+                .map(deletion)
+                .map_err(session_error),
             Method::SessionUnload { target } => {
-                self.route(&target)?;
-                self.manager
-                    .unload_incarnation(&target.conversation_id, target.runtime_incarnation)
+                let route = self.route(&target)?;
+                let manager = self.manager.clone();
+                let routes = self.routes.clone();
+                let changed = self.changed.clone();
+                let (sender, receiver) = tokio::sync::oneshot::channel();
+                // Cleanup is server-owned even if the initiating caller goes away.
+                tokio::spawn(async move {
+                    let result = manager
+                        .unload_incarnation(&target.conversation_id, target.runtime_incarnation)
+                        .await
+                        .map_err(manager_error);
+                    if result.is_ok() {
+                        release_route(&routes, &route);
+                        changed.notify_one();
+                    }
+                    let _ = sender.send(result.map(|()| MethodResult::Unloaded {}));
+                });
+                receiver
                     .await
-                    .map_err(manager_error)?;
-                self.changed.notify_one();
-                Ok(MethodResult::Unloaded {})
-            }
-            Method::ModelGet { target } => {
-                native_result(self.route(&target)?.attachment.model_get())
-            }
-            Method::ModelCatalog { target } => {
-                native_result(self.route(&target)?.attachment.model_catalog())
-            }
-            Method::ModelSet { target, config } => {
-                native_result(self.route(&target)?.attachment.model_set(*config))
-            }
-            Method::ApprovalModeSet { target, mode } => {
-                native_result(self.route(&target)?.attachment.approval_mode_set(mode))
-            }
-            Method::Capability { target } => {
-                native_result(self.route(&target)?.attachment.capability())
-            }
-            Method::Transcript {
-                target,
-                before,
-                limit,
-            } => native_result(
-                self.route(&target)?
-                    .attachment
-                    .transcript_page(before, limit),
-            ),
-            Method::Goal { target, control } => {
-                native_result(self.route(&target)?.attachment.goal_control(control))
-            }
-            Method::BackgroundStatus {
-                target,
-                execution_id,
-            } => native_result(
-                self.route(&target)?
-                    .attachment
-                    .background_status(&execution_id),
-            ),
-            Method::BackgroundCancel {
-                target,
-                execution_id,
-            } => native_result(
-                self.route(&target)?
-                    .attachment
-                    .background_cancel(&execution_id),
-            ),
-            Method::SubagentStatus {
-                target,
-                subagent_id,
-            } => native_result(
-                self.route(&target)?
-                    .attachment
-                    .subagent_status(&subagent_id),
-            ),
-            Method::SubagentCancel {
-                target,
-                subagent_id,
-            } => native_result(
-                self.route(&target)?
-                    .attachment
-                    .subagent_cancel(&subagent_id),
-            ),
-            Method::SubagentDispose {
-                target,
-                subagent_id,
-            } => native_result(
-                self.route(&target)?
-                    .attachment
-                    .subagent_workspace_dispose(&subagent_id)
-                    .await,
-            ),
-            Method::CompactContext { target } => {
-                native_result(self.route(&target)?.attachment.compact_context().await)
+                    .map_err(|_| domain(ErrorData::OperationFailed))?
             }
             Method::ServerInfo {} => Ok(MethodResult::ServerInfo {
                 capabilities: ServerCapabilities::default(),
@@ -331,15 +354,6 @@ impl AppServerConnection {
             Method::SessionDeletePreview { session_id } => {
                 Ok(deletion(self.sessions.delete_preview(&session_id).await))
             }
-            Method::SessionDelete {
-                session_id,
-                expected_target_revision,
-            } => self
-                .sessions
-                .delete_session(&session_id, &expected_target_revision)
-                .await
-                .map(deletion)
-                .map_err(session_error),
             Method::SessionRecoverDeletion { session_id } => {
                 Ok(deletion(self.sessions.recover_deletion(&session_id).await))
             }
@@ -366,15 +380,13 @@ impl AppServerConnection {
                 session_id,
                 node_id,
             } => {
+                let reservation = AttachReservation::new(&self.routes, &session_id)?;
                 let runtime = self
                     .manager
                     .load(&session_id, node_id.as_ref())
                     .await
                     .map_err(manager_error)?;
                 let client = runtime.client();
-                if self.routes.lock().expect("routes mutex").len() >= MAX_ATTACHMENTS {
-                    return Err(domain(ErrorData::InvalidState));
-                }
                 let crate::runtime_client::attachment::AttachedSnapshot {
                     attachment,
                     snapshot,
@@ -386,18 +398,11 @@ impl AppServerConnection {
                     runtime_incarnation: runtime.incarnation_id(),
                     attachment_id: attachment.attachment_id().clone(),
                 };
-                let mut routes = self.routes.lock().expect("routes mutex");
-                if routes.len() >= MAX_ATTACHMENTS {
-                    return Err(domain(ErrorData::InvalidState));
-                }
-                routes.insert(
-                    session_id,
-                    Arc::new(Route {
-                        target: target.clone(),
-                        client,
-                        attachment,
-                    }),
-                );
+                reservation.commit(Arc::new(Route {
+                    target: target.clone(),
+                    client,
+                    attachment,
+                }));
                 self.changed.notify_one();
                 Ok(MethodResult::Attached {
                     target,
@@ -405,61 +410,7 @@ impl AppServerConnection {
                     cursor,
                 })
             }
-            Method::SessionDetach { target } => {
-                let route = self.route(&target)?;
-                let mut routes = self.routes.lock().expect("routes mutex");
-                if routes
-                    .get(&target.session_id)
-                    .is_some_and(|current| Arc::ptr_eq(current, &route))
-                {
-                    routes.remove(&target.session_id);
-                    route.attachment.detach();
-                }
-                self.changed.notify_one();
-                Ok(MethodResult::Detached {})
-            }
-            Method::SessionSnapshot { target } => {
-                native_result(self.route(&target)?.attachment.snapshot())
-            }
-            Method::SessionSubscribe {
-                target,
-                after_cursor,
-            } => {
-                self.route(&target)?
-                    .attachment
-                    .subscribe_events(after_cursor)
-                    .map_err(client_error)?;
-                self.changed.notify_one();
-                Ok(MethodResult::Subscribed { after_cursor })
-            }
-            Method::TurnStart { target, content } | Method::TurnSteer { target, content } => {
-                native_result(self.route(&target)?.attachment.submit_inbound(content))
-            }
-            Method::TurnCancel { target } => {
-                native_result(self.route(&target)?.attachment.cancel_current_attempt())
-            }
-            Method::InteractionRespond {
-                target,
-                interaction,
-                response,
-            } => native_result(
-                self.route(&target)?
-                    .attachment
-                    .respond_interaction(&interaction, response)
-                    .await,
-            ),
-            Method::InteractionCancel {
-                target,
-                interaction,
-            } => native_result(
-                self.route(&target)?
-                    .attachment
-                    .cancel_interaction(&interaction)
-                    .await,
-            ),
-            Method::ResourcesReload { target } => {
-                native_result(self.route(&target)?.attachment.reload_resources().await)
-            }
+            _ => unreachable!("runtime methods admitted above"),
         }
     }
 
@@ -468,13 +419,13 @@ impl AppServerConnection {
             .routes
             .lock()
             .expect("routes mutex")
+            .active
             .get(&target.session_id)
             .cloned()
             .ok_or_else(|| domain(ErrorData::StaleAttachment))?;
         if route.target != *target {
             return Err(domain(ErrorData::StaleAttachment));
         }
-        route.client.validate().map_err(manager_error)?;
         Ok(route)
     }
 
@@ -491,6 +442,7 @@ impl AppServerConnection {
                 .routes
                 .lock()
                 .expect("routes mutex")
+                .active
                 .values()
                 .cloned()
                 .collect();
@@ -537,13 +489,7 @@ impl AppServerConnection {
                     earliest_serviceable,
                 },
                 EventDelivery::Closed | EventDelivery::Exhausted => {
-                    let mut routes = self.routes.lock().expect("routes mutex");
-                    if routes
-                        .get(&target.session_id)
-                        .is_some_and(|current| Arc::ptr_eq(current, &route))
-                    {
-                        routes.remove(&target.session_id);
-                    }
+                    release_route(&self.routes, &route);
                     NotificationMethod::Closed { target }
                 }
                 EventDelivery::Pending => unreachable!("async delivery never returns Pending"),
@@ -558,9 +504,150 @@ impl AppServerConnection {
 
 impl Drop for AppServerConnection {
     fn drop(&mut self) {
-        for route in self.routes.get_mut().expect("routes mutex").values() {
+        for route in self.routes.lock().expect("routes mutex").active.values() {
             route.attachment.detach();
         }
+    }
+}
+
+fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
+    match method {
+        Method::DefaultsRead { target, .. }
+        | Method::DefaultSave { target, .. }
+        | Method::ModelGet { target, .. }
+        | Method::ModelCatalog { target, .. }
+        | Method::ModelSet { target, .. }
+        | Method::ApprovalModeSet { target, .. }
+        | Method::Capability { target, .. }
+        | Method::Transcript { target, .. }
+        | Method::Goal { target, .. }
+        | Method::BackgroundStatus { target, .. }
+        | Method::BackgroundCancel { target, .. }
+        | Method::SubagentStatus { target, .. }
+        | Method::SubagentCancel { target, .. }
+        | Method::SubagentDispose { target, .. }
+        | Method::CompactContext { target, .. }
+        | Method::SessionDetach { target, .. }
+        | Method::SessionSnapshot { target, .. }
+        | Method::SessionSubscribe { target, .. }
+        | Method::TurnStart { target, .. }
+        | Method::TurnSteer { target, .. }
+        | Method::TurnCancel { target, .. }
+        | Method::InteractionRespond { target, .. }
+        | Method::InteractionCancel { target, .. }
+        | Method::ResourcesReload { target, .. } => Some(target),
+        _ => None,
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+async fn dispatch_runtime(
+    method: Method,
+    route: Arc<Route>,
+    routes: Arc<Mutex<RouteTable>>,
+    changed: Arc<tokio::sync::Notify>,
+) -> Result<MethodResult, RpcError> {
+    match method {
+        Method::DefaultsRead { target: _, scope } => {
+            native_result(route.attachment.defaults_read(scope).await)
+        }
+        Method::DefaultSave {
+            target: _,
+            scope,
+            expected_revision,
+            setting,
+        } => native_result(
+            route
+                .attachment
+                .defaults_save(scope, expected_revision, setting)
+                .await,
+        ),
+        Method::ModelGet { target: _ } => native_result(route.attachment.model_get()),
+        Method::ModelCatalog { target: _ } => native_result(route.attachment.model_catalog()),
+        Method::ModelSet { target: _, config } => {
+            native_result(route.attachment.model_set(*config))
+        }
+        Method::ApprovalModeSet { target: _, mode } => {
+            native_result(route.attachment.approval_mode_set(mode))
+        }
+        Method::Capability { target: _ } => native_result(route.attachment.capability()),
+        Method::Transcript {
+            target: _,
+            before,
+            limit,
+        } => native_result(route.attachment.transcript_page(before, limit)),
+        Method::Goal { target: _, control } => {
+            native_result(route.attachment.goal_control(control))
+        }
+        Method::BackgroundStatus {
+            target: _,
+            execution_id,
+        } => native_result(route.attachment.background_status(&execution_id)),
+        Method::BackgroundCancel {
+            target: _,
+            execution_id,
+        } => native_result(route.attachment.background_cancel(&execution_id)),
+        Method::SubagentStatus {
+            target: _,
+            subagent_id,
+        } => native_result(route.attachment.subagent_status(&subagent_id)),
+        Method::SubagentCancel {
+            target: _,
+            subagent_id,
+        } => native_result(route.attachment.subagent_cancel(&subagent_id)),
+        Method::SubagentDispose {
+            target: _,
+            subagent_id,
+        } => native_result(
+            route
+                .attachment
+                .subagent_workspace_dispose(&subagent_id)
+                .await,
+        ),
+        Method::CompactContext { target: _ } => {
+            native_result(route.attachment.compact_context().await)
+        }
+        Method::SessionDetach { target: _ } => {
+            release_route(&routes, &route);
+            changed.notify_one();
+            Ok(MethodResult::Detached {})
+        }
+        Method::SessionSnapshot { target: _ } => native_result(route.attachment.snapshot()),
+        Method::SessionSubscribe {
+            target: _,
+            after_cursor,
+        } => {
+            route
+                .attachment
+                .subscribe_events(after_cursor)
+                .map_err(client_error)?;
+            changed.notify_one();
+            Ok(MethodResult::Subscribed { after_cursor })
+        }
+        Method::TurnStart { target: _, content } | Method::TurnSteer { target: _, content } => {
+            native_result(route.attachment.submit_inbound(content))
+        }
+        Method::TurnCancel { target: _ } => {
+            native_result(route.attachment.cancel_current_attempt())
+        }
+        Method::InteractionRespond {
+            target: _,
+            interaction,
+            response,
+        } => native_result(
+            route
+                .attachment
+                .respond_interaction(&interaction, response)
+                .await,
+        ),
+        Method::InteractionCancel {
+            target: _,
+            interaction,
+        } => native_result(route.attachment.cancel_interaction(&interaction).await),
+        Method::ResourcesReload { target: _ } => {
+            native_result(route.attachment.reload_resources().await)
+        }
+        _ => unreachable!("only admitted runtime methods"),
     }
 }
 
@@ -696,7 +783,7 @@ fn rpc_error(code: i32, message: &str, data: Option<ErrorData>) -> RpcError {
         data,
     }
 }
-fn failure(id: Option<RequestId>, error: RpcError) -> Response<MethodResult> {
+fn failure(id: Option<RequestId>, error: RpcError) -> Response {
     Response::Failure(Failure {
         jsonrpc: JsonRpcVersion::V2,
         id,

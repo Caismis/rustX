@@ -383,10 +383,13 @@ impl SubagentObservationProjector {
 #[derive(schemars::JsonSchema)]
 pub struct SubagentActivityCounters {
     /// Model requests started.
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub model_requests: u64,
     /// Model retry schedules observed (cumulative count).
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub model_retries: u64,
     /// Tool executions finished (completed plus failed).
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub tool_executions: u64,
 }
 

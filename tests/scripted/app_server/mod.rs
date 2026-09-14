@@ -50,6 +50,8 @@ pub(super) struct Probe {
     pub(super) panic_once: std::sync::atomic::AtomicBool,
     pub(super) before_compose: AsyncGate,
     pub(super) before_shutdown: AsyncGate,
+    pub(super) before_operation: AsyncGate,
+    pub(super) draining_operations: watch::Sender<bool>,
 }
 impl Default for Probe {
     fn default() -> Self {
@@ -61,6 +63,8 @@ impl Default for Probe {
             panic_once: std::sync::atomic::AtomicBool::new(false),
             before_compose: AsyncGate::default(),
             before_shutdown: AsyncGate::default(),
+            before_operation: AsyncGate::default(),
+            draining_operations: watch::channel(false).0,
         }
     }
 }

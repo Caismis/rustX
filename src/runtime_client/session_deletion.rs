@@ -11,8 +11,11 @@ pub struct RuntimeClientSessionDeletePreview {
     /// Display name, truncated to at most 256 Unicode scalar values.
     pub name: Option<String>,
     pub target_revision: String,
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub owned_node_count: u64,
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub owned_conversation_count: u64,
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub owned_child_count: u64,
 }
 
@@ -23,7 +26,10 @@ pub struct RuntimeClientSessionDeletePreview {
 pub enum RuntimeClientSessionDeletionBlocker {
     CurrentSession,
     InUse,
-    Workspace { resource_count: u64 },
+    Workspace {
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        resource_count: u64,
+    },
     InvalidOwnership,
 }
 

@@ -145,6 +145,20 @@ impl ManagedRuntime {
 struct ResidentRuntime {
     identity: Arc<ManagedRuntime>,
     composition: Mutex<Option<LocalConversationRuntime>>,
+    operations: watch::Sender<usize>,
+}
+
+/// Private, non-cloneable server-operation ownership. Never lent to a client.
+struct OperationLease(Option<Arc<ResidentRuntime>>);
+
+impl Drop for OperationLease {
+    fn drop(&mut self) {
+        let resident = self.0.take().expect("operation resident");
+        let operations = resident.operations.clone();
+        // Release strong ownership before publishing the drain acknowledgement.
+        drop(resident);
+        operations.send_modify(|count| *count -= 1);
+    }
 }
 impl ResidentRuntime {
     // Shutdown alone may clone execution authority. Never exposed to clients.
@@ -159,14 +173,74 @@ impl ResidentRuntime {
 
 /// Non-owning control/observation seam. Dropping it has no runtime side effects.
 /// Operations return owned facts, never runtime/host/storage handles. The local
-/// composition mutex covers each bounded synchronous operation, without await;
-/// unload takes the same slot after native shutdown and cannot leave a borrowed
-/// operation retaining resources. No global registry lock covers runtime work.
+/// composition mutex covers bounded synchronous helpers, without await. App
+/// Server work uses a registry-admitted server task and scoped operation lease;
+/// unload drains these before native shutdown and composition release. No
+/// global registry lock covers runtime work or an asynchronous wait.
 #[derive(Clone, Debug)]
 pub struct ManagedRuntimeClient {
     runtime: Weak<ManagedRuntime>,
 }
 impl ManagedRuntimeClient {
+    fn admit_operation(&self) -> Result<OperationLease, RuntimeManagerError> {
+        let identity = self
+            .runtime
+            .upgrade()
+            .ok_or(RuntimeManagerError::StaleIncarnation)?;
+        let registry = identity
+            .registry
+            .upgrade()
+            .ok_or(RuntimeManagerError::StaleIncarnation)?;
+        let state = registry.0.lock().expect("registry mutex");
+        let Some(Entry::Loaded(resident)) = state.entries.get(&identity.conversation) else {
+            return Err(RuntimeManagerError::StaleIncarnation);
+        };
+        if resident.identity.incarnation != identity.incarnation {
+            return Err(RuntimeManagerError::StaleIncarnation);
+        }
+        // Same lock as Loaded -> Unloading: no late increment is possible.
+        resident.operations.send_modify(|count| *count += 1);
+        Ok(OperationLease(Some(resident.clone())))
+    }
+
+    /// Admit work to a server-owned task. The caller receives only a reply channel;
+    /// cancellation or retention of that receiver cannot retain the operation lease.
+    pub(crate) fn start_operation<T, F, Fut>(
+        &self,
+        operation: F,
+    ) -> Result<tokio::sync::oneshot::Receiver<T>, RuntimeManagerError>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = T> + Send + 'static,
+    {
+        let lease = self.admit_operation()?;
+        #[cfg(test)]
+        let probe = {
+            let identity = &lease.0.as_ref().expect("operation resident").identity;
+            identity
+                .registry
+                .upgrade()
+                .expect("resident registry")
+                .0
+                .lock()
+                .expect("registry mutex")
+                .probes
+                .get(&identity.conversation)
+                .cloned()
+        };
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            #[cfg(test)]
+            if let Some(probe) = probe {
+                probe.before_operation.park().await;
+            }
+            let result = operation().await;
+            drop(lease);
+            let _ = sender.send(result);
+        });
+        Ok(receiver)
+    }
     /// Reject use of an unloaded, unloading or replaced incarnation.
     /// # Errors
     /// Returns `StaleIncarnation` when residency has ended.
@@ -182,7 +256,8 @@ impl ManagedRuntimeClient {
     pub fn attach(
         &self,
     ) -> Result<crate::runtime_client::attachment::AttachedSnapshot, RuntimeManagerError> {
-        let runtime = self.current()?;
+        let lease = self.admit_operation()?;
+        let runtime = lease.0.as_ref().expect("operation resident");
         let composition = runtime.composition.lock().expect("composition mutex");
         composition
             .as_ref()
@@ -500,6 +575,7 @@ impl SessionRuntimeManager {
                 .expect("process incarnation identity exhausted"),
         );
         Ok(Arc::new_cyclic(|resident| ResidentRuntime {
+            operations: watch::channel(0).0,
             identity: Arc::new(ManagedRuntime {
                 conversation: access.node.conversation_id,
                 incarnation,
@@ -654,6 +730,14 @@ impl SessionRuntimeManager {
         tokio::spawn(async move {
             #[cfg(test)]
             owner.probe(&id).before_shutdown.park().await;
+            #[cfg(test)]
+            owner.probe(&id).draining_operations.send_replace(true);
+            runtime
+                .operations
+                .subscribe()
+                .wait_for(|count| *count == 0)
+                .await
+                .expect("resident owns operation drain");
             let live = runtime.shutdown_runtime().expect("resident composition");
             if let Err(e) = live.shutdown().await {
                 terminal.finish(Err(error(format!("{e:?}"))));

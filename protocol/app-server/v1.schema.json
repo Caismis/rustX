@@ -148,7 +148,8 @@
                 "limit": {
                   "type": "integer",
                   "format": "uint",
-                  "minimum": 0
+                  "minimum": 0,
+                  "maximum": 9007199254740991
                 }
               },
               "additionalProperties": false,
@@ -547,12 +548,14 @@
                 "offset": {
                   "type": "integer",
                   "format": "uint",
-                  "minimum": 0
+                  "minimum": 0,
+                  "maximum": 9007199254740991
                 },
                 "limit": {
                   "type": "integer",
                   "format": "uint",
-                  "minimum": 0
+                  "minimum": 0,
+                  "maximum": 9007199254740991
                 }
               },
               "additionalProperties": false,
@@ -662,12 +665,14 @@
                 "offset": {
                   "type": "integer",
                   "format": "uint",
-                  "minimum": 0
+                  "minimum": 0,
+                  "maximum": 9007199254740991
                 },
                 "limit": {
                   "type": "integer",
                   "format": "uint",
-                  "minimum": 0
+                  "minimum": 0,
+                  "maximum": 9007199254740991
                 }
               },
               "additionalProperties": false,
@@ -1152,9 +1157,8 @@
                   "$ref": "#/$defs/SessionId"
                 },
                 "expected_revision": {
-                  "type": "integer",
-                  "format": "uint64",
-                  "minimum": 0
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
                 },
                 "settings": {
                   "$ref": "#/$defs/SessionPersistentState"
@@ -1214,7 +1218,9 @@
         },
         {
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
         }
       ]
     },
@@ -1253,9 +1259,8 @@
     },
     "RuntimeIncarnationId": {
       "description": "Process-local live composition identity. Never a durable or transport identity.",
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 0
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
     },
     "AttachmentId": {
       "description": "The identity of one Runtime Client attachment.\n\nDistinct from [`ConversationId`], [`AttemptId`], [`RuntimeClientCursor`],\nand request ids: one attachment is one client session, and reconnecting\nalways receives a new attachment identity.",
@@ -1277,9 +1282,8 @@
     },
     "RuntimeClientTranscriptCursor": {
       "description": "The cursor domain of durable transcript paging.",
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 0
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
     },
     "SessionModelConfig": {
       "description": "The authoritative mutable model configuration of one conversation\nsession.\n\nThis one type is the session's state, the `model_get` result, and the\n`model_set` parameter: an update is a whole-state replacement, never an\nambiguous JSON patch.",
@@ -1313,7 +1317,8 @@
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 4294967295
         },
         "summaryModel": {
           "description": "The compaction summary model policy.",
@@ -1385,7 +1390,8 @@
                 "null"
               ],
               "format": "uint32",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 4294967295
             },
             "mode": {
               "type": "string",
@@ -1441,7 +1447,8 @@
               "type": "integer",
               "format": "uint32",
               "minimum": 0,
-              "default": 10
+              "default": 10,
+              "maximum": 4294967295
             },
             "action": {
               "type": "string",
@@ -1485,9 +1492,8 @@
           "type": "string"
         },
         "revision": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
         }
       },
       "additionalProperties": false,
@@ -1578,7 +1584,8 @@
             "rounds": {
               "type": "integer",
               "format": "uint32",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 4294967295
             },
             "action": {
               "type": "string",
@@ -1732,9 +1739,8 @@
     },
     "SurfaceRevision": {
       "description": "The identity of one exact historical Conversation Surface state.\n\nA revision is a monotonic counter in its own identity domain. The empty\nSurface of a new conversation is [`SurfaceRevision::INITIAL`] (`0`), and\nevery accepted [`SurfaceOp`] advances it by exactly one, so revision `n`\nis precisely \"the Surface after the first `n` accepted operations\".\n\nA revision is deliberately **not** a `MessageId`, an `AttemptId`, a\n`RuntimeClientCursor`, an `InboundSequence`, an Event Journal sequence,\nor a `CapabilityRevision`: none of those identify a Surface state, and\nnone of them may be substituted for one.",
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 0
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
     },
     "MessageId": {
       "description": "Identifies a committed canonical message block.",
@@ -1742,9 +1748,8 @@
     },
     "RuntimeClientCursor": {
       "description": "The external cursor of the Runtime Client observation stream.\n\nA cursor identifies one position in the externally visible\n`RuntimeClientEvent` sequence: cursor `C` means \"every Runtime Client\nevent through event `C` has been applied to the snapshot\". It is:\n\n- monotonic within the Runtime Client observation stream;\n- **not** an alias of `u64`;\n- **not** the mailbox [`InboundSequence`](crate::runtime::inbound::InboundSequence);\n- **not** [`RuntimeEventEnvelope::sequence`](crate::events::types::RuntimeEventEnvelope);\n- **not** any future Event Journal sequence;\n- owned by the runtime observation stream, so it survives attachment\n  detach/reconnect;\n- independent of its numeric representation: protocol versioning never\n  derives anything from cursor encoding.\n\nCursor allocation is committed by exactly one linearization owner (the\nRuntime Client projection) together with event publication; overflow\nfails explicitly and never wraps.",
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 0
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
     },
     "UserContentBlock": {
       "description": "A content block inside a `UserMessageBlock`.",
@@ -1957,7 +1962,8 @@
         "visit": {
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 4294967295
         }
       },
       "required": [
@@ -1981,7 +1987,8 @@
           "items": {
             "type": "integer",
             "format": "uint32",
-            "minimum": 0
+            "minimum": 0,
+            "maximum": 4294967295
           }
         }
       },
@@ -2005,9 +2012,8 @@
         },
         "invocation": {
           "description": "WorkflowRuntime-owned invocation ordinal, allocated at run admission.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
         }
       },
       "required": [
@@ -2178,7 +2184,8 @@
           "description": "Zero-based index into the immutable questionnaire.",
           "type": "integer",
           "format": "uint",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "answer": {
           "description": "The typed decision for that question.",
@@ -2396,7 +2403,8 @@
           "description": "The zero-based index into the question's declared options.",
           "type": "integer",
           "format": "uint",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         }
       },
       "additionalProperties": false,
@@ -2414,7 +2422,8 @@
           "items": {
             "type": "integer",
             "format": "uint",
-            "minimum": 0
+            "minimum": 0,
+            "maximum": 9007199254740991
           }
         }
       },
@@ -2568,9 +2577,8 @@
               ]
             },
             "revision": {
-              "type": "integer",
-              "format": "uint64",
-              "minimum": 0
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
             },
             "type": {
               "type": "string",
@@ -2812,7 +2820,8 @@
                 "null"
               ],
               "format": "uint",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 9007199254740991
             },
             "type": {
               "type": "string",
@@ -2840,7 +2849,8 @@
                 "null"
               ],
               "format": "uint",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 9007199254740991
             },
             "type": {
               "type": "string",
@@ -3005,9 +3015,8 @@
           "type": "object",
           "properties": {
             "revision": {
-              "type": "integer",
-              "format": "uint64",
-              "minimum": 0
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
             },
             "settings": {
               "$ref": "#/$defs/SessionPersistentState"
@@ -3028,9 +3037,8 @@
           "type": "object",
           "properties": {
             "revision": {
-              "type": "integer",
-              "format": "uint64",
-              "minimum": 0
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
             },
             "type": {
               "type": "string",
@@ -3047,9 +3055,8 @@
           "type": "object",
           "properties": {
             "resource_revision": {
-              "type": "integer",
-              "format": "uint64",
-              "minimum": 0
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
             },
             "capability_revision": {
               "$ref": "#/$defs/CapabilityRevision"
@@ -3255,19 +3262,22 @@
           "description": "The model's context window in tokens.",
           "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "modelMaxOutputTokens": {
           "description": "The model's configured maximum output tokens.",
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 4294967295
         },
         "maxOutputTokens": {
           "description": "The effective output budget.",
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 4294967295
         },
         "reasoningProfile": {
           "description": "The selected reasoning profile, when the model declares any.",
@@ -3421,19 +3431,22 @@
               "description": "The model's context window in tokens.",
               "type": "integer",
               "format": "uint64",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 9007199254740991
             },
             "modelMaxOutputTokens": {
               "description": "The model's configured maximum output tokens.",
               "type": "integer",
               "format": "uint32",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 4294967295
             },
             "maxOutputTokens": {
               "description": "The effective output budget.",
               "type": "integer",
               "format": "uint32",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 4294967295
             },
             "reasoningProfile": {
               "description": "The selected reasoning profile, when the model declares any.",
@@ -3515,13 +3528,15 @@
           "description": "The model context window in tokens.",
           "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "maxOutputTokens": {
           "description": "The configured maximum output tokens.",
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 4294967295
         },
         "declaredCapabilities": {
           "description": "The capabilities the catalog claims.",
@@ -3671,9 +3686,8 @@
     },
     "CapabilityRevision": {
       "description": "A monotonic revision counter for the capability set observed by an attempt.\n\nA running attempt snapshots one immutable `CapabilityRevision` when it\nstarts and keeps it for its entire lifetime. The revision is a counter,\nnot a provider-specific string: every capability mutation atomically swaps\nthe whole capability set and increments the revision.",
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 0
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
     },
     "RuntimeClientTool": {
       "description": "One external tool catalog entry.",
@@ -4059,7 +4073,8 @@
           "description": "Runtime Client projection statistic: the number of committed\ncompaction completions folded into this read model. The compaction\ngeneration remains the conversation-owned identity.",
           "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "latest_compaction": {
           "description": "The latest committed compaction metadata, when compaction occurred.",
@@ -4085,9 +4100,8 @@
       "properties": {
         "generation": {
           "description": "The compaction generation maintained in the current Conversation\nSurface head.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
         },
         "summary_message_id": {
           "description": "The identity of the committed canonical compaction summary message.",
@@ -4105,7 +4119,8 @@
           "description": "The deterministic estimate of the rebuilt request context.",
           "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         }
       },
       "additionalProperties": false,
@@ -4125,7 +4140,8 @@
           "description": "The measured or estimated input token count.",
           "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "source": {
           "description": "How the measurement was obtained.",
@@ -4588,12 +4604,14 @@
         "autonomous_round_budget": {
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 4294967295
         },
         "autonomous_rounds_consumed": {
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 4294967295
         },
         "origin": {
           "$ref": "#/$defs/GoalOrigin"
@@ -5052,7 +5070,8 @@
           "description": "Execution duration in integer milliseconds (stable for persistence).",
           "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "exit_code": {
           "description": "Process exit code where the tool executed a process.",
@@ -5060,7 +5079,9 @@
             "integer",
             "null"
           ],
-          "format": "int32"
+          "format": "int32",
+          "minimum": -2147483648,
+          "maximum": 2147483647
         },
         "artifacts": {
           "description": "Durable artifact/file references produced by the execution.",
@@ -5420,7 +5441,8 @@
             "null"
           ],
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         }
       },
       "required": [
@@ -5724,7 +5746,8 @@
       "description": "A stable index identifying one content block within the ordered content\nlist of the canonical message being assembled.\n\nStreaming facts (text deltas, reasoning deltas, provider continuation\nstate, tool-call content) reference the block they belong to by this\nindex, so interleaved and multiple blocks remain unambiguous without\nexposing any provider-specific block id type.",
       "type": "integer",
       "format": "uint32",
-      "minimum": 0
+      "minimum": 0,
+      "maximum": 4294967295
     },
     "EventId": {
       "description": "Identifies one durable runtime event.",
@@ -5901,9 +5924,8 @@
           "$ref": "#/$defs/WorkflowRunId"
         },
         "version": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
         },
         "content": {
           "type": "string"
@@ -6056,7 +6078,8 @@
                 "null"
               ],
               "format": "uint32",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 4294967295
             },
             "max_length": {
               "description": "The inclusive maximum Unicode scalar count, when the producer declares one.",
@@ -6065,7 +6088,8 @@
                 "null"
               ],
               "format": "uint32",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 4294967295
             },
             "format": {
               "description": "The declared text shape, when the producer declares one.",
@@ -6216,13 +6240,15 @@
               "description": "The inclusive lower bound on how many options a submitted answer selects.",
               "type": "integer",
               "format": "uint32",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 4294967295
             },
             "max_selected": {
               "description": "The inclusive upper bound on how many options a submitted answer selects.",
               "type": "integer",
               "format": "uint32",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 4294967295
             },
             "allow_custom": {
               "description": "Whether a free-text answer outside the declared options is legal.",
@@ -6724,9 +6750,8 @@
       "properties": {
         "revision": {
           "description": "The child-owned projection revision; strictly increasing per applied\ntransition.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
         },
         "activity": {
           "description": "What the child is observably doing right now.",
@@ -6781,7 +6806,8 @@
               "description": "The retry ordinal of THIS request: 0 for a first attempt, `n`\nfor the request the nth scheduled retry armed.",
               "type": "integer",
               "format": "uint32",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 4294967295
             },
             "type": {
               "type": "string",
@@ -6803,7 +6829,8 @@
               "description": "The scheduled retry ordinal.",
               "type": "integer",
               "format": "uint32",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 4294967295
             },
             "type": {
               "type": "string",
@@ -6945,19 +6972,22 @@
           "description": "Model requests started.",
           "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "model_retries": {
           "description": "Model retry schedules observed (cumulative count).",
           "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "tool_executions": {
           "description": "Tool executions finished (completed plus failed).",
           "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         }
       },
       "additionalProperties": false,
@@ -7269,7 +7299,8 @@
           "description": "Number of persisted nodes, useful metadata for a bounded tree view.",
           "type": "integer",
           "format": "uint",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         }
       },
       "required": [
@@ -7581,17 +7612,20 @@
         "owned_node_count": {
           "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "owned_conversation_count": {
           "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "owned_child_count": {
           "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         }
       },
       "additionalProperties": false,
@@ -7638,7 +7672,8 @@
             "resource_count": {
               "type": "integer",
               "format": "uint64",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 9007199254740991
             },
             "kind": {
               "type": "string",
@@ -7728,10 +7763,9 @@
         },
         "approval_mode_revision": {
           "description": "The runtime control-plane revision of the mode state.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0,
-          "default": 0
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])",
+          "default": "0"
         },
         "durability_failure": {
           "description": "The runtime's durable-authority failure, when it has entered the\nexplicit degraded state. While set, no new durable admission/execution\nwork may begin.",
@@ -8144,9 +8178,8 @@
       "type": "object",
       "properties": {
         "revision": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
         },
         "runs": {
           "type": "array",
@@ -8157,7 +8190,8 @@
         "omitted_runs": {
           "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         }
       },
       "additionalProperties": false,
@@ -8197,22 +8231,26 @@
         "omitted_instances": {
           "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "steps_consumed": {
           "type": "integer",
           "format": "uint",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "steps_max": {
           "type": "integer",
           "format": "uint",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "agents_consumed": {
           "type": "integer",
           "format": "uint",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "candidate": {
           "anyOf": [
@@ -8228,7 +8266,8 @@
           "description": "Admitted candidate users, including serialized workspace waiters.\nWhile nonzero no historical check certifies the mutable workspace.",
           "type": "integer",
           "format": "uint",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "handoff": {
           "anyOf": [
@@ -8259,9 +8298,8 @@
     },
     "RuntimeResourceRevision": {
       "description": "Identifies one immutable process-local runtime resource generation.\n\nThis is deliberately separate from `ContextGeneration` (one context\nassembly provenance set) and `CapabilityRevision` (one executable\ncapability set). A resource-only change may advance this revision while\nretaining an identical capability revision.",
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 0
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
     },
     "WorkflowState": {
       "oneOf": [
@@ -8383,7 +8421,8 @@
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 4294967295
         },
         "kind": {
           "$ref": "#/$defs/WorkflowNodeKind"
@@ -8437,7 +8476,8 @@
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 4294967295
         },
         "iterations_max": {
           "type": [
@@ -8445,7 +8485,8 @@
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 4294967295
         },
         "loop_exit": {
           "anyOf": [
@@ -8563,7 +8604,8 @@
           "description": "The number of completed turns.",
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 4294967295
         },
         "last_usage": {
           "description": "The latest normalized usage of a completed model request, when any.",
@@ -8902,7 +8944,8 @@
                 "null"
               ],
               "format": "uint64",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 9007199254740991
             },
             "type": {
               "type": "string",
@@ -9249,19 +9292,22 @@
           "description": "Input tokens consumed by the request.",
           "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "output_tokens": {
           "description": "Output tokens produced by the response.",
           "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "total_tokens": {
           "description": "Total tokens, where the provider reports or can derive them.",
           "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "details": {
           "description": "Optional normalized usage details.",
@@ -9292,7 +9338,8 @@
             "null"
           ],
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         },
         "cached_input_tokens": {
           "description": "Input tokens served from cache.",
@@ -9301,7 +9348,8 @@
             "null"
           ],
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         }
       }
     },
@@ -9633,9 +9681,8 @@
     },
     "InboundSequence": {
       "description": "A conversation-scoped inbound sequence number.\n\nThe sequence identifies one item of the conversation's inbound ordering\ndomain. It is **not**\n[`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`\nand is never allocated from the Event Journal sequence; the durable\nPending Inbound Inbox owns allocation, and the first successful\nacceptance of a conversation receives `1`.",
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 0
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
     },
     "InboundDrainView": {
       "description": "The latest observed finite drain boundary.",
@@ -9649,7 +9696,8 @@
           "description": "The number of drained items.",
           "type": "integer",
           "format": "uint",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         }
       },
       "additionalProperties": false,
@@ -9754,7 +9802,8 @@
           "description": "The primary model turn that reached the policy boundary.",
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 4294967295
         },
         "kind": {
           "description": "The bounded interaction facts.",
@@ -9900,7 +9949,8 @@
           "description": "The turn number of the request preparation.",
           "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 4294967295
         },
         "status_message_id": {
           "description": "The canonical Agent Status User message described by this view. It is\nthe stable identity of the composition: observing the same\n`status_message_id` twice describes one composition, never two.",
@@ -10038,7 +10088,8 @@
               "description": "Active executions omitted by the module-local bound.",
               "type": "integer",
               "format": "uint",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 9007199254740991
             },
             "type": {
               "type": "string",
@@ -10079,31 +10130,36 @@
               "description": "Number of committed active tasks.",
               "type": "integer",
               "format": "uint",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 9007199254740991
             },
             "blocked_count": {
               "description": "Number of active tasks blocked by active dependencies.",
               "type": "integer",
               "format": "uint",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 9007199254740991
             },
             "completed_count": {
               "description": "Number of committed completed tasks.",
               "type": "integer",
               "format": "uint",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 9007199254740991
             },
             "deleted_count": {
               "description": "Number of committed deleted tasks.",
               "type": "integer",
               "format": "uint",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 9007199254740991
             },
             "omitted_count": {
               "description": "Number of active tasks omitted from the bounded view.",
               "type": "integer",
               "format": "uint",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 9007199254740991
             },
             "type": {
               "type": "string",
@@ -10128,9 +10184,8 @@
       "properties": {
         "id": {
           "description": "The conversation-owned task id.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
         },
         "subject": {
           "description": "The bounded task subject.",
@@ -11218,13 +11273,15 @@
               "description": "The source's total candidate count.",
               "type": "integer",
               "format": "uint",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 9007199254740991
             },
             "limit": {
               "description": "The source's cumulative candidate budget.",
               "type": "integer",
               "format": "uint",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 9007199254740991
             },
             "kind": {
               "type": "string",
@@ -11587,7 +11644,8 @@
           "description": "The exact byte length of the loaded content.",
           "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 9007199254740991
         }
       },
       "additionalProperties": false,
@@ -11610,9 +11668,8 @@
         },
         "next_id": {
           "description": "The id the next created task will receive.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
         }
       },
       "additionalProperties": false,
@@ -11626,9 +11683,8 @@
       "properties": {
         "id": {
           "description": "The task id, unique within the current list generation.\n\n`clear` resets the allocator, so an id names one task for as long as\nthe list it belongs to lives — not for as long as the conversation\ndoes.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
         },
         "subject": {
           "description": "The imperative one-line subject.",
@@ -11656,9 +11712,8 @@
           "description": "The ids this task waits on, ascending and deduplicated.",
           "type": "array",
           "items": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
           }
         },
         "owner": {
@@ -11715,7 +11770,9 @@
       "properties": {
         "code": {
           "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "minimum": -2147483648,
+          "maximum": 2147483647
         },
         "message": {
           "type": "string"
@@ -11781,14 +11838,12 @@
           "type": "object",
           "properties": {
             "expected": {
-              "type": "integer",
-              "format": "uint64",
-              "minimum": 0
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
             },
             "actual": {
-              "type": "integer",
-              "format": "uint64",
-              "minimum": 0
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
             },
             "kind": {
               "type": "string",
@@ -12216,7 +12271,8 @@
               "description": "The exact folded number of completed turns.",
               "type": "integer",
               "format": "uint32",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 4294967295
             },
             "type": {
               "type": "string",
@@ -12385,9 +12441,8 @@
             },
             "revision": {
               "description": "The monotonic control-plane revision.",
-              "type": "integer",
-              "format": "uint64",
-              "minimum": 0
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
             },
             "type": {
               "type": "string",
@@ -12909,7 +12964,8 @@
               "description": "The turn number of the request preparation.",
               "type": "integer",
               "format": "uint32",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 4294967295
             },
             "status": {
               "description": "The structured status view (sections plus the canonical derived\nrendering).",
@@ -12986,7 +13042,8 @@
               "description": "The number of drained items.",
               "type": "integer",
               "format": "uint",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 9007199254740991
             },
             "message_ids": {
               "description": "The drained message identities in inbound sequence order.",

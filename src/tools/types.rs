@@ -333,6 +333,7 @@ pub struct ToolExecutionResult {
     #[serde(default)]
     pub content: Vec<ToolResultContent>,
     /// Execution duration in integer milliseconds (stable for persistence).
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub duration_ms: u64,
     /// Process exit code where the tool executed a process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -894,6 +895,7 @@ pub struct TruncationState {
     pub truncated: bool,
     /// Size of the untruncated output in bytes, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub original_bytes: Option<u64>,
 }
 

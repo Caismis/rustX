@@ -74,9 +74,13 @@ decides whether it starts a fresh attempt or joins the inbound queue of the
 current attempt. Neither method creates a separate execution state machine.
 Callers learn accepted message identity and inbound sequence from the result.
 
-The connection retains at most 32 attachments. Its map is locked only for
-local routing changes; no lock spans composition, provider work, interaction
-settlement or shutdown. Requests may run concurrently and finish out of order.
+The connection admits at most 32 active **plus reserved** attachments. A short
+routing-lock transaction reserves capacity before `load` can compose a cold
+Session. Success commits that reservation to a route; error or cancellation
+drops the reservation. A full connection therefore cannot make a rejected
+Session resident. Its map is locked only for local routing changes; no lock
+spans composition, provider work, interaction settlement or shutdown. Requests
+may run concurrently and finish out of order.
 One notification consumer uses bounded fan-in over native subscriptions;
 there are no per-Session pump tasks or copied event queues.
 
@@ -94,11 +98,30 @@ Interaction ID. Attachment IDs identify one host admission. Incarnation IDs
 identify one process-local composition. Request IDs belong only to correlation.
 None of these are projection cursors or aliases for each other.
 
-The manager validates that an attached incarnation remains Loaded. Explicit
-unload compares the expected incarnation and claims Unloading under the same
-registry lock. Stale unload cannot drain a replacement. Native admission still
-arbitrates operations racing shutdown; no control path reacquires a different
-runtime on behalf of an old attachment.
+After exact attachment routing, the manager admits every live-runtime read or
+control operation under its registry lock, requiring the same Loaded incarnation
+and incrementing its in-flight count. Explicit unload compares that incarnation
+and claims `Loaded -> Unloading` under **the same lock**. There is one ordering:
+an operation admitted first may finish; an unload claim first rejects the
+operation as `StaleRuntime`, without invoking its native owner. No control path
+reacquires a different runtime on behalf of an old attachment.
+
+An admitted operation runs in a server-owned task with a private, non-cloneable
+operation lease. The requesting future receives only a one-shot reply channel;
+abandoning or retaining that future cannot retain the lease. Lease destruction
+releases strong resident ownership before decrementing the in-flight count.
+Unload waits for that count to reach zero, then performs native shutdown,
+joins the projection worker, and releases the composition/allocation. No
+registry lock is held across any of this asynchronous work. The gate is
+subordinate to registry residency, not a second runtime state machine.
+
+Successful `session/unload` removes the exact initiating route and releases its
+attachment capacity **before returning success**, even if the requester stops
+polling. Its response is the initiating request's authoritative terminal
+acknowledgement. Notification consumption is not a resource-release point;
+there is no synthetic durable closed-event queue. An already waiting observer
+may receive `session/closed` for the old target, but cannot remove a newly
+installed route.
 
 ## Attachment and observation lifetime
 
@@ -111,7 +134,10 @@ delete a Session, or shut down the process.
 `RuntimeAttachment`, `EventSubscription`, and the local single-runtime endpoint
 hold weak host references. The resident composition owns the host and live
 resource graph. A successful unload can release that graph and native
-allocation locks while stale handles remain alive. Those handles fail or return
+allocation locks while stale handles remain alive. Only manager-admitted
+server operations may temporarily own that graph; unload drains them first.
+Notification waiting never takes an operation lease or retains the host across
+an await. Those stale handles fail or return
 Closed; they cannot resurrect the host or observe the next incarnation.
 Unload joins the projection worker after native execution shutdown, so a final
 in-flight observation fold cannot outlive successful resource release.
@@ -136,13 +162,54 @@ Runtime unload retains the existing explicit shutdown/cancellation semantics.
 
 ## Generation and validation
 
+### Exact integer wire domains
+
+App Server envelopes encode opaque `u64` identities, sequences and revisions as
+canonical unsigned decimal **strings**, bounded to `0..=18446744073709551615`.
+For example, both an incarnation and a cursor can carry `"9007199254740993"`
+without JavaScript rounding. Their generated domains remain separately named:
+
+```ts
+type RuntimeIncarnationId = string;
+type RuntimeClientCursor = string;
+```
+
+This covers runtime incarnation, event and transcript cursors, Surface revision,
+settings/approval CAS revisions, capability and resource revisions, Goal
+references, Workflow revision and run invocation, candidate version, child
+observation revision, compaction generation, inbound sequence, and Todo IDs,
+dependencies and allocator position. Natural string identities and default
+document/deletion revision strings remain strings. These are distinct domains,
+not interchangeable tokens; do not compare decimal strings lexicographically
+for numerical order (use `BigInt` locally if necessary, never JSON bigint).
+
+Page offsets/limits, collection and omission counts, option indices, byte and
+token counts, durations/retry hints, and Workflow capacity counters remain JSON
+numbers, bounded at the App Server codec to the safe integer range. Native
+`u16`/`u32` protocol versions, turns, budgets and visit/iteration indices are
+intrinsically safe. Signed request IDs are restricted to the safe range; error
+and process exit codes are `i32`. Questionnaire exact integers/binary64 retain
+their existing lossless string formats. Timestamps remain RFC3339 strings.
+Arbitrary user/tool JSON payloads are data, not typed control identity domains.
+
+`src/app_server/wire.rs` applies these rules at the Request/Response/Notification
+envelope boundary. Rust/Schemars field types and explicit quantity bounds drive
+both serde conversion and the public `schema::protocol_schema()` generator;
+there is no second field-name or method-name mapping. Native Rust domain types,
+storage and local TUI stdio representations are unchanged. Encode/decode complete
+App Server envelopes and use the public schema generator, not a native helper
+DTO's standalone serde/schema representation.
+
+### Reproducible generation
+
 Generated client-neutral artifacts are in `protocol/app-server/`:
 
 - `v1.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
 - `v1.ts`: TypeScript generated from that schema using pinned
   `json-schema-to-typescript` and its committed pnpm lockfile.
 - `fixtures.json`: serialized Rust messages, including nulls, string/numeric
-  request IDs, timestamps and lossless Questionnaire numeric encodings.
+  request IDs, timestamps, exact domains above 2^53 and lossless Questionnaire
+  numeric encodings.
 - `fixtures.ts`: those exact messages consumed with `satisfies ProtocolMessage[]`.
 
 Install once with `pnpm install --frozen-lockfile` in that directory. The single
@@ -162,7 +229,12 @@ safe integer range. They are not generated as JavaScript numbers.
 
 Deterministic App Server tests live under `tests/scripted/app_server/`. Native
 provider gates, projection gates and coordinator terminal gates prove overlap,
-snapshot/event ordering and response/cancel races. Weak owner probes and native
+snapshot/event ordering and response/cancel races. Manager admission/drain
+gates prove both operation/unload orders, including abandoned requests.
+Composition gates prove transactional final-slot admission and no composition
+on capacity rejection; unload capacity tests never poll notifications.
+Every exact numeric schema leaf is tested at 0, above 2^53, and u64::MAX, with
+noncanonical/overflow/numeric representations rejected. Weak owner probes and native
 deletion preflight prove resource release, rather than inferring it from elapsed
 time. Timeouts serve only as liveness guards.
 

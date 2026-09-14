@@ -677,6 +677,7 @@ pub(crate) struct OwnershipCommitRefused {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TokenMeasurement {
     /// The measured or estimated input token count.
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub input_tokens: u64,
     /// How the measurement was obtained.
     pub source: TokenMeasurementSource,

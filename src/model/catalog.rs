@@ -1599,6 +1599,7 @@ pub struct CatalogModelView {
     /// The protocol an adapter speaks to this model.
     pub protocol: ModelProtocol,
     /// The model context window in tokens.
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub context_window: u64,
     /// The configured maximum output tokens.
     pub max_output_tokens: u32,
