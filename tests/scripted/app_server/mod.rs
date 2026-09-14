@@ -91,7 +91,10 @@ impl Fixture {
                 "data: {\"id\":\"response\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"a\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
                 "data: [DONE]\n\n")).with_header_gate(server_gates[index].clone())
         }).await;
-        let root = tempfile::tempdir().unwrap();
+        // Match the runtime's canonical workspace identity, including macOS's
+        // /var -> /private/var temporary-directory alias. Keep strict cwd checks.
+        let root =
+            tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
         let workspaces = [root.path().join("a"), root.path().join("b")];
         for (workspace, marker) in workspaces.iter().zip(["A", "B"]) {
             std::fs::create_dir(workspace).unwrap();
