@@ -69,7 +69,7 @@
  * runtime does.
  */
 
-import type { FiniteNumberWire } from "./types.ts";
+import type { FiniteNumberWire } from "./app-server.ts";
 
 /** The exact width of a canonical `Number` wire spelling. */
 export const FINITE_NUMBER_WIRE_CHARS = 16;

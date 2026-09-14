@@ -39,7 +39,7 @@ import type {
   TodoStatus,
   TodoTask,
   ToolExecutionResult,
-} from "../protocol/types.ts";
+} from "../protocol/app-server.ts";
 import { sanitizeField } from "../sanitize.ts";
 import type { PresentationState } from "./state.ts";
 
@@ -88,14 +88,14 @@ export function isTodoComposed(
 
 /** Tasks that are neither completed nor tombstoned. */
 export function openTasks(snapshot: TodoSnapshot): TodoTask[] {
-  return snapshot.tasks.filter(
+  return (snapshot.tasks ?? []).filter(
     (task) => task.status !== "completed" && task.status !== "deleted",
   );
 }
 
 /** Tasks the panel shows: everything the runtime still considers live. */
 export function visibleTasks(snapshot: TodoSnapshot): TodoTask[] {
-  return snapshot.tasks.filter((task) => task.status !== "deleted");
+  return (snapshot.tasks ?? []).filter((task) => task.status !== "deleted");
 }
 
 /** The `done/total` counters, which never count tombstones. */
@@ -170,7 +170,7 @@ export function parseSnapshot(value: unknown): TodoSnapshot | undefined {
     return undefined;
   }
   const candidate = value as { tasks?: unknown; next_id?: unknown };
-  if (typeof candidate.next_id !== "number") {
+  if (!isExactId(candidate.next_id)) {
     return undefined;
   }
   const rawTasks = candidate.tasks ?? [];
@@ -194,7 +194,7 @@ function parseTask(value: unknown): TodoTask | undefined {
   }
   const candidate = value as Record<string, unknown>;
   if (
-    typeof candidate.id !== "number" ||
+    !isExactId(candidate.id) ||
     typeof candidate.subject !== "string" ||
     typeof candidate.status !== "string" ||
     !STATUSES.has(candidate.status)
@@ -204,8 +204,7 @@ function parseTask(value: unknown): TodoTask | undefined {
   const blockedBy = candidate.blocked_by;
   if (
     blockedBy !== undefined &&
-    (!Array.isArray(blockedBy) ||
-      blockedBy.some((entry) => typeof entry !== "number"))
+    (!Array.isArray(blockedBy) || !blockedBy.every(isExactId))
   ) {
     return undefined;
   }
@@ -225,11 +224,22 @@ function parseTask(value: unknown): TodoTask | undefined {
   if (activeForm !== undefined) task.active_form = activeForm;
   const owner = optionalString(candidate.owner);
   if (owner !== undefined) task.owner = owner;
-  if (blockedBy !== undefined) task.blocked_by = blockedBy as number[];
+  if (blockedBy !== undefined) task.blocked_by = blockedBy as string[];
   if (typeof candidate.metadata === "object" && candidate.metadata !== null) {
     task.metadata = candidate.metadata as Record<string, unknown>;
   }
   return task;
+}
+
+/**
+ * Whether a value is a canonical Todo id.
+ *
+ * Todo ids, dependencies and the allocator position are exact `u64` domains and
+ * therefore canonical decimal text on the wire: an id past 2^53 must survive
+ * the round trip, which a JSON number could not guarantee.
+ */
+function isExactId(value: unknown): value is string {
+  return typeof value === "string" && /^(0|[1-9][0-9]*)$/.test(value);
 }
 
 function optionalString(value: unknown, multiline = false): string | undefined {

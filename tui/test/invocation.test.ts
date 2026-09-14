@@ -11,7 +11,7 @@ test("Workflow approval labels its concrete node without inventing a call id", (
     caller: "workflow",
     node: {
       block: {
-        run: { conversation_id: "conv", attempt_id: "attempt", invocation: 4 },
+        run: { conversation_id: "conv", attempt_id: "attempt", invocation: "4" },
         definition: { workflow_id: "check", blocks: ["fanout", "alpha"] },
         invocations: [],
       },

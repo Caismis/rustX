@@ -164,8 +164,8 @@ pre-commit failures use a bounded protocol error without private storage paths.
 | `deleted` | This finalization confirmed cleanup and durable record removal |
 | `not_found` | No live Session or pending record, including completed deletion |
 
-The existing TypeScript Runtime Client mirror in `tui/src/protocol/types.ts`
-mirrors these protocol-28 DTOs. There is no separate deletion SDK. Shared Rust/TypeScript
+The TUI consumes these deletion DTOs from the generated App Server
+`protocol/app-server/v1.ts` contract. There is no separate deletion SDK. Shared Rust/TypeScript
 fixtures validate the wire contract, not deletion persistence. Interactive deletion
 UX (#257) and retention/lifecycle policy remain outside this change.
 

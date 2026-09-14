@@ -4,7 +4,7 @@ import { ApprovalSelector } from "../src/ui/components/approval-selector.ts";
 import { plainText } from "../src/ui/theme.ts";
 import { stateOf } from "./support/render.ts";
 import { attemptView } from "./support/fixtures.ts";
-import type { ApprovalMode } from "../src/protocol/types.ts";
+import type { ApprovalMode } from "../src/protocol/app-server.ts";
 
 function harness() {
   let state = stateOf({ attempt: attemptView(), effective_approval_mode: "policy", pending_approval_mode: "full_access" });

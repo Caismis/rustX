@@ -27,7 +27,7 @@ import {
   workingStatus,
 } from "../src/ui/components/status.ts";
 import { plainText } from "../src/ui/theme.ts";
-import type { InteractionRequest } from "../src/protocol/types.ts";
+import type { InteractionRequest } from "../src/protocol/app-server.ts";
 import {
   DEFAULT_PREVIEW_CHARS,
   withExpandedBackgroundExecutions,
@@ -43,8 +43,9 @@ import {
   toolResult,
   userMessage,
   questionnaireInteraction,
+  nextCursor,
 } from "./support/fixtures.ts";
-import { runtimeCursor } from "./support/fixtures.ts";
+import { exact, runtimeCursor } from "./support/fixtures.ts";
 import { prefs, stateOf } from "./support/render.ts";
 
 const footer = (...args: Parameters<typeof renderFooter>) =>
@@ -123,7 +124,7 @@ describe("working status", () => {
     let state = stateOf();
     const push = (event: Parameters<typeof reduce>[1]["event"]) => {
       state = reduce(state, {
-        cursor: runtimeCursor(state.cursor + 1),
+        cursor: nextCursor(state.cursor),
         event,
       });
     };
@@ -181,7 +182,7 @@ describe("working status", () => {
   it("keeps human Review distinct from tool permission and mixed waits", () => {
     const review = approvalInteraction();
     review.request.kind = { type: "review", subject_digest: "a".repeat(64), review: {
-      instance: { block: { run: { conversation_id: "conversation-1", attempt_id: "attempt-1", invocation: 1 }, definition: { workflow_id: "example", blocks: [] }, invocations: [0] }, node: "review", visit: 0 },
+      instance: { block: { run: { conversation_id: "conversation-1", attempt_id: "attempt-1", invocation: "1" }, definition: { workflow_id: "example", blocks: [] }, invocations: [0] }, node: "review", visit: 0 },
       subject: { type: "plan", candidate: null, content: { plan: "fixed" } }, context: [],
     } };
     assert.equal(workingStatus(stateOf({ pending_interactions: [review] })), "Waiting for human review…");
@@ -208,7 +209,7 @@ describe("footer", () => {
     const rendered = footer(
       stateOf({
         model: sessionModel("alpha/model-a"),
-        capabilities: { revision: 3 },
+        capabilities: { revision: "3" },
       }),
       "connected",
     );
@@ -240,7 +241,7 @@ describe("footer", () => {
 
   it("surfaces unavailable optional capabilities without dying (Issue #81)", () => {
     const healthy = footer(
-      stateOf({ capabilities: { revision: 3, sources: [] } }),
+      stateOf({ capabilities: { revision: "3", sources: [] } }),
       "connected",
     );
     assert.doesNotMatch(healthy, /unavailable/);
@@ -248,7 +249,7 @@ describe("footer", () => {
     const degraded = footer(
       stateOf({
         capabilities: {
-          revision: 3,
+          revision: "3",
           sources: [
             { source: { type: "mcp", server_id: "python:echo" }, state: { type: "ready" } },
             {
@@ -372,7 +373,7 @@ describe("footer", () => {
         inbound: {
           pending: [
             {
-              sequence: 1,
+              sequence: "1",
               message: {
                 id: "m1",
                 content: [{ type: "text", text: "queued" }],
@@ -428,7 +429,7 @@ describe("footer", () => {
         last_usage: { input_tokens: 12_500, output_tokens: 840, total_tokens: 13_340 },
       }),
       background: [backgroundExecution("exec-1", "running")],
-      capabilities: { revision: 9 },
+      capabilities: { revision: "9" },
     });
 
     const wide = footer(state, "connected", 200);
@@ -874,7 +875,7 @@ it("absent metadata is omitted and footer never reads transcript history", () =>
   for (const name of [undefined, null, "", "   "]) {
     const state = stateOf();
     Object.defineProperty(state, "transcript", { get: () => assert.fail("footer must not retokenize history") });
-    const session = { id: "internal-session", name, active_node: "internal-node" } as unknown as import("../src/protocol/types.ts").SessionView;
+    const session = { id: "internal-session", name, active_node: "internal-node" } as unknown as import("../src/protocol/app-server.ts").SessionView;
     const rendered = footer(state, "connected", 120, session, { conversationId: "internal-conversation" });
     assert.doesNotMatch(rendered, /undefined|null|session |internal-|online|ready|provider/);
   }
@@ -893,7 +894,7 @@ it("unknown context window is omitted and snapshot replacement rebuilds approval
 
 it("drops tokens then Session then context before essential facts require two rows", () => {
   const state = stateOf({ attempt: attemptView({ phase: { type: "settled", outcome: { type: "completed", finish_reason: { type: "stop" } } }, last_usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 } }) });
-  const session = { name: "work" } as import("../src/protocol/types.ts").SessionView;
+  const session = { name: "work" } as import("../src/protocol/app-server.ts").SessionView;
   const wide = footer(state, "connected", 200, session);
   assert.match(wide, /session work.*↑1 ↓2/);
   const withoutTokens = footer(state, "connected", wide.length - 1, session);

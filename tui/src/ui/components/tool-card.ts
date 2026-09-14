@@ -78,7 +78,7 @@
  * never the old duplicated call/result log blocks.
  */
 
-import type { ToolExecutionResult } from "../../protocol/types.ts";
+import type { ToolExecutionResult } from "../../protocol/app-server.ts";
 import { workflowDetails, workflowStatus } from "./workflow-details.ts";
 import type { CorrelatedTool, ToolLifecycle } from "../../presentation/tools.ts";
 import {
@@ -133,7 +133,7 @@ export function renderToolCard(
     pushResult(lines, renderer, tool, args, context);
     return drawable(lines);
   }
-  if (tool.lifecycle?.type === "settled" && tool.lifecycle.result.workflow !== undefined) {
+  if (tool.lifecycle?.type === "settled" && tool.lifecycle.result.workflow != null) {
     const identity = tool.lifecycle.result.workflow;
     lines.push(`${role.meta("◇")} ${sanitizeLine(tool.name)} · Workflow invocation`);
     if (part !== "call") {
@@ -517,18 +517,25 @@ export function statusLabel(result: ToolExecutionResult): string {
  * expanded form, so it is clipped like every other header fragment.
  */
 export function describeProgress(
-  progress: { message?: string; completed?: number; total?: number } | undefined,
+  progress:
+    | {
+        message?: string | null;
+        completed?: number | null;
+        total?: number | null;
+      }
+    | undefined
+    | null,
 ): string | undefined {
-  if (progress === undefined) {
+  if (progress == null) {
     return undefined;
   }
   const pieces: string[] = [];
-  if (progress.message !== undefined) {
+  if (progress.message != null) {
     pieces.push(clipText(progress.message, HEADER_BUDGET.maxChars));
   }
-  if (progress.completed !== undefined) {
+  if (progress.completed != null) {
     pieces.push(
-      progress.total === undefined
+      progress.total == null
         ? String(progress.completed)
         : `${progress.completed}/${progress.total}`,
     );

@@ -1,9 +1,10 @@
-import { ConnectionClosedError, RuntimeRequestError } from "../src/runtime/connection.ts";
+import { AppServerRequestError, UncertainOutcomeError } from "../src/app-server/client.ts";
+import { TransportClosedError } from "../src/app-server/transport.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SessionDeletionWorkflow, type DeletionClient } from "../src/ui/session-deletion-workflow.ts";
 import { ResumeSelector } from "../src/ui/components/resume-selector.ts";
-import type { SessionDeleteResult, SessionSummaryView } from "../src/protocol/types.ts";
+import type { SessionDeleteResult, SessionSummaryView } from "../src/protocol/app-server.ts";
 import { plainText } from "../src/ui/theme.ts";
 
 function deferred<T>() {
@@ -151,10 +152,16 @@ test("empty/nonmatching Ctrl+D is inert; confirmation is bounded and sanitizes e
 test("22: presentation deletion path has no filesystem/process/provider authority", async () => {
   const { readFile } = await import("node:fs/promises");
   const source = (await Promise.all(["../src/ui/components/resume-selector.ts", "../src/ui/session-deletion-workflow.ts"].map((path) => readFile(new URL(path, import.meta.url), "utf8")))).join("\n");
-  assert.doesNotMatch(source, /node:|RuntimeClientConnection|submitInbound|selectSession|newSession|modelSet|spawn|unlink|removeDirectory|\.request\(/);
-  const attachment = await readFile(new URL("../src/runtime/attachment.ts", import.meta.url), "utf8");
-  const deletion = attachment.slice(attachment.indexOf("  previewSessionDeletion("), attachment.indexOf("  /** Lists bounded persisted Sessions"));
-  assert.doesNotMatch(deletion, /node:|unlink|spawn|submitInbound|#state\s*=/);
+  assert.doesNotMatch(source, /node:|submitInbound|modelSet|spawn|unlink|removeDirectory/);
+  // The deletion surface reaches the durable Session catalog through the one
+  // typed client and nothing else: no transport, no process, no filesystem.
+  const host = await readFile(new URL("../src/app-server/host.ts", import.meta.url), "utf8");
+  const deletion = host.slice(
+    host.indexOf("  async previewSessionDeletion("),
+    host.indexOf("  async readSettings("),
+  );
+  assert.ok(deletion.length > 0, "the catalog deletion methods are locatable");
+  assert.doesNotMatch(deletion, /node:|unlink|spawn|submitInbound|closeStdin/);
 });
 
 
@@ -421,7 +428,7 @@ test("recovery with unavailable visibility uses the current query without fabric
 
 test("12: typed precommit failure reconciles the target without unknown or recovery authority", async () => {
   const h = harness(); await h.open(); confirm(h.view);
-  h.execution.reject(new RuntimeRequestError({ type: "session_failure", message: "Session deletion failed before logical commit." })); await turn();
+  h.execution.reject(new AppServerRequestError("session/delete", { code: -32000, message: "Session deletion failed before logical commit.", data: { kind: "operation_failed" } })); await turn();
   assert.deepEqual(h.workflow.state, { kind: "result", sessionId: "b", outcome: { status: "precommit_failure" } });
   assert.deepEqual(h.lists, [["", 0]]); assert.equal(h.executes.length, 1);
   assert.equal(h.workflow.canRecover(), false);
@@ -455,7 +462,7 @@ test("stale obligation is acknowledged only by adopted confirmation or explicit 
 
 test("typed terminal rejection ends observation without unknown result or recovery replay", async () => {
   const h = harness(); await h.open(); confirm(h.view);
-  h.execution.reject(new ConnectionClosedError("process_exit", "transport ended")); await turn();
+  h.execution.reject(new TransportClosedError("process_exit", "transport ended")); await turn();
   assert.equal(h.workflow.needsPresentation, false);
   assert.equal(h.workflow.canRecover(), false);
   assert.notEqual(h.workflow.state.kind, "result");
@@ -463,4 +470,41 @@ test("typed terminal rejection ends observation without unknown result or recove
   h.workflow.recover(h.view.reconciliationContext());
   assert.deepEqual(h.recovers, []); assert.equal(h.executes.length, 1);
   h.dispose();
+});
+
+test("a deletion whose response was lost is unknown, never failed, and is never resent", async () => {
+  const h = harness(); await h.open(); confirm(h.view);
+  h.execution.reject(
+    new UncertainOutcomeError(
+      "session/delete",
+      new TransportClosedError("input_eof", "the connection dropped"),
+    ),
+  );
+  await turn();
+  // The server may well have committed it. Reporting a failure would be a
+  // claim this client cannot support, and resending could delete twice.
+  assert.deepEqual(h.workflow.state, { kind: "result", sessionId: "b", outcome: { status: "unknown" } });
+  assert.equal(h.executes.length, 1, "the uncertain mutation was not replayed");
+  assert.equal(h.workflow.canRecover(), true, "native recovery stays offered");
+  h.dispose();
+});
+
+test("New Session is presentation intent only for a ready unfiltered empty catalog", async () => {
+  for (const options of [{ query: "missing" }, { nextOffset: 1 }, {}]) {
+    const h = harness({ rows: [], ...options });
+    let creates = 0;
+    h.view.onCreate = async () => { creates++; };
+    h.view.handleInput("\r");
+    assert.equal(creates, Object.keys(options).length === 0 ? 1 : 0);
+    assert.deepEqual(h.view.selector.visibleSessions(), [], "no synthetic catalog row");
+    assert.deepEqual(h.lists, []);
+    await turn(); h.dispose();
+  }
+  const h = harness({ rows: [] });
+  let creates = 0;
+  const view = new ResumeSelector({ client: h.client, workflow: h.workflow, alive: () => true, feedback: () => {} });
+  view.onCreate = async () => { creates++; };
+  view.handleInput("\r");
+  assert.equal(creates, 0, "unavailable visibility is not an empty catalog");
+  view.dispose(); h.dispose();
 });

@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import type { RuntimeClientSubagent } from "../src/protocol/types.ts";
+import type { RuntimeClientSubagent } from "../src/protocol/app-server.ts";
 import { renderSubagentSection } from "../src/ui/components/activity.ts";
 import {
   prefs,
@@ -42,7 +42,7 @@ function child(
 ): RuntimeClientSubagent {
   return subagent("explore", "sha256:d1", "running", {
     observation: subagentObservation(activity, {
-      revision: 1,
+      revision: "1",
       last_activity_at: "2026-09-02T10:02:55Z",
     }),
     ...overrides,

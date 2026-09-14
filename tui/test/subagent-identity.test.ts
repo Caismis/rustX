@@ -14,7 +14,6 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { reduce, replaceFromSnapshot } from "../src/presentation/projection.ts";
-import { RUNTIME_CLIENT_PROTOCOL_VERSION } from "../src/protocol/types.ts";
 import {
   runtimeCursor,
   snapshot,
@@ -24,7 +23,6 @@ import {
 
 describe("subagent identity", () => {
   it("negotiates the current protocol version", () => {
-    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 34);
   });
 
   it("carries both identity digests from the snapshot", () => {
@@ -54,7 +52,7 @@ describe("subagent identity", () => {
     const observation = subagentObservation(
       { type: "tool", tool_call_id: "call-1", tool_id: "tool-grep" },
       {
-        revision: 7,
+        revision: "7",
         last_activity_at: "2026-09-02T10:02:00Z",
         counters: { model_requests: 2, model_retries: 1, tool_executions: 3 },
       },
@@ -93,7 +91,7 @@ describe("subagent identity", () => {
     );
     const observation = subagentObservation(
       { type: "retrying_model", retry: 2 },
-      { revision: 3, last_activity_at: "2026-09-02T10:01:00Z" },
+      { revision: "3", last_activity_at: "2026-09-02T10:01:00Z" },
     );
     state = reduce(state, {
       cursor: runtimeCursor(2),

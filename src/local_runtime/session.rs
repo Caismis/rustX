@@ -255,7 +255,7 @@ pub struct SessionSummary {
 /// One user-message boundary the native product exposes for `/fork` and
 /// `/tree`. The revision is part of the selection, so later source mutations
 /// cannot change what the selection means.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SessionUserMessageBoundary {
     /// The exact retained Surface revision containing the message.
     pub surface_revision: SurfaceRevision,

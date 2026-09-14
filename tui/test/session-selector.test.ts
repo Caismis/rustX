@@ -12,7 +12,7 @@ import {
   type PopupContent,
 } from "../src/ui/components/popup-frame.ts";
 import { TreeSelector } from "../src/ui/components/tree-selector.ts";
-import type { SessionNodeView } from "../src/protocol/types.ts";
+import type { SessionNodeView } from "../src/protocol/app-server.ts";
 import { plainText } from "../src/ui/theme.ts";
 import { sessionView } from "./support/fixtures.ts";
 
@@ -34,7 +34,7 @@ const sessions = [
 ];
 
 const boundary = {
-  surface_revision: 4,
+  surface_revision: "4",
   message: {
     id: "user-c",
     content: [{ type: "text" as const, text: "try the alternate approach" }],
@@ -100,13 +100,13 @@ describe("native Session selectors", () => {
       boundaries: [boundary],
       title: "Fork from user message",
     });
-    let selectedRevision: number | undefined;
+    let selectedRevision: string | undefined;
     selector.onSelect = (value) => {
       selectedRevision = value.surface_revision;
     };
     selector.handleInput("\r");
 
-    assert.equal(selectedRevision, 4);
+    assert.equal(selectedRevision, "4");
     assert.match(
       selector.render(100).map(plainText).join("\n"),
       /alternate approach/,
@@ -123,7 +123,7 @@ describe("native Session selectors", () => {
       id: "node-2",
       parent: "node-1",
       conversation_id: "conv-2",
-      origin: { type: "fork", source_session: "session-1", source_node: "node-1", source_surface_revision: 4, source_user_message: "user-c" },
+      origin: { type: "fork", source_session: "session-1", source_node: "node-1", source_surface_revision: "4", source_user_message: "user-c" },
     };
     const session = sessionView({
       node_count: 2,
@@ -356,7 +356,7 @@ describe("finite viewports (issue #161)", () => {
 
   it("keeps the selected boundary visible, starting from the initial end position", () => {
     const boundaries = Array.from({ length: 10 }, (_, index) => ({
-      surface_revision: index + 1,
+      surface_revision: String(index + 1),
       message: {
         id: `user-${index}`,
         content: [{ type: "text" as const, text: `approach ${index}` }],
@@ -366,7 +366,7 @@ describe("finite viewports (issue #161)", () => {
     }));
     const selector = new BoundarySelector({ boundaries, title: "Fork from user message" });
     const frame = framed(selector);
-    const chosen: number[] = [];
+    const chosen: string[] = [];
     selector.onSelect = (value) => chosen.push(value.surface_revision);
 
     // The initial highlight is the last boundary; it must be visible
@@ -387,7 +387,7 @@ describe("finite viewports (issue #161)", () => {
     assert.ok(rows.some((line) => line.includes("revision 5")));
 
     selector.handleInput("\r");
-    assert.deepEqual(chosen, [5], "Enter selects the visible marked boundary");
+    assert.deepEqual(chosen, ["5"], "Enter selects the visible marked boundary");
   });
 
   it("keeps the selected tree entry visible across nodes and branches", () => {
@@ -426,7 +426,7 @@ describe("finite viewports (issue #161)", () => {
 
 function boundaryAt(id: string): typeof boundary {
   return {
-    surface_revision: Number(id.replace("user-", "")) + 1,
+    surface_revision: String(Number(id.replace("user-", "")) + 1),
     message: {
       id,
       content: [{ type: "text", text: id }],

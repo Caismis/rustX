@@ -190,8 +190,12 @@ export class ProviderEmulator {
 
   /** Terminates the child unconditionally, for a failing test's cleanup. */
   async stop(): Promise<void> {
-    this.#child.stdin.end();
-    await this.#exit();
+    try {
+      await this.#control("POST", "/shutdown");
+    } finally {
+      this.#child.stdin.end();
+      await this.#exit();
+    }
   }
 
   /** Waits for the child to exit and reports how it did. */

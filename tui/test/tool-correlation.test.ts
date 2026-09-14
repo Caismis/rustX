@@ -24,6 +24,7 @@ import {
   toolMessage,
   toolResult,
   userMessage,
+  nextCursor,
 } from "./support/fixtures.ts";
 import { blockText, prefs, stateOf, transcriptString } from "./support/render.ts";
 
@@ -554,7 +555,7 @@ describe("lifecycle progression", () => {
     ];
     for (const event of events) {
       state = reduce(state, {
-        cursor: runtimeCursor(state.cursor + 1),
+        cursor: nextCursor(state.cursor),
         event,
       });
     }
@@ -565,7 +566,7 @@ describe("lifecycle progression", () => {
     let state = replaceFromSnapshot(snapshot(), runtimeCursor(0));
     const push = (event: Parameters<typeof reduce>[1]["event"]) => {
       state = reduce(state, {
-        cursor: runtimeCursor(state.cursor + 1),
+        cursor: nextCursor(state.cursor),
         event,
       });
     };

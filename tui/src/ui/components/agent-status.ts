@@ -40,7 +40,7 @@ import type {
   AgentStatusView,
   RuntimeClientStatusSection,
   RuntimeClientTodoStatusTask,
-} from "../../protocol/types.ts";
+} from "../../protocol/app-server.ts";
 import { role } from "../theme.ts";
 
 /** The glyph that marks contextual runtime metadata, not a speaker. */
@@ -95,7 +95,7 @@ function facetOf(
 ): AgentStatusFacet | undefined {
   switch (section.type) {
     case "temporal": {
-      const time = formatStatusTime(section.current_time, section.timezone);
+      const time = formatStatusTime(section.current_time, section.timezone ?? undefined);
       return {
         kind: "temporal",
         compact: time,
@@ -135,7 +135,7 @@ function facetOf(
         return undefined;
       }
       const values: string[] = [];
-      if (section.current !== undefined) {
+      if (section.current != null) {
         values.push(clip(todoSubject(section.current), DETAIL_LIMIT));
       }
       // Counts restate the runtime's own committed totals; they are never
@@ -216,7 +216,7 @@ export function renderAgentStatusDetail(status: AgentStatusView): string[] {
 
 /** The in-progress label when the runtime published one, else the subject. */
 function todoSubject(task: RuntimeClientTodoStatusTask): string {
-  return task.status === "in_progress" && task.active_form !== undefined
+  return task.status === "in_progress" && task.active_form != null
     ? task.active_form
     : task.subject;
 }

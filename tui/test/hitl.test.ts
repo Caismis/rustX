@@ -21,7 +21,7 @@ import type {
   InteractionRef,
   QuestionnaireResponse,
   RoutedInteraction,
-} from "../src/protocol/types.ts";
+} from "../src/protocol/app-server.ts";
 import {
   compareInteractionRefs,
   reconcileInteractionFocus,
@@ -868,20 +868,21 @@ describe("human-input surface", () => {
 describe("candidate/plan Review in the unified queue", () => {
   function reviewInteraction(id = "review"): RoutedInteraction {
     const base = approvalInteraction();
-    const instance = { block: { run: { conversation_id: base.request.conversation_id, attempt_id: base.request.attempt_id, invocation: 1 }, definition: { workflow_id: "review-plan", blocks: [] }, invocations: [0] }, node: "review", visit: 0 };
+    const instance = { block: { run: { conversation_id: base.request.conversation_id, attempt_id: base.request.attempt_id, invocation: "1" }, definition: { workflow_id: "review-plan", blocks: [] }, invocations: [0] }, node: "review", visit: 0 };
     return { ...base, interaction: { ...base.interaction, interaction_id: id }, request: { ...base.request, id, kind: { type: "review", subject_digest: "a".repeat(64), review: { instance, subject: { type: "plan", candidate: null, content: { plan: "bounded immutable plan" } }, context: [] } } } };
   }
   it("discloses the exact candidate attached to plan context without changing decisions", () => {
     const review = reviewInteraction();
     if (review.request.kind.type !== "review") throw new Error("review");
-    review.request.kind.review.context = [{ value: { passed: true }, candidate: { run: review.request.kind.review.instance.block.run, version: 7, content: "b".repeat(64) } }];
+    review.request.kind.review.context = [{ value: { passed: true }, candidate: { run: review.request.kind.review.instance.block.run, version: "7", content: "b".repeat(64) } }];
     const { overlay, recorded } = surface({ interactions: [review], focused: review.interaction });
     let disclosure = rendered(overlay, 100);
     for (let page = 0; page < 20; page++) {
       overlay.handleInput(PAGE_DOWN);
       disclosure += rendered(overlay, 100);
     }
-    assert.ok(disclosure.includes('"version": 7'));
+    // The candidate version is an exact domain, so it discloses as text.
+    assert.ok(disclosure.includes('"version": "7"'));
     assert.ok(disclosure.includes("b".repeat(64)));
     assert.ok(disclosure.includes('"passed": true'));
     assert.equal(recorded.reviews.length, 0);

@@ -501,6 +501,27 @@ impl RuntimeAttachment {
             .clone()
     }
 
+    /// Whether this exact registration has been replaced by a later one.
+    ///
+    /// Resync legitimately re-subscribes while a consumer is parked on the
+    /// previous registration. Without this, that consumer's
+    /// [`EventDelivery::Closed`] would be indistinguishable from the end of
+    /// residency, and repairing a projection would retire the attachment that
+    /// asked for the repair.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the attachment subscription lock is poisoned, which
+    /// would mean a previous operation panicked while holding the lock.
+    #[must_use]
+    pub fn superseded(&self, observed: &EventSubscription) -> bool {
+        self.subscription
+            .lock()
+            .expect("attachment subscription lock poisoned")
+            .as_ref()
+            .is_some_and(|current| !current.same_registration(observed))
+    }
+
     /// Waits for the next delivery of the active subscription.
     ///
     /// Returns [`EventDelivery::Closed`] when no subscription is active or

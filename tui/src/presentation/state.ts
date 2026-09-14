@@ -45,7 +45,7 @@ import type {
   TodoSnapshot,
   ToolCallId,
   ToolId,
-} from "../protocol/types.ts";
+} from "../protocol/app-server.ts";
 
 /** One committed canonical message, exactly as the runtime committed it. */
 export interface TranscriptCommitted {
@@ -138,16 +138,16 @@ export interface AttemptPresentation {
    * Distinct from {@link PresentationState.sessionModel}: while this attempt
    * runs on A and the session moved to B, this stays A.
    */
-  model: AttemptModelView | null;
-  executionSettings: import("../protocol/types.ts").AdmittedSettings | null;
+  model?: AttemptModelView;
+  executionSettings?: import("../protocol/app-server.ts").AdmittedSettings;
   /** Foreground tool executions in call-assembly order. */
   foreground: ForegroundToolExecution[];
 }
 
 export interface PresentationState {
-  goal: import("../protocol/types.ts").GoalView | null;
-  settingsEvidence: "live_session" | "frozen_child" | "historical_partial";
-  workflows: import("../protocol/types.ts").WorkflowSnapshot;
+  goal: import("../protocol/app-server.ts").GoalView | null;
+  settingsEvidence: import("../protocol/app-server.ts").SettingsEvidence;
+  workflows: import("../protocol/app-server.ts").WorkflowSnapshot;
   conversationId: ConversationId;
   /** The cursor this state is consistent through. */
   cursor: RuntimeClientCursor;
@@ -179,7 +179,7 @@ export interface PresentationState {
   resources: RuntimeClientResourcesView;
   /** The session's *desired* model configuration. */
   sessionModel: SessionModelView | null;
-  launchSettings: import("../protocol/types.ts").LaunchSettings | null;
+  launchSettings: import("../protocol/app-server.ts").LaunchSettings | null;
   /**
    * The attached Agent runtime's frozen native Agent Extension composition.
    *
@@ -188,10 +188,18 @@ export interface PresentationState {
    * distinction between an absent extension and a disabled contributor lives
    * inside the value itself.
    */
-  effectiveExtensions: import("../protocol/types.ts").EffectiveNativeAgentExtensions | null;
-  settingsLifetimes: import("../protocol/types.ts").SettingsLifetimes | null;
+  effectiveExtensions: import("../protocol/app-server.ts").EffectiveNativeAgentExtensions | null;
+  settingsLifetimes: import("../protocol/app-server.ts").SettingsLifetimes | null;
   /** True once runtime drain begins; shutdown responses complete at quiescence. */
   runtimeShutdown: boolean;
+  /**
+   * The runtime's explicit degraded state, when it has entered one.
+   *
+   * While set, no new durable admission or execution work may begin. It is a
+   * runtime-published fact: nothing here decides that a runtime is degraded,
+   * and nothing here decides that it has recovered.
+   */
+  durabilityFailure: import("../protocol/app-server.ts").RuntimeDurabilityFailure | null;
   /**
    * The conversation's task list, as the runtime derived it from canonical
    * history. `undefined` before the first snapshot arrives, and whenever the
@@ -202,7 +210,8 @@ export interface PresentationState {
   /** Runtime-authoritative ApprovalMode control state. */
   effectiveApprovalMode: ApprovalMode;
   pendingApprovalMode?: ApprovalMode;
-  approvalModeRevision: number;
+  /** The runtime control-plane revision. An exact `u64` decimal domain. */
+  approvalModeRevision: string;
 }
 
 /** Whether the attempt is doing work the UI should show as busy. */

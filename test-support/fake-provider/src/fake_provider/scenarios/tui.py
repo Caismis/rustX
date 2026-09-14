@@ -14,6 +14,7 @@ from fake_provider.scenario import (
     OPENAI_CHAT_COMPLETIONS,
     Expect,
     Finish,
+    Gate,
     Scenario,
     Step,
     Stream,
@@ -245,8 +246,46 @@ def tui_compaction() -> Scenario:
     )
 
 
+#: Two Sessions, each holding one gated response.
+#:
+#: The TUI multi-Session suite starts a turn on Session A, holds it at its
+#: gate, changes focus to Session B, and drives B to completion. A's request
+#: is provably still open across that whole focus change, which is exactly the
+#: fact "switching focus never stops another Session" needs.
+SESSION_A_PROMPT = "tui multi-session: session A long task"
+SESSION_B_PROMPT = "tui multi-session: session B quick task"
+
+
+def tui_multi_session() -> Scenario:
+    return Scenario(
+        "tui_multi_session",
+        Step(
+            Expect(
+                protocol=OPENAI_CHAT_COMPLETIONS,
+                model=INTEGRATION_MODEL,
+                body_contains=(SESSION_A_PROMPT,),
+            ),
+            Stream(
+                Text("A is working"),
+                Gate("session-a-holding"),
+                Text(" and has now finished"),
+                Finish("stop"),
+            ),
+        ),
+        Step(
+            Expect(
+                protocol=OPENAI_CHAT_COMPLETIONS,
+                model=INTEGRATION_MODEL,
+                body_contains=(SESSION_B_PROMPT,),
+            ),
+            Stream(Text("B answered while A was still working"), Finish("stop")),
+        ),
+    )
+
+
 SCENARIOS = {
     "tui_integration": tui_integration,
+    "tui_multi_session": tui_multi_session,
     "tui_ask_user_questionnaire": tui_ask_user_questionnaire,
     "tui_before_start_cancellation": tui_before_start_cancellation,
     "tui_compaction": tui_compaction,

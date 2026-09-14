@@ -5224,6 +5224,19 @@ impl ConversationRuntime {
             .load_user_message_boundaries_page(through, offset, limit)
     }
 
+    /// Reads the current committed Surface head revision alone.
+    ///
+    /// A boundary page is selected against the head the reader is looking at,
+    /// and materializing every Surface message to learn that one number would
+    /// be a durable read the caller never uses.
+    ///
+    /// # Errors
+    ///
+    /// Returns the durable store error when the head cannot be read.
+    pub fn historical_head_revision(&self) -> Result<SurfaceRevision, ConversationStoreError> {
+        Ok(self.inner.store.load_head()?.revision)
+    }
+
     /// Selects the current committed Surface head and materializes that exact
     /// revision. The head read is the clone linearization point; a later
     /// append or compaction creates a later revision and cannot mutate this

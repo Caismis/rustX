@@ -1,7 +1,7 @@
 /**
- * The strict JSONL framing of the Runtime Client stdio transport.
+ * The strict JSONL framing of the App Server stdio transport.
  *
- * This mirrors the Rust transport contract (`src/runtime_client/transport/
+ * This mirrors the Rust transport contract (`src/app_server/transport/
  * stdio.rs`) byte for byte:
  *
  * ```text
@@ -27,11 +27,18 @@
  *
  * Any complete in-bound-size record that does not parse as JSON is a
  * transport failure, exactly as it is in Rust. This module decides framing
- * only; it never interprets protocol semantics.
+ * only; it never interprets protocol semantics, and it is deliberately
+ * unaware of which protocol its records carry.
  */
 
-/** The shared record limit, identical to `STDIO_JSONL_MAX_RECORD_BYTES`. */
-export const JSONL_MAX_RECORD_BYTES = 8 * 1024 * 1024;
+/**
+ * The shared record limit, identical to the App Server's `MAX_MESSAGE_BYTES`.
+ *
+ * The server closes the connection on an inbound message above this bound, so
+ * the client refuses to emit one rather than framing a record it knows will
+ * terminate the transport.
+ */
+export const JSONL_MAX_RECORD_BYTES = 1024 * 1024;
 
 const LF = 0x0a;
 const CR = 0x0d;

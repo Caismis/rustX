@@ -1,4 +1,4 @@
-import type { ToolInvocationId } from "../protocol/types.ts";
+import type { ToolInvocationId } from "../protocol/app-server.ts";
 
 /** Caller correlation is descriptive; it never creates a canonical tool card. */
 export function invocationLabel(id: ToolInvocationId): string {

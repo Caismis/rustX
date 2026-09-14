@@ -17,7 +17,7 @@ import {
 } from "../src/ui/components/model-selector.ts";
 import { PopupFrame } from "../src/ui/components/popup-frame.ts";
 import { plainText } from "../src/ui/theme.ts";
-import type { CatalogModelView } from "../src/protocol/types.ts";
+import type { CatalogModelView } from "../src/protocol/app-server.ts";
 import { attemptModel, catalogModel, sessionModel } from "./support/fixtures.ts";
 
 const CATALOG: CatalogModelView[] = [
@@ -310,7 +310,6 @@ describe("model identity distinctions", () => {
       attemptId: "a1",
       phase: { type: "running" as const },
       turn: 1,
-      executionSettings: null,
       model: attemptModel(model),
       foreground: [],
     };
@@ -388,7 +387,6 @@ describe("model identity distinctions", () => {
             outcome: { type: "completed", finish_reason: { type: "stop" } },
           },
           turn: 1,
-          executionSettings: null,
           model: attemptModel("alpha/model-a"),
           foreground: [],
         },

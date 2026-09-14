@@ -24,7 +24,7 @@ import type { PresentationState } from "../../presentation/state.ts";
 import type {
   ModelInvocationView,
   SessionView,
-} from "../../protocol/types.ts";
+} from "../../protocol/app-server.ts";
 import { correlateTools, runningTools } from "../../presentation/tools.ts";
 import {
   approvalLabel,

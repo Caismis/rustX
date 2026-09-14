@@ -1,66 +1,94 @@
 /**
  * The bounded startup arguments of `rustx-tui`.
  *
+ * There are exactly two modes, and they differ in one thing: who runs the App
+ * Server.
+ *
  * ```text
- * rustx-tui --binary <path> [--models <path>] [--config <path>]
- *           [--workspace <dir>] [--runtime-root <dir>] [--model <provider/model>]
- *           [--trust grant|revoke]
- *           [--inspect-conversation <id> | --resume | --session <id> [--node <id>]]
- *           [--name <text>] [--skill <path>] [--no-automatic-skills]
- *           [--no-builtin-tools] [--no-direct-tools]
- *           [--tools <a,b,c>] [--exclude-tools <a,b,c>]
+ * local self-hosted                       existing / remote
+ *   rustx-tui --binary <rustx> ...          rustx-tui --connect ws://host:port
+ *   spawns and owns                         attaches to a server someone
+ *   rustx app-server --listen stdio         else already runs, over WebSocket
  * ```
  *
- * Without a Session request the runtime starts on an empty Session and every
- * persisted Session stays reachable through `/resume`. Conversation inspection
- * is a separate read-only attachment by known conversation identity. The
- * following requests determine the startup attachment, and they are mutually
- * exclusive with inspection:
+ * Both speak the same App Server protocol and the same generated DTOs. After
+ * the transport is bound nothing downstream knows which mode it is in — except
+ * the one place that must: who owns the process, and therefore what exiting
+ * means.
  *
- * - `--session <id>` (optionally `--node <id>`) starts on a named persisted
- *   Session;
- * - `--resume` opens the `/resume` selector over a fresh Session as
- *   soon as the client attaches, so a Session can be chosen instead of named.
- * - `--inspect-conversation <id>` opens the ordinary Runtime Client projection
- *   for that conversation, attaching to a running child's live projection or
- *   falling back to durable authorities without composing a Session or
- *   execution owner.
+ * # Where each option belongs
  *
- * `--name` is not one of those requests. It names the Session the launch
- * bound, whichever one that is, and it is forwarded to Rust like every other
- * startup control — a Session is never opened by its name.
+ * Options fall into three groups that are deliberately not mixed:
  *
- * The client owns focus. A picker result supplies the explicit Session/node
- * identity for its next subprocess attachment; no focus is published durably.
+ * - **Transport/mode**: `--binary` and `--connect` select the mode.
+ * - **App Server process bindings** (`--user-settings`, `--models`,
+ *   `--runtime-root`): these configure the *process*, so they are local-only.
+ *   A remote App Server was launched by someone else and already has its own;
+ *   accepting them against `--connect` would be a flag that pretends to
+ *   configure a server it cannot reach.
+ * - **Session settings** (`--cwd`, `--config`, `--model`, `--skill`, the tool
+ *   and Skill switches): these are `session/create` inputs. A Session's cwd is
+ *   a Session selection, never the App Server's launch directory, and the two
+ *   are never substituted for one another. In remote mode these paths are
+ *   resolved by the server, on the server's filesystem.
  *
- * Optional runtime path overrides are passed straight through to the Rust binary. This
- * client never opens, parses, validates, or defaults any of them: `models.toml`
- * and the current runtime config are Rust-owned authorities, and
- * reading them here would create a second one. Discovery, trust and defaults
- * belong exclusively to Rust.
+ * Routing (`--session`, `--node`, `--resume`) selects which Session the
+ * terminal opens on. It is client focus and nothing more: the App Server has no
+ * global active Session, and opening one never stops another.
  */
 
-import type {
-  RuntimePaths,
-  RuntimeStartupOptions,
-} from "./runtime/child-process.ts";
+import { posix, win32 } from "node:path";
 
-export const USAGE = `usage: rustx-tui --binary <rustx> [--models <models.toml>] \\
-                 [--config <rustx.toml>] [--workspace <dir>] [--runtime-root <dir>] \\
-                 [--model <provider/model>] [--trust grant|revoke] \\
-                 [--inspect-conversation <conversation-id> | --resume | --session <id> [--node <id>]] \\
-                 [--name <text>] [--skill <path>] [--no-automatic-skills] [--no-builtin-tools] [--no-direct-tools] \\
-                 [--tools <a,b,c>] [--exclude-tools <a,b,c>]`;
+import type { AppServerLaunchOptions } from "./app-server/child-process.ts";
+import type { SessionSettings } from "./protocol/app-server.ts";
+
+export const USAGE = `usage:
+  local self-hosted (spawns and owns an App Server child over stdio):
+    rustx-tui --binary <rustx> [--user-settings <settings.toml>] [--models <models.toml>] \\
+              [--runtime-root <dir>] [session options] [routing options]
+
+  existing / remote App Server (WebSocket):
+    rustx-tui --connect <ws://host:port> --token-file <path> --cwd <server-absolute-dir> [session options] [routing options]
+
+  session options (applied to Sessions this launch creates; paths resolve on the App Server host):
+    [--cwd <dir>] [--config <rustx.toml>] [--model <provider/model>] [--name <text>]
+    [--skill <path>] [--no-automatic-skills] [--no-builtin-tools] [--no-direct-tools]
+    [--tools <a,b,c>] [--exclude-tools <a,b,c>]
+
+  routing options (client focus only; never stops another Session):
+    [--session <id> [--node <id>] | --resume]`;
+
+/** How this launch reaches an App Server. */
+export type ConnectionMode =
+  | {
+      kind: "local";
+      /** Path to the `rustx` binary this TUI spawns and owns. */
+      binary: string;
+      launch: AppServerLaunchOptions;
+    }
+  | {
+      kind: "remote";
+      /** A `ws://` or `wss://` endpoint of an externally managed App Server. */
+      endpoint: string;
+      /** File holding the dedicated transport token. Read at connect time. */
+      tokenFile: string;
+    };
+
+/** Which Session the terminal opens on. Client focus, never server state. */
+export interface SessionRouting {
+  session?: string;
+  node?: string;
+  /** Open the `/resume` picker as soon as the client is connected. */
+  openSessionSelector: boolean;
+}
 
 export interface TuiArguments {
-  binary: string;
-  paths: RuntimePaths;
-  startup: RuntimeStartupOptions;
-  /**
-   * Open the `/resume` selector over the initial fresh attachment. The chosen
-   * identity is client routing state for the next subprocess.
-   */
-  openSessionSelector: boolean;
+  mode: ConnectionMode;
+  /** `session/create` inputs for Sessions this launch creates. */
+  sessionSettings: SessionSettings;
+  /** Name applied to the Session this launch binds, when supplied. */
+  sessionName?: string;
+  routing: SessionRouting;
 }
 
 export class ArgumentError extends Error {
@@ -71,29 +99,32 @@ export class ArgumentError extends Error {
 }
 
 const VALUE_FLAGS = [
-  "--model",
-  "--trust",
   "--binary",
+  "--connect",
+  "--token-file",
+  "--user-settings",
   "--models",
-  "--config",
-  "--workspace",
   "--runtime-root",
-  "--inspect-conversation",
+  "--cwd",
+  "--config",
+  "--model",
+  "--name",
   "--session",
   "--node",
-  "--name",
   "--skill",
   "--tools",
   "--exclude-tools",
 ] as const;
 
 const BOOLEAN_FLAGS = [
-  "--continue",
   "--resume",
   "--no-automatic-skills",
   "--no-builtin-tools",
   "--no-direct-tools",
 ] as const;
+
+/** Local-only because they bind sources of the App Server *process*. */
+const PROCESS_FLAGS = ["--user-settings", "--models", "--runtime-root"] as const;
 
 type ValueFlag = (typeof VALUE_FLAGS)[number];
 type BooleanFlag = (typeof BOOLEAN_FLAGS)[number];
@@ -101,8 +132,9 @@ type BooleanFlag = (typeof BOOLEAN_FLAGS)[number];
 /**
  * Parses the argument vector.
  *
- * @throws {ArgumentError} on an unknown flag, a missing value, a repeated
- * flag, a missing required flag, or a combination of Session requests.
+ * @throws {ArgumentError} on an unknown flag, a missing value, a repeated flag,
+ * a missing required flag, or a combination that names two modes or two Session
+ * routes at once.
  */
 export function parseArguments(argv: readonly string[]): TuiArguments {
   const values = new Map<ValueFlag, string>();
@@ -111,7 +143,10 @@ export function parseArguments(argv: readonly string[]): TuiArguments {
 
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
-    if (flag !== undefined && (VALUE_FLAGS as readonly string[]).includes(flag)) {
+    if (flag === undefined) {
+      throw new ArgumentError("unknown argument");
+    }
+    if ((VALUE_FLAGS as readonly string[]).includes(flag)) {
       const valueFlag = flag as ValueFlag;
       const value = argv[index + 1];
       if (value === undefined) {
@@ -121,113 +156,142 @@ export function parseArguments(argv: readonly string[]): TuiArguments {
         skillPaths.push(value);
       } else {
         if (values.has(valueFlag)) {
-          throw new ArgumentError(`argument ${valueFlag} was supplied more than once`);
+          throw new ArgumentError(
+            `argument ${valueFlag} was supplied more than once`,
+          );
         }
         values.set(valueFlag, value);
       }
       index += 1;
       continue;
     }
-    if (flag !== undefined && (BOOLEAN_FLAGS as readonly string[]).includes(flag)) {
+    if ((BOOLEAN_FLAGS as readonly string[]).includes(flag)) {
       const booleanFlag = flag as BooleanFlag;
       if (booleans.has(booleanFlag)) {
-        throw new ArgumentError(`argument ${booleanFlag} was supplied more than once`);
+        throw new ArgumentError(
+          `argument ${booleanFlag} was supplied more than once`,
+        );
       }
       booleans.add(booleanFlag);
       continue;
     }
-    if (flag === undefined) {
-      throw new ArgumentError("unknown argument");
-    }
-    if (!(VALUE_FLAGS as readonly string[]).includes(flag)) {
-      throw new ArgumentError(`unknown argument ${JSON.stringify(argv[index])}`);
-    }
+    throw new ArgumentError(`unknown argument ${JSON.stringify(flag)}`);
   }
 
-  const required = (
-    flag: Exclude<ValueFlag, "--skill" | "--tools" | "--exclude-tools">,
-  ): string => {
-    const value = values.get(flag);
-    if (value === undefined) {
-      throw new ArgumentError(`missing required argument ${flag}`);
-    }
-    return value;
-  };
+  const binary = values.get("--binary");
+  const connect = values.get("--connect");
+  if (binary !== undefined && connect !== undefined) {
+    throw new ArgumentError(
+      "arguments --binary and --connect cannot be combined; a launch either owns an App Server or connects to one",
+    );
+  }
+  if (binary === undefined && connect === undefined) {
+    throw new ArgumentError(
+      "missing required argument --binary (local self-hosted) or --connect (existing App Server)",
+    );
+  }
+
+  const mode = connect === undefined
+    ? localMode(binary as string, values)
+    : remoteMode(connect, values);
 
   const session = values.get("--session");
   const node = values.get("--node");
-  const inspectConversation = values.get("--inspect-conversation");
-  if (booleans.has("--continue")) throw new ArgumentError("use --session <id> or --resume; there is no global Session focus");
   const resume = booleans.has("--resume");
-  const requests = [
-    booleans.has("--continue") ? "--continue" : undefined,
-    resume ? "--resume" : undefined,
-    session !== undefined ? "--session" : undefined,
-    inspectConversation !== undefined ? "--inspect-conversation" : undefined,
-  ].filter((flag): flag is string => flag !== undefined);
-  if (requests.length > 1) {
-    throw new ArgumentError(
-      `arguments ${requests.join(" and ")} cannot be combined`,
-    );
+  if (session !== undefined && resume) {
+    throw new ArgumentError("arguments --session and --resume cannot be combined");
   }
   if (node !== undefined && session === undefined) {
     throw new ArgumentError("argument --node requires --session");
   }
-  if (inspectConversation !== undefined && node !== undefined) {
-    throw new ArgumentError("argument --inspect-conversation cannot be combined with --node");
-  }
-  if (inspectConversation !== undefined && values.has("--name")) {
-    throw new ArgumentError("argument --inspect-conversation cannot be combined with --name");
+
+  // Only a self-hosted child shares the TUI's filesystem namespace. Never
+  // resolve, normalize, or default a remote path against the client machine.
+  let cwd: string;
+  if (mode.kind === "local") {
+    cwd = values.get("--cwd") ?? process.cwd();
+  } else {
+    const explicit = values.get("--cwd");
+    if (explicit === undefined || !(
+      posix.isAbsolute(explicit) ||
+      (win32.isAbsolute(explicit) && win32.parse(explicit).root.length > 1)
+    )) {
+      throw new ArgumentError("remote Session cwd requires an explicit --cwd absolute path on the App Server host");
+    }
+    cwd = explicit;
   }
 
+  const model = values.get("--model");
+  const tools = values.get("--tools");
+  const excludeTools = values.get("--exclude-tools");
+
   return {
-    binary: required("--binary"),
-    paths: {
-      models: values.get("--models"),
-      config: values.get("--config"),
-      workspace: values.get("--workspace"),
-      runtimeRoot: values.get("--runtime-root"),
+    mode,
+    sessionSettings: {
+      cwd,
+      config: values.get("--config") ?? null,
+      model: model === undefined ? null : { model },
+      skill_paths: skillPaths,
+      no_automatic_skills: booleans.has("--no-automatic-skills"),
+      no_builtin_tools: booleans.has("--no-builtin-tools"),
+      no_direct_tools: booleans.has("--no-direct-tools"),
+      tools: tools === undefined ? null : splitList(tools),
+      exclude_tools:
+        excludeTools === undefined ? null : splitList(excludeTools),
     },
-    openSessionSelector: resume,
-    startup: {
-      model: values.get("--model"),
-      trust: values.get("--trust"),
-      // `--resume` draws its picker over the Session the last launch left
-      // active, so it publishes nothing of its own: cancelling the selector
-      // leaves that Session bound rather than stranding an empty one in the
-      // catalog beside it.
-      continueActiveSession: false,
-      inspectConversation,
-      session,
-      node,
-      sessionName: values.get("--name"),
-      skillPaths,
-      noAutomaticSkills: booleans.has("--no-automatic-skills"),
-      noBuiltinTools: booleans.has("--no-builtin-tools"),
-      noDirectTools: booleans.has("--no-direct-tools"),
-      tools: values.get("--tools"),
-      excludeTools: values.get("--exclude-tools"),
+    sessionName: values.get("--name"),
+    routing: { session, node, openSessionSelector: resume },
+  };
+}
+
+function localMode(
+  binary: string,
+  values: Map<ValueFlag, string>,
+): ConnectionMode {
+  if (values.has("--token-file")) {
+    throw new ArgumentError(
+      "argument --token-file applies only to --connect; a stdio App Server child needs no transport credential",
+    );
+  }
+  return {
+    kind: "local",
+    binary,
+    launch: {
+      userSettings: values.get("--user-settings"),
+      models: values.get("--models"),
+      runtimeRoot: values.get("--runtime-root"),
     },
   };
 }
 
-/**
- * The arguments of a **replacement** spawn.
- *
- * Clear launch-only routing and naming. The caller supplies the chosen
- * Session/node explicitly for the next subprocess; the catalog has no focus.
- */
-export function replacementArguments(parsed: TuiArguments): TuiArguments {
-  return {
-    ...parsed,
-    openSessionSelector: false,
-    startup: {
-      ...parsed.startup,
-      continueActiveSession: false,
-      inspectConversation: undefined,
-      session: undefined,
-      node: undefined,
-      sessionName: undefined,
-    },
-  };
+function remoteMode(
+  endpoint: string,
+  values: Map<ValueFlag, string>,
+): ConnectionMode {
+  if (!/^wss?:\/\//.test(endpoint)) {
+    throw new ArgumentError(
+      "argument --connect requires a ws:// or wss:// endpoint",
+    );
+  }
+  for (const flag of PROCESS_FLAGS) {
+    if (values.has(flag)) {
+      throw new ArgumentError(
+        `argument ${flag} configures an App Server process and cannot be combined with --connect; the external server owns its own configuration`,
+      );
+    }
+  }
+  const tokenFile = values.get("--token-file");
+  if (tokenFile === undefined) {
+    throw new ArgumentError(
+      "argument --connect requires --token-file; the App Server WebSocket transport admits only credentialed clients",
+    );
+  }
+  return { kind: "remote", endpoint, tokenFile };
+}
+
+function splitList(value: string): string[] {
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
 }

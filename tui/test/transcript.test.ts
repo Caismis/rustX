@@ -20,6 +20,7 @@ import {
   assistantMessage,
   attemptModel,
   attemptView,
+  nextCursor,
   runtimeInbound,
   runtimeCursor,
   transcriptCursor,
@@ -73,7 +74,7 @@ describe("assistant text", () => {
       },
     ]) {
       streaming = reduce(streaming, {
-        cursor: runtimeCursor(streaming.cursor + 1),
+        cursor: nextCursor(streaming.cursor),
         event,
       });
     }
@@ -118,10 +119,12 @@ describe("assistant text", () => {
           type: "failed" as const,
           error: {
             type: "runtime" as const,
-            error: { type: "runtime_failure", message: "runtime detail" },
+            // The runtime failure vocabulary is closed; `internal` is one of
+            // its members, and an invented spelling no longer type-checks.
+            error: { type: "internal" as const, message: "runtime detail" },
           },
         },
-        expected: /runtime failed · runtime_failure.*runtime detail/s,
+        expected: /runtime failed · internal.*runtime detail/s,
       },
       {
         outcome: { type: "cancelled" as const, reason: "user_requested" as const },

@@ -16,6 +16,7 @@ export interface ConfirmationViewOptions {
   subject: string;
   warning: string;
   confirmLabel: string;
+  permanent?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -39,9 +40,11 @@ export class ConfirmationView implements PopupContent, Focusable {
   #acted = false;
   #confirmSelected = false;
   readonly #confirmLabel: string;
+  readonly #permanent: boolean;
 
   constructor(options: ConfirmationViewOptions) {
     this.#confirmLabel = options.confirmLabel;
+    this.#permanent = options.permanent ?? true;
     this.#title = options.title;
     this.#subject = options.subject;
     this.#warning = options.warning;
@@ -89,7 +92,7 @@ export class ConfirmationView implements PopupContent, Focusable {
     const lines = [
       ...(this.#bodyHeight === 1 ? [choices[this.#confirmSelected ? 1 : 0]!] : choices),
       role.strong(sanitizeField(this.#subject)),
-      "Permanent: this cannot be undone through rustX.",
+      ...(this.#permanent ? ["Permanent: this cannot be undone through rustX."] : []),
       ...wrapTextWithAnsi(role.warning(sanitizeField(this.#warning)), Math.max(1, width)),
     ];
     return lines

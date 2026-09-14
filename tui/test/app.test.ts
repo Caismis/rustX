@@ -1,10 +1,14 @@
 /**
- * The controlling client's shutdown sequencing.
+ * The terminal application's lifecycle and input routing.
  *
- * The runtime/process pieces are deliberately controlled at their boundaries
- * here: this test proves that the UI waits for the authoritative settlement
- * fact before it sends stdin EOF, while the real-child integration exercises
- * the final process lifecycle.
+ * The App Server pieces are controlled at their own boundaries here: this
+ * suite proves what the UI does — which overlay owns a key, which projection a
+ * late continuation may touch, what exiting means — while the real-child
+ * integration suite exercises the process and transport boundary itself.
+ *
+ * The two process-ownership modes are represented honestly: an owned host
+ * reports a child and ends it on exit; an external host has no child and only
+ * ever disconnects.
  */
 
 import assert from "node:assert/strict";
@@ -14,13 +18,21 @@ import { TUI, Editor } from "@earendil-works/pi-tui";
 import { plainText, plainWidth } from "../src/ui/theme.ts";
 import { stateOf } from "./support/render.ts";
 import { RustxTuiApp } from "../src/ui/app.ts";
-import { ConnectionClosedError, RuntimeRequestError } from "../src/runtime/connection.ts";
+import {
+  AppServerRequestError,
+  UncertainOutcomeError,
+} from "../src/app-server/client.ts";
+import { TransportClosedError } from "../src/app-server/transport.ts";
 import { emptyPresentationState } from "../src/presentation/projection.ts";
 import { TransientFeedbackSurface } from "../src/ui/components/transient-feedback.ts";
-import type { ChildRuntimeProcess } from "../src/runtime/child-process.ts";
-import type { RuntimeClientConnection } from "../src/runtime/connection.ts";
-import type { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
-import type { SessionDeleteResult, SessionSummaryView } from "../src/protocol/types.ts";
+import type { AppServerHost } from "../src/app-server/host.ts";
+import type { AppServerSession } from "../src/app-server/session.ts";
+import type {
+  AttachmentTarget,
+  SessionDeleteResult,
+  SessionSnapshot,
+  SessionSummaryView,
+} from "../src/protocol/app-server.ts";
 import {
   attemptView,
   approvalInteraction,
@@ -33,39 +45,44 @@ import {
   subagent,
 } from "./support/fixtures.ts";
 
-function fakeConnection(
-  onClose?: (listener: (error: ConnectionClosedError) => void) => void,
-): RuntimeClientConnection {
+const SESSION_SETTINGS = { cwd: "/work/project" };
+
+function targetFor(sessionId: string): AttachmentTarget {
   return {
-    pendingCount: 0,
-    closed: undefined,
-    close: () => {},
-    onEvent: () => () => {},
-    onClose: (listener: (error: ConnectionClosedError) => void) => {
-      onClose?.(listener);
-      return () => {};
-    },
-  } as unknown as RuntimeClientConnection;
+    session_id: sessionId,
+    conversation_id: `conv-${sessionId}`,
+    runtime_incarnation: "1",
+    attachment_id: `att-${sessionId}`,
+  };
 }
 
+/**
+ * One attached Session, controlled by the test.
+ *
+ * Only the surface the app actually uses is present: a projection, the two
+ * publication signals, and the operations a command can reach.
+ */
 function fakeSession(
-  waitForSettlement: (attemptId: string) => Promise<unknown>,
   state: unknown = {
-    attempt: {
-      attemptId: "attempt-1",
-      phase: { type: "running" as const },
-    },
+    attempt: { attemptId: "attempt-1", phase: { type: "running" as const } },
   },
-): RuntimeClientAttachment {
-  // Even lifecycle-focused tests expose a complete native presentation snapshot:
-  // the footer now reads it at render time, including terminal-only resizes.
+  sessionId = "session-1",
+): AppServerSession {
+  // Even lifecycle-focused tests expose a complete native presentation
+  // snapshot: the footer reads it at render time, including terminal resizes.
   if (state && typeof state === "object" && !("sessionModel" in state)) {
     state = { ...emptyPresentationState(sessionModel("alpha/model-a")), ...state };
   }
   const stateListeners = new Set<(nextState: unknown) => void>();
   const snapshotListeners = new Set<() => void>();
+  const closedListeners = new Set<() => void>();
   const session = {
     state,
+    sessionId,
+    target: targetFor(sessionId),
+    released: false,
+    serverClosed: false,
+    resyncCount: 0,
     onState: (listener: (nextState: unknown) => void) => {
       stateListeners.add(listener);
       return () => stateListeners.delete(listener);
@@ -74,9 +91,13 @@ function fakeSession(
       snapshotListeners.add(listener);
       return () => snapshotListeners.delete(listener);
     },
+    onClosed: (listener: () => void) => {
+      closedListeners.add(listener);
+      return () => closedListeners.delete(listener);
+    },
     updateState: () => {},
-    shutdown: async () => {},
-    waitForAttemptSettlement: waitForSettlement,
+    resync: async () => {},
+    detach: async () => {},
     publishState(nextState: unknown): void {
       session.state = nextState;
       for (const listener of stateListeners) listener(nextState);
@@ -84,21 +105,91 @@ function fakeSession(
     publishSnapshot(): void {
       for (const listener of snapshotListeners) listener();
     },
+    publishClosed(): void {
+      for (const listener of closedListeners) listener();
+    },
   };
-  return session as unknown as RuntimeClientAttachment;
+  return session as unknown as AppServerSession;
 }
 
-function fakeChild(log: string[]): ChildRuntimeProcess {
-  return {
-    closeStdin: () => log.push("close_stdin"),
-    waitOrTerminate: async () => {
-      log.push("wait_exit");
-      return { code: 0, signal: null };
+interface FakeHostOptions {
+  ownership?: "owned_child" | "external";
+  /** Durable Session catalog overrides: list, preview, delete, recover. */
+  catalog?: Record<string, unknown>;
+  /** Records the owned child's shutdown steps, in order. */
+  log?: string[];
+  /** Installed so a test can end the connection on demand. */
+  onClose?: (listener: (error: TransportClosedError) => void) => void;
+  /** Answers `host.attach` for a focus change. */
+  attach?: (sessionId: string, nodeId?: string) => Promise<AppServerSession>;
+  /** Answers `host.readSession` for the footer. */
+  readSession?: (sessionId: string) => Promise<SessionSnapshot>;
+  exitCode?: number;
+}
+
+function fakeHost(options: FakeHostOptions = {}): AppServerHost {
+  const ownership = options.ownership ?? "owned_child";
+  const log = options.log ?? [];
+  const host = {
+    ownership,
+    client: {
+      closed: undefined,
+      pendingCount: 0,
+      close: () => {},
+      onClose: (listener: (error: TransportClosedError) => void) => {
+        options.onClose?.(listener);
+        return () => {};
+      },
+      onNotification: () => () => {},
+      describeTransport: () => "fake",
     },
+    attached: [],
+    describe: () => (ownership === "owned_child" ? "owned child" : "external"),
     stderrTail: () => ({ text: "", truncatedBytes: 0 }),
-    exited: undefined,
-    pid: 1,
-  } as unknown as ChildRuntimeProcess;
+    childExit: undefined,
+    attach:
+      options.attach ??
+      (async (sessionId: string) => fakeSession(undefined, sessionId)),
+    attachment: () => undefined,
+    detach: async () => {},
+    readSession:
+      options.readSession ?? (async () => sessionView()),
+    listSessions: async () => ({ sessions: [] as SessionSummaryView[] }),
+    createSession: async () => ({ session: sessionView() }),
+    renameSession: async () => sessionView(),
+    sessionTree: async () => ({ nodes: [] }),
+    forkSession: async () => ({ session: sessionView() }),
+    branchSession: async () => ({ session: sessionView() }),
+    previewSessionDeletion: async () => ({}) as SessionDeleteResult,
+    deleteSession: async () => ({}) as SessionDeleteResult,
+    recoverSessionDeletion: async () => ({}) as SessionDeleteResult,
+    ...(options.catalog ?? {}),
+    shutdown: async () => {
+      if (ownership === "owned_child") {
+        // The owned child's stdin is closed, it sees EOF, and the owner waits.
+        log.push("close_stdin");
+        log.push("wait_exit");
+        return { code: options.exitCode ?? 0, signal: null };
+      }
+      // An external server keeps running. This is a disconnect and no more.
+      log.push("disconnect");
+      return undefined;
+    },
+  };
+  return host as unknown as AppServerHost;
+}
+
+/** Builds an app over a controlled host and Session. */
+function appOver(
+  session: AppServerSession,
+  host: AppServerHost = fakeHost(),
+): RustxTuiApp {
+  return new RustxTuiApp({
+    host,
+    session,
+    sessionSettings: SESSION_SETTINGS,
+    cwd: "/work/project",
+  });
 }
 
 function waitForPiEscapeDisambiguation(): Promise<void> {
@@ -111,9 +202,9 @@ function waitForPiEscapeDisambiguation(): Promise<void> {
 }
 
 function waitForApplicationContinuation(): Promise<void> {
-  // Let the promise chain that handles one observed Runtime Client response
-  // finish before the next synthetic input event. This is an event-loop
-  // continuation, not an elapsed-time synchronization primitive.
+  // Let the promise chain that handles one observed App Server response finish
+  // before the next synthetic input event. This is an event-loop continuation,
+  // not an elapsed-time synchronization primitive.
   return new Promise((resolve) => setImmediate(resolve));
 }
 
@@ -159,33 +250,21 @@ function countTuiRenderRequests(): {
 }
 
 describe("RustxTuiApp lifecycle", () => {
-  it("opens a selected child by child_conversation_id and returns with Esc", async () => {
-    const parentState = {
+  it("inspects a selected subagent from authoritative status, without a second client", async () => {
+    const state = {
       ...emptyPresentationState(sessionModel("alpha/model-a")),
       subagents: [subagent("explore", "sha256:child")],
     };
-    const parent = fakeSession(async () => {}, parentState);
-    const parentApi = parent as unknown as {
-      identity: { conversationId: string };
+    const session = fakeSession(state);
+    let statusReads = 0;
+    (session as unknown as {
+      subagentStatus: (id: string) => Promise<unknown>;
+    }).subagentStatus = async (id) => {
+      statusReads += 1;
+      assert.equal(id, "conv-1-subagent-1");
+      return subagent("explore", "sha256:child");
     };
-    parentApi.identity = { conversationId: "conversation-parent" };
-
-    const child = fakeSession(async () => {}, emptyPresentationState(sessionModel("alpha/model-a")));
-    const childApi = child as unknown as {
-      identity: { conversationId: string };
-    };
-    childApi.identity = { conversationId: "conversation-child" };
-    const childLog: string[] = [];
-    const opened: string[] = [];
-    const app = new RustxTuiApp({
-      session: parent,
-      connection: fakeConnection(),
-      child: fakeChild([]),
-      openConversation: async (conversationId) => {
-        opened.push(conversationId);
-        return { session: child, connection: fakeConnection(), child: fakeChild(childLog) };
-      },
-    });
+    const app = appOver(session as unknown as AppServerSession);
     const running = app.run();
 
     // Ctrl+Down enters the explicit subagent-list focus; plain Enter remains
@@ -194,100 +273,88 @@ describe("RustxTuiApp lifecycle", () => {
     await waitForApplicationContinuation();
     process.stdin.emit("data", "\r");
     await waitForApplicationContinuation();
-    assert.deepEqual(opened, ["conv-1-subagent-1"]);
+
+    // The child is read through `subagent/status`. No second conversation
+    // client is composed, and no process is spawned to look at a child.
+    assert.equal(statusReads, 1);
+    assert.equal(session.state, state, "inspection does not replace state");
 
     process.stdin.emit("data", "\u001b");
     await waitForPiEscapeDisambiguation();
-    assert.deepEqual(childLog, ["close_stdin", "wait_exit"]);
-    assert.equal(parent.state, parentState, "navigation does not replace parent state");
-
     await app.quit();
     await running;
   });
 
-  it("detaches a direct read-only inspection without requesting shutdown", async () => {
+  it("ends an owned App Server child on normal exit", async () => {
     const log: string[] = [];
-    let shutdownRequested = false;
-    const session = fakeSession(async () => {}, {
-      ...emptyPresentationState(sessionModel("alpha/model-a")),
-    });
-    session.shutdown = async () => {
-      shutdownRequested = true;
-    };
-    const sessionApi = session as unknown as {
-      identity: { conversationId: string };
-    };
-    sessionApi.identity = { conversationId: "conversation-child" };
-    const app = new RustxTuiApp({
-      session,
-      connection: fakeConnection(),
-      child: fakeChild(log),
-      readOnly: true,
-    });
-    const running = app.run();
+    const app = appOver(
+      fakeSession(),
+      fakeHost({ ownership: "owned_child", log }),
+    );
 
-    process.stdin.emit("data", "\x03");
-    await running;
+    await app.quit();
 
-    assert.equal(shutdownRequested, false);
+    // The child this TUI started is ended through the process-lifecycle seam.
+    // Work in flight may be lost because that process is deliberately ending,
+    // not because a transport detach is execution authority.
     assert.deepEqual(log, ["close_stdin", "wait_exit"]);
   });
 
-  it("keeps stdin open until the exact attempt settlement is observed", async () => {
+  it("never waits for a runtime settlement it cannot observe", async () => {
     const log: string[] = [];
-    let beginSettlement!: () => void;
-    let settle!: () => void;
-    const settlementStarted = new Promise<void>((resolve) => {
-      beginSettlement = resolve;
+    const session = fakeSession({
+      ...emptyPresentationState(sessionModel("alpha/model-a")),
+      attempt: { attemptId: "attempt-1", phase: { type: "running" as const } },
     });
-    const settlement = new Promise<void>((resolve) => {
-      settle = resolve;
-    });
-    const session = fakeSession(async (attemptId) => {
-      assert.equal(attemptId, "attempt-1");
-      log.push("wait_settlement");
-      beginSettlement();
-      await settlement;
-    });
-    const app = new RustxTuiApp({
-      session,
-      connection: fakeConnection(),
-      child: fakeChild(log),
-    });
+    const app = appOver(session as unknown as AppServerSession, fakeHost({ ownership: "owned_child", log }));
 
-    const quitting = app.quit();
-    await settlementStarted;
-    assert.deepEqual(log, ["wait_settlement"]);
+    await app.quit();
 
-    settle();
-    await quitting;
-    assert.deepEqual(log, [
-      "wait_settlement",
-      "close_stdin",
-      "wait_exit",
-    ]);
+    // Exiting does not ask the runtime to settle, and does not report that it
+    // did. An attempt that was running is simply no longer observable.
+    assert.deepEqual(log, ["close_stdin", "wait_exit"]);
+    assert.equal(
+      (session.state as { attempt?: { phase: { type: string } } }).attempt?.phase
+        .type,
+      "running",
+      "nothing fabricated a settlement",
+    );
+  });
+
+  it("only disconnects from an external App Server on exit", async () => {
+    const log: string[] = [];
+    const app = appOver(
+      fakeSession(),
+      fakeHost({ ownership: "external", log }),
+    );
+
+    assert.equal(await app.quit(), undefined);
+
+    // No child, no stdin close, no termination: the server someone else runs
+    // keeps running, and so does every Session on it.
+    assert.deepEqual(log, ["disconnect"]);
   });
 
   it("settles run immediately when the connection was already terminal", async () => {
-    const app = new RustxTuiApp({
-      session: fakeSession(async () => {}),
-      connection: fakeConnection((listener) =>
-        listener(
-          new ConnectionClosedError(
-            "process_exit",
-            "the process was already gone",
+    const app = appOver(
+      fakeSession(),
+      fakeHost({
+        onClose: (listener) =>
+          listener(
+            new TransportClosedError(
+              "process_exit",
+              "the process was already gone",
+            ),
           ),
-        ),
-      ),
-      child: fakeChild([]),
-    });
+      }),
+    );
 
     assert.equal(await app.run(), 1);
   });
 
   it("commits a fatal diagnostic before stopping the TUI", async () => {
     const events: string[] = [];
-    let close!: (error: ConnectionClosedError) => void;
+    let close!: (error: TransportClosedError) => void;
     const prototype = TUI.prototype as unknown as {
       doRender: () => void;
       stop: () => void;
@@ -314,18 +381,19 @@ describe("RustxTuiApp lifecycle", () => {
     };
 
     try {
-      const app = new RustxTuiApp({
-        session: fakeSession(async () => {}, emptyPresentationState(sessionModel("alpha/model-a"))),
-        connection: fakeConnection((listener) => {
-          close = listener;
+      const app = appOver(
+        fakeSession(emptyPresentationState(sessionModel("alpha/model-a"))),
+        fakeHost({
+          onClose: (listener) => {
+            close = listener;
+          },
         }),
-        child: fakeChild([]),
-      });
+      );
       const running = app.run();
       await waitForApplicationContinuation();
       events.length = 0;
 
-      close(new ConnectionClosedError("process_exit", "fatal transport diagnostic"));
+      close(new TransportClosedError("process_exit", "fatal transport diagnostic"));
       assert.equal(await running, 1);
       const renderIndex = events.indexOf("render");
       const stopIndex = events.indexOf("stop");
@@ -343,33 +411,39 @@ describe("RustxTuiApp lifecycle", () => {
     }
   });
 
-  it("finishes with failure when a session restart cannot be launched", async () => {
+  it("reports a failed focus change without replacing anything", async () => {
     const log: string[] = [];
-    const session = fakeSession(
-      async () => {},
-      emptyPresentationState(sessionModel("alpha/model-a")),
-    );
-    (session as unknown as {
-      newSession: () => Promise<unknown>;
-    }).newSession = async () => ({
-      session: sessionView({ id: "session-2" }),
-      restartRequired: true,
-    });
-    const app = new RustxTuiApp({
+    const session = fakeSession(emptyPresentationState(sessionModel("alpha/model-a")));
+    const app = appOver(
       session,
-      connection: fakeConnection(),
-      child: fakeChild(log),
-      restartRuntime: async () => {
-        log.push("restart");
-        throw new Error("spawn failed");
-      },
-    });
+      fakeHost({
+        log,
+        catalog: {
+          createSession: async () => ({ session: sessionView({ id: "session-2" }) }),
+        },
+        attach: async () => {
+          throw new AppServerRequestError("session/attach", {
+            code: -32000,
+            message: "another client already controls this Session",
+            data: { kind: "controller_in_use" },
+          });
+        },
+      }),
+    );
 
     const running = app.run();
     process.stdin.emit("data", "/new\r");
+    await waitForApplicationContinuation();
+    await waitForApplicationContinuation();
 
-    assert.equal(await running, 1);
-    assert.deepEqual(log, ["close_stdin", "wait_exit", "restart"]);
+    // A Session that cannot be opened is reported. It is not a reason to end
+    // the process, replace the child, or stop the Session already on screen.
+    assert.deepEqual(log, [], "no process lifecycle action was taken");
+    assert.equal(session.state, session.state);
+
+    await app.quit();
+    assert.equal(await running, 0);
+    assert.deepEqual(log, ["close_stdin", "wait_exit"]);
   });
 
   it("keeps Esc precedence at the app input-routing boundary", async () => {
@@ -381,39 +455,35 @@ describe("RustxTuiApp lifecycle", () => {
         phase: { type: "running" as const },
       },
     };
-    const session = fakeSession(async () => {}, runningState);
-    const sessionApi = session as unknown as {
-      cancelCurrentAttempt: () => Promise<string>;
-      listSessions: () => Promise<{ sessions: SessionSummaryView[]; nextOffset?: number }>;
-      refreshSession: () => Promise<ReturnType<typeof sessionView>>;
-    };
+    const session = fakeSession(runningState);
+    (session as unknown as { cancelCurrentAttempt: () => Promise<string> })
+      .cancelCurrentAttempt = async () => {
+        cancelled += 1;
+        return "a1";
+      };
     let sessionsListed!: () => void;
     const sessionsListedObserved = new Promise<void>((resolve) => {
       sessionsListed = resolve;
     });
-    sessionApi.cancelCurrentAttempt = async () => {
-      cancelled += 1;
-      return "a1";
-    };
-    sessionApi.listSessions = async () => {
-      sessionsListed();
-      return {
-        sessions: [{
-          id: "session-1",
-          name: "current",
-          updated_at: "2026-08-21T00:00:00Z",
-          active_node: "node-1",
-          active: true,
-        }],
-      };
-    };
-    sessionApi.refreshSession = async () => sessionView();
 
-    const app = new RustxTuiApp({
-      session,
-      connection: fakeConnection(),
-      child: fakeChild([]),
-    });
+    const app = appOver(
+      session as unknown as AppServerSession,
+      fakeHost({
+        catalog: {
+          listSessions: async () => {
+            sessionsListed();
+            return {
+              sessions: [{
+                id: "session-1",
+                name: "current",
+                updated_at: "2026-08-21T00:00:00Z",
+                active_node: "node-1",
+              }],
+            };
+          },
+        },
+      }),
+    );
     const running = app.run();
 
     // Inspection overlay: Esc closes it and must not reach /cancel, even
@@ -446,15 +516,17 @@ describe("RustxTuiApp lifecycle", () => {
 
   it("Session deletion overlay preserves editor, attachment and active projection and owns Esc", async () => {
     const state = emptyPresentationState(sessionModel("alpha/model-a"));
-    const session = fakeSession(async () => {}, state);
+    const session = fakeSession(state);
     const log: string[] = [];
-    const api = session as RuntimeClientAttachment;
     let previews = 0, executes = 0, cancelled = 0;
-    api.listSessions = async () => ({ sessions: [{ id: "old", name: "history", updated_at: "today", active_node: "node-2", active: false }] });
-    api.previewSessionDeletion = async () => { previews++; return { status: "preview", preview: { session_id: "old", name: "history", target_revision: "revision", owned_node_count: 1, owned_conversation_count: 1, owned_child_count: 0 } }; };
-    api.deleteSession = async (id, revision) => { assert.equal(id, "old"); assert.equal(revision, "revision"); executes++; api.listSessions = async () => ({ sessions: [] }); return { status: "deleted", session_id: id }; };
-    api.cancelCurrentAttempt = async () => { cancelled++; return "attempt"; };
-    const app = new RustxTuiApp({ session, connection: fakeConnection(), child: fakeChild(log) });
+    let rows = [{ id: "old", name: "history", updated_at: "today", active_node: "node-2" }];
+    (session as unknown as { cancelCurrentAttempt: () => Promise<string> }).cancelCurrentAttempt =
+      async () => { cancelled++; return "attempt"; };
+    const app = appOver(session as unknown as AppServerSession, fakeHost({ log, catalog: {
+      listSessions: async () => ({ sessions: rows }),
+      previewSessionDeletion: async () => { previews++; return { status: "preview", preview: { session_id: "old", name: "history", target_revision: "revision", owned_node_count: 1, owned_conversation_count: 1, owned_child_count: 0 } }; },
+      deleteSession: async (id: string, revision: string) => { assert.equal(id, "old"); assert.equal(revision, "revision"); executes++; rows = []; return { status: "deleted", session_id: id }; },
+    } }));
     const originalSetText = Editor.prototype.setText;
     let editorWrites = 0;
     Editor.prototype.setText = function(text: string): void { editorWrites++; originalSetText.call(this, text); };
@@ -468,6 +540,8 @@ describe("RustxTuiApp lifecycle", () => {
       process.stdin.emit("data", "\x04"); await waitForApplicationContinuation();
       process.stdin.emit("data", "\t\r"); await waitForApplicationContinuation();
       assert.equal(previews, 2); assert.equal(executes, 1);
+      // Deleting some other Session neither replaces the visible projection
+      // nor touches the owned process.
       assert.equal(session.state, state); assert.deepEqual(log, []);
       assert.equal(editorWrites, writesBeforeDeletion, "deletion never resets the editor");
     } finally { Editor.prototype.setText = originalSetText; await app.quit(); await running; }
@@ -478,19 +552,21 @@ describe("RustxTuiApp lifecycle", () => {
       ...emptyPresentationState(sessionModel("alpha/model-a")),
       attempt: { ...attemptView(), phase: { type: "running" as const } },
     };
-    const session = fakeSession(async () => {}, state);
+    const session = fakeSession(state);
     const execution = deferred<SessionDeleteResult>();
     const recovery = deferred<SessionDeleteResult>();
     let executes = 0, recovers = 0, cancelled = 0, lists = 0;
-    session.listSessions = async () => {
-      lists++;
-      return { sessions: lists === 1 ? [{ id: "old", name: "history", updated_at: "today", active_node: "node-2", active: false }] : [] };
-    };
-    session.previewSessionDeletion = async () => ({ status: "preview", preview: { session_id: "old", name: "history", target_revision: "revision", owned_node_count: 1, owned_conversation_count: 1, owned_child_count: 0 } });
-    session.deleteSession = () => { executes++; return execution.promise; };
-    session.recoverSessionDeletion = () => { recovers++; return recovery.promise; };
-    session.cancelCurrentAttempt = async () => { cancelled++; return "attempt"; };
-    const app = new RustxTuiApp({ session, connection: fakeConnection(), child: fakeChild([]) });
+    (session as unknown as { cancelCurrentAttempt: () => Promise<string> }).cancelCurrentAttempt =
+      async () => { cancelled++; return "attempt"; };
+    const app = appOver(session as unknown as AppServerSession, fakeHost({ catalog: {
+      listSessions: async () => {
+        lists++;
+        return { sessions: lists === 1 ? [{ id: "old", name: "history", updated_at: "today", active_node: "node-2" }] : [] };
+      },
+      previewSessionDeletion: async () => ({ status: "preview", preview: { session_id: "old", name: "history", target_revision: "revision", owned_node_count: 1, owned_conversation_count: 1, owned_child_count: 0 } }),
+      deleteSession: () => { executes++; return execution.promise; },
+      recoverSessionDeletion: () => { recovers++; return recovery.promise; },
+    } }));
     const running = app.run();
     try {
       process.stdin.emit("data", "/resume\r"); await waitForApplicationContinuation();
@@ -502,20 +578,11 @@ describe("RustxTuiApp lifecycle", () => {
       assert.equal(cancelled, 0);
       execution.resolve({ status: "committed_cleanup_pending", session_id: "old" });
       await waitForApplicationContinuation();
-      assert.equal(lists, 2, "the focused workflow observed execute settlement");
-      process.stdin.emit("data", "rr"); await waitForApplicationContinuation();
-      assert.equal(recovers, 1, "cleanup action remains focused and single-submit");
-      process.stdin.emit("data", "\x1b[27u\x1b[27u"); await waitForApplicationContinuation();
-      assert.equal(cancelled, 0);
+      process.stdin.emit("data", "r"); await waitForApplicationContinuation();
+      assert.equal(recovers, 1);
       recovery.resolve({ status: "deleted", session_id: "old" });
       await waitForApplicationContinuation();
-      assert.equal(lists, 3, "recovery settlement still rebuilds the list");
-      assert.equal(executes, 1); assert.equal(recovers, 1);
-      // First Escape now closes the reconciled selector; only the next reaches the attempt.
-      process.stdin.emit("data", "\x1b[27u"); await waitForApplicationContinuation();
-      assert.equal(cancelled, 0);
-      process.stdin.emit("data", "\x1b[27u"); await waitForApplicationContinuation();
-      assert.equal(cancelled, 1, "Escape input was actually delivered through app routing");
+      assert.equal(cancelled, 0, "a deletion overlay never cancels the attempt");
     } finally { await app.quit(); await running; }
   });
 
@@ -529,7 +596,7 @@ describe("RustxTuiApp lifecycle", () => {
       },
       pendingInteractions: [questionnaire],
     };
-    const session = fakeSession(async () => {}, state);
+    const session = fakeSession(state);
     const api = session as unknown as {
       respondInteraction: (
         interaction: { conversation_id: string; interaction_id: string },
@@ -547,11 +614,7 @@ describe("RustxTuiApp lifecycle", () => {
       });
     };
 
-    const app = new RustxTuiApp({
-      session,
-      connection: fakeConnection(),
-      child: fakeChild([]),
-    });
+    const app = appOver(session as unknown as AppServerSession);
     const running = app.run();
     await waitForApplicationContinuation();
     process.stdin.emit("data", "\r");
@@ -585,7 +648,7 @@ describe("RustxTuiApp lifecycle", () => {
       ...emptyPresentationState(sessionModel("alpha/model-a")),
       pendingInteractions: [questionnaireInteraction()],
     };
-    const session = fakeSession(async () => {}, state);
+    const session = fakeSession(state);
     const api = session as unknown as {
       respondInteraction: (
         interaction: { conversation_id: string; interaction_id: string },
@@ -602,11 +665,7 @@ describe("RustxTuiApp lifecycle", () => {
         response,
       });
 
-    const app = new RustxTuiApp({
-      session,
-      connection: fakeConnection(),
-      child: fakeChild([]),
-    });
+    const app = appOver(session as unknown as AppServerSession);
     const running = app.run();
 
     process.stdin.emit("data", "\u001b");
@@ -628,7 +687,7 @@ describe("RustxTuiApp lifecycle", () => {
       ...emptyPresentationState(sessionModel("alpha/model-a")),
       pendingInteractions: [questionnaire],
     };
-    const session = fakeSession(async () => {}, state) as RuntimeClientAttachment & {
+    const session = fakeSession(state) as unknown as Record<string, unknown> & {
       publishState(nextState: unknown): void;
     };
     let responses = 0;
@@ -638,11 +697,7 @@ describe("RustxTuiApp lifecycle", () => {
       responses += 1;
     };
 
-    const app = new RustxTuiApp({
-      session,
-      connection: fakeConnection(),
-      child: fakeChild([]),
-    });
+    const app = appOver(session as unknown as AppServerSession);
     const running = app.run();
     await waitForApplicationContinuation();
 
@@ -668,7 +723,7 @@ describe("RustxTuiApp lifecycle", () => {
       },
       pendingInteractions: [questionnaireInteraction()],
     };
-    const session = fakeSession(async () => {}, state);
+    const session = fakeSession(state);
     const api = session as unknown as {
       cancelCurrentAttempt: () => Promise<string>;
     };
@@ -683,11 +738,7 @@ describe("RustxTuiApp lifecycle", () => {
       return "attempt-1";
     };
 
-    const app = new RustxTuiApp({
-      session,
-      connection: fakeConnection(),
-      child: fakeChild([]),
-    });
+    const app = appOver(session as unknown as AppServerSession);
     const running = app.run();
 
     process.stdin.emit("data", "\u0003");
@@ -705,7 +756,7 @@ describe("RustxTuiApp lifecycle", () => {
       attempt: { ...attemptView(), phase: { type: "running" as const } },
       pendingInteractions: [approval],
     };
-    const session = fakeSession(async () => {}, state);
+    const session = fakeSession(state);
     const responses: Array<{ id: string; response: unknown }> = [];
     (session as unknown as {
       respondInteraction: (
@@ -719,11 +770,7 @@ describe("RustxTuiApp lifecycle", () => {
       });
     };
 
-    const app = new RustxTuiApp({
-      session,
-      connection: fakeConnection(),
-      child: fakeChild([]),
-    });
+    const app = appOver(session as unknown as AppServerSession);
     const running = app.run();
     await waitForApplicationContinuation();
 
@@ -751,7 +798,7 @@ describe("RustxTuiApp lifecycle", () => {
       attempt: { ...attemptView(), phase: { type: "running" as const } },
       pendingInteractions: [approval],
     };
-    const session = fakeSession(async () => {}, state);
+    const session = fakeSession(state);
     const responses: unknown[] = [];
     (session as unknown as {
       respondInteraction: (interaction: unknown, response: unknown) => Promise<void>;
@@ -759,11 +806,7 @@ describe("RustxTuiApp lifecycle", () => {
       responses.push(response);
     };
 
-    const app = new RustxTuiApp({
-      session,
-      connection: fakeConnection(),
-      child: fakeChild([]),
-    });
+    const app = appOver(session as unknown as AppServerSession);
     const running = app.run();
     await waitForApplicationContinuation();
 
@@ -788,7 +831,7 @@ describe("RustxTuiApp lifecycle", () => {
       attempt: { ...attemptView(), phase: { type: "running" as const } },
       pendingInteractions: [approval, childQuestion],
     };
-    const session = fakeSession(async () => {}, state) as RuntimeClientAttachment & {
+    const session = fakeSession(state) as unknown as Record<string, unknown> & {
       publishState(nextState: unknown): void;
     };
     const responses: Array<{ id: string; response: unknown }> = [];
@@ -804,11 +847,7 @@ describe("RustxTuiApp lifecycle", () => {
       });
     };
 
-    const app = new RustxTuiApp({
-      session,
-      connection: fakeConnection(),
-      child: fakeChild([]),
-    });
+    const app = appOver(session as unknown as AppServerSession);
     const running = app.run();
     await waitForApplicationContinuation();
 
@@ -849,7 +888,7 @@ describe("RustxTuiApp lifecycle", () => {
       attempt: { ...attemptView(), phase: { type: "running" as const } },
       pendingInteractions: [approval],
     };
-    const session = fakeSession(async () => {}, state);
+    const session = fakeSession(state);
     const responses: unknown[] = [];
     (session as unknown as {
       respondInteraction: (interaction: unknown, response: unknown) => Promise<void>;
@@ -857,11 +896,7 @@ describe("RustxTuiApp lifecycle", () => {
       responses.push(response);
     };
 
-    const app = new RustxTuiApp({
-      session,
-      connection: fakeConnection(),
-      child: fakeChild([]),
-    });
+    const app = appOver(session as unknown as AppServerSession);
     const running = app.run();
     await waitForApplicationContinuation();
 
@@ -896,7 +931,7 @@ describe("RustxTuiApp lifecycle", () => {
       attempt: { ...attemptView(), phase: { type: "running" as const } },
       pendingInteractions: [approval],
     };
-    const session = fakeSession(async () => {}, state) as RuntimeClientAttachment & {
+    const session = fakeSession(state) as unknown as Record<string, unknown> & {
       publishState(nextState: unknown): void;
     };
     const responses: Array<{ id: string; response: unknown }> = [];
@@ -912,11 +947,7 @@ describe("RustxTuiApp lifecycle", () => {
       });
     };
 
-    const app = new RustxTuiApp({
-      session,
-      connection: fakeConnection(),
-      child: fakeChild([]),
-    });
+    const app = appOver(session as unknown as AppServerSession);
     const running = app.run();
     await waitForApplicationContinuation();
 
@@ -975,7 +1006,7 @@ describe("RustxTuiApp lifecycle", () => {
       attempt: { ...attemptView(), phase: { type: "running" as const } },
       pendingInteractions: [questionnaire],
     };
-    const session = fakeSession(async () => {}, state) as RuntimeClientAttachment & {
+    const session = fakeSession(state) as unknown as Record<string, unknown> & {
       publishState(nextState: unknown): void;
       publishSnapshot(): void;
     };
@@ -992,11 +1023,7 @@ describe("RustxTuiApp lifecycle", () => {
       });
     };
 
-    const app = new RustxTuiApp({
-      session,
-      connection: fakeConnection(),
-      child: fakeChild([]),
-    });
+    const app = appOver(session as unknown as AppServerSession);
     const running = app.run();
     await waitForApplicationContinuation();
 
@@ -1030,7 +1057,7 @@ describe("RustxTuiApp lifecycle", () => {
       attempt: { ...attemptView(), phase: { type: "running" as const } },
       pendingInteractions: [childApproval, approval],
     };
-    const session = fakeSession(async () => {}, state) as RuntimeClientAttachment & {
+    const session = fakeSession(state) as unknown as Record<string, unknown> & {
       publishState(nextState: unknown): void;
     };
     const responses: Array<{ id: string; response: unknown }> = [];
@@ -1046,11 +1073,7 @@ describe("RustxTuiApp lifecycle", () => {
       });
     };
 
-    const app = new RustxTuiApp({
-      session,
-      connection: fakeConnection(),
-      child: fakeChild([]),
-    });
+    const app = appOver(session as unknown as AppServerSession);
     const running = app.run();
     await waitForApplicationContinuation();
 
@@ -1084,7 +1107,7 @@ describe("RustxTuiApp lifecycle", () => {
         phase: { type: "running" as const },
       },
     };
-    const session = fakeSession(async () => {}, state);
+    const session = fakeSession(state);
     const api = session as unknown as {
       onSnapshot: (listener: () => void) => () => void;
       cancelCurrentAttempt: () => Promise<string>;
@@ -1098,11 +1121,7 @@ describe("RustxTuiApp lifecycle", () => {
       return "a1";
     };
 
-    const app = new RustxTuiApp({
-      session,
-      connection: fakeConnection(),
-      child: fakeChild([]),
-    });
+    const app = appOver(session as unknown as AppServerSession);
     const running = app.run();
 
     process.stdin.emit("data", "/help\r");
@@ -1119,73 +1138,62 @@ describe("RustxTuiApp lifecycle", () => {
     await running;
   });
 
-  it("drops an inspection result that completes after a new attachment is bound", async () => {
+  it("drops an inspection result that completes after focus moved to another Session", async () => {
     let oldInspectionStarted!: () => void;
     const oldInspectionObserved = new Promise<void>((resolve) => {
       oldInspectionStarted = resolve;
     });
     const oldInspection = deferred<ReturnType<typeof sessionView>>();
-    let refreshCalls = 0;
     let nextBound!: () => void;
     const nextBoundObserved = new Promise<void>((resolve) => {
       nextBound = resolve;
     });
+    let refreshCalls = 0;
     let oldCancelled = 0;
     let nextCancelled = 0;
     const runningState = {
       ...emptyPresentationState(sessionModel("alpha/model-a")),
-      attempt: {
-        ...attemptView(),
-        phase: { type: "running" as const },
-      },
+      attempt: { ...attemptView(), phase: { type: "running" as const } },
     };
-    const oldSession = fakeSession(async () => {}, runningState);
-    const oldApi = oldSession as unknown as {
-      refreshSession: () => Promise<ReturnType<typeof sessionView>>;
-      newSession: () => Promise<unknown>;
-      detach: () => Promise<void>;
-      cancelCurrentAttempt: () => Promise<string>;
-    };
-    oldApi.refreshSession = async () => {
-      refreshCalls += 1;
-      if (refreshCalls === 1) return sessionView({ id: "session-a", name: "A" });
-      oldInspectionStarted();
-      return oldInspection.promise;
-    };
-    oldApi.newSession = async () => ({
-      session: sessionView({ id: "session-b", name: "B" }),
-      restartRequired: true,
-    });
-    oldApi.detach = async () => {};
-    oldApi.cancelCurrentAttempt = async () => {
-      oldCancelled += 1;
-      return "old-attempt";
-    };
+    const oldSession = fakeSession(runningState, "session-a");
+    (oldSession as unknown as { cancelCurrentAttempt: () => Promise<string> })
+      .cancelCurrentAttempt = async () => {
+        oldCancelled += 1;
+        return "old-attempt";
+      };
+    const nextSession = fakeSession(runningState, "session-b");
+    (nextSession as unknown as { cancelCurrentAttempt: () => Promise<string> })
+      .cancelCurrentAttempt = async () => {
+        nextCancelled += 1;
+        return "next-attempt";
+      };
 
-    const nextSession = fakeSession(async () => {}, runningState);
-    const nextApi = nextSession as unknown as {
-      refreshSession: () => Promise<ReturnType<typeof sessionView>>;
-      cancelCurrentAttempt: () => Promise<string>;
-    };
-    nextApi.refreshSession = async () => {
-      nextBound();
-      return sessionView({ id: "session-b", name: "B" });
-    };
-    nextApi.cancelCurrentAttempt = async () => {
-      nextCancelled += 1;
-      return "next-attempt";
-    };
-
-    const app = new RustxTuiApp({
-      session: oldSession,
-      connection: fakeConnection(),
-      child: fakeChild([]),
-      restartRuntime: async () => ({
-        session: nextSession,
-        connection: fakeConnection(),
-        child: fakeChild([]),
+    const app = appOver(
+      oldSession,
+      fakeHost({
+        attach: async () => {
+          nextBound();
+          return nextSession;
+        },
+        readSession: async () => {
+          refreshCalls += 1;
+          // 1: the footer's read when A is bound.
+          // 2: the `/session` command, held open on purpose.
+          // 3+: the footer's read once B is bound.
+          if (refreshCalls === 1) return sessionView({ id: "session-a", name: "A" });
+          if (refreshCalls === 2) {
+            oldInspectionStarted();
+            return oldInspection.promise;
+          }
+          return sessionView({ id: "session-b", name: "B" });
+        },
+        catalog: {
+          createSession: async () => ({
+            session: sessionView({ id: "session-b", name: "B" }),
+          }),
+        },
       }),
-    });
+    );
     const running = app.run();
     await waitForApplicationContinuation();
 
@@ -1195,21 +1203,22 @@ describe("RustxTuiApp lifecycle", () => {
     await nextBoundObserved;
     await waitForApplicationContinuation();
 
-    // The old request really completes after B is current. Its inspection
+    // The old request really completes after B is visible. Its inspection
     // result must not acquire B's overlay or steal its editor focus.
     oldInspection.resolve(sessionView({ id: "session-a", name: "stale A" }));
     await waitForApplicationContinuation();
     process.stdin.emit("data", "\u001b");
     await waitForPiEscapeDisambiguation();
 
+    // A is still attached and still running; Escape reached B, not A.
     assert.equal(oldCancelled, 0);
-    assert.equal(nextCancelled, 1, "Escape must reach the current attachment");
+    assert.equal(nextCancelled, 1, "Escape must reach the visible Session");
 
     await app.quit();
     await running;
   });
 
-  it("does not let a late old-attachment acknowledgement replace B's transient", async () => {
+  it("does not let a late continuation from the previous focus replace B's transient", async () => {
     let oldRenameStarted!: () => void;
     const oldRenameObserved = new Promise<void>((resolve) => {
       oldRenameStarted = resolve;
@@ -1222,51 +1231,35 @@ describe("RustxTuiApp lifecycle", () => {
     const renders = countTuiRenderRequests();
     const runningState = {
       ...emptyPresentationState(sessionModel("alpha/model-a")),
-      attempt: {
-        ...attemptView(),
-        phase: { type: "running" as const },
-      },
+      attempt: { ...attemptView(), phase: { type: "running" as const } },
     };
-    const oldSession = fakeSession(async () => {}, runningState);
-    const oldApi = oldSession as unknown as {
-      refreshSession: () => Promise<ReturnType<typeof sessionView>>;
-      newSession: () => Promise<unknown>;
-      detach: () => Promise<void>;
-      nameSession: () => Promise<ReturnType<typeof sessionView>>;
-    };
-    oldApi.refreshSession = async () => sessionView({ id: "session-a", name: "A" });
-    oldApi.nameSession = async () => {
-      oldRenameStarted();
-      return oldRename.promise;
-    };
-    oldApi.newSession = async () => ({
-      session: sessionView({ id: "session-b", name: "B" }),
-      restartRequired: true,
-    });
-    oldApi.detach = async () => {};
-
-    const nextSession = fakeSession(async () => {}, runningState);
-    const nextApi = nextSession as unknown as {
-      refreshSession: () => Promise<ReturnType<typeof sessionView>>;
-      nameSession: () => Promise<ReturnType<typeof sessionView>>;
-    };
-    nextApi.refreshSession = async () => {
-      nextBound();
-      return sessionView({ id: "session-b", name: "B" });
-    };
-    nextApi.nameSession = async () => sessionView({ id: "session-b", name: "current B" });
+    const oldSession = fakeSession(runningState, "session-a");
+    const nextSession = fakeSession(runningState, "session-b");
+    let renames = 0;
 
     try {
-      const app = new RustxTuiApp({
-        session: oldSession,
-        connection: fakeConnection(),
-        child: fakeChild([]),
-        restartRuntime: async () => ({
-          session: nextSession,
-          connection: fakeConnection(),
-          child: fakeChild([]),
+      const app = appOver(
+        oldSession,
+        fakeHost({
+          attach: async () => {
+            nextBound();
+            return nextSession;
+          },
+          catalog: {
+            createSession: async () => ({
+              session: sessionView({ id: "session-b", name: "B" }),
+            }),
+            renameSession: async () => {
+              renames += 1;
+              if (renames === 1) {
+                oldRenameStarted();
+                return oldRename.promise;
+              }
+              return sessionView({ id: "session-b", name: "current B" });
+            },
+          },
         }),
-      });
+      );
       const running = app.run();
       await waitForApplicationContinuation();
 
@@ -1305,7 +1298,7 @@ describe("RustxTuiApp lifecycle", () => {
     let listCalls = 0;
     let cancelled = 0;
     const renders = countTuiRenderRequests();
-    const session = fakeSession(async () => {}, {
+    const session = fakeSession({
       ...emptyPresentationState(sessionModel("alpha/model-a")),
       attempt: {
         ...attemptView(),
@@ -1314,34 +1307,11 @@ describe("RustxTuiApp lifecycle", () => {
     });
     const api = session as unknown as {
       onSnapshot: (listener: () => void) => () => void;
-      refreshSession: () => Promise<ReturnType<typeof sessionView>>;
-      listSessions: () => Promise<{
-        sessions: SessionSummaryView[];
-        nextOffset?: number;
-      }>;
       cancelCurrentAttempt: () => Promise<string>;
     };
     api.onSnapshot = (listener) => {
       snapshotListener = listener;
       return () => {};
-    };
-    api.refreshSession = async () => sessionView();
-    api.listSessions = async () => {
-      listCalls += 1;
-      if (listCalls === 1) {
-        firstPage();
-        return {
-          sessions: [{
-            id: "session-a",
-            name: "A",
-            updated_at: "2026-08-21T00:00:00Z",
-            active_node: "node-a",
-            active: true,
-          }],
-          nextOffset: 1,
-        };
-      }
-      return latePage.promise;
     };
     api.cancelCurrentAttempt = async () => {
       cancelled += 1;
@@ -1349,11 +1319,29 @@ describe("RustxTuiApp lifecycle", () => {
     };
 
     try {
-      const app = new RustxTuiApp({
-        session,
-        connection: fakeConnection(),
-        child: fakeChild([]),
-      });
+      const app = appOver(
+        session as unknown as AppServerSession,
+        fakeHost({
+          catalog: {
+            listSessions: async () => {
+              listCalls += 1;
+              if (listCalls === 1) {
+                firstPage();
+                return {
+                  sessions: [{
+                    id: "session-a",
+                    name: "A",
+                    updated_at: "2026-08-21T00:00:00Z",
+                    active_node: "node-a",
+                  }],
+                  nextOffset: 1,
+                };
+              }
+              return latePage.promise;
+            },
+          },
+        }),
+      );
       const running = app.run();
       process.stdin.emit("data", "/resume\r");
       await firstPageObserved;
@@ -1383,80 +1371,61 @@ describe("RustxTuiApp lifecycle", () => {
     }
   });
 
-  it("replaces a terminal Session attachment from the authoritative restart", async () => {
+  it("shows the created Session without replacing a process", async () => {
     const log: string[] = [];
-    let refreshed!: () => void;
-    const refreshedObserved = new Promise<void>((resolve) => {
-      refreshed = resolve;
+    let attached!: () => void;
+    const attachObserved = new Promise<void>((resolve) => {
+      attached = resolve;
     });
     const oldSession = fakeSession(
-      async () => {},
       emptyPresentationState(sessionModel("alpha/model-a")),
+      "session-1",
     );
-    const oldApi = oldSession as unknown as {
-      newSession: () => Promise<never>;
-      detach: () => Promise<void>;
-      refreshSession: () => Promise<ReturnType<typeof sessionView>>;
-    };
-    oldApi.newSession = async () => {
-      throw new RuntimeRequestError({
-        type: "session_restart_required",
-        message: "catalog visibility committed; durability uncertain",
-      });
-    };
-    oldApi.detach = async () => {
-      log.push("detach");
-    };
-    oldApi.refreshSession = async () => sessionView();
-
     const nextSession = fakeSession(
-      async () => {},
       emptyPresentationState(sessionModel("alpha/model-a")),
+      "session-2",
     );
-    const nextApi = nextSession as unknown as {
-      refreshSession: () => Promise<ReturnType<typeof sessionView>>;
-    };
-    nextApi.refreshSession = async () => {
-      log.push("refresh_authoritative");
-      refreshed();
-      return sessionView({ id: "session-2", name: "authoritative destination" });
-    };
 
-    const app = new RustxTuiApp({
-      session: oldSession,
-      connection: fakeConnection(),
-      child: fakeChild(log),
-      restartRuntime: async () => {
-        log.push("restart");
-        return {
-          session: nextSession,
-          connection: fakeConnection(),
-          child: fakeChild(log),
-        };
-      },
-    });
+    const app = appOver(
+      oldSession,
+      fakeHost({
+        log,
+        attach: async (sessionId) => {
+          assert.equal(sessionId, "session-2");
+          log.push("attach");
+          attached();
+          return nextSession;
+        },
+        catalog: {
+          createSession: async () => {
+            log.push("create");
+            return { session: sessionView({ id: "session-2", name: "B" }) };
+          },
+        },
+      }),
+    );
     const running = app.run();
     process.stdin.emit("data", "/new\r");
-    await refreshedObserved;
+    await attachObserved;
+    await waitForApplicationContinuation();
 
-    assert.deepEqual(log.slice(0, 4), [
-      "detach",
-      "close_stdin",
-      "wait_exit",
-      "restart",
-    ]);
-    assert.ok(log.includes("refresh_authoritative"));
+    // Creating and showing a Session is two App Server operations and no
+    // process lifecycle at all: the child is untouched, and the Session that
+    // was visible before is neither detached nor unloaded.
+    assert.deepEqual(log, ["create", "attach"]);
+    assert.equal(oldSession.released, false);
 
     await app.quit();
     await running;
+    assert.deepEqual(log.slice(-2), ["close_stdin", "wait_exit"]);
   });
 
-  it("restores a committed fork draft only after authoritative restart metadata", async () => {
+  it("restores a committed fork draft into the Session it belongs to", async () => {
     const prompt = "fork-draft-exact-7f3b";
     const log: string[] = [];
-    let refreshed!: () => void;
-    const refreshedObserved = new Promise<void>((resolve) => {
-      refreshed = resolve;
+    let attached!: () => void;
+    const attachObserved = new Promise<void>((resolve) => {
+      attached = resolve;
     });
     let submitted!: (content: string) => void;
     const submittedObserved = new Promise<string>((resolve) => {
@@ -1464,153 +1433,51 @@ describe("RustxTuiApp lifecycle", () => {
     });
 
     const oldSession = fakeSession(
-      async () => {},
       emptyPresentationState(sessionModel("alpha/model-a")),
+      "session-1",
     );
-    const oldApi = oldSession as unknown as {
-      newSession: () => Promise<unknown>;
-      detach: () => Promise<void>;
-    };
-    oldApi.newSession = async () => ({
-      session: sessionView({ id: "session-2", name: "committed fork" }),
-      editorContent: [{ type: "text", text: prompt }],
-      restartRequired: true,
-      restartDiagnostic: "catalog visibility committed; durability uncertain",
-    });
-    oldApi.detach = async () => {
-      log.push("detach");
-    };
-
     const nextSession = fakeSession(
-      async () => {},
       emptyPresentationState(sessionModel("alpha/model-a")),
+      "session-2",
     );
-    const nextApi = nextSession as unknown as {
-      refreshSession: () => Promise<ReturnType<typeof sessionView>>;
-      submitInbound: (content: Array<{ type: "text"; text: string }>) => Promise<{
-        messageId: string;
-        sequence: number;
-      }>;
-    };
-    nextApi.refreshSession = async () => {
-      refreshed();
-      return sessionView({ id: "session-2", name: "authoritative committed fork" });
-    };
-    nextApi.submitInbound = async (content) => {
+    (nextSession as unknown as {
+      submitInbound: (
+        content: Array<{ type: "text"; text: string }>,
+      ) => Promise<{ messageId: string; sequence: string }>;
+    }).submitInbound = async (content) => {
       submitted(content.map((block) => block.text).join("\n"));
-      return { messageId: "destination-user-1", sequence: 1 };
+      return { messageId: "destination-user-1", sequence: "1" };
     };
 
-    const app = new RustxTuiApp({
-      session: oldSession,
-      connection: fakeConnection(),
-      child: fakeChild(log),
-      restartRuntime: async () => ({
-        session: nextSession,
-        connection: fakeConnection(),
-        child: fakeChild(log),
+    const app = appOver(
+      oldSession,
+      fakeHost({
+        log,
+        attach: async () => {
+          attached();
+          return nextSession;
+        },
+        catalog: {
+          createSession: async () => ({
+            session: sessionView({ id: "session-2", name: "committed fork" }),
+            editorContent: [{ type: "text", text: prompt }],
+            durabilityDiagnostic: "catalog visibility committed; durability uncertain",
+          }),
+        },
       }),
-    });
+    );
     const running = app.run();
     process.stdin.emit("data", "/new\r");
-    await refreshedObserved;
-    // The refresh promise resolves at the native metadata boundary; allow
-    // the app's awaited replacement continuation to install the draft before
-    // the next input event is delivered.
-    await Promise.resolve();
+    await attachObserved;
+    // Let the app's awaited focus continuation install the draft before the
+    // next input event is delivered.
+    await waitForApplicationContinuation();
+    await waitForApplicationContinuation();
 
     process.stdin.emit("data", "\r");
     assert.equal(await submittedObserved, prompt);
-    assert.deepEqual(log.slice(0, 3), ["detach", "close_stdin", "wait_exit"]);
-
-    await app.quit();
-    await running;
-  });
-
-  it("routes interactive model replacement through the terminal Session flow", async () => {
-    const log: string[] = [];
-    let catalogRead!: () => void;
-    const catalogReadObserved = new Promise<void>((resolve) => {
-      catalogRead = resolve;
-    });
-    let refreshStarted!: () => void;
-    const refreshObserved = new Promise<void>((resolve) => {
-      refreshStarted = resolve;
-    });
-    const oldSession = fakeSession(
-      async () => {},
-      emptyPresentationState(sessionModel("alpha/model-a")),
-    );
-    const oldApi = oldSession as unknown as {
-      modelCatalog: () => Promise<{ models: ReturnType<typeof catalogModel>[] }>;
-      modelSet: () => Promise<never>;
-      refreshSession: () => Promise<ReturnType<typeof sessionView>>;
-      detach: () => Promise<void>;
-    };
-    oldApi.modelCatalog = async () => {
-      catalogRead();
-      return {
-        models: [
-          catalogModel("alpha/model-a"),
-          catalogModel("beta/model-b"),
-        ],
-      };
-    };
-    oldApi.modelSet = async () => {
-      throw new RuntimeRequestError({
-        type: "session_restart_required",
-        message: "model catalog visibility committed; durability uncertain",
-      });
-    };
-    oldApi.refreshSession = async () => sessionView();
-    oldApi.detach = async () => {
-      log.push("detach");
-    };
-
-    const nextSession = fakeSession(
-      async () => {},
-      emptyPresentationState(sessionModel("beta/model-b")),
-    );
-    const nextApi = nextSession as unknown as {
-      refreshSession: () => Promise<ReturnType<typeof sessionView>>;
-    };
-    nextApi.refreshSession = async () => {
-      log.push("refresh_authoritative");
-      refreshStarted();
-      return sessionView({ id: "session-2", name: "authoritative model session" });
-    };
-
-    const app = new RustxTuiApp({
-      session: oldSession,
-      connection: fakeConnection(),
-      child: fakeChild(log),
-      restartRuntime: async () => {
-        log.push("restart");
-        return {
-          session: nextSession,
-          connection: fakeConnection(),
-          child: fakeChild(log),
-        };
-      },
-    });
-    const running = app.run();
-
-    process.stdin.emit("data", "/model\r");
-    await catalogReadObserved;
-    // The catalog response is observed above; let the dispatcher finish its
-    // promise chain and install the selector before its next input event.
-    await waitForApplicationContinuation();
-    process.stdin.emit("data", "\u001b[B");
-    process.stdin.emit("data", "\r");
-    await refreshObserved;
-
-    assert.deepEqual(log.slice(0, 5), [
-      "detach",
-      "close_stdin",
-      "wait_exit",
-      "restart",
-      "refresh_authoritative",
-    ]);
+    // The draft was restored by changing focus, not by replacing a process.
+    assert.ok(!log.includes("close_stdin"));
 
     await app.quit();
     await running;
@@ -1623,9 +1490,7 @@ describe("RustxTuiApp lifecycle", () => {
     const catalogReadObserved = new Promise<void>((resolve) => {
       catalogRead = resolve;
     });
-    const session = fakeSession(
-      async () => {},
-      emptyPresentationState(sessionModel("alpha/model-a")),
+    const session = fakeSession(emptyPresentationState(sessionModel("alpha/model-a")),
     );
     const api = session as unknown as {
       modelCatalog: () => Promise<{ models: ReturnType<typeof catalogModel>[] }>;
@@ -1643,11 +1508,7 @@ describe("RustxTuiApp lifecycle", () => {
       return sessionModel(config.model);
     };
 
-    const app = new RustxTuiApp({
-      session,
-      connection: fakeConnection(),
-      child: fakeChild([]),
-    });
+    const app = appOver(session as unknown as AppServerSession);
     const running = app.run();
 
     process.stdin.emit("data", "\f");
@@ -1670,7 +1531,7 @@ describe("RustxTuiApp lifecycle", () => {
 /** Real app routing with native operations held at explicit submission gates. */
 async function deletionAppHarness(overlapInitial = false) {
   const state = { ...emptyPresentationState(sessionModel("alpha/model-a")), attempt: { ...attemptView(), phase: { type: "running" as const } } };
-  const session = fakeSession(async () => {}, state) as RuntimeClientAttachment & {
+  const session = fakeSession(state) as unknown as Record<string, unknown> & {
     publishState(next: typeof state): void;
     publishSnapshot(): void;
   };
@@ -1684,19 +1545,23 @@ async function deletionAppHarness(overlapInitial = false) {
   let cancelled = 0;
   let rows: SessionSummaryView[] = [{ id: "old", name: "historical-target", updated_at: "today", active_node: "node-2", }];
   let listResponse: ((query?: string, offset?: number) => Promise<{ sessions: SessionSummaryView[]; nextOffset?: number }>) | undefined;
-  session.listSessions = async (query, offset = 0) => {
-    lists.push([query, offset]);
-    if (overlapInitial && lists.length === 1) return lateList.promise;
-    return listResponse ? listResponse(query, offset) : { sessions: [...rows] };
+  // Deletion addresses the durable Session catalog on the host; the attached
+  // Session owns only what an attachment owns.
+  const catalog = {
+    listSessions: async (query?: string, offset = 0) => {
+      lists.push([query, offset]);
+      if (overlapInitial && lists.length === 1) return lateList.promise;
+      return listResponse ? listResponse(query, offset) : { sessions: [...rows] };
+    },
+    previewSessionDeletion: (id: string) => { previews.push(id); return preview.promise; },
+    deleteSession: (id: string, revision: string) => { executes.push([id, revision]); return execution.promise; },
+    recoverSessionDeletion: (id: string) => { recovers.push(id); return recovery.promise; },
   };
-  session.previewSessionDeletion = (id) => { previews.push(id); return preview.promise; };
-  session.deleteSession = (id, revision) => { executes.push([id, revision]); return execution.promise; };
-  session.recoverSessionDeletion = (id) => { recovers.push(id); return recovery.promise; };
   session.cancelCurrentAttempt = async () => { cancelled++; return "attempt-1"; };
-  session.respondInteraction = async (interaction, response) => { responses.push({ interaction, response }); };
+  session.respondInteraction = async (interaction: unknown, response: unknown) => { responses.push({ interaction, response }); };
   session.submitInbound = async () => { assert.fail("deletion must not submit model-visible input"); };
-  let close!: (error: ConnectionClosedError) => void;
-  const connection = fakeConnection((listener) => { close = listener; });
+  let close!: (error: TransportClosedError) => void;
+  const host = fakeHost({ catalog, onClose: (listener) => { close = listener; } });
   const original = TUI.prototype.showOverlay;
   const surfaces: Array<{ content: Parameters<TUI["showOverlay"]>[0]; visible: boolean }> = [];
   TUI.prototype.showOverlay = function(content, options) {
@@ -1707,7 +1572,7 @@ async function deletionAppHarness(overlapInitial = false) {
     handle.hide = () => { surface.visible = false; hide(); };
     return handle;
   };
-  const app = new RustxTuiApp({ session, connection, child: fakeChild([]) });
+  const app = appOver(session as unknown as AppServerSession, host);
   const running = app.run();
   const input = async (data: string) => { process.stdin.emit("data", data); await waitForApplicationContinuation(); };
   await input("/resume\r");
@@ -1733,7 +1598,7 @@ async function deletionAppHarness(overlapInitial = false) {
       session.publishState({ ...state, pendingInteractions: [interaction] });
     },
     resync: () => { session.publishSnapshot(); session.publishState(state); },
-    terminal: () => close(new ConnectionClosedError("process_exit", "transport ended")),
+    terminal: () => close(new TransportClosedError("process_exit", "transport ended")),
     finish: async () => { await app.quit(); await running; TUI.prototype.showOverlay = original; },
   };
 }
@@ -2040,7 +1905,7 @@ for (const replacement of ["HITL", "snapshot"] as const) {
     try {
       await h.resolvePreview(); await h.input("\t\r");
       if (replacement === "HITL") h.takeover(approvalInteraction()); else h.resync();
-      h.execution.reject(new RuntimeRequestError({ type: "session_failure", message: "Session deletion failed before logical commit." }));
+      h.execution.reject(new AppServerRequestError("session/delete", { code: -32000, message: "Session deletion failed before logical commit.", data: { kind: "operation_failed" } }));
       await waitForApplicationContinuation();
       assert.deepEqual(h.lists, [[undefined, 0], ["", 0]]);
       if (replacement === "HITL") { assert.match(h.text(), /Deny/); await h.input("\x1b[27u"); }
@@ -2057,13 +1922,13 @@ for (const replacement of ["HITL", "snapshot"] as const) {
 
 it("approval overlay routes one typed request, consumes Esc, and discards stale snapshot surfaces", async () => {
   const state = stateOf({ attempt: attemptView({ phase: { type: "running" } }) });
-  const session = fakeSession(async () => {}, state) as RuntimeClientAttachment & {
+  const session = fakeSession(state) as unknown as Record<string, unknown> & {
     publishState(next: typeof state): void; publishSnapshot(): void;
   };
-  const response = deferred<Awaited<ReturnType<RuntimeClientAttachment["approvalModeSet"]>>>();
+  const response = deferred<Awaited<ReturnType<AppServerSession["approvalModeSet"]>>>();
   const requests: string[] = [];
   let cancellations = 0;
-  session.approvalModeSet = (mode) => { requests.push(mode); return response.promise; };
+  session.approvalModeSet = (mode: string) => { requests.push(mode); return response.promise; };
   session.cancelCurrentAttempt = async () => { cancellations++; return "a1"; };
   const surfaces: Array<{ content: Parameters<TUI["showOverlay"]>[0]; visible: boolean }> = [];
   const original = TUI.prototype.showOverlay;
@@ -2074,7 +1939,7 @@ it("approval overlay routes one typed request, consumes Esc, and discards stale 
     handle.hide = () => { surface.visible = false; hide(); };
     return handle;
   };
-  const app = new RustxTuiApp({ session, connection: fakeConnection(), child: fakeChild([]) });
+  const app = appOver(session as unknown as AppServerSession);
   const running = app.run();
   const input = async (data: string) => { process.stdin.emit("data", data); await waitForApplicationContinuation(); };
   const active = () => surfaces.findLast((surface) => surface.visible);
@@ -2093,14 +1958,14 @@ it("approval overlay routes one typed request, consumes Esc, and discards stale 
     assert.match(text(), /Current attempt: Policy/);
     await input("\x1b[27u"); await input("/approval\r");
     assert.equal(active(), undefined); assert.deepEqual(requests, ["full_access"]);
-    response.resolve({ effectiveApprovalMode: "policy", pendingApprovalMode: "full_access", revision: 1 });
+    response.resolve({ effectiveApprovalMode: "policy", pendingApprovalMode: "full_access", revision: "1" });
     await waitForApplicationContinuation();
-    session.publishState({ ...state, pendingApprovalMode: "full_access", approvalModeRevision: 1 });
+    session.publishState({ ...state, pendingApprovalMode: "full_access", approvalModeRevision: "1" });
     await input("/approval\r");
     assert.match(text(), /Current attempt: Policy/); assert.match(text(), /Next attempt: Full access/);
     const stale = active()!;
     session.publishSnapshot();
-    session.publishState({ ...state, effectiveApprovalMode: "full_access", approvalModeRevision: 2 });
+    session.publishState({ ...state, effectiveApprovalMode: "full_access", approvalModeRevision: "2" });
     stale.content.handleInput?.("\r");
     assert.deepEqual(requests, ["full_access"]);
     await input("/approval\r");
@@ -2108,7 +1973,7 @@ it("approval overlay routes one typed request, consumes Esc, and discards stale 
     assert.equal(cancellations, 0);
     await input("\r");
     assert.deepEqual(requests, ["full_access", "policy"]);
-    assert.equal(session.state?.effectiveApprovalMode, "full_access", "the response never mutates local effective state");
+    assert.equal((session.state as { effectiveApprovalMode?: string }).effectiveApprovalMode, "full_access", "the response never mutates local effective state");
   } finally {
     await app.quit(); await running; TUI.prototype.showOverlay = original;
   }
@@ -2116,36 +1981,24 @@ it("approval overlay routes one typed request, consumes Esc, and discards stale 
 
 /** Approval-specific gates over the existing real-app input/attachment seams. */
 async function approvalOwnerHarness(t: TestContext, sameAttachment = false) {
-  type Reply = Awaited<ReturnType<RuntimeClientAttachment["approvalModeSet"]>>;
+  type Reply = Awaited<ReturnType<AppServerSession["approvalModeSet"]>>;
   function owner(model: string) {
     const state = stateOf({ model: sessionModel(model), attempt: attemptView({ phase: { type: "running" } }) });
-    const session = fakeSession(async () => {}, state) as RuntimeClientAttachment & {
+    const session = fakeSession(state) as unknown as Record<string, unknown> & {
       publishState(next: typeof state): void; publishSnapshot(): void;
     };
     const requests: Array<{ mode: string; response: ReturnType<typeof deferred<Reply>> }> = [];
     let cancelled = 0;
-    session.approvalModeSet = (mode) => {
+    session.approvalModeSet = (mode: string) => {
       const response = deferred<Reply>(); requests.push({ mode, response }); return response.promise;
     };
     session.cancelCurrentAttempt = async () => { cancelled++; return "active-attempt"; };
-    session.refreshSession = async () => sessionView({ id: model, name: model });
-    session.detach = async () => {};
     return { state, session, requests, cancelled: () => cancelled };
   }
   const a = owner("owner/a");
   const b = owner("owner/b");
   const bound = deferred<void>();
   const bView = sessionView({ id: "owner/b", name: "owner/b" });
-  a.session.newSession = async () => {
-    if (sameAttachment) {
-      // Native Session transition can retain the attachment object. The app's
-      // accepted Session switch still advances its presentation owner epoch.
-      a.session.publishState(b.state);
-      a.session.approvalModeSet = b.session.approvalModeSet;
-    }
-    return { session: bView, restartRequired: !sameAttachment };
-  };
-  b.session.refreshSession = async () => { bound.resolve(); return bView; };
   const surfaces: Array<{ content: Parameters<TUI["showOverlay"]>[0]; visible: boolean }> = [];
   const originalOverlay = TUI.prototype.showOverlay;
   t.mock.method(TUI.prototype, "showOverlay", function(this: TUI, content: Parameters<TUI["showOverlay"]>[0], options: Parameters<TUI["showOverlay"]>[1]) {
@@ -2161,9 +2014,27 @@ async function approvalOwnerHarness(t: TestContext, sameAttachment = false) {
   t.mock.method(TransientFeedbackSurface.prototype, "replace", function(this: TransientFeedbackSurface, value: Parameters<TransientFeedbackSurface["replace"]>[0]) {
     transient = this; feedback.push(value); originalReplace.call(this, value);
   });
-  const app = new RustxTuiApp({ session: a.session, connection: fakeConnection(), child: fakeChild([]),
-    restartRuntime: async () => ({ session: b.session, connection: fakeConnection(), child: fakeChild([]) }),
-  });
+  const app = appOver(
+    a.session as unknown as AppServerSession,
+    fakeHost({
+      catalog: {
+        createSession: async () => {
+          if (sameAttachment) {
+            // A Session transition can land on the attachment already in
+            // focus. The accepted focus change still advances the app's
+            // presentation owner epoch, so a late continuation is still stale.
+            a.session.publishState(b.state);
+            a.session.approvalModeSet = b.session.approvalModeSet;
+          }
+          return { session: bView };
+        },
+      },
+      attach: async () => {
+        bound.resolve();
+        return (sameAttachment ? a.session : b.session) as unknown as AppServerSession;
+      },
+    }),
+  );
   const running = app.run();
   const input = async (data: string) => { process.stdin.emit("data", data); await waitForApplicationContinuation(); };
   const active = () => surfaces.findLast((surface) => surface.visible);
@@ -2193,12 +2064,12 @@ for (const outcome of ["success", "failure"] as const) {
       await h.input("\x1b[27u");
       assert.equal(h.active(), undefined);
       assert.equal(h.a.cancelled(), 0);
-      assert.equal(h.a.session.state?.effectiveApprovalMode, "policy");
+      assert.equal((h.a.session.state as { effectiveApprovalMode?: string }).effectiveApprovalMode, "policy");
       await h.input("/approval\r");
       assert.equal(h.active(), undefined, "Esc did not settle the still-pending native request");
       const before = h.feedback.length;
       const request = h.a.requests[0]!;
-      if (outcome === "success") request.response.resolve({ effectiveApprovalMode: "policy", pendingApprovalMode: "full_access", revision: 1 });
+      if (outcome === "success") request.response.resolve({ effectiveApprovalMode: "policy", pendingApprovalMode: "full_access", revision: "1" });
       else request.response.reject(new Error("native rejection\n" + "detail ".repeat(100)));
       await waitForApplicationContinuation();
       assert.equal(h.feedback.length, before + 1);
@@ -2207,8 +2078,8 @@ for (const outcome of ["success", "failure"] as const) {
       assert.match(feedback.text, outcome === "success" ? /accepted: effective Policy · next attempt Full access/ : /Approval change failed: native rejection/);
       assert.ok(h.feedbackRows().length <= 3);
       assert.ok(h.feedbackRows().every((row) => plainWidth(row) <= 50));
-      assert.equal(h.a.session.state?.effectiveApprovalMode, "policy", "no optimistic mutation");
-      assert.equal(h.a.session.state?.pendingApprovalMode, undefined, "control reply is not copied into projection");
+      assert.equal((h.a.session.state as { effectiveApprovalMode?: string }).effectiveApprovalMode, "policy", "no optimistic mutation");
+      assert.equal((h.a.session.state as { pendingApprovalMode?: string }).pendingApprovalMode, undefined, "control reply is not copied into projection");
       await h.input("/approval\r");
       assert.match(h.text(), /Approval mode/, "its own completion released the token");
       assert.equal(h.a.requests.length, 1);
@@ -2233,7 +2104,7 @@ for (const sameAttachment of [false, true]) {
         assert.match(h.text(), /Current attempt: Policy/);
         const before = [...h.feedback];
         const aRequest = h.a.requests[0]!;
-        if (outcome === "success") aRequest.response.resolve({ effectiveApprovalMode: "full_access", revision: 99 });
+        if (outcome === "success") aRequest.response.resolve({ effectiveApprovalMode: "full_access", revision: "99" });
         else aRequest.response.reject(new Error("stale owner A failure"));
         await waitForApplicationContinuation();
         assert.deepEqual(h.feedback, before, "A's result/error cannot repaint B");
@@ -2245,21 +2116,75 @@ for (const sameAttachment of [false, true]) {
         assert.equal(h.active(), undefined, "A's finally cannot clear B's pending token");
         assert.equal(h.b.requests.length, 1);
         const current = sameAttachment ? h.a.session : h.b.session;
-        current.publishState({ ...h.b.state, pendingApprovalMode: "full_access", approvalModeRevision: 2 });
-        h.b.requests[0]!.response.resolve({ effectiveApprovalMode: "policy", pendingApprovalMode: "full_access", revision: 2 });
+        current.publishState({ ...h.b.state, pendingApprovalMode: "full_access", approvalModeRevision: "2" });
+        h.b.requests[0]!.response.resolve({ effectiveApprovalMode: "policy", pendingApprovalMode: "full_access", revision: "2" });
         await waitForApplicationContinuation();
         assert.match(h.feedback.at(-1)!.text, /accepted: effective Policy · next attempt Full access/);
         await h.input("/approval\r");
         assert.match(h.text(), /Current attempt: Policy/);
         assert.match(h.text(), /Next attempt: Full access/);
-        assert.equal(current.state?.effectiveApprovalMode, "policy");
+        assert.equal((current.state as { effectiveApprovalMode?: string }).effectiveApprovalMode, "policy");
         assert.equal(h.a.cancelled() + h.b.cancelled(), 0);
         // B's own completion (and no other completion) admits the next request.
         await h.input("\r");
         assert.equal(h.b.requests.length, 2);
-        h.b.requests[1]!.response.resolve({ effectiveApprovalMode: "policy", revision: 3 });
+        h.b.requests[1]!.response.resolve({ effectiveApprovalMode: "policy", revision: "3" });
         await waitForApplicationContinuation();
       } finally { await h.finish(); }
     });
   }
 }
+
+it("remote recovery installs a fresh attachment and fences old callbacks without replay", async () => {
+  let close!: (error: TransportClosedError) => void;
+  const old = fakeSession(emptyPresentationState(sessionModel("alpha/model-a")));
+  const next = fakeSession(emptyPresentationState(sessionModel("beta/model-b")));
+  const pending = deferred<{ messageId: string; sequence: string }>();
+  let submissions = 0;
+  old.submitInbound = () => { submissions++; return pending.promise; };
+  next.submitInbound = async () => { submissions++; return { messageId: "new", sequence: "2" }; };
+  const first = fakeHost({ ownership: "external", onClose: (listener) => { close = listener; } });
+  let attachments = 0;
+  const second = fakeHost({ ownership: "external", attach: async (id) => {
+    assert.equal(id, old.sessionId); attachments++; return next;
+  } });
+  let connects = 0;
+  const app = new RustxTuiApp({ host: first, session: old, sessionSettings: SESSION_SETTINGS,
+    reconnect: async () => { connects++; return second; } });
+  const running = app.run();
+  await waitForApplicationContinuation();
+  process.stdin.emit("data", "first submission\r");
+  await waitForApplicationContinuation();
+  const error = new TransportClosedError("input_eof", "lost connection");
+  Object.defineProperty(first.client, "closed", { value: error });
+  close(error);
+  await waitForApplicationContinuation();
+  pending.reject(new UncertainOutcomeError("turn/start", error));
+  await waitForApplicationContinuation();
+  assert.equal(connects, 1);
+  assert.equal(attachments, 1);
+  assert.equal(submissions, 1, "the uncertain turn was not replayed");
+  close(error);
+  await waitForApplicationContinuation();
+  assert.equal(connects, 1, "an old connection callback cannot replace recovery");
+  process.stdin.emit("data", "new intentional submission\r");
+  await waitForApplicationContinuation();
+  assert.equal(submissions, 2, "new input uses the replacement attachment");
+  await app.quit();
+  await running;
+});
+
+it("quitting while remote recovery is pending closes the late connection", async () => {
+  let close!: (error: TransportClosedError) => void;
+  const connection = deferred<AppServerHost>();
+  const first = fakeHost({ ownership: "external", onClose: (listener) => { close = listener; } });
+  const log: string[] = [];
+  const second = fakeHost({ ownership: "external", log });
+  const app = new RustxTuiApp({ host: first, session: fakeSession(), sessionSettings: SESSION_SETTINGS,
+    reconnect: () => connection.promise });
+  close(new TransportClosedError("input_eof", "lost connection"));
+  await app.quit();
+  connection.resolve(second);
+  await waitForApplicationContinuation();
+  assert.deepEqual(log, ["disconnect"]);
+});

@@ -590,16 +590,19 @@ impl AppServerConnection {
                 .into_iter()
                 .map(|route| {
                     Box::pin(async move {
-                        let delivery = if route.client.validate().is_err() {
-                            EventDelivery::Closed
-                        } else {
-                            route.attachment.next_event().await
+                        // The exact registration this poll parks on travels with
+                        // its delivery: a `Closed` only ends residency if it is
+                        // still the attachment's current registration.
+                        let observed = route.attachment.subscription();
+                        let delivery = match (route.client.validate(), &observed) {
+                            (Ok(()), Some(subscription)) => subscription.next().await,
+                            _ => EventDelivery::Closed,
                         };
-                        (route, delivery)
+                        (route, delivery, observed)
                     })
                 })
                 .collect();
-            let (route, delivery) = tokio::select! {
+            let (route, delivery, observed) = tokio::select! {
                 () = &mut changed => continue,
                 result = futures_util::future::select_all(pending) => result.0,
             };
@@ -618,6 +621,16 @@ impl AppServerConnection {
                     after_cursor,
                     earliest_serviceable,
                 },
+                EventDelivery::Closed
+                    if observed
+                        .is_some_and(|subscription| route.attachment.superseded(&subscription)) =>
+                {
+                    // A resync replaced this registration while the consumer was
+                    // parked on it. The attachment is alive and has a newer
+                    // registration; retiring its route here would end the
+                    // attachment that asked for the repair.
+                    continue;
+                }
                 EventDelivery::Closed | EventDelivery::Exhausted => {
                     release_route(&self.routes, &route);
                     NotificationMethod::Closed { target }
@@ -657,6 +670,7 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::SubagentCancel { target, .. }
         | Method::SubagentDispose { target, .. }
         | Method::CompactContext { target, .. }
+        | Method::SessionBoundaries { target, .. }
         | Method::SessionSnapshot { target, .. }
         | Method::SessionSubscribe { target, .. }
         | Method::TurnStart { target, .. }
@@ -724,6 +738,20 @@ async fn dispatch_runtime(
             subagent_id,
         } => native_result(authority.subagent_workspace_dispose(&subagent_id).await),
         Method::CompactContext { target: _ } => native_result(authority.compact_context().await),
+        Method::SessionBoundaries {
+            target: _,
+            offset,
+            limit,
+        } => {
+            let (surface_revision, boundaries, next_offset) = authority
+                .user_message_boundaries(offset, limit)
+                .map_err(client_error)?;
+            Ok(MethodResult::Boundaries {
+                surface_revision,
+                boundaries,
+                next_offset,
+            })
+        }
         Method::SessionSnapshot { target: _ } => native_result(
             authority
                 .snapshot()

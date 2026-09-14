@@ -167,6 +167,12 @@ pub enum Method {
         offset: usize,
         limit: usize,
     },
+    #[serde(rename = "session/boundaries")]
+    SessionBoundaries {
+        target: AttachmentTarget,
+        offset: usize,
+        limit: usize,
+    },
     #[serde(rename = "session/fork")]
     SessionFork {
         session_id: SessionId,
@@ -379,6 +385,12 @@ pub enum MethodResult {
     },
     Tree {
         nodes: Vec<crate::local_runtime::session::SessionNode>,
+        next_offset: Option<usize>,
+    },
+    Boundaries {
+        /// The exact committed head the page was selected against.
+        surface_revision: crate::conversation::SurfaceRevision,
+        boundaries: Vec<crate::local_runtime::session::SessionUserMessageBoundary>,
         next_offset: Option<usize>,
     },
     Deletion {

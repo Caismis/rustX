@@ -3,34 +3,16 @@ import { readFileSync } from "node:fs";
 import { it } from "node:test";
 import { renderSettings } from "../src/commands/dispatcher.ts";
 import { emptyPresentationState, replaceFromSnapshot } from "../src/presentation/projection.ts";
-import { RUNTIME_CLIENT_PROTOCOL_VERSION, type EffectiveNativeAgentExtensions, type RuntimeClientRequest, type RuntimeClientResult, type SettingsLifetimes } from "../src/protocol/types.ts";
+import type { EffectiveNativeAgentExtensions, SettingsLifetimes } from "../src/protocol/app-server.ts";
 import { agentStatus, attemptModel, attemptView, runtimeCursor, sessionModel, snapshot, temporalSection } from "./support/fixtures.ts";
-
-it("CFG238 shares the native protocol fixture and explicit lifetimes", () => {
-  const fixture: { request: RuntimeClientRequest; result: RuntimeClientResult; lifetimes: SettingsLifetimes } = JSON.parse(readFileSync(new URL("../../tests/fixtures/runtime-client/settings-v26.json", import.meta.url), "utf8"));
-  // The fixture is named for the version that introduced its shape. v27 added
-  // the subagent `profile_digest` and v28 crash-safe Session deletion, both
-  // leaving the settings contract untouched; v29 (Issue #259) added the
-  // `effective_extensions.todo` member the fixture now carries in every state,
-  // including the `todo_only` combination that proves the two extensions
-  // project on independent axes.
-  assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 34);
-  assert.equal(fixture.request.method, "default_save");
-  if (fixture.request.method === "default_save") {
-    assert.equal(fixture.request.scope, "user");
-    assert.deepEqual(fixture.request.target, "model_selection");
-  }
-  assert.equal(fixture.result.type, "default_saved");
-  assert.deepEqual(fixture.lifetimes, snapshot().settings_lifetimes);
-});
 
 it("CFG238 reconstructs distinct launch, Session, pending and frozen facts from a fresh snapshot", () => {
   const native = snapshot({
     launch_settings: { model: { model: "local/a", reasoning_profile: null }, model_origin: { kind: "user", document: "/config/settings.toml" }, reasoning_origin: { kind: "builtin" }, approval_mode: "policy", approval_origin: { kind: "builtin" }, runtime_root_origin: { kind: "cli" }, tool_selection_origin: { kind: "builtin" } },
     model: sessionModel("local/b"),
     effective_approval_mode: "policy", pending_approval_mode: "full_access",
-    resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] }, revision: 8, context_files: [], agent_profile: false },
-    attempt: attemptView({ model: attemptModel("local/c"), execution_settings: { resource_revision: 7, approval_mode: "policy" } }),
+    resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] }, revision: "8", context_files: [], agent_profile: false },
+    attempt: attemptView({ model: attemptModel("local/c"), execution_settings: { resource_revision: "7", approval_mode: "policy" } }),
   });
   const live = replaceFromSnapshot(native, runtimeCursor(50));
   const reconnect = replaceFromSnapshot(structuredClone(native), runtimeCursor(50));
@@ -204,8 +186,8 @@ it("EXT256 historical inspection reports no effective extension composition", ()
 
 
 it("CFG275 renders the native generation fixture without resolving capability state", () => {
-  const facts: import("../src/protocol/types.ts").CapabilityInspection = JSON.parse(readFileSync(new URL("../../tests/fixtures/runtime-client/capabilities-v34.json", import.meta.url), "utf8"));
-  const state = replaceFromSnapshot(snapshot({ resources: { revision: 7, inspection: facts } }), runtimeCursor(1));
+  const facts: import("../src/protocol/app-server.ts").CapabilityInspection = JSON.parse(readFileSync(new URL("../../tests/fixtures/runtime-client/capabilities-v34.json", import.meta.url), "utf8"));
+  const state = replaceFromSnapshot(snapshot({ resources: { revision: "7", inspection: facts } }), runtimeCursor(1));
   const original = JSON.stringify(facts);
   for (let index = 0; index < 3; index++) {
     const output = renderSettings(state);
@@ -217,9 +199,9 @@ it("CFG275 renders the native generation fixture without resolving capability st
 
 it("CFG275 redacted native causes match the TypeScript wire unions", () => {
   const expected: {
-    source: import("../src/protocol/types.ts").SourceResolutionFailure;
-    workflow: import("../src/protocol/types.ts").WorkflowDependencyFailure;
-    skills: import("../src/protocol/types.ts").SkillDiagnostic[];
+    source: import("../src/protocol/app-server.ts").SourceResolutionFailure;
+    workflow: import("../src/protocol/app-server.ts").WorkflowDependencyFailure;
+    skills: import("../src/protocol/app-server.ts").SkillDiagnostic[];
   } = {
   "source": {
     "kind": "unavailable",

@@ -1,9 +1,24 @@
-/** Attachment-owned observation of submitted native Session management requests. */
-import { ConnectionClosedError, RuntimeRequestError } from "../runtime/connection.ts";
-import type { RuntimeClientAttachment } from "../runtime/attachment.ts";
-import type { SessionDeletePreview, SessionDeleteResult, SessionSummaryView } from "../protocol/types.ts";
+/**
+ * Client-owned observation of submitted durable Session deletion requests.
+ *
+ * Deletion addresses the durable Session catalog, so this talks to the
+ * connection's catalog rather than to an attachment. The attached Session it is
+ * bound to decides only *when this observation is still worth publishing*.
+ *
+ * The uncertain-outcome rule applies here in full: a deletion whose response
+ * was lost is reported as `unknown`, never as failed and never resent. Only the
+ * server can say whether it committed, and the operator is offered the native
+ * recovery capability instead of a silent retry.
+ */
+import type { AppServerHost } from "../app-server/host.ts";
+import {
+  AppServerRequestError,
+  UncertainOutcomeError,
+} from "../app-server/client.ts";
+import { TransportClosedError } from "../app-server/transport.ts";
+import type { SessionDeletePreview, SessionDeleteResult, SessionSummaryView } from "../protocol/app-server.ts";
 
-export type DeletionClient = Pick<RuntimeClientAttachment, "listSessions" | "previewSessionDeletion" | "deleteSession" | "recoverSessionDeletion">;
+export type DeletionClient = Pick<AppServerHost, "listSessions" | "previewSessionDeletion" | "deleteSession" | "recoverSessionDeletion">;
 export interface DeletionContext { query: string; ids: string[]; index: number; loaded: number }
 export interface ReconciledSessions { sessions: SessionSummaryView[]; nextOffset?: number }
 export type SessionListReconciliation =
@@ -87,12 +102,24 @@ export class SessionDeletionWorkflow {
         ? await this.#client.deleteSession(sessionId, request.revision)
         : await this.#client.recoverSessionDeletion(sessionId);
     } catch (error) {
-      if (error instanceof ConnectionClosedError) { this.terminate(); return; }
-      // Native execute maps ordinary deletion errors to this pre-commit category.
-      // Recovery has no such mapping; do not infer its commit status from text.
-      outcome = operation === "execute" && error instanceof RuntimeRequestError && error.error.type === "session_failure"
-        ? { status: "precommit_failure" }
-        : { status: "unknown" };
+      if (error instanceof UncertainOutcomeError) {
+        // The response was lost. The deletion may well have committed, so this
+        // is `unknown` — never a failure, and never a resend.
+        outcome = { status: "unknown" };
+      } else if (error instanceof TransportClosedError) {
+        this.terminate();
+        return;
+      } else if (
+        operation === "execute" &&
+        error instanceof AppServerRequestError &&
+        error.kind !== "committed_durability_uncertain"
+      ) {
+        // A typed answer arrived, so the server refused before committing.
+        // Recovery has no such mapping; do not infer its commit status.
+        outcome = { status: "precommit_failure" };
+      } else {
+        outcome = { status: "unknown" };
+      }
     }
     // Only concrete attachment/transport termination ends observation. A popup
     // replacement or a same-attachment snapshot is deliberately irrelevant.

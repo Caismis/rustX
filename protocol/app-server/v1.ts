@@ -175,6 +175,14 @@ export type Request1 =
       };
     }
   | {
+      method: 'session/boundaries';
+      params: {
+        target: AttachmentTarget;
+        offset: number;
+        limit: number;
+      };
+    }
+  | {
       method: 'session/fork';
       params: {
         session_id: SessionId;
@@ -634,6 +642,25 @@ export type MethodResult =
       nodes: SessionNode[];
       next_offset?: number | null;
       type: 'tree';
+    }
+  | {
+      /**
+       * The identity of one exact historical Conversation Surface state.
+       *
+       * A revision is a monotonic counter in its own identity domain. The empty
+       * Surface of a new conversation is [`SurfaceRevision::INITIAL`] (`0`), and
+       * every accepted [`SurfaceOp`] advances it by exactly one, so revision `n`
+       * is precisely "the Surface after the first `n` accepted operations".
+       *
+       * A revision is deliberately **not** a `MessageId`, an `AttemptId`, a
+       * `RuntimeClientCursor`, an `InboundSequence`, an Event Journal sequence,
+       * or a `CapabilityRevision`: none of those identify a Surface state, and
+       * none of them may be substituted for one.
+       */
+      surface_revision: string;
+      boundaries: SessionUserMessageBoundary[];
+      next_offset?: number | null;
+      type: 'boundaries';
     }
   | {
       result: RuntimeClientSessionDeletionResult;
@@ -2457,7 +2484,7 @@ export type RuntimeClientEvent =
        * acceptance of a conversation receives `1`.
        */
       sequence: string;
-      message: UserMessageBlock2;
+      message: UserMessageBlock3;
       /**
        * The durable transcript position allocated at acceptance, absent
        * for hidden Context-kind inbound.
@@ -4947,6 +4974,100 @@ export interface SessionNode {
       };
 }
 /**
+ * One user-message boundary the native product exposes for `/fork` and
+ * `/tree`. The revision is part of the selection, so later source mutations
+ * cannot change what the selection means.
+ */
+export interface SessionUserMessageBoundary {
+  /**
+   * The identity of one exact historical Conversation Surface state.
+   *
+   * A revision is a monotonic counter in its own identity domain. The empty
+   * Surface of a new conversation is [`SurfaceRevision::INITIAL`] (`0`), and
+   * every accepted [`SurfaceOp`] advances it by exactly one, so revision `n`
+   * is precisely "the Surface after the first `n` accepted operations".
+   *
+   * A revision is deliberately **not** a `MessageId`, an `AttemptId`, a
+   * `RuntimeClientCursor`, an `InboundSequence`, an Event Journal sequence,
+   * or a `CapabilityRevision`: none of those identify a Surface state, and
+   * none of them may be substituted for one.
+   */
+  surface_revision: string;
+  message: UserMessageBlock1;
+}
+/**
+ * Inbound information supplied to the current agent.
+ *
+ * A `UserMessageBlock` does not necessarily mean a human spoke: it is the
+ * canonical home for anything inbound, including messages from other agents
+ * (with [`UserSource::Agent`] provenance) and runtime compaction summaries
+ * (with [`InboundKind::CompactionSummary`] kind). It
+ * must never become `AssistantMessageBlock` or `ToolMessageBlock`, which are
+ * reserved for output and actions of the current agent.
+ */
+export interface UserMessageBlock1 {
+  /**
+   * Identifies a committed canonical message block.
+   */
+  id: string;
+  /**
+   * The inbound content.
+   */
+  content: UserContentBlock[];
+  /**
+   * Provenance: who supplied the inbound information.
+   */
+  source:
+    | 'human'
+    | {
+        agent: {
+          /**
+           * Identity of the sending agent.
+           */
+          agent_id: string;
+        };
+      }
+    | 'fleet'
+    | 'external_system'
+    | 'runtime'
+    | {
+        extension: {
+          /**
+           * The rustX-derived logical extension identity.
+           */
+          contributor: string;
+        };
+      };
+  /**
+   * Typed kind of inbound information.
+   */
+  kind?:
+    | {
+        goal_continuation: GoalRef;
+      }
+    | 'message'
+    | {
+        compaction_summary: CompactionSummaryMetadata;
+      }
+    | {
+        context: ContextKind;
+      };
+  /**
+   * The persisted UTC instant associated with the inbound message, when
+   * the producer supplied one.
+   *
+   * An ordinary asynchronously delivered inbound message
+   * ([`InboundKind::Message`]) carries the persisted instant of its
+   * delivery; the producer supplies the original timestamp explicitly and
+   * no wall-clock time is fabricated. Derived M4 compaction summaries
+   * ([`InboundKind::CompactionSummary`]) never carry one. Older or
+   * derived messages without a timestamp remain representable: the field
+   * defaults to `None` on deserialization and is omitted from the
+   * canonical encoding while absent.
+   */
+  timestamp?: string | null;
+}
+/**
  * Confirmation metadata; counts include the complete native ownership graph.
  */
 export interface RuntimeClientSessionDeletePreview {
@@ -5948,7 +6069,7 @@ export interface InboundItemView {
    * The mailbox-assigned inbound sequence.
    */
   sequence: string;
-  message: UserMessageBlock1;
+  message: UserMessageBlock2;
 }
 /**
  * Inbound information supplied to the current agent.
@@ -5960,7 +6081,7 @@ export interface InboundItemView {
  * must never become `AssistantMessageBlock` or `ToolMessageBlock`, which are
  * reserved for output and actions of the current agent.
  */
-export interface UserMessageBlock1 {
+export interface UserMessageBlock2 {
   /**
    * Identifies a committed canonical message block.
    */
@@ -7133,7 +7254,7 @@ export interface AgentStatusView1 {
  * must never become `AssistantMessageBlock` or `ToolMessageBlock`, which are
  * reserved for output and actions of the current agent.
  */
-export interface UserMessageBlock2 {
+export interface UserMessageBlock3 {
   /**
    * Identifies a committed canonical message block.
    */

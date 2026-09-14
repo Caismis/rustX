@@ -996,6 +996,61 @@ impl ClientInner {
         Ok(RuntimeClientResult::TranscriptPage { page })
     }
 
+    /// Reads one bounded page of historical user-message boundaries, selected
+    /// against the current committed Surface head.
+    ///
+    /// The revision travels with the page because it is part of what a `/fork`
+    /// or `/tree` selection *means*: a later append must not silently change
+    /// which conversation cut the reader chose.
+    pub(crate) fn user_message_boundaries(
+        &self,
+        offset: usize,
+        limit: usize,
+    ) -> Result<
+        (
+            crate::conversation::SurfaceRevision,
+            Vec<crate::local_runtime::session::SessionUserMessageBoundary>,
+            Option<usize>,
+        ),
+        RuntimeClientError,
+    > {
+        self.ensure_session_runtime_live()?;
+        if limit == 0 || limit > TRANSCRIPT_PAGE_LIMIT_MAX {
+            return Err(RuntimeClientError::InvalidRequest {
+                message: format!(
+                    "boundary page limit must be between 1 and {TRANSCRIPT_PAGE_LIMIT_MAX}"
+                ),
+            });
+        }
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or_else(|| RuntimeClientError::InvalidState {
+                message: "no live Surface in historical inspection".to_owned(),
+            })?;
+        let failed =
+            |error: crate::durable::ConversationStoreError| RuntimeClientError::RuntimeFailure {
+                message: format!("durable user-message boundary page failed: {error}"),
+            };
+        let revision = runtime.historical_head_revision().map_err(failed)?;
+        let page = runtime
+            .historical_user_message_boundaries_page(revision, offset, limit)
+            .map_err(failed)?;
+        Ok((
+            revision,
+            page.boundaries
+                .into_iter()
+                .map(
+                    |boundary| crate::local_runtime::session::SessionUserMessageBoundary {
+                        surface_revision: boundary.surface_revision,
+                        message: boundary.message,
+                    },
+                )
+                .collect(),
+            page.next_offset,
+        ))
+    }
+
     /// Returns a durable request-history read handle owned by the
     /// conversation runtime.
     ///
@@ -2468,6 +2523,17 @@ impl core::fmt::Debug for EventSubscription {
 }
 
 impl EventSubscription {
+    /// Whether two handles share one projection registration.
+    ///
+    /// A re-subscription installs a *new* registration and closes the previous
+    /// one. A consumer parked on the previous handle therefore observes
+    /// [`EventDelivery::Closed`], which means "this registration was replaced",
+    /// not "this attachment ended". Only identity can tell those apart.
+    #[must_use]
+    pub fn same_registration(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     /// Polls the projection once for the next retained event.
     fn poll(&self) -> EventDelivery {
         let Some(host) = self.inner.host.upgrade() else {

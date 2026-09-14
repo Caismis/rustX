@@ -14,7 +14,7 @@ import { describe, it } from "node:test";
 import { reduce } from "../src/presentation/projection.ts";
 import { renderResourceBanner, displayPath } from "../src/ui/components/resources.ts";
 import { plainText } from "../src/ui/theme.ts";
-import { runtimeCursor } from "./support/fixtures.ts";
+import { exact, nextCursor, runtimeCursor } from "./support/fixtures.ts";
 import { stateOf } from "./support/render.ts";
 
 const banner = (state: Parameters<typeof renderResourceBanner>[0], workspace?: string) =>
@@ -24,7 +24,7 @@ describe("loaded resources", () => {
   it("names the context files, Skills, and active Tools the runtime published", () => {
     const state = stateOf({
       resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] },
-        revision: 3,
+        revision: "3",
         context_files: [
           { path: "/home/dev/AGENTS.md", bytes: 12 },
           { path: "/work/project/AGENTS.md", bytes: 40 },
@@ -46,7 +46,7 @@ describe("loaded resources", () => {
   it("keeps context files in the runtime's own precedence order", () => {
     const state = stateOf({
       resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] },
-        revision: 1,
+        revision: "1",
         context_files: [
           { path: "/work/zeta/AGENTS.md", bytes: 1 },
           { path: "/work/alpha/AGENTS.md", bytes: 1 },
@@ -60,7 +60,7 @@ describe("loaded resources", () => {
 
   it("omits a section the runtime published nothing for", () => {
     const state = stateOf({
-      capabilities: { revision: 1, tools: [], available_tools: [], skills: [] },
+      capabilities: { revision: "1", tools: [], available_tools: [], skills: [] },
     });
     const rendered = banner(state);
 
@@ -72,22 +72,22 @@ describe("loaded resources", () => {
 
   it("reports a frozen agent profile as context", () => {
     const state = stateOf({
-      resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] }, revision: 2, context_files: [], agent_profile: true },
+      resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] }, revision: "2", context_files: [], agent_profile: true },
     });
     assert.match(banner(state), /\[Context\]\n {2}agent profile/);
   });
 
   it("folds a reload's whole generation from one event", () => {
     const before = stateOf({
-      resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] }, revision: 1, context_files: [], agent_profile: false },
+      resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] }, revision: "1", context_files: [], agent_profile: false },
     });
     const after = reduce(before, {
-      cursor: runtimeCursor(before.cursor + 1),
+      cursor: nextCursor(before.cursor),
       event: {
         type: "resource_generation_updated",
         capabilities: {
           ...before.capabilities,
-          revision: before.capabilities.revision + 1,
+          revision: exact(BigInt(before.capabilities.revision) + 1n),
           skills: [
             {
               id: "skill-generation",
@@ -99,7 +99,7 @@ describe("loaded resources", () => {
           ],
         },
         resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] },
-          revision: 2,
+          revision: "2",
           context_files: [{ path: "/work/project/AGENTS.md", bytes: 9 }],
           agent_profile: false,
         },
@@ -109,8 +109,8 @@ describe("loaded resources", () => {
     // One event, one cursor, both halves. There is no intermediate state in
     // which this client holds the new capability generation beside the
     // resource generation the same reload retired.
-    assert.equal(after.resources.revision, 2);
-    assert.equal(after.capabilities.revision, before.capabilities.revision + 1);
+    assert.equal(after.resources.revision, "2");
+    assert.equal(after.capabilities.revision, exact(BigInt(before.capabilities.revision) + 1n));
     assert.deepEqual(
       (after.capabilities.skills ?? []).map((skill) => skill.name),
       ["generation-skill"],
@@ -120,24 +120,24 @@ describe("loaded resources", () => {
 
   it("folds a resource-only reload without waiting for a capability revision", () => {
     const before = stateOf({
-      resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] }, revision: 1, context_files: [], agent_profile: false },
+      resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] }, revision: "1", context_files: [], agent_profile: false },
     });
     const after = reduce(before, {
-      cursor: runtimeCursor(before.cursor + 1),
+      cursor: nextCursor(before.cursor),
       event: {
         type: "resource_generation_updated",
         // A reload that only rewrote project instructions repeats the
         // capability view it composed against, unchanged revision and all.
         capabilities: before.capabilities,
         resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] },
-          revision: 2,
+          revision: "2",
           context_files: [{ path: "/work/project/AGENTS.md", bytes: 9 }],
           agent_profile: false,
         },
       },
     });
 
-    assert.equal(after.resources.revision, 2);
+    assert.equal(after.resources.revision, "2");
     assert.match(banner(after, "/work/project"), /\[Context\]\n {2}AGENTS\.md/);
     assert.equal(after.capabilities.revision, before.capabilities.revision);
   });
@@ -155,11 +155,11 @@ describe("resource path display", () => {
 
 
 it("CFG275 reload replaces diagnostics with the resource generation and preserves retained state", () => {
-  const before = stateOf({ resources: { revision: 1, inspection: { main: null, agents: {}, workflows: {}, sources: { optional: { status: "unprepared" } }, skills: [], skill_diagnostics: [] } } });
+  const before = stateOf({ resources: { revision: "1", inspection: { main: null, agents: {}, workflows: {}, sources: { optional: { status: "unprepared" } }, skills: [], skill_diagnostics: [] } } });
   const frozen = JSON.stringify(before.resources);
   const next = { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] };
-  const after = reduce(before, { cursor: runtimeCursor(before.cursor + 1), event: { type: "resource_generation_updated", capabilities: before.capabilities, resources: { revision: 2, inspection: next } } });
-  assert.equal(after.resources.revision, 2);
+  const after = reduce(before, { cursor: nextCursor(before.cursor), event: { type: "resource_generation_updated", capabilities: before.capabilities, resources: { revision: "2", inspection: next } } });
+  assert.equal(after.resources.revision, "2");
   assert.deepEqual(after.resources.inspection, next);
   assert.equal(JSON.stringify(before.resources), frozen);
 });

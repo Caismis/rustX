@@ -42,7 +42,7 @@ import type {
   InteractionRequester,
   QuestionnaireResponse,
   QuestionnaireSpecification,
-} from "../src/protocol/types.ts";
+} from "../src/protocol/app-server.ts";
 import { QuestionnaireOverlay } from "../src/ui/components/questionnaire.ts";
 import { plainText } from "../src/ui/theme.ts";
 

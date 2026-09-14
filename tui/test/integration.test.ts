@@ -1,52 +1,52 @@
 /**
- * The real rustX child: TypeScript client -> actual `rustx` binary.
+ * The real boundary: a real `rustx app-server`, real pipes, a real socket.
  *
  * ```text
- * RuntimeClientAttachment
- *   -> RuntimeClientConnection      (real JSONL framing)
- *   -> ChildRuntimeProcess          (real OS process)
- *   -> rustx --models ... --config ... --workspace ... --runtime-root ...
- *   -> real Runtime Client protocol
- *   -> real local runtime composition (#42)
+ * local self-hosted                        existing / remote
+ *   AppServerHost.spawnLocal                 AppServerHost.connectRemote
+ *   -> AppServerChild (real OS process)      -> WebSocketTransport (real socket)
+ *   -> StdioTransport (real JSONL)           -> the #36 admission contract
+ *          \                                        /
+ *           \____ AppServerClient (one protocol) __/
  * ```
  *
- * A fake protocol process alone would not prove this client speaks the bytes
- * rustX actually writes. The model provider is the shared external emulator
- * (issue #47), so the runtime exercises its own adapter, its own credential
- * resolution, and its own streaming path with no network and no credential in
- * CI — and the TUI owns no provider protocol of its own.
+ * A scripted peer alone would not prove this client speaks the bytes rustX
+ * actually writes, or that the process and socket boundaries behave. The model
+ * provider is the shared external emulator (Issue #47), so the server exercises
+ * its own adapter, credential resolution and streaming path with no network and
+ * no credential in CI — and the TUI owns no provider protocol of its own.
  *
- * Readiness is protocol synchronization throughout: the client writes a
- * request and awaits its correlated response, or awaits an event. Nothing
- * sleeps, and no ordering is established by a timer.
+ * Readiness is protocol synchronization throughout: the client writes a request
+ * and awaits its correlated response, or awaits a provider gate. Nothing sleeps,
+ * and no ordering is established by a timer.
  *
- * The suite skips itself with a clear reason when the binary has not been
- * built or the provider emulator's toolchain is missing, so a partial
- * checkout still runs the rest of the tests.
+ * The suite skips itself with a clear reason when the binary has not been built
+ * or the provider emulator's toolchain is missing, so a partial checkout still
+ * runs the rest of the tests.
  */
 
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import type { ChildRuntimeProcessOptions } from "../src/runtime/child-process.ts";
-import { existsSync, writeFileSync, mkdirSync } from "node:fs";
-import { join, sep } from "node:path";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 
-import { ChildRuntimeProcess } from "../src/runtime/child-process.ts";
-import { RuntimeClientConnection, RuntimeRequestError } from "../src/runtime/connection.ts";
-import { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
-import { CommandDispatcher } from "../src/commands/dispatcher.ts";
-import { QuestionnaireOverlay, readNumberDraft } from "../src/ui/components/questionnaire.ts";
-import { finiteNumberToWire } from "../src/protocol/number.ts";
-import type { RuntimeClientProtocolEvent } from "../src/protocol/types.ts";
+import { parseArguments } from "../src/cli.ts";
+import { prepareStartup } from "../src/startup.ts";
+
+import { AppServerHost } from "../src/app-server/host.ts";
+import { AppServerClient, UncertainOutcomeError } from "../src/app-server/client.ts";
+import { AppServerChild } from "../src/app-server/child-process.ts";
+import { StdioTransport } from "../src/app-server/stdio-transport.ts";
+import { WebSocketTransport } from "../src/app-server/websocket-transport.ts";
+import { TransportClosedError } from "../src/app-server/transport.ts";
+import type { AppServerSession } from "../src/app-server/session.ts";
+import type { SessionSettings } from "../src/protocol/app-server.ts";
 import { ProviderEmulator } from "./support/provider-emulator.ts";
 import { TempFixture } from "./support/temp-fixture.ts";
-import { until } from "./support/scripted-peer.ts";
-import { correlateTools } from "../src/presentation/tools.ts";
-import { workflowDetails } from "../src/ui/components/workflow-details.ts";
-import { renderToolCard } from "../src/ui/components/tool-card.ts";
-import { plainText } from "../src/ui/theme.ts";
+import { until } from "./support/app-server-peer.ts";
 
 /** The cargo target directory, overridable for a non-default layout. */
 const BINARY =
@@ -59,1097 +59,584 @@ const SKIP = existsSync(BINARY)
     : "uv is not installed; the shared provider emulator cannot run"
   : `the rustx binary is not built at ${BINARY}; run \`cargo build --bin rustx\``;
 
-const PROJECT_INSTRUCTIONS = "# Project\n\nthe workspace instruction file\n";
 const CREDENTIAL_VARIABLE = "RUSTX_TUI_INTEGRATION_KEY";
 const CREDENTIAL_VALUE = "integration-secret";
-
-function spawnTrusted(options: ChildRuntimeProcessOptions, hostSettings = ""): ChildRuntimeProcess {
-  assert(options.paths.runtimeRoot && options.paths.workspace);
-  const host = `${options.paths.runtimeRoot}-host`;
-  const env = { ...options.env, HOME: host, XDG_CONFIG_HOME: join(host, "config"), XDG_STATE_HOME: join(host, "state") };
-  mkdirSync(join(host, "config", "rustx"), { recursive: true });
-  writeFileSync(join(host, "config", "rustx", "settings.toml"), hostSettings);
-  const grant = spawnSync(options.binary, ["--workspace", options.paths.workspace, "--trust", "grant"], { env, encoding: "utf8" });
-  assert.equal(grant.status, 0, grant.stderr);
-  return ChildRuntimeProcess.spawn({ ...options, env });
-}
-
-function modelToml(id: string, contextWindow: number, maxOutput: number, params = "{}"): string {
-  return `[[providers.fixture.models]]
-id = "${id}"
-protocol = "openai_chat_completions"
-context_window = ${contextWindow}
-max_output_tokens = ${maxOutput}
-request_params = ${params}
-capabilities = { input_modalities = ["text"], output_modalities = ["text"], tool_calls = true, reasoning = false }
-compat = { chat_reasoning_replay = "omit" }
-`;
-}
-
-function modelsToml(baseUrl: string): string {
-  return `[providers.fixture]
-base_url = ${JSON.stringify(baseUrl)}
-api_key = "$${CREDENTIAL_VARIABLE}"
-${modelToml("integration-model", 128000, 512, '{ temperature = 0.25 }')}
-${modelToml("second-model", 32000, 256)}`;
-}
-
-const RUNTIME_CONFIG_TOML = `schema_version = 8
-agent_id = "agent-tui-integration"
-context = { reserve_tokens = 1024, keep_recent_tokens = 8192 }
-[agent]
-model = { model = "fixture/integration-model" }
-`;
-
-const BEFORE_START_RUNTIME_CONFIG_TOML = `schema_version = 8
-agent_id = "agent-tui-before-start"
-context = { reserve_tokens = 1024, keep_recent_tokens = 8192 }
-[agent]
-model = { model = "fixture/integration-model" }
-tools = { builtin = ["bash"] }
-`;
-
-it("native Workflow retirement preserves visible Tool identity through stdio, reconnect and reopen", { skip: SKIP, timeout: 20_000 }, async (test) => {
-  const provider = await ProviderEmulator.start("workflow_retention");
-  const fixture = TempFixture.create("rustx-workflow-projection-");
-  const workspace = fixture.path("workspace");
-  mkdirSync(join(workspace, ".agents/workflows"), { recursive: true });
-  writeFileSync(fixture.path("models.toml"), modelsToml(provider.url("/v1")).replaceAll("integration-model", "workflow-model"));
-  writeFileSync(fixture.path("rustx.toml"), RUNTIME_CONFIG_TOML.replace("fixture/integration-model", "fixture/workflow-model") + '\nworkflows = ["review_pr"]\n[agent.tools]\nbuiltin = ["read"]\n' );
-  writeFileSync(join(workspace, ".agents/workflows/review_pr.yaml"), `description: Inspect registered workflow files.
-block:
-  input:
-    type: object
-    properties: {task: {type: string}}
-    required: [task]
-    additionalProperties: false
-  output:
-    type: object
-    properties: {files: {type: string}}
-    required: [files]
-    additionalProperties: false
-  entry: inspect
-  nodes:
-    inspect:
-      type: tool
-      selector: {origin: builtin, name: glob}
-      arguments:
-        type: literal
-        value: {path: .agents/workflows, pattern: '*.yaml'}
-      result: {type: text, part: 0}
-    done:
-      type: return
-      output:
-        type: object
-        fields: {files: {type: reference, path: [inspect]}}
-  edges: [{from: inspect, to: done}]
-`);
-  const child = spawnTrusted({ binary: BINARY,
-    paths: { models: fixture.path("models.toml"), config: fixture.path("rustx.toml"), workspace, runtimeRoot: fixture.path("private") },
-    env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE },
-  });
-  const connection = new RuntimeClientConnection({ input: child.stdout, output: child.stdin });
-  void child.wait().then(exit => connection.reportProcessExit(exit.code, exit.signal, exit.spawnError));
-  const session = new RuntimeClientAttachment({ connection });
-  let phase = "attach";
-  const aborted = () => {
-    console.error("Workflow test aborted", phase);
-    child.closeStdin();
-  };
-  test.signal.addEventListener("abort", aborted, { once: true });
-  try {
-    await session.attach();
-    phase = "submit";
-    await session.submitInbound([{ type: "text", text: "workflow conformance request" }]);
-    for (let i = 0; i < 9; i++) {
-      phase = `provider gate ${i}`;
-      await provider.awaitGate(`workflow-${i}`);
-      // Prior invocation is canonically settled before the provider's next
-      // request. Pin each read cut while no next Workflow can be admitted.
-      await session.resync();
-      await provider.releaseGate(`workflow-${i}`);
-    }
-    await provider.awaitGate("workflow-complete");
-    await session.resync();
-    const attemptId = session.state!.attempt!.attemptId;
-    await provider.releaseGate("workflow-complete");
-    phase = "attempt settlement";
-    await session.waitForAttemptSettlement(attemptId);
-    phase = "resync";
-    await session.resync();
-    const state = session.state!;
-    assert.equal(state.workflows.runs.length, 8);
-    assert.equal(state.workflows.omitted_runs, 1);
-    assert.ok(!state.workflows.runs.some(run => run.tool_call_id === "call-review-pr-0"));
-    const correlation = correlateTools(state);
-    assert.ok(correlation.anchoredCalls.has("call-review-pr-0"), "oldest canonical call remains visible");
-    const oldest = correlation.byCallId.get("call-review-pr-0")!;
-    assert.equal(oldest.workflow, undefined, "native details really retired");
-    const renderContext = { expanded: true, budget: { maxLines: 20, maxChars: 4000 } };
-    const retired = plainText(renderToolCard(oldest, renderContext));
-    assert.match(retired, /Workflow invocation/);
-    assert.match(retired, /Historical Workflow details unavailable/);
-    assert.equal(oldest.lifecycle.type, "settled");
-    if (oldest.lifecycle.type !== "settled") throw new Error("terminal oldest call");
-    const ordinary = { ...oldest, lifecycle: { ...oldest.lifecycle, result: { ...oldest.lifecycle.result, workflow: undefined } } };
-    assert.doesNotMatch(plainText(renderToolCard(ordinary, renderContext)), /Workflow invocation/);
-    const run = state.workflows.runs[0]!;
-    assert.deepEqual(run.state, { type: "settled", outcome: "completed" });
-    assert.equal(run.program_digest.length, 64);
-    assert.equal(run.instances.filter(row => row.kind === "tool").length, 1);
-    assert.equal(correlateTools(state).byCallId.get(run.tool_call_id)?.workflow?.id.invocation, run.id.invocation);
-    const canonical = JSON.stringify(state.transcript);
-    const requests = await provider.requests();
-    for (let i = 0; i < 10; i++) workflowDetails(run);
-    phase = "detach";
-    await session.detach();
-    phase = "reattach";
-    await session.attach();
-    phase = "reconnect resync";
-    await session.resync();
-    assert.deepEqual(session.state!.workflows, state.workflows);
-    assert.equal(plainText(renderToolCard(correlateTools(session.state!).byCallId.get(oldest.callId)!, renderContext)), retired);
-    assert.equal(JSON.stringify(session.state!.transcript), canonical);
-    assert.equal((await provider.requests()).length, requests.length);
-    assert.equal(requests.length, 10);
-    assert.equal(state.pendingInteractions.length, 0);
-    phase = "close first process";
-    child.closeStdin();
-    await child.waitOrTerminate(10_000);
-    const reopened = spawnTrusted({ binary: BINARY,
-      paths: { models: fixture.path("models.toml"), config: fixture.path("rustx.toml"), workspace, runtimeRoot: fixture.path("private") },
-      startup: { continueActiveSession: false, session: "session-1", skillPaths: [], noAutomaticSkills: false, noBuiltinTools: false, noDirectTools: false },
-      env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE },
-    });
-    const reopenedConnection = new RuntimeClientConnection({ input: reopened.stdout, output: reopened.stdin });
-    void reopened.wait().then(exit => reopenedConnection.reportProcessExit(exit.code, exit.signal, exit.spawnError));
-    try {
-      const historical = new RuntimeClientAttachment({ connection: reopenedConnection });
-      phase = "reopen attach";
-      await historical.attach();
-      assert.equal(historical.state!.workflows.runs.length, 0, "process reopen cannot resurrect an executable run");
-      assert.equal(historical.state!.pendingInteractions.length, 0);
-      assert.equal(JSON.stringify(historical.state!.transcript), canonical);
-      assert.equal(plainText(renderToolCard(correlateTools(historical.state!).byCallId.get(oldest.callId)!, renderContext)), retired);
-      assert.equal((await provider.requests()).length, requests.length);
-    } catch (error) {
-      console.error("Workflow reopen failure", error, reopened.stderrTail());
-      throw error;
-    } finally {
-      reopened.closeStdin();
-      await reopened.waitOrTerminate(10_000);
-    }
-  } catch (error) {
-    console.error("Workflow bridge failure", error, child.stderrTail());
-    throw error;
-  } finally {
-    test.signal.removeEventListener("abort", aborted);
-    child.closeStdin();
-    await child.waitOrTerminate(10_000);
-    await provider.finish();
-    fixture.cleanup();
-  }
-});
-
-interface Harness {
-  child: ChildRuntimeProcess;
-  connection: RuntimeClientConnection;
-  session: RuntimeClientAttachment;
-  provider: ProviderEmulator;
-}
-
-describe("real rustx child integration", { skip: SKIP }, () => {
-  let harness: Harness | undefined;
-  let fixture: TempFixture | undefined;
-
-  before(async () => {
-    const provider = await ProviderEmulator.start("tui_integration");
-    fixture = TempFixture.create("rustx-tui-");
-    const workspace = fixture.path("workspace");
-    mkdirSync(workspace, { recursive: true });
-    // A real project instruction file, so the resource projection is proven
-    // against what the runtime actually loaded rather than a fixture.
-    writeFileSync(join(workspace, "AGENTS.md"), PROJECT_INSTRUCTIONS);
-    writeFileSync(fixture.path("models.toml"), modelsToml(provider.url("/v1")));
-    writeFileSync(fixture.path("rustx.toml"), RUNTIME_CONFIG_TOML);
-
-    const child = spawnTrusted({
-      binary: BINARY,
-      paths: {
-        models: fixture.path("models.toml"),
-        config: fixture.path("rustx.toml"),
-        workspace,
-        runtimeRoot: fixture.path("private"),
-      },
-      // The child performs its own credential resolution from this
-      // environment.
-      env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE },
-    });
-
-    const connection = new RuntimeClientConnection({
-      input: child.stdout,
-      output: child.stdin,
-    });
-    void child
-      .wait()
-      .then((exit) =>
-        connection.reportProcessExit(exit.code, exit.signal, exit.spawnError),
-      );
-
-    const session = new RuntimeClientAttachment({ connection });
-    harness = { child, connection, session, provider };
-  });
-
-  after(async () => {
-    if (harness !== undefined) {
-      harness.child.closeStdin();
-      await harness.child.waitOrTerminate(10_000);
-      // The scenario is asserted on the provider side too: every declared
-      // step consumed, in order, with no unexpected request.
-      await harness.provider.finish();
-    }
-    // The owned root is removed after the child process is gone — on pass
-    // AND failure, because the `after` hook always runs.
-    fixture?.cleanup();
-  });
-
-  it("completes the whole lifecycle against the real binary", async () => {
-    assert.ok(harness);
-    const { child, connection, session, provider } = harness;
-
-    // --- spawn + initialize ------------------------------------------------
-    const identity = await session.attach();
-    assert.equal(identity.conversationId, "conversation-1");
-    assert.equal(identity.agentId, "agent-tui-integration");
-
-    const initial = session.state;
-    assert.ok(initial);
-    assert.equal(
-      initial.sessionModel!.configured.model,
-      "fixture/integration-model",
-    );
-    assert.equal(initial.sessionModel!.effective.contextWindow, 128_000);
-
-    // The runtime names the project instruction files it loaded, by path and
-    // by exact byte length. The client never reads the file to find out.
-    const contextFiles = initial.resources.context_files ?? [];
-    const instructions = contextFiles.find((file) =>
-      file.path.endsWith(`${sep}AGENTS.md`),
-    );
-    assert.ok(
-      instructions,
-      `AGENTS.md in the published generation: ${JSON.stringify(initial.resources)}`,
-    );
-    assert.equal(
-      instructions.bytes,
-      Buffer.byteLength(PROJECT_INSTRUCTIONS, "utf8"),
-    );
-
-    // --- model / capability inspection through the protocol only -----------
-    const catalog = await session.modelCatalog();
-    const references = (catalog.models ?? []).map((model) => model.model);
-    assert.deepEqual(references, [
-      "fixture/integration-model",
-      "fixture/second-model",
-    ]);
-    // The catalog exposes the credential *source*, never a value.
-    const entry = (catalog.models ?? [])[0];
-    assert.deepEqual(entry?.credentialSource, {
-      type: "environment",
-      variable: CREDENTIAL_VARIABLE,
-    });
-    assert.ok(!JSON.stringify(catalog).includes(CREDENTIAL_VALUE));
-
-    const capabilities = await session.capabilityGet();
-    const toolNames = (capabilities.tools ?? []).map((tool) => tool.name);
-    for (const expected of ["bash", "read", "write", "execution"]) {
-      assert.ok(toolNames.includes(expected), `${expected} in ${toolNames}`);
-    }
-
-    // --- submit inbound ----------------------------------------------------
-    const accepted = await session.submitInbound([
-      { type: "text", text: "hello from the tui" },
-    ]);
-    // Identity and sequence are runtime-assigned; the client invented neither.
-    assert.ok(accepted.messageId.length > 0);
-    assert.equal(accepted.sequence, 1);
-
-    // --- streaming and commit, observed through the subscription -----------
-    await until(
-      () =>
-        (session.state?.transcript ?? []).some(
-          (entry) =>
-            entry.kind === "committed" && entry.message.role === "assistant",
-        ),
-      "the assistant message committed",
-    );
-
-    const committed = session.state?.transcript.find(
-      (entry) => entry.kind === "committed" && entry.message.role === "assistant",
-    );
-    assert.ok(committed?.kind === "committed");
-    assert.ok(committed.message.role === "assistant");
-    const text = committed.message.content
-      .filter((block) => block.type === "text")
-      .map((block) => (block.type === "text" ? block.text : ""))
-      .join("");
-    assert.equal(text, "Hello world");
-
-    // --- the attempt really ran, with the model it froze -------------------
-    await until(
-      () => session.state?.attempt?.phase.type === "settled",
-      "the attempt settled",
-    );
-    const attempt = session.state?.attempt;
-    assert.equal(attempt?.model!.primary.model, "fixture/integration-model");
-    assert.deepEqual(attempt?.phase, {
-      type: "settled",
-      outcome: { type: "completed", finish_reason: { type: "stop" } },
-    });
-
-    // Exactly one provider request, carrying the catalog's own request
-    // parameters, which the runtime — not this client — assembled. The
-    // emulator asserted the same fields on arrival; this reads back the
-    // record it kept.
-    const requests = await provider.requests();
-    assert.equal(requests.length, 1);
-    const body = requests[0]?.body as Record<string, unknown>;
-    assert.equal(body.model, "integration-model");
-    assert.equal(body.temperature, 0.25);
-    assert.deepEqual(requests[0]?.credentialHeaders, ["authorization"]);
-    assert.ok(!JSON.stringify(body).includes(CREDENTIAL_VALUE));
-
-    // --- the A -> B invariant against the real runtime ---------------------
-    const updated = await session.modelSet({ model: "fixture/second-model" });
-    assert.equal(updated.configured.model, "fixture/second-model");
-    await until(
-      () => session.state?.sessionModel!.configured.model === "fixture/second-model",
-      "the session model change was published on the stream",
-    );
-    assert.equal(
-      session.state?.attempt?.model!.primary.model,
-      "fixture/integration-model",
-      "the settled attempt still reports the model it ran with",
-    );
-
-    // --- inspection commands over the real projection ----------------------
-    const dispatcher = new CommandDispatcher({
-      session,
-      diagnostics: () => ({
-        connectionState: "connected",
-        childStatus: "running",
-        stderrTail: child.stderrTail().text,
-        stderrTruncatedBytes: child.stderrTail().truncatedBytes,
-        pendingRequests: connection.pendingCount,
-        resyncCount: session.resyncCount,
-      }),
-    });
-    // CFG238: display commands do not cross the native control boundary. The
-    // real emulator requests and the canonical/model projection stay identical.
-    const beforeDisplay = structuredClone(session.state);
-    const beforeModel = await session.modelGet();
-    const beforeProvider = await provider.requests();
-    for (const command of ["/show-reasoning on", "/show-reasoning off"]) {
-      assert.equal((await dispatcher.submit(command)).kind, "preference");
-    }
-    const obsolete = await dispatcher.submit("/reasoning off");
-    assert.equal(obsolete.kind, "transient");
-    if (obsolete.kind === "transient") assert.match(obsolete.text, /unknown command/);
-    assert.deepEqual(session.state, beforeDisplay);
-    assert.deepEqual(await session.modelGet(), beforeModel);
-    assert.deepEqual(await provider.requests(), beforeProvider);
-
-    for (const command of [
-      "/settings",
-      "/model show",
-      "/tools",
-      "/skills",
-      "/todos",
-      "/status",
-      "/debug",
-    ]) {
-      const outcome = await dispatcher.submit(command);
-      assert.equal(outcome.kind, "inspect", command);
-      if (outcome.kind === "inspect") {
-        assert.ok(outcome.body.length > 0, `${command} must have inspection content`);
-        assert.ok(
-          !outcome.body.includes(CREDENTIAL_VALUE),
-          `${command} must never render a credential`,
-        );
-      }
-    }
-
-    // `/model` with no argument opens the selector over the real catalog the
-    // runtime published; it opens no inspection and sends no model_set.
-    const chooser = await dispatcher.submit("/model");
-    assert.equal(chooser.kind, "choose_model");
-    if (chooser.kind === "choose_model") {
-      assert.ok(
-        chooser.models.length > 0,
-        "the runtime catalog reached the selector",
-      );
-    }
-
-    // --- resync repairs from the real authoritative snapshot ---------------
-    await session.resync();
-    assert.equal(session.resyncCount, 1);
-    assert.ok(
-      (session.state?.transcript ?? []).some(
-        (entry) => entry.kind === "committed" && entry.message.role === "assistant",
-      ),
-      "the repaired projection carries the committed history",
-    );
-
-    // --- shutdown is not transport closure ---------------------------------
-    await session.shutdown();
-    const stillReadable = await session.modelGet();
-    assert.equal(stillReadable.configured.model, "fixture/second-model");
-
-    // --- stdin EOF, clean exit --------------------------------------------
-    child.closeStdin();
-    const exit = await child.waitOrTerminate(15_000);
-    assert.equal(exit.code, 0, "a clean transport EOF exits successfully");
-    assert.equal(exit.signal, null, "no fallback termination was needed");
-
-    // After the process is gone, requests fail immediately rather than hang.
-    await assert.rejects(session.modelGet());
-  });
-});
-
-// ---------------------------------------------------------------------------
-// BeforeStart cancellation through the real Runtime Client/TUI boundary
-// ---------------------------------------------------------------------------
-
-describe("real rustx BeforeStart cancellation projection", { skip: SKIP }, () => {
-  let harness: Harness | undefined;
-  let fixture: TempFixture | undefined;
-  const wireEvents: RuntimeClientProtocolEvent[] = [];
-  let removeEventListener: (() => void) | undefined;
-
-  before(async () => {
-    const provider = await ProviderEmulator.start("tui_before_start_cancellation");
-    fixture = TempFixture.create("rustx-tui-before-start-");
-    const workspace = fixture.path("workspace");
-    mkdirSync(workspace, { recursive: true });
-    writeFileSync(fixture.path("models.toml"), modelsToml(provider.url("/v1")));
-    writeFileSync(
-      fixture.path("rustx.toml"),
-      BEFORE_START_RUNTIME_CONFIG_TOML,
-    );
-
-    const child = spawnTrusted({
-      binary: BINARY,
-      paths: {
-        models: fixture.path("models.toml"),
-        config: fixture.path("rustx.toml"),
-        workspace,
-        runtimeRoot: fixture.path("private"),
-      },
-      env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE },
-    }, '[native_tools.bash]\napproval = "always"\n');
-    const connection = new RuntimeClientConnection({
-      input: child.stdout,
-      output: child.stdin,
-    });
-    void child
-      .wait()
-      .then((exit) =>
-        connection.reportProcessExit(exit.code, exit.signal, exit.spawnError),
-      );
-    removeEventListener = connection.onEvent((event) => wireEvents.push(event));
-    const session = new RuntimeClientAttachment({ connection });
-    harness = { child, connection, session, provider };
-  });
-
-  after(async () => {
-    removeEventListener?.();
-    if (harness !== undefined) {
-      harness.child.closeStdin();
-      await harness.child.waitOrTerminate(10_000);
-      await harness.provider.finish();
-    }
-    fixture?.cleanup();
-  });
-
-  it("keeps incremental and fresh snapshot foreground state identical", async () => {
-    assert.ok(harness);
-    const { session } = harness;
-    await session.attach();
-    await session.submitInbound([
-      { type: "text", text: "cancel before executor start" },
-    ]);
-
-    await until(
-      () =>
-        (session.state?.pendingInteractions ?? []).length === 1 &&
-        session.state?.attempt !== undefined,
-      "the real runtime to reach the pre-tool approval boundary",
-    );
-    const admitted = session.state;
-    assert.ok(admitted?.attempt);
-    const attemptId = admitted.attempt.attemptId;
-    assert.equal(admitted.pendingInteractions.length, 1);
-
-    await session.cancelCurrentAttempt();
-    const outcome = await session.waitForAttemptSettlement(attemptId);
-    assert.deepEqual(outcome, {
-      type: "cancelled",
-      reason: "user_requested",
-    });
-
-    await until(
-      () =>
-        session.state?.transcript.some(
-          (entry) =>
-            entry.kind === "committed" &&
-            entry.message.role === "tool" &&
-            entry.message.tool_call_id === "call-tui-before-start",
-        ) === true,
-      "the canonical BeforeStart ToolMessage to commit",
-    );
-
-    const incremental = session.state;
-    assert.ok(incremental?.attempt);
-    const incrementalForeground = incremental.attempt.foreground.find(
-      (entry) => entry.call_id === "call-tui-before-start",
-    );
-    assert.ok(incrementalForeground);
-    assert.deepEqual(incrementalForeground.state.type, "settled");
-    if (incrementalForeground.state.type !== "settled") {
-      throw new Error("the incremental foreground slot did not settle");
-    }
-    assert.deepEqual(incrementalForeground.state.result.status, {
-      type: "cancelled",
-      reason: "user_requested",
-      phase: "before_start",
-    });
-
-    const incrementalToolMessage = incremental.transcript.find(
-      (entry) =>
-        entry.kind === "committed" &&
-        entry.message.role === "tool" &&
-        entry.message.tool_call_id === "call-tui-before-start",
-    );
-    assert.ok(incrementalToolMessage?.kind === "committed");
-    assert.equal(incrementalToolMessage.message.role, "tool");
-    assert.deepEqual(
-      incrementalToolMessage.message.result,
-      incrementalForeground.state.result,
-    );
-
-    const executionStarted = wireEvents.filter(
-      (event) => event.event.type === "tool_execution_started",
-    );
-    const executionSettled = wireEvents.filter(
-      (event) => event.event.type === "tool_execution_settled",
-    );
-    assert.equal(
-      executionStarted.length,
-      0,
-      "BeforeStart does not fabricate ToolExecutionStarted",
-    );
-    assert.equal(
-      executionSettled.length,
-      1,
-      "the canonical commit exposes exactly one client settlement",
-    );
-    assert.equal(
-      wireEvents.filter(
-        (event) =>
-          event.event.type === "message_committed" &&
-          event.event.message.role === "tool",
-      ).length,
-      1,
-      "the canonical ToolMessage is committed exactly once",
-    );
-
-    // This is the real Runtime Client snapshot_get response, consumed over
-    // the same JSONL connection. No TypeScript-side snapshot is constructed.
-    await session.resync();
-    const fresh = session.state;
-    assert.ok(fresh?.attempt);
-    const freshForeground = fresh.attempt.foreground.find(
-      (entry) => entry.call_id === "call-tui-before-start",
-    );
-    assert.ok(freshForeground);
-    assert.deepEqual(freshForeground, incrementalForeground);
-    assert.deepEqual(fresh.attempt.phase, incremental.attempt.phase);
-    const freshToolMessage = fresh.transcript.find(
-      (entry) =>
-        entry.kind === "committed" &&
-        entry.message.role === "tool" &&
-        entry.message.tool_call_id === "call-tui-before-start",
-    );
-    assert.ok(freshToolMessage?.kind === "committed");
-    assert.equal(freshToolMessage.message.role, "tool");
-    assert.deepEqual(freshToolMessage.message, incrementalToolMessage.message);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Structured ask_user through the real provider/runtime/client/TUI path
-// ---------------------------------------------------------------------------
-
-describe("real rustx structured ask_user questionnaire", { skip: SKIP }, () => {
-  let harness: Harness | undefined;
-  let fixture: TempFixture | undefined;
-
-  before(async () => {
-    const provider = await ProviderEmulator.start("tui_ask_user_questionnaire");
-    fixture = TempFixture.create("rustx-tui-questionnaire-");
-    const workspace = fixture.path("workspace");
-    mkdirSync(workspace, { recursive: true });
-    writeFileSync(fixture.path("models.toml"), modelsToml(provider.url("/v1")));
-    writeFileSync(fixture.path("rustx.toml"), RUNTIME_CONFIG_TOML);
-
-    const child = spawnTrusted({
-      binary: BINARY,
-      paths: {
-        models: fixture.path("models.toml"),
-        config: fixture.path("rustx.toml"),
-        workspace,
-        runtimeRoot: fixture.path("private"),
-      },
-      env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE },
-    });
-    const connection = new RuntimeClientConnection({
-      input: child.stdout,
-      output: child.stdin,
-    });
-    void child
-      .wait()
-      .then((exit) =>
-        connection.reportProcessExit(exit.code, exit.signal, exit.spawnError),
-      );
-    const session = new RuntimeClientAttachment({ connection });
-    harness = { child, connection, session, provider };
-  });
-
-  after(async () => {
-    if (harness !== undefined) {
-      harness.child.closeStdin();
-      await harness.child.waitOrTerminate(10_000);
-      await harness.provider.finish();
-    }
-    fixture?.cleanup();
-  });
-
-  it("publishes one questionnaire, resyncs it, and continues after submission", async () => {
-    assert.ok(harness);
-    const { child, session } = harness;
-    await session.attach();
-
-    await session.submitInbound([
-      { type: "text", text: "choose the visual direction" },
-    ]);
-    await until(
-      () =>
-        (session.state?.pendingInteractions ?? []).some(
-          (interaction) => interaction.request.kind.type === "questionnaire",
-        ),
-      "the structured questionnaire to become pending",
-    );
-
-    const pending = session.state?.pendingInteractions.find(
-      (interaction) => interaction.request.kind.type === "questionnaire",
-    );
-    assert.ok(pending);
-    assert.equal(pending.request.kind.type, "questionnaire");
-    if (pending.request.kind.type !== "questionnaire") throw new Error("not a questionnaire");
-    assert.equal(pending.request.kind.questionnaire.questions.length, 2);
-    assert.equal(
-      pending.request.kind.questionnaire.questions[1]?.answer.type,
-      "multi_choice",
-    );
-    const firstAnswer = pending.request.kind.questionnaire.questions[0]?.answer;
-    assert.equal(firstAnswer?.type, "single_choice");
-    if (firstAnswer?.type !== "single_choice") throw new Error("not a single choice");
-    assert.equal(firstAnswer.options[0]?.label, "Swiss / Klein blue");
-    // A native `ask_user` prompt is never labelled as MCP.
-    assert.equal(pending.request.kind.requester.origin, "builtin");
-
-    // The authoritative snapshot reconstructs the same request facts; no
-    // client-side draft or echoed prose is needed to restore the overlay.
-    await session.resync();
-    const reconstructed = session.state?.pendingInteractions.find(
-      (interaction) =>
-        interaction.interaction.conversation_id === pending.interaction.conversation_id &&
-        interaction.interaction.interaction_id === pending.interaction.interaction_id,
-    );
-    assert.ok(reconstructed);
-    assert.deepEqual(reconstructed.request.kind, pending.request.kind);
-    if (reconstructed.request.kind.type !== "questionnaire") {
-      throw new Error("resynchronized interaction is not a questionnaire");
-    }
-
-    let submitted:
-      | import("../src/protocol/types.ts").QuestionnaireResponse
-      | undefined;
-    const overlay = new QuestionnaireOverlay({
-      interactionId: `${reconstructed.interaction.conversation_id}::${reconstructed.interaction.interaction_id}`,
-      questionnaire: reconstructed.request.kind.questionnaire,
-      requester: reconstructed.request.kind.requester,
-      onSubmit: (response) => {
-        submitted = response;
-      },
-      onDecline: () => assert.fail("the questionnaire should be submitted"),
-      onInterrupt: () => assert.fail("the questionnaire should not cancel the attempt"),
-    });
-    assert.match(overlay.render(56).join("\n"), /Swiss preview/);
-    assert.match(overlay.render(120).join("\n"), /Swiss preview/);
-
-    // Select the first authored option, leave the multi-select question
-    // unanswered, then submit the partial answer from the review tab.
-    overlay.handleInput("\r");
-    overlay.handleInput("\t");
-    overlay.handleInput("\t");
-    overlay.handleInput("\r");
-    assert.deepEqual(submitted, {
-      type: "submitted",
-      value: {
-        answers: [
-          {
-            question_index: 0,
-            answer: { type: "option", value: { option_index: 0 } },
-          },
-        ],
-      },
-    });
-
-    await session.respondInteraction(reconstructed.interaction, {
-      type: "questionnaire",
-      response: submitted!,
-    });
-    await until(
-      () =>
-        !(session.state?.pendingInteractions ?? []).some(
-          (interaction) =>
-            interaction.interaction.conversation_id === reconstructed.interaction.conversation_id &&
-            interaction.interaction.interaction_id === reconstructed.interaction.interaction_id,
-        ),
-      "the questionnaire to settle",
-    );
-    await until(
-      () =>
-        (session.state?.transcript ?? []).some(
-          (entry) =>
-            entry.kind === "committed" &&
-            entry.message.role === "assistant" &&
-            entry.message.content.some(
-              (block) =>
-                block.type === "text" && block.text === "Questionnaire continued",
-            ),
-        ),
-      "the model continuation after the questionnaire",
-    );
-
-    // The first provider call is the structured tool call and the second is
-    // the model's next turn with rustX's canonical structured result.
-    const requests = await harness.provider.requests();
-    assert.equal(requests.length, 2);
-  });
-
-  /**
-   * The `Number` wire, across two real processes.
-   *
-   * The shared fixtures prove the byte contract deterministically; this proves
-   * that the shipped `rustx` binary really decodes those bytes off its own
-   * stdio transport. `2^63` is the value that matters: it is an exact
-   * binary64, but `JSON.stringify(2 ** 63)` prints `9223372036854776000`, a
-   * different mathematical integer, so a raw JSON number could not carry it.
-   *
-   * The interaction is deliberately unknown to the runtime, because the
-   * *decode* is the subject. A record the runtime cannot deserialize is a
-   * malformed record, which is transport-fatal: the connection would close and
-   * this request would reject with a transport failure rather than with the
-   * semantic `interaction_not_pending`. Receiving the semantic error is
-   * therefore proof that `FiniteNumber` was reconstructed from the bytes the
-   * TypeScript client actually wrote.
-   */
-  it("carries an exact 2^63 Number answer into the real runtime's decoder", async () => {
-    assert.ok(harness);
-    const { child, session } = harness;
-
-    const draft = "9223372036854775808";
-    const reading = readNumberDraft(draft);
-    assert.deepEqual(reading, { kind: "value", value: 2 ** 63 });
-    const wire = finiteNumberToWire(reading.kind === "value" ? reading.value : Number.NaN);
-    assert.equal(wire, "43e0000000000000");
-    assert.notEqual(JSON.stringify(2 ** 63), draft);
-
-    const stale = { conversation_id: "no-such-conversation", interaction_id: "no-such-interaction" };
-    await assert.rejects(
-      session.respondInteraction(stale, {
-        type: "questionnaire",
-        response: {
-          type: "submitted",
-          value: {
-            answers: [
-              { question_index: 0, answer: { type: "number", value: { value: wire } } },
-            ],
-          },
-        },
-      }),
-      (error: unknown) => {
-        assert.ok(error instanceof RuntimeRequestError, String(error));
-        assert.equal(
-          error.error.type,
-          "interaction_not_pending",
-          "a decode failure would have closed the transport instead",
-        );
-        return true;
-      },
-    );
-
-    // The connection survived, so nothing about the record was malformed.
-    assert.equal(session.state?.pendingInteractions.length, 0);
-    child.closeStdin();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Repeated compaction over the real stdio transport (Issue #27)
-// ---------------------------------------------------------------------------
-
-const COMPACTION_RUNTIME_CONFIG_TOML = `schema_version = 8
-agent_id = "agent-tui-compaction"
-context = { reserve_tokens = 1536, keep_recent_tokens = 256 }
-[agent]
-model = { model = "fixture/integration-model" }
-`;
-
-const TUI_TURN_ONE = "tui compaction: turn one";
-const TUI_TURN_TWO = "tui compaction: turn two";
-const TUI_TURN_THREE = "tui compaction: turn three";
-const FILLER_ONE_MARKER = "tui-compaction-filler-one-marker-39c1";
-const FILLER_TWO_MARKER = "tui-compaction-filler-two-marker-84e2";
-const SUMMARY_ONE_TEXT =
-  "tui summary one: the assistant produced filler report one.";
-const SUMMARY_TWO_TEXT =
-  "tui summary two: the assistant produced filler report two.";
+/** 43 base64url characters, exactly as the server's credential bound requires. */
+const TRANSPORT_TOKEN = "tui-integration-token-0000000000000000000000";
 
 /**
- * Awaits one exact condition with a wall-clock deadlock bound.
+ * One user environment for a standalone App Server.
  *
- * The compaction turns stream ~200 KB through two hops (emulator -> child ->
- * client), which the event-loop-only `until` exhausts before; the condition
- * itself stays the exact ordering signal and the deadline only fails a
- * genuine stall.
+ * The App Server owns process-level user configuration; a Session owns its own
+ * cwd and project configuration. This fixture builds both, keeps them separate,
+ * and never lets the process's launch directory stand in for a Session's cwd.
  */
-async function awaitCondition(
-  condition: () => boolean,
-  what: string,
-): Promise<void> {
-  const deadline = Date.now() + 30_000;
-  while (!condition()) {
-    if (Date.now() > deadline) {
-      throw new Error(`${what} never became true`);
-    }
-    await new Promise<void>((resolve) => setImmediate(resolve));
+class ServerFixture {
+  readonly fixture: TempFixture;
+  readonly home: string;
+  readonly env: NodeJS.ProcessEnv;
+
+  private constructor(fixture: TempFixture, home: string, env: NodeJS.ProcessEnv) {
+    this.fixture = fixture;
+    this.home = home;
+    this.env = env;
+  }
+
+  /** Authors the canonical user documents with the real `rustx init`. */
+  static create(prefix: string, providerUrl: string): ServerFixture {
+    const fixture = TempFixture.create(prefix);
+    const home = fixture.path("home");
+    mkdirSync(join(home, ".config", "rustx"), { recursive: true });
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: home,
+      [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE,
+    };
+    delete env.XDG_CONFIG_HOME;
+    delete env.XDG_STATE_HOME;
+
+    const initialized = spawnSync(
+      BINARY,
+      [
+        "init",
+        "--template", "openai-chat",
+        "--provider", "fixture",
+        "--model-id", "integration-model",
+        "--endpoint", providerUrl,
+        "--credential-env", CREDENTIAL_VARIABLE,
+        "--context-window", "128000",
+        "--max-output", "4096",
+        "--tool-calls", "true",
+        "--reasoning", "false",
+        "--compat", 'chat_reasoning_replay = "omit"',
+      ],
+      { env, encoding: "utf8" },
+    );
+    assert.equal(initialized.status, 0, initialized.stderr);
+    writeFileSync(fixture.path("token"), `${TRANSPORT_TOKEN}\n`);
+    return new ServerFixture(fixture, home, env);
+  }
+
+  /** A trusted workspace, ready to be a Session's cwd. */
+  workspace(name: string): string {
+    const workspace = this.fixture.path(name);
+    mkdirSync(workspace, { recursive: true });
+    const granted = spawnSync(
+      BINARY,
+      ["--workspace", workspace, "--trust", "grant"],
+      { env: this.env, encoding: "utf8" },
+    );
+    assert.equal(granted.status, 0, granted.stderr);
+    return workspace;
+  }
+
+  settings(name: string): SessionSettings {
+    return { cwd: this.workspace(name) };
+  }
+
+  get runtimeRoot(): string {
+    return this.fixture.path("runtime");
+  }
+
+  cleanup(): void {
+    this.fixture.cleanup();
   }
 }
 
-/**
- * The small-window catalog of the compaction leg: a 56k-token window with an
- * 8k reserve crosses the soft input limit on the emulator's scripted ~200 KB
- * fillers by construction — the same sizing the Rust conformance suite uses.
- */
-function compactionModelsToml(baseUrl: string): string {
-  return `[providers.fixture]
-base_url = ${JSON.stringify(baseUrl)}
-api_key = "$${CREDENTIAL_VARIABLE}"
-${modelToml("integration-model", 56000, 1024)}`;
+/** One externally managed App Server, listening on an ephemeral loopback port. */
+class ExternalAppServer {
+  readonly #child: ChildProcessWithoutNullStreams;
+  readonly endpoint: string;
+  #exited = false;
+
+  private constructor(child: ChildProcessWithoutNullStreams, endpoint: string) {
+    this.#child = child;
+    this.endpoint = endpoint;
+    child.on("exit", () => {
+      this.#exited = true;
+    });
+  }
+
+  /** Starts the server and waits for the address it actually bound. */
+  static async start(server: ServerFixture): Promise<ExternalAppServer> {
+    const child = spawn(
+      BINARY,
+      [
+        "app-server",
+        "--runtime-root", server.runtimeRoot,
+        "--listen", "ws://127.0.0.1:0",
+        "--token-file", server.fixture.path("token"),
+      ],
+      { env: server.env, stdio: ["pipe", "pipe", "pipe"] },
+    ) as ChildProcessWithoutNullStreams;
+
+    // The server advertises its bound address on stderr only after bootstrap
+    // succeeds, so this is a readiness barrier rather than a delay.
+    const lines = createInterface({ input: child.stderr });
+    const endpoint = await new Promise<string>((resolve, reject) => {
+      child.once("exit", (code) =>
+        reject(new Error(`the App Server exited before binding (code ${code})`)),
+      );
+      lines.on("line", (line) => {
+        const bound = line.match(/rustx app-server listening (ws:\/\/\S+)/);
+        if (bound !== null) resolve(bound[1]!);
+      });
+    });
+    return new ExternalAppServer(child, endpoint);
+  }
+
+  get running(): boolean {
+    return !this.#exited;
+  }
+
+  async stop(): Promise<void> {
+    if (this.#exited) return;
+    this.#child.kill("SIGTERM");
+    await new Promise<void>((resolve) => this.#child.once("exit", () => resolve()));
+  }
 }
 
-describe("real rustx child repeated compaction", { skip: SKIP }, () => {
-  let harness: Harness | undefined;
-  let fixture: TempFixture | undefined;
+/** Creates and attaches one Session, returning its live attachment. */
+async function openSession(
+  host: AppServerHost,
+  settings: SessionSettings,
+): Promise<AppServerSession> {
+  const created = await host.createSession(settings);
+  return host.attach(created.session.id, created.session.active_node);
+}
+
+describe("local self-hosted mode: one owned App Server child over stdio", { skip: SKIP }, () => {
+  let provider: ProviderEmulator;
+  let server: ServerFixture;
 
   before(async () => {
-    const provider = await ProviderEmulator.start("tui_compaction");
-    fixture = TempFixture.create("rustx-tui-compaction-");
-    const workspace = fixture.path("workspace");
-    mkdirSync(workspace, { recursive: true });
-    writeFileSync(
-      fixture.path("models.toml"),
-      compactionModelsToml(provider.url("/v1")),
-    );
-    writeFileSync(
-      fixture.path("rustx.toml"),
-      COMPACTION_RUNTIME_CONFIG_TOML,
-    );
+    provider = await ProviderEmulator.start("tui_multi_session");
+    server = ServerFixture.create("rustx-tui-stdio-", provider.url("/v1"));
+  });
+  after(async () => {
+    server?.cleanup();
+    await provider?.finish();
+  });
 
-    const child = spawnTrusted({
+  it("keeps one child across every Session, and never replaces it", { timeout: 90_000 }, async () => {
+    const host = await AppServerHost.spawnLocal({
       binary: BINARY,
-      paths: {
-        models: fixture.path("models.toml"),
-        config: fixture.path("rustx.toml"),
-        workspace,
-        runtimeRoot: fixture.path("private"),
-      },
-      env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE },
+      launch: { runtimeRoot: server.runtimeRoot },
+      env: server.env,
     });
+    try {
+      // The handshake completed over real JSONL against the real binary.
+      assert.equal(host.ownership, "owned_child");
+      assert.ok(host.client.capabilities?.multi_session);
+      assert.equal(host.childExit, undefined);
+      assert.match(host.describe(), /owned App Server child \(pid \d+\)/);
 
-    const connection = new RuntimeClientConnection({
-      input: child.stdout,
-      output: child.stdin,
+      const a = await openSession(host, server.settings("session-a"));
+      const b = await openSession(host, server.settings("session-b"));
+
+      // Two Sessions, two distinct runtimes, one process. Nothing about the
+      // second attachment replaced or restarted anything.
+      assert.notEqual(a.sessionId, b.sessionId);
+      assert.notEqual(a.target.runtime_incarnation, b.target.runtime_incarnation);
+      assert.equal(host.attached.length, 2);
+      assert.equal(host.childExit, undefined);
+
+      // Returning to A reuses its exact attachment: same four-domain target.
+      const returned = await host.attach(a.sessionId);
+      assert.equal(returned, a);
+      assert.deepEqual(returned.target, a.target);
+
+      const exit = await host.shutdown();
+      assert.equal(exit?.code, 0, "the owned child completed explicit owner drain");
+    } finally {
+      await host.shutdown();
+    }
+  });
+
+  it("runs Session A while Session B is visible, and repairs A from authoritative state", { timeout: 120_000 }, async () => {
+    const host = await AppServerHost.spawnLocal({
+      binary: BINARY,
+      launch: { runtimeRoot: server.runtimeRoot },
+      env: server.env,
     });
-    void child
-      .wait()
-      .then((exit) =>
-        connection.reportProcessExit(exit.code, exit.signal, exit.spawnError),
+    try {
+      const a = await openSession(host, server.settings("multi-a"));
+      const b = await openSession(host, server.settings("multi-b"));
+      const stop = host.client.onNotification((message) => {
+        a.applyNotification(message);
+        b.applyNotification(message);
+      });
+
+      // A starts work and the provider holds its response open.
+      await a.submitInbound([
+        { type: "text", text: "tui multi-session: session A long task" },
+      ]);
+      await provider.awaitGate("session-a-holding");
+
+      // Focus moves to B. Nothing was sent that could stop A.
+      const before = host.attached.length;
+      await host.attach(b.sessionId);
+      assert.equal(host.attached.length, before);
+
+      // B is fully usable while A is still executing in the same process.
+      await b.submitInbound([
+        { type: "text", text: "tui multi-session: session B quick task" },
+      ]);
+      await until(
+        () => b.state.attempt?.phase.type === "settled",
+        "Session B settles while Session A is still running",
+      );
+      assert.equal(
+        a.state.attempt?.phase.type,
+        "running",
+        "Session A kept executing while Session B held the screen",
       );
 
-    const session = new RuntimeClientAttachment({ connection });
-    harness = { child, connection, session, provider };
-  });
-
-  after(async () => {
-    if (harness !== undefined) {
-      harness.child.closeStdin();
-      await harness.child.waitOrTerminate(10_000);
-      await harness.provider.finish();
+      // A finishes, and focus returns to it. The projection is repaired from
+      // authoritative state rather than from what the client last believed.
+      await provider.releaseGate("session-a-holding");
+      await until(
+        () => a.state.attempt?.phase.type === "settled",
+        "Session A settles in the same App Server process",
+      );
+      const returned = await host.attach(a.sessionId);
+      await returned.resync();
+      assert.equal(returned.state.attempt?.phase.type, "settled");
+      assert.ok(returned.resyncCount >= 1);
+      assert.equal(host.childExit, undefined, "one child served both Sessions");
+      const page = await a.boundaries();
+      assert.equal(page.boundaries.length, 1, "the committed user boundary is available for tree navigation");
+      const original = await host.readSession(a.sessionId);
+      const branched = await host.branchSession(a.sessionId, original.active_node,
+        page.surfaceRevision, page.boundaries[0]!.message.id);
+      await assert.rejects(host.attach(a.sessionId, branched.session.active_node), /explicit unload confirmation/);
+      const branch = await host.openNode(a.sessionId, branched.session.active_node);
+      assert.notEqual(branch.target.conversation_id, a.target.conversation_id);
+      assert.equal(branch.nodeId, branched.session.active_node);
+      const back = await host.openNode(a.sessionId, original.active_node);
+      assert.equal(back.target.conversation_id, a.target.conversation_id);
+      assert.notEqual(back.target.runtime_incarnation, a.target.runtime_incarnation,
+        "confirmed node changes use server-owned unload/recovery");
+      assert.equal(b.released, false, "another Session's attachment is untouched");
+      stop();
+    } finally {
+      await host.shutdown();
     }
-    fixture?.cleanup();
   });
 
-  it("commits two compactions across three turns, observed over real stdio", async () => {
-    assert.ok(harness);
-    const { session, provider } = harness;
-    // The settled-phase signal alone is ambiguous across turns (a settled
-    // attempt keeps reporting "settled" until the next attempt starts), so
-    // per-turn settlement is observed through the committed assistant count.
-    const committedAssistants = () =>
-      (session.state?.transcript ?? []).filter(
-        (entry) =>
-          entry.kind === "committed" && entry.message.role === "assistant",
-      ).length;
+  it("keeps child diagnostics out of the protocol stream", { timeout: 90_000 }, async () => {
+    // The child writes its bound-address diagnostic and any warning to stderr.
+    // stderr is read into a bounded tail by the process owner and is never
+    // handed to the protocol decoder, so no amount of logging can corrupt a
+    // JSONL record — which a completed handshake proves.
+    const host = await AppServerHost.spawnLocal({
+      binary: BINARY,
+      launch: { runtimeRoot: server.runtimeRoot },
+      env: server.env,
+      stderrTailBytes: 2048,
+    });
+    try {
+      const session = await openSession(host, server.settings("stderr-session"));
+      assert.equal(session.state.conversationId, session.target.conversation_id);
+      const tail = host.stderrTail();
+      assert.ok(tail.text.length <= 2048, "the diagnostic tail stays bounded");
+      assert.equal(host.client.closed, undefined, "stdout stayed well-framed");
+    } finally {
+      await host.shutdown();
+    }
+  });
 
-    await session.attach();
-    assert.equal(session.state?.context.compaction_count, 0);
+  it("reports unexpected child death as a process failure, never as a runtime outcome", { timeout: 90_000 }, async () => {
+    // The child is driven directly here: the subject is what the client does
+    // when a process it owns disappears mid-request.
+    const child = AppServerChild.spawn({
+      binary: BINARY,
+      launch: { runtimeRoot: server.runtimeRoot },
+      env: server.env,
+    });
+    const transport = new StdioTransport({
+      input: child.stdout,
+      output: child.stdin,
+      label: "stdio integration",
+    });
+    void child.wait().then((exit) => {
+      transport.reportProcessExit(exit.code, exit.signal, exit.spawnError);
+    });
+    const client = await AppServerClient.initialize({ transport });
 
-    await session.submitInbound([{ type: "text", text: TUI_TURN_ONE }]);
-    await awaitCondition(() => committedAssistants() === 1, "turn one committed");
-    assert.equal(
-      session.state?.context.compaction_count,
-      0,
-      "the filling turn never compacts",
+    const created = await client.call(
+      "session/create",
+      { settings: server.settings("death-session") },
+      "session_transition",
     );
+    const pending = client.call(
+      "session/attach",
+      { session_id: created.session.id, node_id: null },
+      "attached",
+    );
+    // The process dies with a request in flight.
+    process.kill(child.pid!, "SIGKILL");
 
-    await session.submitInbound([{ type: "text", text: TUI_TURN_TWO }]);
-    await awaitCondition(
-      () => (session.state?.context.compaction_count ?? 0) >= 1,
-      "compaction #1 committed",
+    const failure = await pending.then(
+      () => undefined,
+      (error: unknown) => error,
     );
-    await awaitCondition(() => committedAssistants() === 2, "turn two committed");
-    assert.equal(session.state?.context.compaction_count, 1);
-    assert.equal(session.state?.context.latest_compaction?.generation, 1);
-
-    await session.submitInbound([{ type: "text", text: TUI_TURN_THREE }]);
-    await awaitCondition(
-      () => (session.state?.context.compaction_count ?? 0) >= 2,
-      "compaction #2 committed",
+    // `session/attach` can change server state, so a lost response is an
+    // unknown outcome — not a failure, and never something to resend.
+    assert.ok(failure instanceof UncertainOutcomeError, String(failure));
+    assert.ok(failure.transportFailure instanceof TransportClosedError);
+    assert.match(
+      failure.transportFailure.message,
+      /App Server process exited|closed its transport output stream/,
     );
-    await awaitCondition(() => committedAssistants() === 3, "turn three committed");
-    assert.equal(session.state?.context.compaction_count, 2);
-    assert.equal(session.state?.context.latest_compaction?.generation, 2);
-
-    // The recorded wire: five requests; retired bytes never returned to the
-    // provider, and the second summary's span is the already-compacted
-    // surface.
-    const requests = await provider.requests();
-    assert.equal(requests.length, 5);
-    const bodies = requests.map((request) => JSON.stringify(request.body));
-    assert.ok(bodies[0]?.includes(TUI_TURN_ONE));
-    assert.ok(
-      bodies[1]?.includes(FILLER_ONE_MARKER) &&
-        !bodies[1]?.includes(FILLER_TWO_MARKER),
-    );
-    assert.ok(
-      bodies[2]?.includes(SUMMARY_ONE_TEXT) &&
-        bodies[2]?.includes(TUI_TURN_TWO) &&
-        !bodies[2]?.includes(FILLER_ONE_MARKER),
-      "the first rewritten surface reached the provider",
-    );
-    assert.ok(
-      bodies[3]?.includes(SUMMARY_ONE_TEXT) &&
-        bodies[3]?.includes(FILLER_TWO_MARKER) &&
-        !bodies[3]?.includes(FILLER_ONE_MARKER),
-      "the second compaction's span is the already-compacted surface",
-    );
-    assert.ok(
-      bodies[4]?.includes(SUMMARY_TWO_TEXT) &&
-        bodies[4]?.includes(TUI_TURN_THREE) &&
-        !bodies[4]?.includes(FILLER_ONE_MARKER) &&
-        !bodies[4]?.includes(FILLER_TWO_MARKER) &&
-        !bodies[4]?.includes(SUMMARY_ONE_TEXT),
-      "the second rewritten surface carries exactly the second summary",
-    );
-
-    // The projection carries the continuous truth: both canonical summaries
-    // and both retired fillers remain visible as committed history.
-    const transcript = JSON.stringify(session.state?.transcript ?? []);
-    assert.ok(transcript.includes(SUMMARY_ONE_TEXT));
-    assert.ok(transcript.includes(SUMMARY_TWO_TEXT));
-    assert.ok(
-      transcript.includes(FILLER_ONE_MARKER),
-      "the retired filler stays a committed transcript fact",
-    );
-    assert.ok(transcript.includes(FILLER_TWO_MARKER));
+    // Nothing here claims a turn settled, an interaction was answered, or a
+    // tool completed. The client only lost its ability to observe.
+    assert.ok(client.closed);
+    await child.waitOrTerminate(2_000);
   });
 });
 
-it("Session deletion: real resume UI → attachment → native preview/block/delete; restart and zero provider calls", { skip: SKIP, timeout: 30_000 }, async (t) => {
-  const { SessionDeletionWorkflow } = await import("../src/ui/session-deletion-workflow.ts");
-  const { ResumeSelector } = await import("../src/ui/components/resume-selector.ts");
-  const provider = await ProviderEmulator.start("tui_integration");
-  const fixture = TempFixture.create("rustx-resume-delete-");
-  const workspace = fixture.path("workspace"); mkdirSync(workspace);
-  writeFileSync(fixture.path("models.toml"), modelsToml(provider.url("/v1")));
-  writeFileSync(fixture.path("rustx.toml"), RUNTIME_CONFIG_TOML);
-  const options: ChildRuntimeProcessOptions = { binary: BINARY, paths: {
-    models: fixture.path("models.toml"), config: fixture.path("rustx.toml"), workspace, runtimeRoot: fixture.path("private"),
-  }, env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE } };
-  let child = spawnTrusted(options);
-  const attach = async () => {
-    const connection = new RuntimeClientConnection({ input: child.stdout, output: child.stdin });
-    void child.wait().then((exit) => connection.reportProcessExit(exit.code, exit.signal, exit.spawnError));
-    const session = new RuntimeClientAttachment({ connection }); await session.attach(); return session;
-  };
-  t.after(async () => {
-    try { await session.shutdown(); } catch { /* A completed Session switch already quiesced this runtime. */ }
-    child.closeStdin(); await child.waitOrTerminate();
-    try { await provider.finish(); } finally { fixture.cleanup(); }
+describe("existing/remote mode: WebSocket to an externally managed App Server", { skip: SKIP }, () => {
+  let provider: ProviderEmulator;
+  let server: ServerFixture;
+  let external: ExternalAppServer;
+
+  before(async () => {
+    provider = await ProviderEmulator.start("tui_multi_session");
+    server = ServerFixture.create("rustx-tui-ws-", provider.url("/v1"));
+    external = await ExternalAppServer.start(server);
   });
-  let session = await attach();
-  await session.submitInbound([{ type: "text", text: "hello from the tui" }]);
-  await until(() => session.state?.attempt?.phase.type === "settled", "fixture history committed");
-  const historical = await session.refreshSession();
-  const clone = await session.cloneSession();
-  child.closeStdin(); await child.waitOrTerminate();
-  options.startup = { continueActiveSession: false, session: clone.session.id, skillPaths: [], noAutomaticSkills: false, noBuiltinTools: false, noDirectTools: false };
-  child = spawnTrusted(options); session = await attach();
-  const active = await session.refreshSession();
-  const before = structuredClone(session.state), beforeModel = await session.modelGet(), beforeProvider = await provider.requests();
-  const feedback: string[] = [];
-  const page = await session.listSessions();
-  const view = new ResumeSelector({ initialPage: page, client: session, workflow: new SessionDeletionWorkflow(session, () => true, (text) => feedback.push(text)), alive: () => true, feedback: (text) => feedback.push(text) });
-  view.selector.selectIdentity(active.id); view.handleInput("\x04");
-  await until(() => view.render(100).map(plainText).join(" ").includes("currently in use"), "native allocation blocker");
-  view.handleInput("\x1b");
-  view.selector.selectIdentity(historical.id); view.handleInput("\x04");
-  await until(() => view.render(100).map(plainText).join(" ").includes("❯ Cancel"), "native historical preview");
-  view.handleInput("\r");
-  assert.ok((await session.listSessions()).sessions.some((row) => row.id === historical.id), "safe default cancels");
-  view.handleInput("\x04");
-  await until(() => view.render(100).map(plainText).join(" ").includes("❯ Cancel"), "fresh explicit preview");
-  view.handleInput("\t"); view.handleInput("\r"); view.handleInput("\r");
-  await until(() => feedback.includes("Session permanently deleted.") && !view.selector.visibleSessions().some((row) => row.id === historical.id), "native deletion and rebuilt list");
-  assert.deepEqual(session.state, before);
-  assert.deepEqual(await session.modelGet(), beforeModel);
-  assert.equal((await session.refreshSession()).id, active.id);
-  assert.deepEqual(await provider.requests(), beforeProvider, "management UI generated zero provider requests");
-  await session.shutdown(); child.closeStdin(); await child.waitOrTerminate(); child = spawnTrusted(options); session = await attach();
-  assert.ok(!(await session.listSessions()).sessions.some((row) => row.id === historical.id));
-  assert.ok((await session.listSessions()).sessions.some((row) => row.id === active.id), "independent clone preserved");
+  after(async () => {
+    await external?.stop();
+    server?.cleanup();
+    await provider?.finish();
+  });
+
+  it("resume bootstrap can browse while another real connection controls A, then attach only a chosen Session", { timeout: 90_000 }, async (t) => {
+    const owner = await AppServerHost.connectRemote({ endpoint: external.endpoint, token: TRANSPORT_TOKEN });
+    const browser = await AppServerHost.connectRemote({ endpoint: external.endpoint, token: TRANSPORT_TOKEN });
+    try {
+      const a = await openSession(owner, server.settings("resume-A"));
+      const settings = server.settings("resume-B");
+      const b = await owner.createSession(settings);
+      const attachments: string[] = [];
+      const attach = browser.attach.bind(browser);
+      t.mock.method(browser, "attach", (id: string, node?: string) => { attachments.push(id); return attach(id, node); });
+      const parsed = parseArguments(["--connect", external.endpoint, "--token-file", server.fixture.path("token"), "--cwd", settings.cwd, "--resume"]);
+      const focus = await prepareStartup(browser, parsed);
+      assert.equal(focus.session, undefined);
+      assert.deepEqual(attachments, []);
+      assert.equal(browser.attached.length, 0);
+      assert.ok(focus.resumePage?.sessions.some((s) => s.id === a.sessionId));
+      assert.ok(focus.resumePage?.sessions.some((s) => s.id === b.session.id));
+      await assert.rejects(browser.attach(a.sessionId), (error: unknown) =>
+        error instanceof Error && "kind" in error && error.kind === "controller_in_use");
+      const selected = await browser.attach(b.session.id);
+      assert.equal(selected.sessionId, b.session.id);
+      assert.deepEqual(attachments, [a.sessionId, b.session.id]);
+      assert.deepEqual(browser.attached.map((s) => s.sessionId), [b.session.id]);
+      assert.equal(owner.attachment(a.sessionId), a);
+      assert.equal(a.released, false);
+      await a.resync();
+      assert.equal(owner.client.closed, undefined);
+    } finally {
+      await browser.shutdown();
+      await owner.shutdown();
+    }
+  });
+
+  it("admits a credentialed client and refuses one without the token", { timeout: 90_000 }, async () => {
+    const host = await AppServerHost.connectRemote({
+      endpoint: external.endpoint,
+      token: TRANSPORT_TOKEN,
+    });
+    try {
+      assert.equal(host.ownership, "external");
+      assert.ok(host.client.capabilities?.multi_session);
+      assert.match(host.describe(), /external App Server at ws:\/\//);
+      // Ownership is structural, not inferred: a loopback endpoint is still
+      // somebody else's process.
+      assert.equal(host.childExit, undefined);
+      assert.deepEqual(host.stderrTail(), { text: "", truncatedBytes: 0 });
+    } finally {
+      await host.shutdown();
+    }
+
+    await assert.rejects(
+      AppServerHost.connectRemote({
+        endpoint: external.endpoint,
+        token: "wrong-token-000000000000000000000000000000",
+      }),
+      (error: unknown) =>
+        error instanceof TransportClosedError && error.reason === "handshake_failed",
+    );
+    assert.ok(external.running, "a refused client never stops the listener");
+  });
+
+  it("keeps the server and its accepted work alive across disconnect and reconnect", { timeout: 120_000 }, async () => {
+    const first = await AppServerHost.connectRemote({
+      endpoint: external.endpoint,
+      token: TRANSPORT_TOKEN,
+    });
+    const settings = server.settings("remote-session");
+    const session = await openSession(first, settings);
+    const sessionId = session.sessionId;
+    const incarnation = session.target.runtime_incarnation;
+    const stop = first.client.onNotification((m) => session.applyNotification(m));
+
+    await session.submitInbound([{ type: "text", text: "tui multi-session: session A long task" }]);
+    await provider.awaitGate("session-a-holding");
+
+    // Exiting a remote TUI is a disconnect and nothing more.
+    stop();
+    await first.shutdown();
+    assert.ok(external.running, "TUI exit never stops an external App Server");
+
+    // Reconnect: a new transport, a new initialize, a new attachment, and the
+    // authoritative state — not a reconstruction from what the old client held.
+    const second = await AppServerHost.connectRemote({
+      endpoint: external.endpoint,
+      token: TRANSPORT_TOKEN,
+    });
+    try {
+      const reattached = await second.attach(sessionId);
+      assert.equal(reattached.sessionId, sessionId);
+      assert.notEqual(
+        reattached.target.attachment_id,
+        session.target.attachment_id,
+        "reconnecting always receives a new attachment identity",
+      );
+      assert.equal(
+        reattached.target.runtime_incarnation,
+        incarnation,
+        "the Session kept running in the same server incarnation",
+      );
+      // The Session's accepted work survived the disconnect: the projection
+      // this client reads is the server's, not the previous client's.
+      assert.equal(reattached.state.conversationId, session.state.conversationId);
+      assert.equal(reattached.state.attempt?.phase.type, "running");
+      const b = await openSession(second, server.settings("remote-b"));
+      await b.submitInbound([{ type: "text", text: "tui multi-session: session B quick task" }]);
+      await until(() => b.state.attempt?.phase.type === "settled", "B completes while disconnected A remains held");
+      await provider.releaseGate("session-a-holding");
+      await until(() => reattached.state.attempt?.phase.type === "settled", "accepted remote work finishes after reconnect");
+      assert.equal((await provider.requests()).length, 2, "one admission per Session, no replay");
+    } finally {
+      await second.shutdown();
+    }
+    assert.ok(external.running);
+  });
+
+  it("never replays an uncertain mutation when the socket dies", { timeout: 90_000 }, async () => {
+    const transport = await WebSocketTransport.connect({ endpoint: external.endpoint, token: TRANSPORT_TOKEN });
+    let loseResponse = false;
+    let sentMutations = 0;
+    const client = await AppServerClient.initialize({ transport: {
+      get closed() { return transport.closed; },
+      describe: () => transport.describe(),
+      close: () => transport.close(),
+      onClose: (listener) => transport.onClose(listener),
+      send: async (message) => {
+        if ((message as { method?: string }).method === "session/name") sentMutations++;
+        await transport.send(message);
+      },
+      onMessage: (listener) => transport.onMessage((message) => {
+        const result = typeof message === "object" && message !== null && "result" in message
+          ? message.result : undefined;
+        if (loseResponse && typeof result === "object" && result !== null && "type" in result && result.type === "session") {
+          transport.close(); // The server committed the rename; drop its response.
+          return;
+        }
+        listener(message);
+      }),
+    } });
+    const host = new AppServerHost({ client, ownership: "external" });
+    const session = await openSession(host, server.settings("replay-session"));
+    loseResponse = true;
+    await assert.rejects(host.renameSession(session.sessionId, "accepted-once"), UncertainOutcomeError);
+    const recovered = await AppServerHost.connectRemote({ endpoint: external.endpoint, token: TRANSPORT_TOKEN });
+    try {
+      assert.equal((await recovered.readSession(session.sessionId)).name, "accepted-once");
+      assert.equal(sentMutations, 1);
+      await recovered.attach(session.sessionId);
+    } finally {
+      await recovered.shutdown();
+      await host.shutdown();
+    }
+    assert.ok(external.running);
+  });
+});
+
+describe("cross-transport parity", { skip: SKIP }, () => {
+  let provider: ProviderEmulator;
+  let server: ServerFixture;
+
+  before(async () => {
+    provider = await ProviderEmulator.start("tui_integration");
+    server = ServerFixture.create("rustx-tui-parity-", provider.url("/v1"));
+  });
+  after(async () => {
+    server?.cleanup();
+    await provider?.stop();
+  });
+
+  it("invokes the same operations and reaches the same projection over stdio and WebSocket", { timeout: 120_000 }, async () => {
+    /** One representative scenario, expressed once, run over each transport. */
+    async function scenario(host: AppServerHost, name: string) {
+      const session = await openSession(host, server.settings(name));
+      const renamed = await host.renameSession(session.sessionId, "parity");
+      const listed = await host.listSessions();
+      const capabilities = await session.capabilities();
+      const boundaries = await session.boundaries();
+      await session.resync();
+      return {
+        // Everything compared here is server-authoritative and
+        // transport-independent by construction.
+        named: renamed.name,
+        listedSelf: listed.sessions.some((row) => row.id === session.sessionId),
+        conversation: session.state.conversationId === session.target.conversation_id,
+        capabilityRevisionIsExact: /^(0|[1-9][0-9]*)$/.test(capabilities.revision),
+        surfaceRevisionIsExact: /^(0|[1-9][0-9]*)$/.test(boundaries.surfaceRevision),
+        boundaries: boundaries.boundaries.length,
+        repaired: session.resyncCount,
+        attempt: session.state.attempt?.phase.type,
+      };
+    }
+
+    const local = await AppServerHost.spawnLocal({
+      binary: BINARY,
+      launch: { runtimeRoot: server.runtimeRoot },
+      env: server.env,
+    });
+    let overStdio;
+    try {
+      overStdio = await scenario(local, "parity-stdio");
+      assert.equal(local.ownership, "owned_child");
+    } finally {
+      await local.shutdown();
+    }
+
+    const external = await ExternalAppServer.start(server);
+    const remote = await AppServerHost.connectRemote({
+      endpoint: external.endpoint,
+      token: TRANSPORT_TOKEN,
+    });
+    let overWebSocket;
+    try {
+      overWebSocket = await scenario(remote, "parity-ws");
+      assert.equal(remote.ownership, "external");
+    } finally {
+      await remote.shutdown();
+      // The one legitimate difference: who owns the process, and therefore
+      // what exiting means. Everything above this line is identical.
+      assert.ok(external.running, "exiting a remote TUI stops nothing");
+      await external.stop();
+    }
+
+    assert.deepEqual(
+      overWebSocket,
+      overStdio,
+      "the same operations reach the same projection on both transports",
+    );
+  });
 });

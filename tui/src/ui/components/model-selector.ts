@@ -58,7 +58,7 @@ import type {
   CatalogModelView,
   ModelRef,
   SessionModelView,
-} from "../../protocol/types.ts";
+} from "../../protocol/app-server.ts";
 import type { AttemptPresentation } from "../../presentation/state.ts";
 import {
   describeConfiguredReasoning,
@@ -479,7 +479,7 @@ export function searchTerms(model: CatalogModelView): string[] {
     ...(capabilities.toolCalls ? ["tools"] : []),
     ...(capabilities.reasoning ? ["reasoning"] : []),
     ...(model.reasoningProfiles ?? []).map((profile) => profile.id),
-    ...(model.defaultReasoningProfile === undefined
+    ...(model.defaultReasoningProfile == null
       ? []
       : [model.defaultReasoningProfile]),
     tokens(model.contextWindow),

@@ -26,7 +26,7 @@ import {
   selectTodos,
 } from "../src/presentation/todos.ts";
 import { sanitizeData, sanitizeField, sanitizeLine } from "../src/sanitize.ts";
-import type { MessageBlock, ToolExecutionResult } from "../src/protocol/types.ts";
+import type { MessageBlock, ToolExecutionResult } from "../src/protocol/app-server.ts";
 import { plainText } from "../src/ui/theme.ts";
 import { rendererFor } from "../src/ui/components/tool-renderers.ts";
 import { renderToolCard } from "../src/ui/components/tool-card.ts";
@@ -49,18 +49,18 @@ import {
 } from "./support/fixtures.ts";
 
 function task(id: number, subject: string, overrides: Partial<TodoTask> = {}): TodoTask {
-  return { id, subject, status: "pending", ...overrides };
+  return { id: String(id), subject, status: "pending", ...overrides };
 }
 
 function snapshotOf(tasks: TodoTask[]): TodoSnapshot {
-  return { tasks, next_id: tasks.length + 1 };
+  return { tasks, next_id: String(tasks.length + 1) };
 }
 
 function todoResult(snapshot: TodoSnapshot, summary = "Updated #1"): ToolExecutionResult {
   return toolResult({
     content: [
       { type: "text", text: summary },
-      { type: "json", value: snapshot },
+      { type: "json", value: snapshot as unknown as Record<string, unknown> },
     ],
   });
 }
@@ -209,8 +209,8 @@ describe("the derived task list", () => {
       "an undrawable payload is ignored, never promoted over a good list",
     );
     assert.deepEqual(
-      selectTodos(attached({ next_id: 1 } as unknown as TodoSnapshot)),
-      { tasks: [], next_id: 1 },
+      selectTodos(attached({ next_id: "1" } as unknown as TodoSnapshot)),
+      { tasks: [], next_id: "1" },
       "a snapshot whose list omits its tasks is the empty list, not a guess",
     );
   });
@@ -231,7 +231,7 @@ describe("the derived task list", () => {
         "m1",
         "c1",
         TODO_TOOL_ID,
-        toolResult({ content: [{ type: "json", value: historical }] }),
+        toolResult({ content: [{ type: "json", value: historical as unknown as Record<string, unknown> }] }),
       ),
     ]);
     assert.equal(
@@ -262,7 +262,7 @@ describe("the derived task list", () => {
         "m2",
         "c2",
         TODO_TOOL_ID,
-        toolResult({ content: [{ type: "json", value: historical }] }),
+        toolResult({ content: [{ type: "json", value: historical as unknown as Record<string, unknown> }] }),
       ),
       2,
     );
@@ -278,9 +278,9 @@ describe("the derived task list", () => {
   });
 
   it("is empty, not absent, when the conversation never used the tool", () => {
-    assert.deepEqual(selectTodos(attached({ tasks: [], next_id: 1 })), {
+    assert.deepEqual(selectTodos(attached({ tasks: [], next_id: "1" })), {
       tasks: [],
-      next_id: 1,
+      next_id: "1",
     });
     assert.equal(
       selectTodos(emptyPresentationState(sessionModel("alpha/model-a"))),
@@ -298,27 +298,27 @@ describe("task text a terminal must not be handed", () => {
     const state = attached({
       tasks: [
         {
-          id: 1,
+          id: "1",
           subject: `safe${String.fromCharCode(10)}spoofed`,
           status: "in_progress",
           active_form: `writing${String.fromCharCode(9)}fast`,
           owner: `me${String.fromCharCode(13)}`,
         },
       ],
-      next_id: 2,
+      next_id: "2",
     });
     const list = selectTodos(state);
-    const subject = list?.tasks[0]?.subject ?? "";
+    const subject = list?.tasks?.[0]?.subject ?? "";
     assert.ok(!/[\n\r\t]/.test(subject), subject);
-    assert.ok(!/[\n\r\t]/.test(list?.tasks[0]?.active_form ?? ""));
-    assert.ok(!/[\n\r\t]/.test(list?.tasks[0]?.owner ?? ""));
+    assert.ok(!/[\n\r\t]/.test(list?.tasks?.[0]?.active_form ?? ""));
+    assert.ok(!/[\n\r\t]/.test(list?.tasks?.[0]?.owner ?? ""));
   });
 
   it("bounds the panel in physical rows, not in tasks", () => {
     const tasks = Array.from({ length: 6 }, (_, index) =>
       task(index + 1, `line${String.fromCharCode(10)}break ${index}`),
     );
-    const state = attached({ tasks, next_id: 7 });
+    const state = attached({ tasks, next_id: "7" });
     const panel = renderTodoPanel(selectTodos(state), { columns: 80, rows: 3 });
     assert.equal(
       plainText(panel).split(String.fromCharCode(10)).length,
@@ -331,12 +331,12 @@ describe("task text a terminal must not be handed", () => {
     const state = attached({
       tasks: [
         {
-          id: 1,
+          id: "1",
           subject: `${ESC}[31mred${ESC}[0m${ESC}]0;retitled${String.fromCharCode(7)}`,
           status: "pending",
         },
       ],
-      next_id: 2,
+      next_id: "2",
     });
     const panel = renderTodoPanel(selectTodos(state), { columns: 80 });
     assert.ok(!plainText(panel).includes(ESC), "no ESC survives sanitization");
@@ -613,7 +613,7 @@ describe("the task panel", () => {
             status: "in_progress",
             active_form: "writing the tests",
           }),
-          task(3, "Ship", { blocked_by: [1, 2] }),
+          task(3, "Ship", { blocked_by: ["1", "2"] }),
         ]),
         { columns: 80 },
       ),
@@ -738,7 +738,7 @@ describe("/todos", () => {
             status: "in_progress",
             active_form: "writing the tests",
           }),
-          task(3, "Ship", { blocked_by: [2] }),
+          task(3, "Ship", { blocked_by: ["2"] }),
           task(4, "Gone", { status: "deleted" }),
         ]),
       ),
