@@ -1,0 +1,42 @@
+/* Selected DeepSeek Harness presentation rules; see PROVENANCE.md. */
+.frame {
+position: relative;
+  display: grid;
+  grid-template-rows: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--dsw-alias-bg-base);
+
+  transition: grid-template-columns var(--ds-transition-duration-slow) var(--ds-ease-in-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+.frame {
+transition: none;
+}
+}
+
+.sidebarCol {
+min-width: 0;
+  overflow: hidden;
+  background: var(--dsw-specific-sidebar-fill);
+  border-right: 0.5px solid var(--dsw-alias-border-l3);
+}
+
+.centerCol {
+min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.rightbarCol {
+position: relative;
+  min-width: 0;
+  overflow: visible;
+}
+
+.frame { grid-template-columns: 250px minmax(360px, 1fr) 350px; height: 100dvh; }
+.rightbarCol { overflow: auto; border-left: 1px solid var(--dsw-alias-border-l3); background: var(--dsw-specific-sidebar-fill); }
+@media (max-width: 1100px) { .frame { grid-template-columns: 220px minmax(360px, 1fr); } .rightbarCol { grid-column: 1 / -1; max-height: 50vh; } .frame { overflow: auto; height: auto; min-height: 100dvh; grid-template-rows: minmax(700px, 100dvh) auto; } }
+@media (max-width: 650px) { .frame { display: flex; flex-direction: column; height: auto; } .sidebarCol { max-height: 400px; overflow: auto; } .centerCol { min-height: 75dvh; } }

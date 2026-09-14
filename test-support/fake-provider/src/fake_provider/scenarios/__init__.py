@@ -22,7 +22,7 @@ import dataclasses
 from typing import Callable
 
 from fake_provider.scenario import Scenario, Step, Stream, ToolCall
-from fake_provider.scenarios import conformance, tui
+from fake_provider.scenarios import conformance, tui, web_console
 
 #: The placeholder of the concrete absolute workspace root of the runtime
 #: under test, substituted into scripted tool-call arguments.
@@ -33,6 +33,7 @@ WORKSPACE_PLACEHOLDER = "{workspace}"
 SCENARIOS: dict[str, Callable[[], Scenario]] = {
     **conformance.SCENARIOS,
     **tui.SCENARIOS,
+    **web_console.SCENARIOS,
 }
 
 
