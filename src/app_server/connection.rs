@@ -227,12 +227,11 @@ impl AppServerConnection {
         if let Some(target) = runtime_target(&method) {
             let route = self.route(target)?;
             let client = route.client.clone();
-            let routes = self.routes.clone();
             let changed = self.changed.clone();
             let receiver = client
-                .start_operation(move || async move {
-                    dispatch_runtime(method, route, routes, changed).await
-                })
+                .start_operation(
+                    move || async move { dispatch_runtime(method, route, changed).await },
+                )
                 .map_err(manager_error)?;
             return receiver
                 .await
@@ -240,6 +239,13 @@ impl AppServerConnection {
         }
         match method {
             Method::Initialize(_) => unreachable!(),
+            Method::SessionDetach { target } => {
+                // Removing a connection relationship needs no live-runtime lease.
+                let route = self.route(&target)?;
+                release_route(&self.routes, &route);
+                self.changed.notify_one();
+                Ok(MethodResult::Detached {})
+            }
             Method::SessionDelete {
                 session_id,
                 expected_target_revision,
@@ -261,10 +267,10 @@ impl AppServerConnection {
                         .unload_incarnation(&target.conversation_id, target.runtime_incarnation)
                         .await
                         .map_err(manager_error);
-                    if result.is_ok() {
-                        release_route(&routes, &route);
-                        changed.notify_one();
-                    }
+                    // Every terminal result retires this exact external route,
+                    // including stale residency and fail-closed shutdown errors.
+                    release_route(&routes, &route);
+                    changed.notify_one();
                     let _ = sender.send(result.map(|()| MethodResult::Unloaded {}));
                 });
                 receiver
@@ -527,7 +533,6 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::SubagentCancel { target, .. }
         | Method::SubagentDispose { target, .. }
         | Method::CompactContext { target, .. }
-        | Method::SessionDetach { target, .. }
         | Method::SessionSnapshot { target, .. }
         | Method::SessionSubscribe { target, .. }
         | Method::TurnStart { target, .. }
@@ -544,7 +549,6 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
 async fn dispatch_runtime(
     method: Method,
     route: Arc<Route>,
-    routes: Arc<Mutex<RouteTable>>,
     changed: Arc<tokio::sync::Notify>,
 ) -> Result<MethodResult, RpcError> {
     match method {
@@ -606,11 +610,6 @@ async fn dispatch_runtime(
         ),
         Method::CompactContext { target: _ } => {
             native_result(route.attachment.compact_context().await)
-        }
-        Method::SessionDetach { target: _ } => {
-            release_route(&routes, &route);
-            changed.notify_one();
-            Ok(MethodResult::Detached {})
         }
         Method::SessionSnapshot { target: _ } => native_result(route.attachment.snapshot()),
         Method::SessionSubscribe {

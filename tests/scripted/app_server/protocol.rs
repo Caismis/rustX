@@ -82,6 +82,113 @@ async fn rejected(connection: &AppServerConnection, method: Method) -> ErrorData
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn failed_unload_reclaims_route_without_notification_polling() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.manager.clone());
+        initialize(&connection).await;
+        let old = attach(&connection, &f, 0).await;
+        assert_eq!(connection.attachment_counts(), (1, 0));
+        let identity = f.manager.load(&old.session_id, None).await.unwrap();
+        identity
+            .inspect_runtime()
+            .unwrap()
+            .fail_residency_settlement();
+        assert_eq!(
+            rejected(
+                &connection,
+                Method::SessionUnload {
+                    target: old.clone()
+                }
+            )
+            .await,
+            ErrorData::OperationFailed
+        );
+        assert_eq!(
+            f.manager.residency(&old.conversation_id),
+            super::ResidencyState::Unloading
+        );
+        assert_eq!(connection.attachment_counts(), (0, 0));
+        assert_eq!(
+            rejected(
+                &connection,
+                Method::TurnStart {
+                    target: old,
+                    content: input("never execute")
+                }
+            )
+            .await,
+            ErrorData::StaleAttachment
+        );
+        let next = attach(&connection, &f, 1).await;
+        assert_eq!(connection.attachment_counts(), (1, 0));
+        call(&connection, 1, Method::SessionUnload { target: next }).await;
+        assert_eq!(connection.attachment_counts(), (0, 0));
+        assert!(f.provider.request_bodies().is_empty());
+        // Failed native settlement deliberately retains fail-closed residency
+        // until process teardown; connection capacity is independent of it.
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn detach_during_unloading_needs_no_operation_lease() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.manager.clone());
+        initialize(&connection).await;
+        let old = attach(&connection, &f, 0).await;
+        let probe = f.manager.probe(&old.conversation_id);
+        probe.before_shutdown.arm();
+        let unload = super::unload_task(&f, old.conversation_id.clone());
+        probe.before_shutdown.entered().await;
+        assert_eq!(
+            f.manager.residency(&old.conversation_id),
+            super::ResidencyState::Unloading
+        );
+        assert!(matches!(
+            call(&connection, 1, Method::SessionDetach { target: old }).await,
+            MethodResult::Detached {}
+        ));
+        assert_eq!(connection.attachment_counts(), (0, 0));
+        assert!(!*probe.before_operation.entered.borrow());
+        probe.before_shutdown.release();
+        unload.await.unwrap().unwrap();
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stale_detach_cannot_remove_replacement_route() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.manager.clone());
+        initialize(&connection).await;
+        let old = attach(&connection, &f, 0).await;
+        call(
+            &connection,
+            1,
+            Method::SessionDetach {
+                target: old.clone(),
+            },
+        )
+        .await;
+        let new = attach(&connection, &f, 0).await;
+        assert_ne!(old.attachment_id, new.attachment_id);
+        assert_eq!(old.runtime_incarnation, new.runtime_incarnation);
+        assert_eq!(
+            rejected(&connection, Method::SessionDetach { target: old }).await,
+            ErrorData::StaleAttachment
+        );
+        assert_eq!(connection.attachment_counts(), (1, 0));
+        call(&connection, 2, Method::SessionSnapshot { target: new }).await;
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn admitted_async_operation_drains_before_unload_releases_resources() {
     bounded(async {
         use crate::local_runtime::session::deletion::SessionDeleteResult;

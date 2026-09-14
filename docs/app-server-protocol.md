@@ -115,13 +115,19 @@ joins the projection worker, and releases the composition/allocation. No
 registry lock is held across any of this asynchronous work. The gate is
 subordinate to registry residency, not a second runtime state machine.
 
-Successful `session/unload` removes the exact initiating route and releases its
-attachment capacity **before returning success**, even if the requester stops
-polling. Its response is the initiating request's authoritative terminal
-acknowledgement. Notification consumption is not a resource-release point;
-there is no synthetic durable closed-event queue. An already waiting observer
-may receive `session/closed` for the old target, but cannot remove a newly
-installed route.
+`session/detach` only removes the exact connection-local attachment relationship;
+it acquires no runtime operation lease and works even during `Unloading` or after
+residency ends. It does not cancel execution, settle interactions, or unload.
+
+After exact local route validation, every terminal `session/unload` manager result
+removes the exact initiating route and releases its attachment capacity **before
+returning**, even if the requester stops polling. Errors remain errors: native
+shutdown failure still leaves residency fail-closed in `Unloading`, and stale
+incarnations still fail explicitly. Its response is the initiating request's
+authoritative terminal acknowledgement. Notification consumption is not a
+resource-release point; there is no synthetic durable closed-event queue. An
+already waiting observer may receive `session/closed` for the old target, but
+cannot remove a newly installed route.
 
 ## Attachment and observation lifetime
 
