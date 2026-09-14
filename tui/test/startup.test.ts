@@ -208,3 +208,128 @@ it("a lost first attachment response returns to unfocused browsing without repla
   await finishFocus(next.transport);
   assert.deepEqual(next.host.attached.map((s) => s.sessionId), ["B"]);
 });
+
+async function createFromEmpty(h: ReturnType<typeof appFor>, host: AppServerHost, transport: FakeTransport) {
+  const selector = h.surfaces.at(-1)!;
+  assert.deepEqual(selector.selector.visibleSessions(), []);
+  assert.match(selector.render(80).join("\n"), /No Sessions available.*\n.*\n.*New Session/);
+  assert.match(selector.popupFooter().join(), /Enter New Session/);
+  assert.equal(h.editor.disableSubmit, true);
+  noControl(transport);
+  selector.handleInput("\r");
+  const [create] = await transport.log.awaitMethod("session/create");
+  selector.handleInput("\r");
+  assert.equal(transport.log.count("session/create"), 1, "pending action is single-submit");
+  assert.deepEqual(paramsOf(create!, "session/create").settings, parsedResume().sessionSettings);
+  transport.respond(create!.id, { type: "session_transition", session: sessionView({ id: "created" }),
+    editor_content: [{ type: "text", text: "transition draft" }], durability_diagnostic: "durability test notice" });
+  const attach = await attachment(transport, "created");
+  assert.equal(paramsOf(attach, "session/attach").node_id, sessionView().active_node);
+  await finishFocus(transport);
+  assert.deepEqual(host.attached.map((s) => s.sessionId), ["created"]);
+  assert.equal(h.editor.disableSubmit, false);
+  assert.equal(h.editor.getText(), "transition draft");
+  assert.match(h.feedback.at(-1)!, /durability test notice/);
+  assert.equal(transport.log.count("session/create"), 1);
+  assert.equal(transport.log.count("session/attach"), 1);
+  for (const method of ["session/unload", "session/detach", "turn/cancel", "turn/start"]) assert.equal(transport.log.count(method), 0);
+  assert.equal(transport.disposed, false, "creation preserves the connected host");
+  selector.handleInput("\r");
+  assert.equal(transport.log.count("session/create"), 1, "closed picker cannot create again");
+}
+
+it("delete last Session leaves an empty unfocused picker until explicit New Session", async (t) => {
+  const { host, transport } = await connected();
+  const starting = prepareStartup(host, parsedResume());
+  await catalog(transport, rows.slice(0, 1));
+  const h = appFor(t, host, await starting);
+  const selector = h.surfaces[0]!;
+  selector.handleInput("\x04");
+  const [preview] = await transport.log.awaitMethod("session/deletePreview");
+  transport.respond(preview!.id, { type: "deletion", result: { status: "preview", preview: {
+    session_id: "A", target_revision: "revision-A", owned_node_count: 1, owned_conversation_count: 1, owned_child_count: 0,
+  } } });
+  await tick();
+  selector.handleInput("\t"); selector.handleInput("\r");
+  const [deletion] = await transport.log.awaitMethod("session/delete");
+  assert.deepEqual(paramsOf(deletion!, "session/delete"), { session_id: "A", expected_target_revision: "revision-A" });
+  transport.respond(deletion!.id, { type: "deletion", result: { status: "deleted", session_id: "A" } });
+  await catalog(transport, [], 2);
+  await tick();
+  assert.equal(h.surfaces.at(-1), selector);
+  await createFromEmpty(h, host, transport);
+  assert.equal(transport.log.count("session/delete"), 1);
+});
+
+it("unfocused reconnect to empty catalog initializes and reads before explicit creation", async (t) => {
+  const first = await connected();
+  let next!: Awaited<ReturnType<typeof connected>>;
+  let reconnects = 0;
+  const starting = prepareStartup(first.host, parsedResume());
+  await catalog(first.transport);
+  const h = appFor(t, first.host, await starting, async () => { reconnects++; next = await connected(); return next.host; });
+  first.transport.fail("socket_error");
+  await tick();
+  await catalog(next.transport, []);
+  await tick();
+  assert.equal(next.transport.log.count("initialize"), 1);
+  assert.equal(next.transport.log.count("session/list"), 1);
+  noControl(first.transport);
+  h.surfaces[0]!.onCreate!(); // retired surface is fenced
+  await createFromEmpty(h, next.host, next.transport);
+  assert.equal(reconnects, 1, "creation does not replace the host");
+});
+
+for (const stage of ["create", "attach"] as const) {
+  it(`${stage} failure leaves the empty picker recoverable without rollback or retry`, async (t) => {
+    const { host, transport } = await connected();
+    const h = appFor(t, host, { resumePage: { sessions: [] } });
+    const selector = h.surfaces[0]!;
+    selector.handleInput("\r");
+    const [create] = await transport.log.awaitMethod("session/create");
+    let failed = create!;
+    if (stage === "attach") {
+      transport.respond(create!.id, { type: "session_transition", session: sessionView({ id: "created" }) });
+      [failed] = await transport.log.awaitMethod("session/attach") as [typeof failed];
+    }
+    transport.respondError(failed.id, { code: -32000, message: `${stage} rejected`, data: { kind: "operation_failed" } });
+    await tick();
+    assert.match(h.feedback.at(-1)!, new RegExp(`${stage} rejected`));
+    assert.match(selector.render(80).join(), /New Session/);
+    assert.equal(host.attached.length, 0);
+    assert.equal(h.editor.disableSubmit, true);
+    assert.equal(transport.log.count("session/create"), 1);
+    assert.equal(transport.log.count("session/attach"), stage === "attach" ? 1 : 0);
+    assert.equal(transport.log.count("session/delete"), 0);
+    selector.handleInput("\x1b");
+    // Escape is available so the user can reopen and reconcile the catalog.
+    selector.handleInput("\r");
+    assert.equal(transport.log.count("session/create"), 1);
+  });
+}
+
+for (const stage of ["create", "attach"] as const) {
+  it(`lost empty-picker ${stage} response reconnects read-only without mutation replay`, async (t) => {
+    const first = await connected();
+    const next = await connected();
+    const h = appFor(t, first.host, { resumePage: { sessions: [] } }, async () => next.host);
+    const old = h.surfaces[0]!;
+    old.handleInput("\r");
+    const [create] = await first.transport.log.awaitMethod("session/create");
+    if (stage === "attach") {
+      first.transport.respond(create!.id, { type: "session_transition", session: sessionView({ id: "created" }) });
+      await first.transport.log.awaitMethod("session/attach");
+    }
+    first.transport.fail("socket_error");
+    await catalog(next.transport, []);
+    await tick();
+    assert.equal(first.transport.log.count("session/create"), 1);
+    assert.equal(first.transport.log.count("session/attach"), stage === "attach" ? 1 : 0);
+    noControl(next.transport);
+    assert.equal(h.editor.disableSubmit, true);
+    assert.match(h.surfaces.at(-1)!.render(80).join(), /New Session/);
+    assert.match(h.feedback.at(-1)!, /no unanswered mutations were resent/);
+    await old.onCreate!();
+    noControl(next.transport);
+  });
+}

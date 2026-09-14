@@ -110,7 +110,7 @@ Selecting a row acquires only that Session's attachment/controller; a conflict
 is reported for that explicit selection and leaves the picker available to
 choose again. An unrelated controlled Session cannot block browsing.
 
-If the initial catalog is empty, startup explicitly creates one Session with
+If the initial catalog is empty, startup automatically creates one Session with
 the launch's Session settings, attaches it, and opens normal presentation.
 Ordinary startup also creates/attaches one Session; `--session ID` attaches that
 exact identity directly. During unfocused browsing there is no transcript or
@@ -118,6 +118,14 @@ runtime interaction/model/footer projection and runtime input is disabled.
 Esc closes the picker; Enter reopens it and Ctrl+C exits. Reconnecting before
 selection refreshes the host/catalog without attaching anything. Reconnecting
 after focus reattaches the known Session/node and repairs from server state.
+
+Catalog browsing is read-only. If deletion of the final Session or an unfocused
+reconnect leaves an empty catalog, the picker offers **New Session** (Enter).
+Only that explicit action invokes the dispatcher operation shared with `/new`,
+then attaches and focuses the created Session. No catalog refresh creates a
+replacement automatically. Creation/attachment failures leave the picker
+recoverable; Esc then Enter reopens the authoritative catalog. Lost mutation
+responses are never replayed.
 
 ## Session switching is focus
 

@@ -488,3 +488,23 @@ test("a deletion whose response was lost is unknown, never failed, and is never 
   assert.equal(h.workflow.canRecover(), true, "native recovery stays offered");
   h.dispose();
 });
+
+test("New Session is presentation intent only for a ready unfiltered empty catalog", async () => {
+  for (const options of [{ query: "missing" }, { nextOffset: 1 }, {}]) {
+    const h = harness({ rows: [], ...options });
+    let creates = 0;
+    h.view.onCreate = async () => { creates++; };
+    h.view.handleInput("\r");
+    assert.equal(creates, Object.keys(options).length === 0 ? 1 : 0);
+    assert.deepEqual(h.view.selector.visibleSessions(), [], "no synthetic catalog row");
+    assert.deepEqual(h.lists, []);
+    await turn(); h.dispose();
+  }
+  const h = harness({ rows: [] });
+  let creates = 0;
+  const view = new ResumeSelector({ client: h.client, workflow: h.workflow, alive: () => true, feedback: () => {} });
+  view.onCreate = async () => { creates++; };
+  view.handleInput("\r");
+  assert.equal(creates, 0, "unavailable visibility is not an empty catalog");
+  view.dispose(); h.dispose();
+});

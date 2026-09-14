@@ -257,7 +257,7 @@ export class CommandDispatcher {
         case "/model":
           return await this.#model(session, state, argument);
         case "/new":
-          return await this.#newSession();
+          return await this.newSession();
         case "/resume":
           return await this.#resume(session, argument);
         case "/unload": {
@@ -369,11 +369,15 @@ export class CommandDispatcher {
   }
 
   /** Creates a fresh Session from this client's Session settings. */
-  async #newSession(): Promise<CommandOutcome> {
-    const created = await this.#context.host.createSession(
-      this.#context.sessionSettings,
-    );
-    return focusTransition(created, "created");
+  async newSession(): Promise<CommandOutcome> {
+    try {
+      const created = await this.#context.host.createSession(
+        this.#context.sessionSettings,
+      );
+      return focusTransition(created, "created");
+    } catch (error) {
+      return failure(error);
+    }
   }
 
   /**

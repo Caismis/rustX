@@ -19,6 +19,8 @@ export class ResumeSelector implements PopupContent {
   readonly selector: SessionSelector;
   onChange?: () => void;
   onCancel?: () => void;
+  onCreate?: () => Promise<void>;
+  #creating = false;
   onSelect?: (session: SessionSummaryView) => void;
   readonly #client: DeletionClient;
   readonly #workflow: SessionDeletionWorkflow;
@@ -83,7 +85,14 @@ export class ResumeSelector implements PopupContent {
   }
   dispose(): void { ++this.#workflowSerial; ++this.#requestSerial; this.#unsubscribe(); }
   popupTitle(): string { return this.#state.kind === "selector" ? "Resume session" : "Session deletion"; }
+  #offersCreation(): boolean {
+    return this.onCreate !== undefined && this.#state.kind === "selector" &&
+      this.#listStatus === "ready" && this.#query === "" &&
+      this.#nextOffset === undefined && this.selector.visibleSessions().length === 0;
+  }
   popupFooter(): string[] {
+    if (this.#creating) return [];
+    if (this.#offersCreation()) return ["Enter New Session · Esc close"];
     if (this.#state.kind === "selector") return this.#listStatus === "ready" ? this.selector.popupFooter() : ["Esc close"];
     if (this.#state.kind === "confirm") return this.#state.view.popupFooter();
     if (this.#state.kind === "pending") return this.#state.operation === "preview" ? ["Esc cancel"] : [];
@@ -92,7 +101,16 @@ export class ResumeSelector implements PopupContent {
   invalidate(): void {}
   setBodyHeight(height: number): void { this.#bodyHeight = Math.max(1, height); }
   handleInput(data: string): void {
-    if (!this.#alive()) return;
+    if (!this.#alive() || this.#creating) return;
+    if (this.#offersCreation() && matchesKey(data, "enter")) {
+      this.#creating = true;
+      this.onChange?.();
+      void this.onCreate!().finally(() => {
+        this.#creating = false;
+        if (this.#alive()) this.onChange?.();
+      });
+      return;
+    }
     const state = this.#state;
     if (state.kind === "selector") {
       // Search remains editable while a native query is pending/unavailable,
@@ -115,6 +133,10 @@ export class ResumeSelector implements PopupContent {
     this.onChange?.();
   }
   render(width: number): string[] {
+    if (this.#creating) return ["Creating Session…"];
+    if (this.#offersCreation()) {
+      return ["No Sessions available.", "", "❯ New Session"].slice(0, this.#bodyHeight);
+    }
     const state = this.#state;
     if (state.kind === "selector" && this.#listStatus !== "ready") {
       const text = this.#listStatus === "pending" ? "Refreshing native Session visibility…"

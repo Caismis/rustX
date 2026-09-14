@@ -133,8 +133,12 @@ By default, a launch creates a new Session. `--session ID` selects one explicitl
 `--resume` browses the durable catalog without loading or attaching a Session.
 Only selecting a row acquires that Session's controller. A selection conflict
 leaves the picker available; another client's control cannot block browsing.
-An empty initial catalog explicitly creates and attaches one Session using the
+An empty initial catalog automatically creates and attaches one Session using the
 launch settings. There is no global active Session or restart-based selection.
+Catalog browsing is read-only. If an unfocused resume view becomes empty after
+deletion or reconnect, it offers **New Session** (Enter). Creation occurs only
+after that user action, through the same operation as `/new`; successful
+attachment enables the editor. Later empty catalogs never create automatically.
 
 Normal local exit sends SIGTERM to the owned child and waits for its #291 drain
 result. Remote exit closes only this client's WebSocket. Remote disconnect

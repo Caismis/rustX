@@ -1147,6 +1147,14 @@ export class RustxTuiApp {
     selector.onCancel = () => {
       if (this.#isCurrentPresentationLease(lease) && this.#overlay === handle) this.#closeOverlay();
     };
+    if (this.#session === undefined) {
+      selector.onCreate = async () => {
+        if (!this.#isCurrentPresentationLease(lease) || this.#overlay !== handle || this.#switching) return;
+        const outcome = await this.#dispatcher.newSession();
+        if (!this.#isCurrentPresentationLease(lease)) return;
+        await this.#handleOutcome(outcome, lease);
+      };
+    }
     selector.onSelect = (session) => {
       if (!this.#isCurrentPresentationLease(lease)) return;
       void this.#handleOutcome(
