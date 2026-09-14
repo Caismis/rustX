@@ -32,6 +32,9 @@ export function App({ client }: { client: AppServerClient }) {
   const [token, setToken] = useState('');
   const [tabs, setTabs] = useState<string[]>(preferences.tabs);
   const [selected, setSelected] = useState<string | undefined>(preferences.tabs[0]);
+  // Existing navigation hints may restore wanted views, never a released claim.
+  // A detached tab stays visible on this page but is no longer a resume hint.
+  const resumeTabs = JSON.stringify(tabs.filter(id => state.views[id]?.attachmentIntent !== 'released'));
   const [cwd, setCwd] = useState('');
   const [error, setError] = useState('');
   const [creating, setCreating] = useState<number>();
@@ -41,7 +44,7 @@ export function App({ client }: { client: AppServerClient }) {
   const [offset, setOffset] = useState(0);
   const view = selected ? state.views[selected] : undefined;
   const connected = state.connection === 'connected';
-  const attached = connected && view?.attachment === 'attached';
+  const attached = connected && view?.attachmentIntent === 'wanted' && view.attachment === 'attached';
   const run = (action: () => Promise<unknown>) => {
     const generation = client.getSnapshot().generation; setError('');
     void action().catch(cause => { if (generation === client.getSnapshot().generation) setError(String(cause)); });
@@ -52,9 +55,9 @@ export function App({ client }: { client: AppServerClient }) {
     try {
       // Persist only safe navigation. Never the token, drafts, snapshots or requests.
       const url = new URL(endpoint);
-      if (['ws:', 'wss:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash && url.pathname === '/') localStorage.setItem(PREFERENCES, json({ endpoint, tabs }));
+      if (['ws:', 'wss:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash && url.pathname === '/') localStorage.setItem(PREFERENCES, json({ endpoint, tabs: JSON.parse(resumeTabs) }));
     } catch { /* Storage may be disabled in a trusted browser. */ }
-  }, [endpoint, tabs]);
+  }, [endpoint, resumeTabs]);
   const open = (id: string) => {
     if (!tabs.includes(id) && tabs.length >= 32) { setError('Close a view before opening more than 32 tabs. Explicit detach releases an attachment.'); return; }
     setSelected(id); setTabs(current => current.includes(id) ? current : [...current, id]);
@@ -111,6 +114,7 @@ export function App({ client }: { client: AppServerClient }) {
       <Pill role="tab" active={selected === id} aria-selected={selected === id} onClick={() => setSelected(id)}>{state.sessions.find(item => item.id === id)?.name ?? id.slice(0, 16)}</Pill>
       <button className="close-tab" aria-label={`Close view ${id}`} onClick={() => {
         const remaining = tabs.filter(item => item !== id); setTabs(remaining); if (selected === id) setSelected(remaining[0]);
+        run(() => client.release(id, false));
       }}>×</button>
     </div>)}</nav>
     {(error || state.error) && <div className="notice error" role="alert">{error || state.error}<Button size="sm" onClick={() => { setError(''); client.clearError(); }}>Dismiss notice</Button></div>}
@@ -131,7 +135,7 @@ export function App({ client }: { client: AppServerClient }) {
     </section>}
     {view ? <>
       <section className="session-toolbar"><div><strong>{view.id}</strong><small>{view.settings?.cwd ?? 'cwd unavailable'} · {view.attachment}</small></div>
-        <div className="row"><Button size="sm" disabled={!connected} onClick={() => run(() => client.attach(view.id))}>{view.target ? 'Resync' : 'Attach / cold resume'}</Button>
+        <div className="row"><Button size="sm" disabled={!connected} onClick={() => run(() => client.attach(view.id))}>{view.target && view.attachmentIntent === 'wanted' ? 'Resync' : 'Attach / cold resume'}</Button>
           <Button size="sm" disabled={!attached} onClick={() => run(() => client.release(view.id, false))}>Detach</Button>
           <Button size="sm" disabled={!attached} onClick={() => run(() => client.release(view.id, true))}>Unload runtime</Button></div>
       </section>

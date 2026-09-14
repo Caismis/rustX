@@ -1,5 +1,9 @@
 # Issue #289 validation record
 
+The attachment-lifecycle review correction and its fresh validation are recorded
+in [REVIEW-301.md](REVIEW-301.md). The initial implementation record below predates
+that correction.
+
 Recorded 2026-09-14 on Linux, Node v24.20.0, pnpm 11.13.1, Cargo 1.95.0 and
 uv 0.11.12. This records executed checks, not a claim of manual browser coverage.
 
@@ -94,7 +98,7 @@ job, and the Web Console has its own frozen-install/typecheck/test/build/browser
 | Pause during notification processing | Log presentation pause never pauses correctness processing |
 | Endpoint validation | URL credentials/query/fragment never become handshake/log inputs |
 | `test/presentation.test.tsx`: source-derived shell | Boots without Host; unsupported Harness controls absent |
-| Tab switch/close/unmount | Emits no implicit cancel, unload, delete, answer or detach |
+| Tab switch/unmount (original coverage) | Presentation-only; the former close assertion was incorrect and is replaced by the review regressions linked above |
 | Streaming/Approval rendering | Canonical replacement has no duplicate; authoritative resolution removes obsolete Approval actions |
 | Questionnaire stale/reconnect and duplicate option labels | Disabled while stale; answer identity is native option index, not display label |
 | Native Review | Preserves native instance and subject digest and removes controls on authoritative resolution |

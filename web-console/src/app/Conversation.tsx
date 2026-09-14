@@ -48,10 +48,10 @@ export function Interactions({ client, state, view, run }: {
   return view.snapshot?.pending_interactions?.map(item => {
     const key = interactionKey(item.interaction);
     const operation = state.interactionOperations[key]?.status;
-    const disabled = view.attachment !== 'attached' || !!operation;
+    const disabled = view.attachmentIntent !== 'wanted' || view.attachment !== 'attached' || !!operation;
     const status = operation === 'uncertain' ? 'Outcome uncertain — waiting for authoritative resolution'
       : operation === 'acknowledged' ? 'Settlement acknowledged — refreshing'
-      : operation === 'in-flight' ? 'Awaiting server acknowledgement' : view.attachment !== 'attached' ? 'Pending — stale until reattached' : 'Pending interaction';
+      : operation === 'in-flight' ? 'Awaiting server acknowledgement' : view.attachmentIntent !== 'wanted' ? 'Pending — attachment released by this client' : view.attachment !== 'attached' ? 'Pending — stale until reattached' : 'Pending interaction';
     const kind = item.request.kind;
     const response = (answer: Parameters<AppServerClient['answer']>[2]) => run(() => client.answer(view.id, item.interaction, answer));
     return <div key={key} className="interaction">

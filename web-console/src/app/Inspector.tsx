@@ -16,7 +16,7 @@ export function Inspector({ client, state, view }: { client: AppServerClient; st
     SessionId: view?.id, ConversationId: view?.target?.conversation_id ?? snapshot?.conversation_id,
     runtime_incarnation: view?.target?.runtime_incarnation,
     connection_generation: state.generation, connection: state.connection,
-    attachment: view?.attachment, attachment_id: view?.target?.attachment_id,
+    attachment_intent: view?.attachmentIntent, attachment: view?.attachment, attachment_id: view?.target?.attachment_id,
     residency: view?.attachment === 'attached' || view?.attachment === 'resynchronizing' ? 'loaded'
       : view?.attachment === 'unloaded' ? 'unloaded (acknowledged)' : 'not currently observed',
     cursor: view?.cursor, cwd: view?.settings?.cwd,

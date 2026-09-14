@@ -8,7 +8,9 @@ import { ProtocolLog, type WireContext } from './protocol-log';
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'resynchronizing' | 'stale' | 'incompatible' | 'error';
 export interface SessionView {
   id: string;
-  wanted: boolean;
+  // Local future-control intent; never inferred from an RPC acknowledgement.
+  attachmentIntent: 'wanted' | 'released';
+  // Last server observation, independent of tab visibility and local intent.
   attachment: 'detached' | 'attaching' | 'attached' | 'resynchronizing' | 'stale' | 'unloaded' | 'error';
   target?: AttachmentTarget;
   snapshot?: RuntimeClientSnapshot;
@@ -81,7 +83,8 @@ export class AppServerClient {
   private refreshes = new Map<string, Promise<void>>();
   private dirty = new Set<string>();
   private resubscribe = new Set<string>();
-  private attaching = new Map<string, Promise<void>>();
+  private attachmentChanges = new Map<string, { kind: 'attach' | 'detach' | 'unload'; work: Promise<void> }>();
+  private attachmentChangeCount = 0;
   private attachmentEpochs = new Map<string, number>();
   private state: ClientView = {
     connection: 'disconnected', generation: 0, sessions: [], views: {}, uncertain: [], interactionOperations: {},
@@ -94,11 +97,11 @@ export class AppServerClient {
     for (const listener of this.listeners) listener();
   }
   private setSession(id: string, patch: Partial<SessionView>) {
-    const view = this.state.views[id] ?? { id, wanted: true, attachment: 'detached' as const };
+    const view = this.state.views[id] ?? { id, attachmentIntent: 'released' as const, attachment: 'detached' as const };
     this.publish({ views: { ...this.state.views, [id]: { ...view, ...patch } } });
   }
   restoreViews(ids: readonly string[]) {
-    for (const id of ids.slice(0, 32)) if (!this.state.views[id]) this.setSession(id, {});
+    for (const id of ids.slice(0, 32)) if (!this.state.views[id]) this.setSession(id, { attachmentIntent: 'wanted' });
   }
   async connect(endpoint: string, token: string, reconnect = false) {
     const url = new URL(endpoint);
@@ -139,9 +142,10 @@ export class AppServerClient {
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
       await this.listSessions();
       // Sequential repair leaves room for controls below the transport's 16-work bound.
-      for (const view of Object.values(this.state.views)) {
+      for (const id of Object.keys(this.state.views)) {
         if (!this.current(generation)) return;
-        if (view.wanted) await this.attach(view.id).catch(() => {});
+        // Re-read current intent after every await; reconnect never creates intent.
+        if (this.state.views[id]?.attachmentIntent === 'wanted') await this.acquireAttachment(id).catch(() => {});
       }
       if (this.current(generation)) this.publish({ connection: 'connected' });
     } catch (error) {
@@ -175,13 +179,13 @@ export class AppServerClient {
       } else pending.reject(new Error('Disconnected before a response. Unsent operations were discarded.'));
     }
     this.pending.clear();
-    this.refreshes.clear(); this.dirty.clear(); this.resubscribe.clear(); this.attaching.clear();
+    this.refreshes.clear(); this.dirty.clear(); this.resubscribe.clear(); this.attachmentChanges.clear();
     const operations = { ...this.state.interactionOperations };
     for (const [key, operation] of Object.entries(operations)) if (operation.status === 'in-flight') delete operations[key];
     for (const item of uncertain) if (item.interactionKey) operations[item.interactionKey] = { sessionId: item.sessionId!, status: 'uncertain' };
     this.publish({ connection, generation: this.state.generation + 1, uncertain, interactionOperations: operations,
       views: Object.fromEntries(Object.entries(this.state.views).map(([id, view]) => [id, {
-        ...view, target: undefined, attachment: view.wanted ? 'stale' : view.attachment,
+        ...view, target: undefined, attachment: view.target || ['attaching', 'attached', 'resynchronizing'].includes(view.attachment) ? 'stale' : view.attachment,
       }])),
     });
     oldSocket?.close();
@@ -256,7 +260,7 @@ export class AppServerClient {
     const target = value.params.target;
     const view = this.state.views[target.session_id];
     // An attach response may be interleaved after its first notification.
-    if (this.attaching.has(target.session_id) && !view?.target) { this.dirty.add(target.session_id); return; }
+    if (view?.attachment === 'attaching' && !view?.target) { this.dirty.add(target.session_id); return; }
     if (!sameTarget(view?.target, target)) return;
     if (value.method === 'session/closed') {
       this.retireAttachmentWork(target.session_id);
@@ -293,17 +297,40 @@ export class AppServerClient {
     await this.listSessions();
     if (this.current(generation)) return result.result;
   }
+  /** Explicit Open / Attach gesture. Visibility itself does not acquire a claim. */
   attach(id: string): Promise<void> {
-    const existing = this.attaching.get(id);
-    if (existing) return existing;
-    if (this.state.views[id]?.target) return this.refresh(id);
+    this.setSession(id, { attachmentIntent: 'wanted' });
+    return this.acquireAttachment(id);
+  }
+  private acquireAttachment(id: string): Promise<void> {
+    return this.changeAttachment(id, 'attach', async generation => {
+      if (this.state.views[id]?.attachmentIntent !== 'wanted') return;
+      if (this.state.views[id]?.target) return this.refresh(id);
+      this.setSession(id, { attachment: 'attaching', error: undefined });
+      const epoch = (this.attachmentEpochs.get(id) ?? 0) + 1;
+      this.attachmentEpochs.set(id, epoch);
+      await this.performAttach(id, generation, epoch);
+    });
+  }
+  /** Serialize explicit attachment gestures, including close during attach and
+   * reopen during release. This queue never retries and cannot cross generations. */
+  private changeAttachment(id: string, kind: 'attach' | 'detach' | 'unload', operation: (generation: number) => Promise<void>): Promise<void> {
+    const previous = this.attachmentChanges.get(id);
+    if (previous?.kind === kind) return previous.work;
+    if (this.attachmentChangeCount >= 64) return Promise.reject(new Error('Attachment operation capacity reached. Disconnect to release external claims.'));
     const generation = this.state.generation;
-    this.setSession(id, { wanted: true, attachment: 'attaching', error: undefined });
-    const epoch = (this.attachmentEpochs.get(id) ?? 0) + 1;
-    this.attachmentEpochs.set(id, epoch);
-    const work = this.performAttach(id, generation, epoch);
-    this.attaching.set(id, work);
-    void work.finally(() => { if (this.attaching.get(id) === work) this.attaching.delete(id); }).catch(() => {});
+    this.attachmentChangeCount++;
+    const work = (async () => {
+      if (previous) await previous.work.catch(() => {});
+      if (!this.current(generation)) return;
+      await operation(generation);
+    })();
+    const change = { kind, work };
+    this.attachmentChanges.set(id, change);
+    void work.finally(() => {
+      this.attachmentChangeCount--;
+      if (this.attachmentChanges.get(id) === change) this.attachmentChanges.delete(id);
+    }).catch(() => {});
     return work;
   }
   private async performAttach(id: string, generation: number, epoch: number) {
@@ -407,9 +434,17 @@ export class AppServerClient {
       throw error;
     }
   }
-  async release(id: string, unload: boolean) {
-    const target = this.target(id);
-    const generation = this.state.generation;
+  /** Explicit detach/unload or closing a view relinquishes future-control intent
+   * immediately. Neither failure nor acknowledgement is allowed to reverse it. */
+  release(id: string, unload: boolean): Promise<void> {
+    this.setSession(id, { attachmentIntent: 'released' });
+    return this.changeAttachment(id, unload ? 'unload' : 'detach', generation => this.performRelease(id, unload, generation));
+  }
+  private async performRelease(id: string, unload: boolean, generation: number) {
+    // A close may arrive before attach completes, while stale, or disconnected.
+    // Use an observed target if one exists; never attach just to release it.
+    const target = this.state.views[id]?.target;
+    if (!target) return;
     const epoch = this.attachmentEpochs.get(id);
     try {
       await this.request({ method: unload ? 'session/unload' : 'session/detach', params: { target } }, unload ? 'unloaded' : 'detached');
@@ -426,11 +461,11 @@ export class AppServerClient {
     // A new attach increments the epoch, so this acknowledgement cannot retire it.
     if (this.current(generation) && this.attachmentEpochs.get(id) === epoch) {
       this.retireAttachmentWork(id);
-      this.setSession(id, { target: undefined, wanted: false, attachment: unload ? 'unloaded' : 'detached', error: undefined });
+      this.setSession(id, { target: undefined, attachment: unload ? 'unloaded' : 'detached', error: undefined });
     }
   }
   private retireAttachmentWork(id: string) {
-    this.refreshes.delete(id); this.dirty.delete(id); this.resubscribe.delete(id); this.attaching.delete(id);
+    this.refreshes.delete(id); this.dirty.delete(id); this.resubscribe.delete(id);
   }
   clearError() { this.publish({ error: undefined }); }
   acknowledgeDiagnostic(id: string) {

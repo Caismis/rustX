@@ -101,14 +101,37 @@ its acknowledgement applies only to the attachment lifecycle that requested it.
 
 **Disconnect** closes only the socket and stays disconnected. An unexpected loss
 marks observations stale. **Reconnect** is explicit: initialize, list, reattach
-wanted Sessions and replace snapshots. There is no automatic connection loop.
+Sessions whose current `attachmentIntent` is `wanted`, then replace snapshots.
+There is no automatic connection loop. Three facts stay separate: React tabs own
+visibility; `attachmentIntent` records this browser's desired controller ownership;
+`attachment`/target and uncertain-operation diagnostics record server observations.
+Open/Attach sets intent to `wanted`. Detach, unload and closing a tab set it to
+`released` immediately, before any RPC acknowledgement or failure. Server results
+never change intent. Loss marks an observed route stale regardless of intent.
+
+Closing a tab removes presentation immediately and sends only **session/detach**
+when an observed target is available. If attach is in flight, the release waits for
+its exact target; an explicit reopen waits for release before acquiring a fresh
+attachment. These operations are serialized per Session, bounded to 64 queued or
+running changes, and fenced by connection generation. They are never retried.
+A detach failure/uncertain result stays diagnostic without reopening the tab.
+Switching tabs and React unmounting alone remain presentation-only.
+
 Disconnect, closing a tab, switching focus, and React unmounting never cancel,
-answer, unload or delete. Closing a view leaves its native attachment alone during
-that connection. Explicit **Detach** releases observation; **Unload runtime** is
-the public native shutdown operation and may settle active work. **Attach / cold
-resume** loads through rustX's canonical configuration resolver. Detach/unload
-acknowledgements stop automatic attachment of that view on same-page reconnect;
-a fresh page restores open tab IDs through new authoritative attach operations.
+answer, unload or delete. Detach releases only external controller/subscription
+ownership, so work, loaded runtimes and pending interactions survive. Explicit
+**Unload runtime** is the native shutdown operation and may settle active work.
+After lost detach/unload acknowledgement, released intent prevents reconnect from
+attaching or cold-loading the Session to discover the outcome. Only a later
+explicit **Open / Attach / cold resume** sets wanted intent again. A fresh attach
+cannot by itself prove the previous mutation's outcome, so uncertainty remains.
+
+The existing endpoint/tab navigation hints retain only wanted views for automatic
+page-reload restoration. A detached tab can remain visible on this page without
+remaining a resume hint; no new persisted intent, observation or request state is
+introduced. On a fresh page the Session remains available through the native list
+for explicit Open. **Attach / cold resume** resolves through rustX's canonical
+configuration owners.
 
 Request IDs provide correlation only. There are at most eight transmitted and 64
 pending/queued calls, below the transport's native work bound. The 30-second
@@ -205,9 +228,12 @@ Follow this exact order because the provider is scripted:
 3. In B send **Use B while A runs** and observe **B stayed responsive.** Return to A.
 4. Disconnect, reconnect, then reload the page. Re-enter the transport token and
    connect. The active A projection and both tab IDs return from authoritative state.
-5. Release the provider gate (replace `<control>` with the printed URL):
+5. Close A's tab and verify its Session-list row says detached. Release the provider
+   gate (replace `<control>` with the printed URL):
    `curl -X POST <control>/gates/finish-a/release`.
-   Observe **A is running. A finished.** once in committed conversation.
+   Reopen A from the Session list and observe **A is running. A finished.** once in
+   committed conversation. Closing the view released its controller, not its work.
+   Repeat close/open on A and B; each closed row should become detached.
 6. Send **Approval please** in A. Disconnect/reload while **Allow once** is pending,
    reconnect, then allow. The real bash Tool returns `console-approved`, followed by
    **Approval completed.** Open its Tool card and inspect the IN/OUT values.

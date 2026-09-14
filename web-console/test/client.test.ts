@@ -144,20 +144,22 @@ describe('native App Server connection', () => {
   it('accepts an unload acknowledgement after the native attachment-closed notification', async () => {
     const s = server(); await s.attached('A'); s.held.add('session/unload');
     const target = s.client.target('A'); const unloading = s.client.release('A', true);
-    const request = await s.waitFor('session/unload', 1);
+    const request = await s.waitFor('session/unload', 1); s.commit(request);
     s.socket.deliver({ jsonrpc: '2.0', method: 'session/closed', params: { target } });
     expect(s.client.getSnapshot().views.A.attachment).toBe('stale');
     s.reply(request); await unloading;
     expect(s.client.getSnapshot().views.A.attachment).toBe('unloaded');
-    expect(s.client.getSnapshot().views.A.wanted).toBe(false);
+    expect(s.client.getSnapshot().views.A.attachmentIntent).toBe('released');
   });
   it('fences retired attachment work and a late unload acknowledgement within the same connection', async () => {
     const s = server(); await s.attached('A'); s.held.add('session/snapshot'); s.held.add('session/unload');
     const oldTarget = s.client.target('A'); const staleRead = s.client.refresh('A');
     const read = await s.waitFor('session/snapshot', 1); const unloading = s.client.release('A', true);
     const unload = await s.waitFor('session/unload', 1);
+    s.commit(read); s.commit(unload);
     s.socket.deliver({ jsonrpc: '2.0', method: 'session/closed', params: { target: oldTarget } });
-    await s.client.attach('A'); const newTarget = s.client.target('A');
+    const reopening = s.client.attach('A'); s.reply(unload); await Promise.all([unloading, reopening]);
+    const newTarget = s.client.target('A');
     expect(newTarget.attachment_id).not.toBe(oldTarget.attachment_id);
     s.held.delete('session/snapshot');
     await s.update('A', { ...snapshot(), messages: [{ id: 'new-incarnation', role: 'assistant', content: [{ type: 'text', text: 'Current' }] }] });
@@ -177,10 +179,10 @@ describe('native App Server connection', () => {
   it('repairs a notification interleaved before its attach response with a fresh snapshot and subscription', async () => {
     const s = server(); await s.connect(); s.held.add('session/attach');
     const work = s.client.attach('A'); const request = await s.waitFor('session/attach', 1);
-    const target = { session_id: 'A', conversation_id: 'conversation-A', runtime_incarnation: '1', attachment_id: 'new-attachment' };
+    const attached = s.commit(request); const target = s.target('A');
     s.socket.deliver({ jsonrpc: '2.0', method: 'session/resyncRequired', params: { target, after_cursor: '0', earliest_serviceable: '1' } });
     s.snapshots.set('A', { ...snapshot(), pending_interactions: [interaction('approval')] }); s.cursor = 1n;
-    s.socket.success(request, { type: 'attached', target, snapshot: snapshot(), cursor: '0' }); await work;
+    s.socket.deliver(attached); await work;
     expect(s.client.getSnapshot().views.A.snapshot?.pending_interactions).toHaveLength(1);
     expect(s.requests.at(-1)?.request).toMatchObject({ method: 'session/subscribe', params: { target, after_cursor: '1' } });
   });
@@ -211,6 +213,78 @@ describe('native App Server connection', () => {
     await failure; expect(s.client.getSnapshot().views.A.attachment).toBe('stale');
     expect(s.client.getSnapshot().views.A.target).toBeUndefined();
     expect(s.client.getSnapshot().uncertain).toEqual([]);
+  });
+  it.each([false, true])('lost release acknowledgement (unload=%s) preserves released intent and never reattaches or replays', async unload => {
+    const s = server(); await s.attached('A', 'B'); const method = unload ? 'session/unload' : 'session/detach';
+    s.held.add(method); const baseline = s.requests.length;
+    const release = s.client.release('A', unload);
+    expect(s.client.getSnapshot().views.A).toMatchObject({ attachmentIntent: 'released', attachment: 'attached' });
+    const rejected = expect(release).rejects.toBeInstanceOf(OutcomeUncertain);
+    const request = await s.waitFor(method, 1); s.commit(request);
+    expect(s.loaded.has('A')).toBe(!unload); expect(s.claims().map(item => item.session_id)).toEqual(['B']);
+    s.socket.close(); await rejected;
+    expect(s.client.getSnapshot().views.A).toMatchObject({ attachmentIntent: 'released', attachment: 'stale' });
+    await s.connect();
+    expect(s.requests.slice(baseline).filter(({ request }) => request.method === 'session/attach').map(({ request }) => request.params)).toEqual([{ session_id: 'B' }]);
+    expect(s.requests.filter(({ request }) => request.method === method)).toHaveLength(1);
+    expect(s.loaded.has('A')).toBe(!unload); expect(s.coldLoads.get('A')).toBe(1);
+    expect(s.client.getSnapshot().uncertain).toEqual([expect.objectContaining({ method, sessionId: 'A' })]);
+    await s.client.attach('A');
+    expect(s.client.getSnapshot().views.A).toMatchObject({ attachmentIntent: 'wanted', attachment: 'attached' });
+    expect(s.coldLoads.get('A')).toBe(unload ? 2 : 1);
+    expect(s.requests.slice(baseline).filter(({ request }) => request.method === 'session/attach' && request.params.session_id === 'A')).toHaveLength(1);
+    // A new explicit attachment cannot prove the old request's outcome.
+    expect(s.client.getSnapshot().uncertain).toHaveLength(1);
+  });
+  it('more than 32 historical open/close owners retain only live external claims', async () => {
+    const s = server(); await s.attached('B');
+    for (let i = 0; i < 40; i++) {
+      const id = `closed-${i}`; s.snapshots.set(id, snapshot(id));
+      await s.client.attach(id); expect(s.claims().map(item => item.session_id)).toEqual(['B', id]);
+      await s.client.release(id, false); expect(s.claims().map(item => item.session_id)).toEqual(['B']);
+      expect(s.loaded.has(id)).toBe(true);
+    }
+    expect(s.maxClaims).toBe(2);
+    const baseline = s.requests.length; await s.connect();
+    expect(s.requests.slice(baseline).filter(({ request }) => request.method === 'session/attach').map(({ request }) => request.params)).toEqual([{ session_id: 'B' }]);
+  });
+  it('close during attach waits for its exact target, then detaches without changing runtime facts', async () => {
+    const s = server(); await s.connect(); s.held.add('session/attach');
+    const opening = s.client.attach('A'); const request = await s.waitFor('session/attach', 1);
+    const closing = s.client.release('A', false);
+    expect(s.client.getSnapshot().views.A.attachmentIntent).toBe('released');
+    s.reply(request); await Promise.all([opening, closing]);
+    expect(s.claims()).toEqual([]); expect(s.loaded.has('A')).toBe(true);
+    expect(s.requests.filter(({ request }) => request.method === 'session/detach')).toHaveLength(1);
+    await s.connect(); expect(s.claims()).toEqual([]);
+  });
+  it('explicit reopen waits for a pending detach and acquires one fresh authoritative attachment', async () => {
+    const s = server(); await s.attached('A'); s.held.add('session/detach');
+    const closing = s.client.release('A', false); const request = await s.waitFor('session/detach', 1);
+    const oldTarget = s.client.target('A');
+    const opening = s.client.attach('A'); const duplicate = s.client.attach('A');
+    expect(s.client.getSnapshot().views.A.attachmentIntent).toBe('wanted');
+    expect(s.requests.filter(({ request }) => request.method === 'session/attach')).toHaveLength(1);
+    s.snapshots.get('A')!.pending_interactions = [interaction('questionnaire')];
+    s.reply(request); await Promise.all([closing, opening, duplicate]);
+    expect(s.requests.filter(({ request }) => request.method === 'session/attach')).toHaveLength(2);
+    expect(s.claims()).toHaveLength(1); expect(s.client.target('A')).not.toEqual(oldTarget);
+    expect(s.client.getSnapshot().views.A.snapshot?.pending_interactions).toHaveLength(1);
+  });
+  it('reconnect reads intent after each await instead of restoring a captured historical intent', async () => {
+    const s = server(); s.client.restoreViews(['A', 'B']); s.held.add('session/attach');
+    const connecting = s.connect(); const request = await s.waitFor('session/attach', 1);
+    await s.client.release('B', false); s.reply(request); await connecting;
+    expect(s.requests.filter(({ request }) => request.method === 'session/attach').map(({ request }) => request.params)).toEqual([{ session_id: 'A' }]);
+    expect(s.client.getSnapshot().views.B.attachmentIntent).toBe('released');
+  });
+  it('a rejected release does not restore attachment intent or claim successful detach', async () => {
+    const s = server(); await s.attached('A'); s.held.add('session/detach');
+    const rejected = expect(s.client.release('A', false)).rejects.toThrow('Invalid state');
+    const request = await s.waitFor('session/detach', 1);
+    s.socket.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'Invalid state', data: { kind: 'invalid_state' } } });
+    await rejected; expect(s.client.getSnapshot().views.A).toMatchObject({ attachmentIntent: 'released', attachment: 'attached' });
+    await s.connect(); expect(s.claims()).toEqual([]);
   });
   it('rejects unsafe endpoint credential paths before opening a socket', async () => {
     const s = server(); await expect(s.client.connect(`${endpoint}?token=secret`, TOKEN)).rejects.toThrow('no credentials');

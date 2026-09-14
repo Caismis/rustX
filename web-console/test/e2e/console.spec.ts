@@ -39,7 +39,27 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(page.locator('.status strong')).toHaveText('connected');
     await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
     await reload(); await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
-    await fixture.release('finish-a'); await expect(page.getByText('A is running. A finished.', { exact: true })).toBeVisible();
+    const incarnationA = JSON.parse(await page.getByLabel('Runtime facts').innerText()).runtime_incarnation;
+    await page.getByRole('button', { name: `Close view ${idA}` }).click();
+    await expect(page.getByRole('tab', { name: idA, exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: `Open ${idA}`, exact: true })).toContainText('detached');
+    // The only controller has been released before the provider finishes A.
+    await fixture.release('finish-a');
+    await fixture.control('observations/await?kind=response_completed&count=2&timeoutMs=30000');
+    await page.getByRole('button', { name: `Open ${idA}`, exact: true }).click();
+    await expect(page.getByText('A is running. A finished.', { exact: true })).toBeVisible();
+    expect(JSON.parse(await page.getByLabel('Runtime facts').innerText()).runtime_incarnation).toBe(incarnationA);
+    // Alternate more than the native 32-attachment capacity on one connection.
+    // Every close is acknowledged as detached, and every reopen keeps residency.
+    for (let i = 0; i < 34; i++) {
+      const id = i % 2 === 0 ? idA : idB;
+      await page.getByRole('button', { name: `Close view ${id}` }).click();
+      await expect(page.getByRole('button', { name: `Open ${id}`, exact: true })).toContainText('detached');
+      await page.getByRole('button', { name: `Open ${id}`, exact: true }).click();
+      await expect(page.locator('.session-toolbar small')).toContainText('attached');
+      await expect(page.locator('.session-toolbar strong')).toHaveText(id);
+    }
+    await page.getByRole('tab', { name: idA, exact: true }).click();
     await send('Approval please'); await expect(page.getByRole('button', { name: 'Allow once' })).toBeEnabled();
     await page.getByRole('button', { name: 'Disconnect', exact: true }).click(); await reload();
     await expect(page.getByRole('button', { name: 'Allow once' })).toBeEnabled(); await page.getByRole('button', { name: 'Allow once' }).click();
