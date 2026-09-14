@@ -9,9 +9,9 @@
 //!   in-memory byte pipes, and decoded back.
 //!
 //! A transport is correct exactly when the two are indistinguishable here.
-//! Issue #36 adds a `WebSocketDriverFactory` and one more generated test per
-//! scenario; no scenario body changes, because no scenario names a framing,
-//! a byte, or a transport error.
+//! These are the temporary pre-#290 Runtime Client expectations. Issue #36
+//! instead runs `tests/support/app_server_conformance.rs` through both App
+//! Server stdio and WebSocket drivers without duplicating semantic expectations.
 //!
 //! Byte-level framing, record limits, stdout purity, EOF/broken-pipe
 //! lifecycle, and backpressure are transport-specific and live in

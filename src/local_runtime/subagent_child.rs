@@ -790,9 +790,9 @@ async fn send_interaction_response_result(
     runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
     response_id: u64,
     interaction: crate::runtime::interaction::InteractionRef,
-    response: crate::runtime::interaction::InteractionResponse,
+    response: crate::runtime::interaction::InteractionControl,
 ) -> Result<(), ChildExit> {
-    let result = runtime.respond_interaction(&interaction, response).await;
+    let result = runtime.control_interaction(&interaction, response).await;
     handle
         .send_reliable(ChildFrame::InteractionResponseResult(
             crate::runtime::subagent::ipc::InteractionResponseResultFrame {

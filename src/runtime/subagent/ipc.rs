@@ -98,7 +98,9 @@ use crate::runtime::workspace::WorkspaceSnapshot;
 /// derives its private allocation from product identity, `ConversationId` and incarnation.
 /// Version 24 carries frozen selection facts and Skill provenance, so child
 /// inspection describes the same composition that execution materializes.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 24;
+/// Version 25 carries explicit response/cancel controls to the originating
+/// interaction coordinator. It is independent of App Server protocol v1.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 25;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -259,7 +261,7 @@ pub(crate) struct DelegationFrame {
     /// The explicit bounded context package, when the delegating call
     /// supplied one.
     pub context: Option<String>,
-    /// Whether a capable root Runtime Client human surface existed when the
+    /// Whether a capable root runtime projection was bound when the
     /// child was admitted. This is provider state, not `ask_user` capability
     /// selection and not a settlement decision.
     pub interaction_provider_available: bool,
@@ -548,13 +550,13 @@ pub(crate) enum ParentFrame {
         /// The full semantic route target.
         interaction: crate::runtime::interaction::InteractionRef,
         /// The typed response; the child coordinator validates it.
-        response: crate::runtime::interaction::InteractionResponse,
+        response: crate::runtime::interaction::InteractionControl,
     },
     /// Early root Runtime Client human-provider availability hint for future
     /// child publications. The admission result is authoritative, and
     /// existing pending interactions are unaffected.
     InteractionProviderAvailable {
-        /// Whether a capable root Runtime Client control attachment exists.
+        /// Whether a capable root runtime projection is bound.
         available: bool,
     },
     /// The root provider authority's answer to one child publication request.
@@ -855,7 +857,7 @@ pub(crate) async fn read_parent_frame<R: tokio::io::AsyncRead + Unpin + ?Sized>(
             let (response_id, interaction, response): (
                 u64,
                 crate::runtime::interaction::InteractionRef,
-                crate::runtime::interaction::InteractionResponse,
+                crate::runtime::interaction::InteractionControl,
             ) = decode(&payload)?;
             ParentFrame::InteractionRespond {
                 response_id,
@@ -1304,7 +1306,9 @@ mod tests {
             &ParentFrame::InteractionRespond {
                 response_id: 44,
                 interaction: routed_ref.clone(),
-                response: response.clone(),
+                response: crate::runtime::interaction::InteractionControl::Respond {
+                    response: response.clone(),
+                },
             },
         )
         .await
@@ -1332,7 +1336,9 @@ mod tests {
             Some(ParentFrame::InteractionRespond {
                 response_id: 44,
                 interaction: routed_ref.clone(),
-                response: response.clone(),
+                response: crate::runtime::interaction::InteractionControl::Respond {
+                    response: response.clone()
+                },
             })
         );
         assert_eq!(

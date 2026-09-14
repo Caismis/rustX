@@ -1029,8 +1029,10 @@ The Runtime Client protocol carries the same semantic plane through
 `interaction_respond`, typed acceptance/errors, `interaction_pending` and
 `interaction_settled` events, and `snapshot.pending_interactions`. Snapshot
 plus cursor and subscribe-after-cursor retain the existing repair invariant.
-No capable attachment at publication fails approval closed as `Unavailable`.
-Detaching an attachment only closes admission for future interactions; it
+No bound publication provider fails approval closed as `Unavailable`. A loaded
+App Server runtime remains capable with zero external attachments; disconnect
+does not change pending Approval/Questionnaire ownership or publication admission.
+Detaching an attachment does not close admission for future interactions and
 does not answer, deny, or cancel an already-published request. A later
 attachment can answer a still-live request from the authoritative runtime
 projection.
@@ -5217,19 +5219,23 @@ environment, finite timeout, bounded diagnostics, and no generic
 
 The outermost layer exposes the runtime to humans and other systems:
 
-- Runtime Client protocol (semantic client boundary)
+- App Server protocol (versioned, transport-neutral public client boundary)
 - Local interactive CLI
 - Runtime command interface
-- HTTP control interface
-- Runtime event streaming
-- AG-UI projection
+- Runtime projection/event streaming
 
-AG-UI is an output projection, not the internal durable event model.
+See [App Server protocol v1](app-server-protocol.md) for the method vocabulary,
+generated client schemas, connection multiplexing, weak attachment lifetime and
+headless interaction ownership. #36 binds the same endpoint to stdio JSONL for a
+local TUI-owned child and WebSocket for browser/remote/existing-server clients;
+it does not introduce another semantic endpoint. #290 consumes those bindings,
+without requiring a loopback WebSocket for local TUI use. No REST or AG-UI frontend
+protocol is implemented.
 
 #### Runtime Client protocol implementation (Issue #37, revised by Issues #131, #130, #136, #140, and #144)
 
-Issue #37 implements the one external semantic normalization boundary in
-`src/runtime_client`:
+Issue #37 established the native projection machinery in `src/runtime_client`.
+Issue #288 reuses it beneath the one public App Server protocol:
 
 ```text
 canonical runtime state / internal RuntimeEvent
@@ -5241,7 +5247,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-      Runtime Client protocol
+       App Server protocol v1
 ```
 
 The governing invariant is that all authoritative execution and
@@ -5249,19 +5255,17 @@ conversation state originates from rustX Runtime; external clients observe
 deterministic projections and never become a second authority. The
 internal `RuntimeEvent` vocabulary is an execution-fact vocabulary, **not**
 the wire contract: `RuntimeClientEvent` and `RuntimeClientSnapshot` are
-explicit runtime-owned projection types with their own versioning
-(`RUNTIME_CLIENT_PROTOCOL_VERSION`, independent from
-`EVENT_SCHEMA_VERSION`, the manifest schema version, and the crate
-version), lifecycle semantics, and cursor domain
-(`RuntimeClientCursor`). Later transports (Issue #38 stdio JSONL,
-Issue #36 WebSocket) wrap this semantic layer without redefining it, and a
+explicit runtime-owned projection types. Their public wire contract is versioned
+by `APP_SERVER_PROTOCOL_VERSION`, independently of journal, manifest, crate and
+the existing local TUI protocol version. Snapshot/cursor/attachment authority
+stays in the host; App Server does not copy its projection database. Both stdio
+JSONL and WebSocket in #36 bind App Server, including its standalone process entry
+point. Neither binding owns domain semantics. The existing `src/protocol` boundary remains the compiled
+`RuntimeManifest` protocol; it is not a frontend protocol.
 
-future AG-UI adapter consumes this projection as its only source — there
-is no second AG-UI interpretation path directly from internal runtime
-events. The existing `src/protocol` boundary remains the compiled
-`RuntimeManifest` protocol; the two protocols are not mixed.
-
-The current Runtime Client protocol is defined by `RUNTIME_CLIENT_PROTOCOL_VERSION`.
+The following version history describes the existing local TUI stdio contract,
+retained until #290 migrates that application. App Server clients never negotiate
+or nest it. Its local version is `RUNTIME_CLIENT_PROTOCOL_VERSION`.
 
 Runtime Client protocol 34 removes the obsolete global `SessionSummaryView.active`
 field. Strict initialization rejects v33 clients; Session route changes report
@@ -6226,7 +6230,8 @@ transcript or execution-history authority.
 
 #### Runtime Client transports: stdio JSONL (Issue #38)
 
-Transports live beneath the semantic layer, in their own namespace:
+The existing local TUI transport lives in its own namespace. This diagram is
+specific to that application pending #290, not the public App Server topology:
 
 ```text
 rustX Runtime
@@ -6242,14 +6247,16 @@ transport adapters                framing only; src/runtime_client/transport
       |
       +-- stdio / strict JSONL    Issue #38
       |
-      +-- WebSocket               Issue #36, later
+      +-- TUI                     pending #290 migration to App Server
       |
       v
 clients
 ```
 
-Issue #38 adds `src/runtime_client/transport/stdio.rs`. Adding Issue #36
-means adding a sibling module there; no semantic module moves.
+Issue #38 added `src/runtime_client/transport/stdio.rs` for this temporary local
+Runtime Client contract. #36 instead binds the App Server endpoint to first-class
+stdio JSONL and WebSocket transports; #290 replaces the TUI's old wire semantics,
+not stdio as a transport choice. The following describes the current #38 adapter.
 
 - **The endpoint remains the semantic owner.** A transport calls
   `RuntimeClientEndpoint::handle_request` and forwards
@@ -6326,8 +6333,10 @@ means adding a sibling module there; no semantic module moves.
 - **Conformance is transport-independent.** The Issue #38 scenario suite
   (`tests/support/runtime_client_conformance.rs`) drives one set of
   semantic scenarios through a direct-endpoint driver and the stdio
-  driver. Issue #36 adds a WebSocket driver and inherits every scenario
-  unchanged; byte-level framing tests stay transport-specific.
+  driver for the old Runtime Client contract. The new App Server parity scenario
+  is `tests/support/app_server_conformance.rs`: #36 supplies stdio and WebSocket
+  drivers for that shared semantic scenario, not the old protocol's scenarios.
+  Byte-level framing tests stay transport-specific.
 
 #### Runtime Client model semantics (Issue #42)
 

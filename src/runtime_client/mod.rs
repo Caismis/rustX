@@ -1,5 +1,6 @@
-//! The Runtime Client boundary (Issue #37): the one external observation
-//! boundary of rustX Runtime state.
+//! Runtime Client projection/control owners reused by the App Server boundary.
+//! The public multi-Session protocol is [`crate::app_server`]. The local TUI
+//! stdio envelope remains scoped to its current application until #290.
 //!
 //! # Architecture
 //!
@@ -13,7 +14,7 @@
 //!  RuntimeClientEvent / RuntimeClientSnapshot
 //!                 |
 //!                 v
-//!       Runtime Client Protocol
+//!       App Server protocol (client-neutral generated schemas)
 //! ```
 //!
 //! The governing invariant:
@@ -35,9 +36,9 @@
 //! [`RuntimeClientEvent`](event::RuntimeClientEvent) and
 //! [`RuntimeClientSnapshot`](snapshot::RuntimeClientSnapshot) are
 //! explicit runtime-owned projection types with their own versioning,
-//! lifecycle semantics, and cursor domain. Later transports (Issue #38
-//! stdio JSONL, Issue #36 WebSocket) wrap this semantic layer without
-//! redefining it, and an AG-UI adapter consumes this projection as its
+//! lifecycle semantics, and cursor domain. Issue #38's local stdio contract
+//! remains until #290; Issue #36 binds stdio JSONL and WebSocket to the App
+//! Server endpoint that reuses these projection owners. An AG-UI adapter consumes this projection as its
 //! only source — there is no second AG-UI interpretation path directly
 //! from internal runtime events.
 //!
@@ -75,13 +76,13 @@
 //! - one control attachment per live runtime instance, plus explicitly
 //!   read-only observation attachments;
 //! - detach is never cancellation;
-//! - no capable attachment at interaction publication fails approval closed;
+//! - interaction availability follows runtime binding, not client presence;
 //! - live pending interactions are reconstructed from the snapshot/cursor
 //!   projection, never from TUI state or recovery logs;
 //! - bounded in-memory projection replay (the durable Event Journal and
 //!   current Surface bootstrap remain `ConversationStore` authorities; the
 //!   client cursor/cache is never recovery input);
-//! - no WebSocket (Issue #36), no TUI (Issue #39), no M9 cancellation
+//! - no App Server stdio/WebSocket bindings (Issue #36), no TUI (Issue #39), no M9 cancellation
 //!   hierarchy, no AG-UI adapter implementation.
 //!
 //! # Transports

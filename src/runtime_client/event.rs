@@ -46,6 +46,7 @@ use crate::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult, ToolProg
 /// fields are rejected.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum RuntimeClientEvent {
     /// Bounded authoritative Goal view, including activation-only changes.
     GoalChanged { view: crate::goal::GoalView },
@@ -503,6 +504,7 @@ pub enum RuntimeClientEvent {
 /// retry hint — never the provider-specific error code.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum RuntimeClientOutcome {
     /// The attempt completed.
     Completed {
@@ -535,6 +537,7 @@ pub enum RuntimeClientOutcome {
 /// (such as the raw provider error code) never appear here.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum RuntimeClientAttemptFailure {
     /// A model request exhausted its retry policy.
     Model {
@@ -543,6 +546,7 @@ pub enum RuntimeClientAttemptFailure {
         /// The normalized human-readable message.
         message: String,
         /// The retry hint, when the provider reported one.
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
         retry_after_ms: Option<u64>,
     },
     /// A runtime failure.

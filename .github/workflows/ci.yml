@@ -272,6 +272,18 @@ jobs:
         working-directory: tui
         run: pnpm typecheck
 
+      - name: Install protocol generator
+        working-directory: protocol/app-server
+        run: pnpm install --frozen-lockfile
+
+      - name: Check generated App Server artifacts
+        working-directory: protocol/app-server
+        run: pnpm check
+
+      - name: Typecheck Rust-produced protocol fixtures
+        working-directory: protocol/app-server
+        run: pnpm typecheck
+
       # The integration suite drives the real binary over the real stdio
       # transport, so it must exist before the tests run.
       - name: Build the rustx binary

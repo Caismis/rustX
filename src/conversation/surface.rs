@@ -42,6 +42,7 @@ use crate::runtime::identity::MessageId;
 /// none of them may be substituted for one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
+#[derive(schemars::JsonSchema)]
 pub struct SurfaceRevision(u64);
 
 impl SurfaceRevision {

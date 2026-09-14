@@ -51,6 +51,7 @@ use crate::tools::types::{
 /// runtime (Issue #63).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct RuntimeDurabilityFailure {
     /// The operation that failed persistently.
     pub operation: String,
@@ -66,6 +67,7 @@ pub struct RuntimeDurabilityFailure {
 /// directly.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct RuntimeClientSnapshot {
     pub settings_evidence: super::settings::SettingsEvidence,
     /// Immutable resolver facts; unavailable for durable-only or frozen-child attachment.
@@ -240,6 +242,7 @@ pub struct RuntimeClientSnapshot {
 /// One bounded newest-or-older page of derived transcript history.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct RuntimeClientTranscriptPage {
     /// Items in chronological order within this page.
     #[serde(default)]
@@ -250,7 +253,7 @@ pub struct RuntimeClientTranscriptPage {
 }
 
 /// One derived transcript item and its stable durable cursor.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RuntimeClientTranscriptEntry {
     /// The durable transcript position, not the Runtime Client event cursor.
     pub cursor: RuntimeClientTranscriptCursor,
@@ -259,7 +262,7 @@ pub struct RuntimeClientTranscriptEntry {
 }
 
 /// One live-published requested interaction audit projection.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RuntimeClientTranscriptInteractionRequested {
     /// Durable Event Journal event identity.
     pub event_id: EventId,
@@ -276,7 +279,7 @@ pub struct RuntimeClientTranscriptInteractionRequested {
 }
 
 /// One live-published settled interaction audit projection.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RuntimeClientTranscriptInteractionSettled {
     /// Durable Event Journal event identity.
     pub event_id: EventId,
@@ -295,6 +298,7 @@ pub struct RuntimeClientTranscriptInteractionSettled {
 /// The explicit Runtime Client transcript vocabulary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum RuntimeClientTranscriptItem {
     /// A user, Assistant, or Tool message body from Pending Inbound or Ledger.
     Message {
@@ -341,6 +345,7 @@ pub enum RuntimeClientTranscriptItem {
 /// The cursor domain of durable transcript paging.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
+#[derive(schemars::JsonSchema)]
 pub struct RuntimeClientTranscriptCursor(u64);
 
 impl RuntimeClientTranscriptCursor {
@@ -518,6 +523,7 @@ pub(crate) fn interaction_settled_view(
 /// The context diagnostics carried by the Runtime Client snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct RuntimeClientContextView {
     /// Whether the runtime currently owns a context-compaction operation.
     /// This is live operation state, not inferred from token usage.
@@ -525,6 +531,7 @@ pub struct RuntimeClientContextView {
     /// Runtime Client projection statistic: the number of committed
     /// compaction completions folded into this read model. The compaction
     /// generation remains the conversation-owned identity.
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub compaction_count: u64,
     /// The latest committed compaction metadata, when compaction occurred.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -538,6 +545,7 @@ pub struct RuntimeClientContextView {
 /// ordinary Ledger fact in [`RuntimeClientSnapshot::messages`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct RuntimeClientCompactionView {
     /// The compaction generation maintained in the current Conversation
     /// Surface head.
@@ -549,6 +557,7 @@ pub struct RuntimeClientCompactionView {
     /// The pre-compaction input measurement and its provenance.
     pub tokens_before: TokenMeasurement,
     /// The deterministic estimate of the rebuilt request context.
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub estimated_tokens_after: u64,
 }
 
@@ -558,6 +567,7 @@ pub struct RuntimeClientCompactionView {
 /// output, and foreground tool execution into one structured read model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct RuntimeClientAttempt {
     /// The attempt identity.
     pub attempt_id: AttemptId,
@@ -589,6 +599,7 @@ pub struct RuntimeClientAttempt {
 /// The externally meaningful phase of one attempt.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum RuntimeClientAttemptPhase {
     /// The coordinator admitted the attempt; the loop has not started yet.
     Admitted,
@@ -609,6 +620,7 @@ pub enum RuntimeClientAttemptPhase {
 /// observed incrementally.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct InFlightAssistantMessage {
     /// The provisional message identity.
     pub message_id: MessageId,
@@ -620,6 +632,7 @@ pub struct InFlightAssistantMessage {
 /// One ordered block of an in-flight Assistant message.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum InFlightBlock {
     /// Accumulated text of one output block.
     Text {
@@ -665,6 +678,7 @@ pub enum InFlightBlock {
 /// this one shape.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct ForegroundToolExecution {
     /// The logical tool-call identity.
     pub call_id: ToolCallId,
@@ -679,6 +693,7 @@ pub struct ForegroundToolExecution {
 /// The externally meaningful state of one foreground tool execution.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum ForegroundToolState {
     /// The call is known and its arguments are assembled; execution has
     /// not started.
@@ -710,6 +725,7 @@ pub enum ForegroundToolState {
 /// drain or mutate the mailbox.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct InboundDiagnostics {
     /// The currently pending inbound items in runtime-assigned inbound
     /// sequence order.
@@ -723,6 +739,7 @@ pub struct InboundDiagnostics {
 /// One pending inbound item of the diagnostics view.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct InboundItemView {
     /// The mailbox-assigned inbound sequence.
     pub sequence: InboundSequence,
@@ -733,6 +750,7 @@ pub struct InboundItemView {
 /// The latest observed finite drain boundary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct InboundDrainView {
     /// The highest selected inbound sequence.
     pub watermark: InboundSequence,
@@ -749,6 +767,7 @@ pub struct InboundDrainView {
 /// value contracts. No internal task handles or process ids ever appear.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct RuntimeClientBackgroundExecution {
     /// The detached runtime execution identity.
     pub execution_id: ToolExecutionId,
@@ -771,6 +790,7 @@ pub struct RuntimeClientBackgroundExecution {
 /// responsibilities; this is only a read-model projection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct RuntimeClientSubagentWorkspace {
     /// Present when the Workflow run, rather than this child, owns the lease.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -790,6 +810,7 @@ pub struct RuntimeClientSubagentWorkspace {
 /// The external read-model projection of a child workspace's isolation mode.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum RuntimeClientWorkspaceIsolation {
     /// No runtime-owned physical checkout exists.
     Shared,
@@ -813,6 +834,7 @@ pub enum RuntimeClientWorkspaceIsolation {
 /// The Git facts needed to recover a preserved child worktree.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct RuntimeClientWorkspaceHandoff {
     /// The child's preserved logical project scope.
     pub logical_workspace: std::path::PathBuf,
@@ -843,6 +865,7 @@ pub struct RuntimeClientWorkspaceHandoff {
 /// authority on whether the child is alive, settling, or settled.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct RuntimeClientSubagent {
     /// The conversation-owned subagent identity.
     pub subagent_id: crate::runtime::identity::SubagentId,
@@ -928,6 +951,7 @@ pub const AGENT_STATUS_WINDOW: usize = 64;
 /// presentation and stays entirely outside this type.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct AgentStatusView {
     /// The attempt that composed the status.
     pub attempt_id: AttemptId,
@@ -964,6 +988,7 @@ pub struct AgentStatusView {
 /// One structured Agent Status section of the external view.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum RuntimeClientStatusSection {
     /// The typed Time payload.
     Temporal {
@@ -971,6 +996,7 @@ pub enum RuntimeClientStatusSection {
         current_time: DateTime<Utc>,
         /// The Time status timezone, when configured.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "Option<String>")]
         timezone: Option<Tz>,
     },
     /// The runtime-owned background-execution section.
@@ -1004,6 +1030,7 @@ pub enum RuntimeClientStatusSection {
 /// One bounded Todo task in the Agent Status client view.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct RuntimeClientTodoStatusTask {
     /// The conversation-owned task id.
     pub id: u64,
@@ -1021,6 +1048,7 @@ pub struct RuntimeClientTodoStatusTask {
 /// The external view of the Agent Status opportunity set.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct AgentStatusOpportunityView {
     /// The `FreshInbound` opportunity that produced this status, when one is
     /// present. Future delivery opportunities can be added alongside it
@@ -1036,6 +1064,7 @@ pub struct AgentStatusOpportunityView {
 /// The external view of one `FreshInbound` status opportunity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct FreshInboundStatusOpportunityView {
     /// The inbound message that made status generation eligible.
     pub target_message_id: MessageId,
@@ -1058,6 +1087,7 @@ pub struct FreshInboundStatusOpportunityView {
 /// would place the status after an unrelated inbound turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct PostToolBatchStatusOpportunityView {
     /// The durable position of the settled `ToolResult` batch this
     /// opportunity belongs to.
@@ -1080,6 +1110,7 @@ pub struct PostToolBatchStatusOpportunityView {
 /// internals appear.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct CapabilityView {
     /// The active monotonic capability revision.
     pub revision: CapabilityRevision,
@@ -1111,6 +1142,7 @@ pub struct CapabilityView {
 /// runtime and remains fatal at composition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum CapabilitySourceDescriptor {
     /// Canonical Managed Python source.
     ManagedPython { package: String },
@@ -1125,6 +1157,7 @@ pub enum CapabilitySourceDescriptor {
 /// The client-visible availability of one optional capability source.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum CapabilitySourceStateView {
     /// Discovered without permission to prepare.
     Inactive {
@@ -1143,6 +1176,7 @@ pub enum CapabilitySourceStateView {
 /// One optional capability source's availability projection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct CapabilitySourceView {
     /// The stable source identity.
     pub source: CapabilitySourceDescriptor,
@@ -1153,6 +1187,7 @@ pub struct CapabilitySourceView {
 /// One external tool catalog entry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct RuntimeClientTool {
     /// The canonical tool identity.
     pub id: ToolId,
@@ -1184,6 +1219,7 @@ pub struct RuntimeClientTool {
 /// of request input inside a conversation projection.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct RuntimeClientResourcesView {
     /// Facts copied from the same immutable generation as this revision.
     pub inspection: Box<crate::runtime::capability_inspection::CapabilityInspection>,
@@ -1203,16 +1239,19 @@ pub struct RuntimeClientResourcesView {
 /// One runtime-loaded project instruction file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct RuntimeClientContextFile {
     /// The canonical absolute host path the runtime read.
     pub path: String,
     /// The exact byte length of the loaded content.
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub bytes: u64,
 }
 
 /// One external Skill catalog entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct RuntimeClientSkill {
     /// The validated standard Skill identity.
     pub id: SkillId,

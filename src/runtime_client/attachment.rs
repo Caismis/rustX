@@ -24,13 +24,31 @@
 //! adapter; it owns no semantic runtime state itself.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use super::host::{ClientInner, EventDelivery, EventSubscription};
 use super::types::{
     AttachmentId, RuntimeClientError, RuntimeClientRequest, RuntimeClientResponse,
     RuntimeClientResult,
 };
+
+/// Native attachment admission facts, without version negotiation or RPC envelopes.
+pub struct AttachedSnapshot {
+    pub attachment: RuntimeAttachment,
+    pub snapshot: super::snapshot::RuntimeClientSnapshot,
+    pub cursor: super::types::RuntimeClientCursor,
+}
+
+macro_rules! native_control {
+    ($name:ident, $write:expr $(, $argument:ident : $ty:ty)*) => {
+        /// Invoke the existing native control owner through this attachment.
+        /// # Errors
+        /// Closed attachments and native validation failures are explicit.
+        pub fn $name(&self, $($argument: $ty),*) -> Result<RuntimeClientResult, RuntimeClientError> {
+            self.access($write)?.$name($($argument),*)
+        }
+    };
+}
 
 /// One admitted Runtime Client attachment.
 ///
@@ -40,8 +58,8 @@ use super::types::{
 pub struct RuntimeAttachment {
     /// The attachment identity.
     attachment_id: AttachmentId,
-    /// The shared Runtime Client host state.
-    inner: Arc<ClientInner>,
+    /// Residency owns the host. An external handle cannot extend its lifetime.
+    inner: Weak<ClientInner>,
     /// Whether this attachment can only observe the projection.
     read_only: bool,
     /// Whether this handle already detached explicitly.
@@ -52,15 +70,133 @@ pub struct RuntimeAttachment {
 }
 
 impl RuntimeAttachment {
+    /// Read the bound user-default document through its native owner.
+    /// # Errors
+    /// Closed attachments or unavailable document authority.
+    pub async fn defaults_read(
+        &self,
+        scope: super::settings::DefaultScope,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.access(false)?.defaults_read(scope).await
+    }
+
+    /// Save a captured native value with the document's revision check.
+    /// # Errors
+    /// Closed attachments, stale revisions or native write failures.
+    pub async fn defaults_save(
+        &self,
+        scope: super::settings::DefaultScope,
+        revision: String,
+        target: super::settings::DefaultTarget,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.access(true)?
+            .defaults_save(scope, revision, target)
+            .await
+    }
+    native_control!(model_get, false);
+    native_control!(model_catalog, false);
+    native_control!(capability, false);
+    native_control!(model_set, true, config: crate::model::session::SessionModelConfig);
+    native_control!(approval_mode_set, true, mode: crate::runtime::types::ApprovalMode);
+    native_control!(goal_control, true, control: crate::goal::GoalControl);
+    native_control!(transcript_page, false, before: Option<super::snapshot::RuntimeClientTranscriptCursor>, limit: usize);
+    native_control!(background_status, false, id: &crate::runtime::identity::ToolExecutionId);
+    native_control!(background_cancel, true, id: &crate::runtime::identity::ToolExecutionId);
+    native_control!(subagent_status, false, id: &crate::runtime::identity::SubagentId);
+    native_control!(subagent_cancel, true, id: &crate::runtime::identity::SubagentId);
+
+    /// Await the native maintenance operation.
+    /// # Errors
+    /// Closed attachment or rejected/failed compaction.
+    pub async fn compact_context(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.access(true)?.compact_context().await
+    }
+
+    /// Dispose only the retained resource identified by the native subagent owner.
+    /// # Errors
+    /// Closed attachment or native disposal refusal/failure.
+    pub async fn subagent_workspace_dispose(
+        &self,
+        id: &crate::runtime::identity::SubagentId,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.access(true)?.subagent_workspace_dispose(id).await
+    }
+    fn access(&self, write: bool) -> Result<Arc<ClientInner>, RuntimeClientError> {
+        if self.detached.load(Ordering::SeqCst) {
+            return Err(RuntimeClientError::NotAttached);
+        }
+        if write && self.read_only {
+            return Err(RuntimeClientError::InvalidState {
+                message: "inspection attachment is read-only".into(),
+            });
+        }
+        self.inner.upgrade().ok_or(RuntimeClientError::NotAttached)
+    }
+
+    /// Submit through native admission; no request/correlation envelope is involved.
+    /// # Errors
+    /// Closed attachments and native admission failures are explicit.
+    pub fn submit_inbound(
+        &self,
+        content: Vec<crate::message::types::UserContentBlock>,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.access(true)?.submit_inbound(content)
+    }
+
+    /// Request cancellation through the native attempt owner.
+    /// # Errors
+    /// Closed attachments or no cancellable attempt.
+    pub fn cancel_current_attempt(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.access(true)?.cancel_current_attempt()
+    }
+
+    /// Read the linearized native projection.
+    /// # Errors
+    /// Closed attachments or projection failures.
+    pub fn snapshot(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.access(false)?
+            .snapshot()
+            .map(|(snapshot, cursor)| RuntimeClientResult::Snapshot { snapshot, cursor })
+    }
+
+    /// Answer through the runtime-owned interaction coordinator.
+    /// # Errors
+    /// Closed attachments, stale interaction or invalid response.
+    pub async fn respond_interaction(
+        &self,
+        interaction: &crate::runtime::interaction::InteractionRef,
+        response: crate::runtime::interaction::InteractionResponse,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.access(true)?
+            .respond_interaction(interaction, response)
+            .await
+    }
+
+    /// Publish a new native resource generation at its existing admission boundary.
+    /// # Errors
+    /// Closed attachments or native reload failures.
+    pub async fn reload_resources(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.access(true)?.reload_resources().await
+    }
+
+    /// Cancel exactly one pending interaction at its authoritative coordinator.
+    /// # Errors
+    /// Closed attachments and stale interactions fail explicitly.
+    pub async fn cancel_interaction(
+        &self,
+        interaction: &crate::runtime::interaction::InteractionRef,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.access(true)?.cancel_interaction(interaction).await
+    }
     /// Creates the attachment handle over the shared host state.
     pub(crate) fn new(
         attachment_id: AttachmentId,
-        inner: Arc<ClientInner>,
+        inner: &Arc<ClientInner>,
         read_only: bool,
     ) -> Self {
         Self {
             attachment_id,
-            inner,
+            inner: Arc::downgrade(inner),
             read_only,
             detached: AtomicBool::new(false),
             subscription: Mutex::new(None),
@@ -85,6 +221,9 @@ impl RuntimeAttachment {
     #[allow(clippy::too_many_lines)] // request dispatch remains one semantic boundary
     pub fn handle_request(&self, request: RuntimeClientRequest) -> RuntimeClientResponse {
         let id = request.id();
+        let Some(inner) = self.inner.upgrade() else {
+            return Self::error_response(id, RuntimeClientError::NotAttached);
+        };
         if self.detached.load(Ordering::SeqCst) {
             return Self::error_response(id, RuntimeClientError::NotAttached);
         }
@@ -106,16 +245,12 @@ impl RuntimeAttachment {
             );
         }
         let result = match request {
-            RuntimeClientRequest::Goal { control, .. } => self.inner.goal_control(control),
+            RuntimeClientRequest::Goal { control, .. } => inner.goal_control(control),
             RuntimeClientRequest::Initialize { .. } => Err(RuntimeClientError::InvalidRequest {
                 message: "the attachment is already initialized".to_owned(),
             }),
-            RuntimeClientRequest::SubmitInbound { content, .. } => {
-                self.inner.submit_inbound(content)
-            }
-            RuntimeClientRequest::CancelCurrentAttempt { .. } => {
-                self.inner.cancel_current_attempt()
-            }
+            RuntimeClientRequest::SubmitInbound { content, .. } => inner.submit_inbound(content),
+            RuntimeClientRequest::CancelCurrentAttempt { .. } => inner.cancel_current_attempt(),
             RuntimeClientRequest::CompactContext { .. } => {
                 unreachable!("manual compaction is handled asynchronously")
             }
@@ -125,20 +260,16 @@ impl RuntimeAttachment {
             RuntimeClientRequest::InteractionRespond { .. } => {
                 unreachable!("interaction responses are handled asynchronously")
             }
-            RuntimeClientRequest::SnapshotGet { .. } => self
-                .inner
+            RuntimeClientRequest::SnapshotGet { .. } => inner
                 .snapshot()
                 .map(|(snapshot, cursor)| RuntimeClientResult::Snapshot { snapshot, cursor }),
             RuntimeClientRequest::TranscriptPageGet {
                 before_cursor,
                 limit,
                 ..
-            } => self.inner.transcript_page(before_cursor, limit),
+            } => inner.transcript_page(before_cursor, limit),
             RuntimeClientRequest::SubscribeEvents { after_cursor, .. } => {
-                match self
-                    .inner
-                    .subscribe_events(&self.attachment_id, after_cursor)
-                {
+                match inner.subscribe_events(&self.attachment_id, after_cursor) {
                     Ok((subscription, result)) => {
                         self.store_subscription(subscription);
                         Ok(result)
@@ -146,17 +277,15 @@ impl RuntimeAttachment {
                     Err(error) => Err(error),
                 }
             }
-            RuntimeClientRequest::CapabilityGet { .. } => self.inner.capability(),
-            RuntimeClientRequest::ModelCatalogGet { .. } => self.inner.model_catalog(),
+            RuntimeClientRequest::CapabilityGet { .. } => inner.capability(),
+            RuntimeClientRequest::ModelCatalogGet { .. } => inner.model_catalog(),
             RuntimeClientRequest::DefaultsRead { .. }
             | RuntimeClientRequest::DefaultSave { .. } => {
                 unreachable!("default document operations are asynchronous")
             }
-            RuntimeClientRequest::ModelGet { .. } => self.inner.model_get(),
-            RuntimeClientRequest::ModelSet { config, .. } => self.inner.model_set(*config),
-            RuntimeClientRequest::ApprovalModeSet { mode, .. } => {
-                self.inner.approval_mode_set(mode)
-            }
+            RuntimeClientRequest::ModelGet { .. } => inner.model_get(),
+            RuntimeClientRequest::ModelSet { config, .. } => inner.model_set(*config),
+            RuntimeClientRequest::ApprovalModeSet { mode, .. } => inner.approval_mode_set(mode),
             RuntimeClientRequest::SessionDeletePreview { .. }
             | RuntimeClientRequest::SessionDelete { .. }
             | RuntimeClientRequest::SessionDeleteRecover { .. }
@@ -172,16 +301,16 @@ impl RuntimeAttachment {
                 unreachable!("native Session requests are handled asynchronously")
             }
             RuntimeClientRequest::BackgroundStatus { execution_id, .. } => {
-                self.inner.background_status(&execution_id)
+                inner.background_status(&execution_id)
             }
             RuntimeClientRequest::BackgroundCancel { execution_id, .. } => {
-                self.inner.background_cancel(&execution_id)
+                inner.background_cancel(&execution_id)
             }
             RuntimeClientRequest::SubagentStatus { subagent_id, .. } => {
-                self.inner.subagent_status(&subagent_id)
+                inner.subagent_status(&subagent_id)
             }
             RuntimeClientRequest::SubagentCancel { subagent_id, .. } => {
-                self.inner.subagent_cancel(&subagent_id)
+                inner.subagent_cancel(&subagent_id)
             }
             RuntimeClientRequest::SubagentWorkspaceDispose { .. } => {
                 unreachable!("retained workspace disposal is handled asynchronously")
@@ -211,6 +340,9 @@ impl RuntimeAttachment {
         request: RuntimeClientRequest,
     ) -> RuntimeClientResponse {
         let id = request.id();
+        let Some(inner) = self.inner.upgrade() else {
+            return Self::error_response(id, RuntimeClientError::NotAttached);
+        };
         if self.detached.load(Ordering::SeqCst) {
             return Self::error_response(id, RuntimeClientError::NotAttached);
         }
@@ -226,7 +358,7 @@ impl RuntimeAttachment {
             request,
             RuntimeClientRequest::DefaultsRead { .. } | RuntimeClientRequest::DefaultSave { .. }
         ) {
-            return match self.inner.defaults_request(request).await {
+            return match inner.defaults_request(request).await {
                 Ok(result) => RuntimeClientResponse {
                     id,
                     result: Some(result),
@@ -237,7 +369,7 @@ impl RuntimeAttachment {
         }
         if !matches!(request, RuntimeClientRequest::Shutdown { .. }) {
             if matches!(request, RuntimeClientRequest::CompactContext { .. }) {
-                let result = self.inner.compact_context().await;
+                let result = inner.compact_context().await;
                 return match result {
                     Ok(result) => RuntimeClientResponse {
                         id,
@@ -248,7 +380,7 @@ impl RuntimeAttachment {
                 };
             }
             if matches!(request, RuntimeClientRequest::ReloadResources { .. }) {
-                let result = self.inner.reload_resources().await;
+                let result = inner.reload_resources().await;
                 return match result {
                     Ok(result) => RuntimeClientResponse {
                         id,
@@ -264,8 +396,7 @@ impl RuntimeAttachment {
                 ..
             } = &request
             {
-                let result = self
-                    .inner
+                let result = inner
                     .respond_interaction(interaction, response.clone())
                     .await;
                 return match result {
@@ -278,7 +409,7 @@ impl RuntimeAttachment {
                 };
             }
             if let RuntimeClientRequest::SubagentWorkspaceDispose { subagent_id, .. } = &request {
-                let result = self.inner.subagent_workspace_dispose(subagent_id).await;
+                let result = inner.subagent_workspace_dispose(subagent_id).await;
                 return match result {
                     Ok(result) => RuntimeClientResponse {
                         id,
@@ -289,7 +420,7 @@ impl RuntimeAttachment {
                 };
             }
             if let Some(session_request) = request.session_request() {
-                let result = self.inner.session_request(session_request).await;
+                let result = inner.session_request(session_request).await;
                 return match result {
                     Ok(result) => RuntimeClientResponse {
                         id,
@@ -301,7 +432,7 @@ impl RuntimeAttachment {
             }
             return self.handle_request(request);
         }
-        let result = self.inner.shutdown().await;
+        let result = inner.shutdown().await;
         match result {
             Ok(result) => RuntimeClientResponse {
                 id,
@@ -331,13 +462,14 @@ impl RuntimeAttachment {
         &self,
         after_cursor: super::types::RuntimeClientCursor,
     ) -> Result<EventSubscription, RuntimeClientError> {
+        let inner = self
+            .inner
+            .upgrade()
+            .ok_or(RuntimeClientError::NotAttached)?;
         if self.detached.load(Ordering::SeqCst) {
             return Err(RuntimeClientError::NotAttached);
         }
-        match self
-            .inner
-            .subscribe_events(&self.attachment_id, after_cursor)
-        {
+        match inner.subscribe_events(&self.attachment_id, after_cursor) {
             Ok((subscription, _result)) => {
                 self.store_subscription(subscription.clone());
                 Ok(subscription)
@@ -404,7 +536,9 @@ impl RuntimeAttachment {
         if self.detached.swap(true, Ordering::SeqCst) {
             return;
         }
-        self.inner.detach(&self.attachment_id);
+        if let Some(inner) = self.inner.upgrade() {
+            inner.detach(&self.attachment_id);
+        }
         // Take the handle out under the attachment lock and drop it after
         // releasing that lock: dropping a subscription acquires the host
         // lock, and no path may hold the attachment lock across it.
@@ -419,7 +553,7 @@ impl RuntimeAttachment {
     /// Stores the delivery handle of a fresh subscription, releasing any
     /// previous one outside the attachment lock (dropping a subscription
     /// acquires the host lock).
-    fn store_subscription(&self, subscription: EventSubscription) {
+    pub(crate) fn store_subscription(&self, subscription: EventSubscription) {
         let previous = self
             .subscription
             .lock()
@@ -443,8 +577,10 @@ impl RuntimeAttachment {
 
 impl Drop for RuntimeAttachment {
     fn drop(&mut self) {
-        if !self.detached.swap(true, Ordering::SeqCst) {
-            self.inner.detach(&self.attachment_id);
+        if !self.detached.swap(true, Ordering::SeqCst)
+            && let Some(inner) = self.inner.upgrade()
+        {
+            inner.detach(&self.attachment_id);
         }
     }
 }

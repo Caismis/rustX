@@ -459,6 +459,7 @@ impl NativeContextContributor {
 /// the assembly generation records the attestation separately.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
+#[derive(schemars::JsonSchema)]
 pub struct CertifiedExtensionIdentity(String);
 
 impl CertifiedExtensionIdentity {
@@ -513,6 +514,7 @@ impl core::fmt::Display for CertifiedExtensionIdentity {
 /// the whole capability set and increments the revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
+#[derive(schemars::JsonSchema)]
 pub struct CapabilityRevision(u64);
 
 impl CapabilityRevision {
@@ -546,6 +548,7 @@ impl Default for CapabilityRevision {
     Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
 #[serde(transparent)]
+#[derive(schemars::JsonSchema)]
 pub struct RuntimeResourceRevision(u64);
 
 impl RuntimeResourceRevision {

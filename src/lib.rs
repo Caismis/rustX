@@ -5,6 +5,7 @@
 //! agent kernel.
 
 pub mod agent;
+pub mod app_server;
 mod bounded_file;
 pub mod capabilities;
 pub mod context;

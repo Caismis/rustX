@@ -145,6 +145,15 @@ struct Subscriber {
     notify: Arc<Notify>,
 }
 
+impl Drop for Subscriber {
+    fn drop(&mut self) {
+        // Wake a parked receiver on removal or destruction of the projection.
+        // The receiver holds only a weak host reference and observes Closed.
+        self.notify.notify_waiters();
+        self.notify.notify_one();
+    }
+}
+
 /// The result of one subscriber poll against the bounded replay ring.
 // The event variant is the overwhelmingly common one and is produced once
 // per delivered event; boxing it would add an allocation to every delivery
@@ -1714,7 +1723,10 @@ impl RuntimeClientProjection {
             });
         }
         let subscriber_id = self.next_subscriber_id;
-        self.next_subscriber_id = self.next_subscriber_id.saturating_add(1);
+        self.next_subscriber_id = self
+            .next_subscriber_id
+            .checked_add(1)
+            .ok_or(RuntimeClientError::ProjectionExhausted)?;
         let notify = Arc::new(Notify::new());
         self.subscribers.push(Subscriber {
             id: subscriber_id,

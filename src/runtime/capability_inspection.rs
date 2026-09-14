@@ -19,6 +19,7 @@ use crate::tools::types::ToolOrigin;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct CapabilityInspection {
     pub main: Option<AgentInspection>,
     pub agents: BTreeMap<SubagentName, AgentInspection>,
@@ -30,6 +31,7 @@ pub struct CapabilityInspection {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct AgentInspection {
     pub identity: AgentIdentity,
     pub source: Option<std::path::PathBuf>,
@@ -45,6 +47,7 @@ pub struct AgentInspection {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "name", rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum AgentIdentity {
     Main,
     Named(SubagentName),
@@ -52,6 +55,7 @@ pub enum AgentIdentity {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct ToolInspection {
     pub id: ToolId,
     pub name: String,
@@ -60,6 +64,7 @@ pub struct ToolInspection {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum NativeExtension {
     AgentStatus,
     Todo,
@@ -68,6 +73,7 @@ pub enum NativeExtension {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct ExtensionInspection {
     pub identity: NativeExtension,
     pub active: bool,
@@ -75,6 +81,7 @@ pub struct ExtensionInspection {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", content = "diagnostics", rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum WorkflowInspection {
     Enabled,
     Disabled(Vec<WorkflowAdmissionDiagnostic>),
@@ -82,6 +89,7 @@ pub enum WorkflowInspection {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum SourceInspection {
     Inactive {
         activation: crate::capabilities::activation::SourceActivation,

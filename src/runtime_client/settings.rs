@@ -9,6 +9,7 @@ use std::pin::Pin;
 /// Only the two primary selection fields; never request parameters or credentials.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct ModelDefault {
     pub model: ModelRef,
     pub reasoning_profile: Option<ReasoningProfileId>,
@@ -16,6 +17,7 @@ pub struct ModelDefault {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum DefaultScope {
     User,
 }
@@ -23,6 +25,7 @@ pub enum DefaultScope {
 /// The native setting to capture at the save operation boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum DefaultTarget {
     ModelSelection,
     ApprovalMode,
@@ -32,6 +35,7 @@ pub enum DefaultTarget {
 /// Clients request a `DefaultTarget`; they never supply this as a save input.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "field", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum DefaultValue {
     ModelSelection { selection: ModelDefault },
     ApprovalMode { mode: ApprovalMode },
@@ -39,6 +43,7 @@ pub enum DefaultValue {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct DefaultDocument {
     pub scope: DefaultScope,
     pub document: String,
@@ -50,6 +55,7 @@ pub struct DefaultDocument {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum SettingsBoundary {
     LaunchCapture,
     NextAdmission,
@@ -62,6 +68,7 @@ pub enum SettingsBoundary {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct SaveDefaultResult {
     pub scope: DefaultScope,
     pub document: String,
@@ -73,6 +80,7 @@ pub struct SaveDefaultResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum SettingOrigin {
     Builtin,
     User { document: String },
@@ -83,6 +91,7 @@ pub enum SettingOrigin {
 /// Captured resolver facts, explicitly NOT a read of today's disk defaults.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct LaunchSettings {
     pub model: ModelDefault,
     pub model_origin: SettingOrigin,
@@ -120,6 +129,7 @@ pub struct LaunchSettings {
 /// this describes the composition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct EffectiveNativeAgentExtensions {
     /// The composed Agent Status extension, or `None` when this Agent
     /// composes no Agent Status at all.
@@ -146,11 +156,13 @@ pub struct EffectiveNativeAgentExtensions {
 /// value clients already parse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct EffectiveTodoExtension {}
 
 /// The frozen contributor configuration of a composed Agent Status extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct EffectiveAgentStatusExtension {
     pub time: EffectiveTimeStatus,
     pub background: EffectiveBackgroundStatus,
@@ -159,16 +171,19 @@ pub struct EffectiveAgentStatusExtension {
 /// The frozen Time contributor of a composed Agent Status extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct EffectiveTimeStatus {
     pub enabled: bool,
     /// The IANA timezone frozen for this composition, or `None` when none was
     /// configured. `None` is "no explicit timezone", not "UTC".
+    #[schemars(with = "Option<String>")]
     pub timezone: Option<chrono_tz::Tz>,
 }
 
 /// The frozen Background contributor of a composed Agent Status extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct EffectiveBackgroundStatus {
     pub enabled: bool,
 }
@@ -206,6 +221,7 @@ impl EffectiveNativeAgentExtensions {
 /// Metadata names canonical sections rather than maintaining another copy of live state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct SettingsLifetimes {
     pub launch: SettingsBoundary,
     pub model: SettingsBoundary,
@@ -257,6 +273,7 @@ pub trait DefaultSettingsStore: Send + Sync {
 /// Facts frozen together with the attempt model under native admission.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct AdmittedSettings {
     pub resource_revision: crate::runtime::identity::RuntimeResourceRevision,
     pub approval_mode: ApprovalMode,
@@ -265,6 +282,7 @@ pub struct AdmittedSettings {
 /// Which native evidence is available for the canonical settings sections.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum SettingsEvidence {
     LiveSession,
     FrozenChild,

@@ -297,6 +297,7 @@ impl<'de> Deserialize<'de> for CredentialSource {
 /// carries a credential value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum CredentialSourceView {
     /// The credential is a literal catalog value.
     Literal,
@@ -1581,6 +1582,7 @@ impl std::error::Error for ModelCatalogError {}
 /// provider HTTP client.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct ModelCatalogView {
     /// Every selectable model in deterministic reference order.
     #[serde(default)]
@@ -1590,12 +1592,14 @@ pub struct ModelCatalogView {
 /// One selectable model of the public catalog view.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct CatalogModelView {
     /// The fully qualified model reference.
     pub model: ModelRef,
     /// The protocol an adapter speaks to this model.
     pub protocol: ModelProtocol,
     /// The model context window in tokens.
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub context_window: u64,
     /// The configured maximum output tokens.
     pub max_output_tokens: u32,
@@ -1620,6 +1624,7 @@ pub struct CatalogModelView {
 /// a client never needs to select a profile.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct ReasoningProfileView {
     /// The profile identity.
     pub id: ReasoningProfileId,

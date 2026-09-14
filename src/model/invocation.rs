@@ -633,12 +633,14 @@ impl ResolvedModelInvocation {
 /// credential is never a request parameter.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct ModelInvocationView {
     /// The fully qualified model reference.
     pub model: ModelRef,
     /// The protocol of the binding.
     pub protocol: ModelProtocol,
     /// The model's context window in tokens.
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub context_window: u64,
     /// The model's configured maximum output tokens.
     pub model_max_output_tokens: u32,

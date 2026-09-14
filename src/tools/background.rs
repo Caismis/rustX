@@ -264,6 +264,7 @@ const BACKGROUND_CANCEL_REASON: CancellationReason = CancellationReason::UserReq
 /// execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum BackgroundLifecycle {
     /// The dispatch committed and the runner is starting.
     Starting,

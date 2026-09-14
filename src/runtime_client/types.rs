@@ -1,6 +1,9 @@
-//! Runtime Client Protocol: the transport-neutral protocol contract.
+//! Native projection/control types and the existing local stdio envelopes.
 //!
-//! This module owns the explicit external protocol boundary of Issue #37.
+//! The public multi-Session client boundary is [`crate::app_server::protocol`].
+//! The stdio envelopes here serve the existing TUI pending its #290 migration;
+//! they are not an inner protocol required by App Server clients.
+//! This module originally established the projection boundary in Issue #37.
 //! It is deliberately **not** the internal runtime fact vocabulary
 //! ([`RuntimeEvent`](crate::events::types::RuntimeEvent)) and not the
 //! compiled manifest protocol (`crate::protocol`): the Runtime Client
@@ -34,9 +37,8 @@
 //! envelope remains structurally capable of peer-initiated requests in a
 //! later protocol version.
 //!
-//! No transport lives here: JSONL/stdio framing is owned by Issue #38 and
-//! any WebSocket transport by Issue #36; both consume this semantic layer
-//! without redefining it.
+//! No transport lives here: the current local JSONL binding belongs to Issue #38.
+//! Both stdio JSONL and WebSocket in Issue #36 consume App Server, not these envelopes.
 //!
 //! Native Approval responses are deliberately finite and provider-neutral.
 //! They contain no replacement `ToolCall` identity or argument channel; the
@@ -374,6 +376,7 @@ pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 34;
 /// fails explicitly and never wraps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
+#[derive(schemars::JsonSchema)]
 pub struct RuntimeClientCursor(u64);
 
 impl RuntimeClientCursor {
@@ -403,6 +406,7 @@ impl fmt::Display for RuntimeClientCursor {
 /// always receives a new attachment identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
+#[derive(schemars::JsonSchema)]
 pub struct AttachmentId(String);
 
 impl AttachmentId {
@@ -998,6 +1002,7 @@ pub struct RuntimeClientResponse {
 /// The public result of disposing a retained subagent workspace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum RuntimeClientSubagentWorkspaceDisposalOutcome {
     /// The retained physical worktree and its exact runtime branch were
     /// removed by this request.

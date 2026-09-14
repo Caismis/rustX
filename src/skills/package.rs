@@ -176,6 +176,7 @@ pub const MAX_SOURCE_SKILL_PACKAGES: usize = 128;
 /// never suppresses an unrelated valid package.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "cause", rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum SkillPackageError {
     /// The package name violates the Agent Skills naming rules.
     InvalidName {

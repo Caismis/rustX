@@ -20,9 +20,9 @@
 //!     -> typed response/event       -> JSONL bytes -> typed response/event
 //! ```
 //!
-//! A future Issue #36 WebSocket transport adds one `DriverFactory` and
-//! reuses every scenario function below unchanged: no scenario names a
-//! framing, a byte, an I/O type, or a transport error.
+//! This exercises the temporary pre-#290 Runtime Client wire contract.
+//! Issue #36's stdio and WebSocket bindings instead reuse the App Server
+//! scenario in `app_server_conformance.rs`, not this old protocol fixture.
 //!
 //! # What belongs here and what does not
 //!
@@ -101,8 +101,8 @@ pub trait RuntimeClientProtocolDriver: Send {
 
 /// Creates protocol drivers of one transport over a runtime.
 ///
-/// Issue #36 adds a `WebSocketDriverFactory` here and inherits every
-/// scenario; nothing else changes.
+/// This factory serves the existing local Runtime Client tests only;
+/// App Server transport parity uses `app_server_conformance.rs`.
 pub trait DriverFactory: Send + Sync {
     /// The transport name, used in assertion messages.
     fn name(&self) -> &'static str;

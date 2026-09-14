@@ -9,6 +9,7 @@ use crate::model::generation::GenerationFailure;
 /// Provider SDK error structs never cross this boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ModelErrorKind {
     /// The request itself was invalid.
     InvalidRequest,

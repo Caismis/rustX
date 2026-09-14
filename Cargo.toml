@@ -79,7 +79,7 @@ rmcp = { version = "3.2.0", default-features = false, features = [
     "transport-streamable-http-client-reqwest",
     "reqwest",
 ] }
-schemars = "1"
+schemars = { version = "1", features = ["chrono04"] }
 tempfile = "3.27.0"
 # The M8 durability backend (Issue #63 / #11). `bundled` compiles the SQLite
 # amalgamation so no system libsqlite3 is required on any CI platform.

@@ -16,6 +16,7 @@ pub enum SourceEnablement {
 /// Effective host-owned authority, not a writable configuration vocabulary.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum SourceActivation {
     /// Discovery carries no activation grant.
     #[default]

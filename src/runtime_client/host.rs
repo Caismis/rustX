@@ -1,7 +1,7 @@
 //! The Runtime Client host: the projection + control + attachment adapter
 //! over the conversation runtime coordinator (Issue #61).
 //!
-//! [`RuntimeClientHost`] is the Runtime Client protocol boundary. It
+//! [`RuntimeClientHost`] is the native projection/control owner reused by App Server. It
 //! observes and controls the
 //! [`ConversationRuntime`](crate::runtime::conversation_runtime::ConversationRuntime)
 //! of the same conversation; it does **not** own the conversation runtime:
@@ -26,7 +26,7 @@
 //! - the Runtime Client projection (snapshot read model, cursor allocation,
 //!   bounded replay, subscribers) and its linearization boundary;
 //! - the root publication-admission check for child interactions, limited to
-//!   the synchronized presence of the control attachment;
+//!   the lifetime of the bound runtime projection, independently of clients;
 //! - protocol adaptation: request dispatch, `model_set`/`shutdown`/
 //!   `cancel_current_attempt` forwarding, native Session intent forwarding,
 //!   and inbound publish forwarding;
@@ -101,10 +101,10 @@
 //!
 //! # Lifetime
 //!
-//! The host is a **non-owning observer** of the conversation runtime in
-//! every direction: the host holds an `Arc<ConversationRuntime>` (control +
-//! seed reads), while the runtime holds only a `Weak` reference through its
-//! installed observation seams. Releasing the last host handle closes the
+//! The host retains the runtime for control and seed reads inside the resident
+//! composition. External attachment/endpoint/subscription handles are weak;
+//! the runtime also holds only weak references through its installed observer
+//! seams. Releasing the last resident host handle closes the
 //! primary observation queue (the projection worker's terminal condition);
 //! releasing the last runtime handle closes the queue and the admission
 //! wake gate. A detached or absent Runtime Client never stops the
@@ -351,11 +351,12 @@ pub(crate) struct ClientInner {
     pending: Arc<PendingObservations>,
     /// Whether the projection worker task was spawned.
     worker_started: AtomicBool,
+    worker: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 /// Root-side publication authority installed into the parent subagent
-/// registry. It is a weak adapter over the Runtime Client host's attachment
-/// lock, not an interaction owner.
+/// registry. It is a weak adapter over runtime projection binding, independent
+/// of external attachments, and is not an interaction owner.
 struct RootInteractionPublicationAuthority {
     inner: Weak<ClientInner>,
 }
@@ -400,13 +401,10 @@ impl ClientInner {
         guard
     }
 
-    /// The root publication-admission frontier. The same host mutex that
-    /// removes/installs the control attachment on detach/attach is used for
-    /// this check, so an admission and a detach have exactly one ordering:
-    /// whichever operation acquires this boundary first wins.
+    /// A bound live projection can expose interactions to a future client.
+    /// Admission follows runtime binding, never external attachment presence.
     pub(crate) fn admits_interaction_publication(&self) -> bool {
-        let state = self.lock_state();
-        state.control_attachment.is_some()
+        self.runtime.is_some() && !self.read_only
     }
 
     /// Refreshes the bounded transcript bootstrap page from the durable
@@ -493,7 +491,7 @@ impl ClientInner {
             .runtime
             .as_ref()
             .map(|runtime| runtime.tool_runtime().workflows().subscribe());
-        tokio::spawn(async move {
+        let worker = tokio::spawn(async move {
             loop {
                 tokio::select! {
                     () = pending.wait() => {},
@@ -519,6 +517,18 @@ impl ClientInner {
             #[cfg(test)]
             pending.signal_worker_exit();
         });
+        *self.worker.lock().expect("projection worker mutex") = Some(worker);
+    }
+
+    /// Residency shutdown joins the observer before releasing resource authority.
+    /// Closing the leaf queue prevents another fold from upgrading the weak host.
+    pub(crate) async fn drain_projection(&self) -> Result<(), tokio::task::JoinError> {
+        self.pending.close();
+        let worker = self.worker.lock().expect("projection worker mutex").take();
+        if let Some(worker) = worker {
+            worker.await?;
+        }
+        Ok(())
     }
 
     /// Admits one attachment: the internal primitive behind the
@@ -564,14 +574,31 @@ impl ClientInner {
         read_only_attachment: bool,
     ) -> Result<(super::attachment::RuntimeAttachment, RuntimeClientResult), RuntimeClientError>
     {
-        let read_only_attachment = self.read_only || read_only_attachment;
-        self.ensure_session_runtime_live()?;
         if protocol_version != RUNTIME_CLIENT_PROTOCOL_VERSION {
             return Err(RuntimeClientError::UnsupportedProtocolVersion {
                 supported: RUNTIME_CLIENT_PROTOCOL_VERSION,
                 requested: protocol_version,
             });
         }
+        let attached = self.admit_attachment(read_only_attachment, false)?;
+        let result = RuntimeClientResult::Initialized {
+            attachment_id: attached.attachment.attachment_id().clone(),
+            conversation_id: self.conversation_id.clone(),
+            agent_id: self.agent_id.clone(),
+            snapshot: attached.snapshot,
+            cursor: attached.cursor,
+        };
+        Ok((attached.attachment, result))
+    }
+
+    /// App Server attachment admission, snapshot and subscription share one cut.
+    pub(crate) fn admit_attachment(
+        self: &Arc<Self>,
+        read_only_attachment: bool,
+        subscribe: bool,
+    ) -> Result<super::attachment::AttachedSnapshot, RuntimeClientError> {
+        let read_only_attachment = self.read_only || read_only_attachment;
+        self.ensure_session_runtime_live()?;
         self.ensure_worker();
         let mut state = self.lock_state();
         if !read_only_attachment && let Some(existing) = &state.control_attachment {
@@ -585,11 +612,27 @@ impl ClientInner {
             self.refresh_transcript_page(&mut state)?;
         }
         let (snapshot, cursor) = state.projection.snapshot()?;
-        state.next_attachment_seq = state.next_attachment_seq.saturating_add(1);
+        let next_attachment_seq = state
+            .next_attachment_seq
+            .checked_add(1)
+            .ok_or(RuntimeClientError::ProjectionExhausted)?;
+        let subscription = if subscribe {
+            let (subscriber_id, notify) = state.projection.subscribe(cursor)?;
+            Some(EventSubscription {
+                inner: Arc::new(SubscriptionInner {
+                    host: Arc::downgrade(self),
+                    subscriber_id,
+                    notify,
+                }),
+            })
+        } else {
+            None
+        };
+        state.next_attachment_seq = next_attachment_seq;
         let attachment_id = AttachmentId::new(format!("attachment-{}", state.next_attachment_seq));
         let attachment_state = AttachmentState {
             attachment_id: attachment_id.clone(),
-            subscriber_id: None,
+            subscriber_id: subscription.as_ref().map(|s| s.inner.subscriber_id),
         };
         if read_only_attachment {
             state
@@ -598,29 +641,20 @@ impl ClientInner {
         } else {
             state.control_attachment = Some(attachment_state);
         }
-        // Keep provider admission under the same host-state lock as the
-        // attachment identity. A concurrent detach therefore cannot remove
-        // the attachment and then be overwritten by this attach's provider
-        // update after the lock is released.
-        if !read_only_attachment && let Some(runtime) = self.runtime.as_ref() {
-            runtime.set_interaction_provider_available(true);
-        }
         drop(state);
         let attachment = super::attachment::RuntimeAttachment::new(
             attachment_id.clone(),
-            self.clone(),
+            self,
             self.read_only || read_only_attachment,
         );
-        Ok((
+        if let Some(subscription) = subscription {
+            attachment.store_subscription(subscription);
+        }
+        Ok(super::attachment::AttachedSnapshot {
             attachment,
-            RuntimeClientResult::Initialized {
-                attachment_id,
-                conversation_id: self.conversation_id.clone(),
-                agent_id: self.agent_id.clone(),
-                snapshot,
-                cursor,
-            },
-        ))
+            snapshot,
+            cursor,
+        })
     }
 
     /// Releases one attachment. Idempotent: a second detach (or an
@@ -650,13 +684,6 @@ impl ClientInner {
         };
         if let Some(subscriber_id) = attachment.subscriber_id {
             state.projection.remove_subscriber(subscriber_id);
-        }
-        // Detach is non-semantic: it only closes the provider admission
-        // gate for future interactions. It does not settle any request
-        // already published by the coordinator. Read-only detaches never
-        // touch that gate.
-        if control && let Some(runtime) = self.runtime.as_ref() {
-            runtime.set_interaction_provider_available(false);
         }
     }
 
@@ -874,6 +901,35 @@ impl ClientInner {
             })
     }
 
+    pub(crate) async fn cancel_interaction(
+        &self,
+        interaction: &InteractionRef,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_writable_runtime()?;
+        self.runtime
+            .as_ref()
+            .expect("writable runtime")
+            .control_interaction(
+                interaction,
+                crate::runtime::interaction::InteractionControl::Cancel,
+            )
+            .await
+            .map(|()| RuntimeClientResult::InteractionResponseAccepted {
+                interaction: interaction.clone(),
+            })
+            .map_err(|error| match error {
+                RoutedInteractionError::NotPending { interaction } => {
+                    RuntimeClientError::InteractionNotPending { interaction }
+                }
+                RoutedInteractionError::InvalidResponse { message } => {
+                    RuntimeClientError::InteractionInvalidResponse { message }
+                }
+                RoutedInteractionError::AuditFailed { interaction } => {
+                    RuntimeClientError::InteractionAuditFailed { interaction }
+                }
+            })
+    }
+
     /// Reads the authoritative snapshot and its cursor, linearized
     /// together.
     ///
@@ -1003,10 +1059,10 @@ impl ClientInner {
                     Ok(attachment.subscriber_id)
                 })?
         };
-        if let Some(subscriber_id) = previous_subscriber {
-            state.projection.remove_subscriber(subscriber_id);
-        }
         let (subscriber_id, notify) = state.projection.subscribe(after_cursor)?;
+        if let Some(previous) = previous_subscriber {
+            state.projection.remove_subscriber(previous);
+        }
         if state
             .control_attachment
             .as_ref()
@@ -1028,7 +1084,7 @@ impl ClientInner {
         Ok((
             EventSubscription {
                 inner: Arc::new(SubscriptionInner {
-                    host: self.clone(),
+                    host: Arc::downgrade(self),
                     subscriber_id,
                     notify,
                 }),
@@ -1101,6 +1157,22 @@ impl ClientInner {
         &self,
         request: RuntimeClientRequest,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        match request {
+            RuntimeClientRequest::DefaultsRead { scope, .. } => self.defaults_read(scope).await,
+            RuntimeClientRequest::DefaultSave {
+                scope,
+                expected_revision,
+                target,
+                ..
+            } => self.defaults_save(scope, expected_revision, target).await,
+            _ => unreachable!("bounded settings request"),
+        }
+    }
+
+    pub(crate) async fn defaults_read(
+        &self,
+        scope: super::settings::DefaultScope,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.ensure_writable_runtime()?;
         let store = self
             .defaults
@@ -1108,40 +1180,45 @@ impl ClientInner {
             .ok_or_else(|| RuntimeClientError::InvalidState {
                 message: "this runtime has no user-default write authority".into(),
             })?;
-        match request {
-            RuntimeClientRequest::DefaultsRead { scope, .. } => Ok(RuntimeClientResult::Defaults {
-                document: store.read(scope).await?,
-            }),
-            RuntimeClientRequest::DefaultSave {
-                scope,
-                expected_revision,
-                target,
-                ..
-            } => {
-                use super::settings::{DefaultTarget, DefaultValue, ModelDefault};
-                let runtime = self.runtime.as_ref().expect("writable runtime checked");
-                // Capture one native owner under its coordinator lock. No projection
-                // read, observation drain, or disk operation participates in this cut.
-                let value = match target {
-                    DefaultTarget::ModelSelection => {
-                        let config = runtime.model_view().configured;
-                        DefaultValue::ModelSelection {
-                            selection: ModelDefault {
-                                model: config.model,
-                                reasoning_profile: config.reasoning_profile,
-                            },
-                        }
-                    }
-                    DefaultTarget::ApprovalMode => DefaultValue::ApprovalMode {
-                        mode: runtime.approval_mode_state().desired,
+        Ok(RuntimeClientResult::Defaults {
+            document: store.read(scope).await?,
+        })
+    }
+
+    pub(crate) async fn defaults_save(
+        &self,
+        scope: super::settings::DefaultScope,
+        expected_revision: String,
+        target: super::settings::DefaultTarget,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        use super::settings::{DefaultTarget, DefaultValue, ModelDefault};
+        self.ensure_writable_runtime()?;
+        let store = self
+            .defaults
+            .as_ref()
+            .ok_or_else(|| RuntimeClientError::InvalidState {
+                message: "this runtime has no user-default write authority".into(),
+            })?;
+        let runtime = self.runtime.as_ref().expect("writable runtime checked");
+        // Capture one native owner under its coordinator lock. No projection
+        // read, observation drain, or disk operation participates in this cut.
+        let value = match target {
+            DefaultTarget::ModelSelection => {
+                let config = runtime.model_view().configured;
+                DefaultValue::ModelSelection {
+                    selection: ModelDefault {
+                        model: config.model,
+                        reasoning_profile: config.reasoning_profile,
                     },
-                };
-                Ok(RuntimeClientResult::DefaultSaved {
-                    result: store.save(scope, expected_revision, value).await?,
-                })
+                }
             }
-            _ => unreachable!("bounded settings request"),
-        }
+            DefaultTarget::ApprovalMode => DefaultValue::ApprovalMode {
+                mode: runtime.approval_mode_state().desired,
+            },
+        };
+        Ok(RuntimeClientResult::DefaultSaved {
+            result: store.save(scope, expected_revision, value).await?,
+        })
     }
 
     /// Replaces the authoritative session model configuration through the
@@ -1613,8 +1690,9 @@ impl RuntimeClientHost {
     /// composition constructs the runtime, optionally binds this host, and
     /// then calls [`ConversationRuntime::activate`]; binding after
     /// activation is refused with
-    /// [`HostConstructionError::RuntimeAlreadyActivated`]. A headless
-    /// runtime never constructs a host at all.
+    /// [`HostConstructionError::RuntimeAlreadyActivated`]. App Server residency
+    /// keeps this host bound with zero clients; lower-level runtime-only
+    /// compositions may intentionally omit a client projection.
     ///
     /// # Bootstrap linearization
     ///
@@ -1697,6 +1775,7 @@ impl RuntimeClientHost {
             }),
             pending,
             worker_started: AtomicBool::new(false),
+            worker: Mutex::new(None),
         });
         // No authoritative runtime can enqueue observations into this host,
         // but using the normal worker setup keeps attachment/subscription
@@ -1831,8 +1910,10 @@ impl RuntimeClientHost {
             }),
             pending,
             worker_started: AtomicBool::new(false),
+            worker: Mutex::new(None),
         });
         if let Some(runtime) = inner.runtime.as_ref() {
+            runtime.set_interaction_provider_available(true);
             runtime.install_interaction_publication_authority(Arc::new(
                 RootInteractionPublicationAuthority {
                     inner: Arc::downgrade(&inner),
@@ -1882,8 +1963,9 @@ impl RuntimeClientHost {
 
     /// Creates the transport-neutral semantic endpoint of this runtime.
     ///
-    /// The endpoint is the boundary a transport (Issue #38 stdio/JSONL,
-    /// Issue #36 WebSocket) wraps: it accepts every
+    /// This endpoint serves the temporary pre-#290 local Runtime Client
+    /// binding (Issue #38 stdio/JSONL). Issue #36's stdio and WebSocket
+    /// bindings instead wrap `AppServerConnection`. This endpoint accepts every
     /// [`RuntimeClientRequest`](super::types::RuntimeClientRequest),
     /// including `initialize`, and returns the correlated
     /// [`RuntimeClientResponse`](super::types::RuntimeClientResponse). A
@@ -1893,9 +1975,9 @@ impl RuntimeClientHost {
     #[must_use]
     pub fn endpoint(&self) -> super::endpoint::RuntimeClientEndpoint {
         if self.inner.read_only {
-            super::endpoint::RuntimeClientEndpoint::new_read_only(self.clone())
+            super::endpoint::RuntimeClientEndpoint::new_read_only(self)
         } else {
-            super::endpoint::RuntimeClientEndpoint::new(self.clone())
+            super::endpoint::RuntimeClientEndpoint::new(self)
         }
     }
 
@@ -1922,6 +2004,7 @@ impl RuntimeClientHost {
     /// The attachment can read the same projection as the Runtime Client
     /// control owner, including disposable live state, but every semantic
     /// mutation is rejected before it reaches the conversation runtime.
+    #[cfg(test)]
     pub(crate) fn attach_read_only(
         &self,
         protocol_version: u16,
@@ -2344,7 +2427,7 @@ pub enum EventDelivery {
 /// which is the same release an explicit detach performs.
 struct SubscriptionInner {
     /// The host whose projection owns the registration.
-    host: Arc<ClientInner>,
+    host: Weak<ClientInner>,
     /// The opaque registration identity.
     subscriber_id: u64,
     /// The edge-triggered wakeup handle of this subscriber.
@@ -2353,8 +2436,10 @@ struct SubscriptionInner {
 
 impl Drop for SubscriptionInner {
     fn drop(&mut self) {
-        let mut state = self.host.lock_state();
-        state.projection.remove_subscriber(self.subscriber_id);
+        if let Some(host) = self.host.upgrade() {
+            let mut state = host.lock_state();
+            state.projection.remove_subscriber(self.subscriber_id);
+        }
     }
 }
 
@@ -2385,7 +2470,10 @@ impl core::fmt::Debug for EventSubscription {
 impl EventSubscription {
     /// Polls the projection once for the next retained event.
     fn poll(&self) -> EventDelivery {
-        let mut state = self.inner.host.lock_state();
+        let Some(host) = self.inner.host.upgrade() else {
+            return EventDelivery::Closed;
+        };
+        let mut state = host.lock_state();
         match state.projection.poll_subscriber(self.inner.subscriber_id) {
             SubscriberPoll::Event(event) => EventDelivery::Event(event),
             SubscriberPoll::Pending => EventDelivery::Pending,
@@ -7092,6 +7180,7 @@ mod tests {
     /// Client host, so a test controls host construction itself (the
     /// Issue #61 bootstrap regressions).
     struct RuntimeOnlyFixture {
+        host_owner: Option<RuntimeClientHost>,
         _dir: tempfile::TempDir,
         runtime: ConversationRuntime,
         coordinator: crate::capabilities::CapabilityCoordinator,
@@ -7208,6 +7297,7 @@ mod tests {
         (
             adapter,
             RuntimeOnlyFixture {
+                host_owner: None,
                 _dir: dir,
                 runtime,
                 coordinator,
@@ -7231,7 +7321,7 @@ mod tests {
         tempfile::TempDir,
         CurrentRuntimeConfig,
     ) {
-        let (adapter, fixture) = runtime_only_fixture_with_conversation_id(
+        let (adapter, mut fixture) = runtime_only_fixture_with_conversation_id(
             scripts,
             ToolRegistry::new(),
             probe,
@@ -7284,14 +7374,9 @@ model = "scripted/scripted"
             .install_runtime(fixture.runtime.clone())
             .await
             .expect("install runtime");
-        (
-            adapter,
-            fixture,
-            RuntimeClientEndpoint::new(host),
-            supervisor,
-            catalog_root,
-            config,
-        )
+        let endpoint = RuntimeClientEndpoint::new(&host);
+        fixture.host_owner = Some(host);
+        (adapter, fixture, endpoint, supervisor, catalog_root, config)
     }
 
     fn initialize_endpoint(endpoint: &RuntimeClientEndpoint) {
@@ -7306,7 +7391,7 @@ model = "scripted/scripted"
     #[allow(clippy::too_many_lines)]
     async fn catalog_publication_outcomes_leave_other_session_attachment_live() {
         for post in [false, true] {
-            let (_, _, endpoint, supervisor, root, _) =
+            let (_, _composition, endpoint, supervisor, root, _) =
                 local_session_endpoint(Vec::new(), None).await;
             initialize_endpoint(&endpoint);
             if post {
@@ -7357,7 +7442,8 @@ model = "scripted/scripted"
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)]
     async fn session_new_always_creates_an_independent_identity() {
-        let (_, _, endpoint, supervisor, root, _) = local_session_endpoint(Vec::new(), None).await;
+        let (_, _composition, endpoint, supervisor, root, _) =
+            local_session_endpoint(Vec::new(), None).await;
         initialize_endpoint(&endpoint);
         let initial = supervisor.current().await.unwrap();
         let a = supervisor.new_session().await.unwrap();

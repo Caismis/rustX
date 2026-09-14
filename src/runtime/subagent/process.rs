@@ -40,7 +40,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::context::SessionContextPolicy;
 use crate::runtime::identity::{ConversationId, SubagentId};
-use crate::runtime::interaction::{InteractionRef, InteractionResponse, RoutedInteractionError};
+use crate::runtime::interaction::{InteractionRef, RoutedInteractionError};
 use crate::runtime::types::CancellationReason;
 
 use super::anchors::{NestedUnitSettlement, RetainedProcessUnits, contain_retained};
@@ -1348,7 +1348,7 @@ pub(crate) enum ChildBoundRoute {
         /// The full routed interaction identity.
         interaction: InteractionRef,
         /// The typed response; the child coordinator validates it.
-        response: InteractionResponse,
+        response: crate::runtime::interaction::InteractionControl,
         /// The child coordinator's accepted or fail-closed result.
         result: tokio::sync::oneshot::Sender<Result<(), RoutedInteractionError>>,
     },

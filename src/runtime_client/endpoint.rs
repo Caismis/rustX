@@ -1,7 +1,10 @@
-//! The Runtime Client semantic endpoint: the transport-neutral protocol
-//! entry point of the Runtime Client protocol.
+//! Single-composition local stdio endpoint used by the existing TUI until #290.
 //!
-//! [`RuntimeClientEndpoint`] is the boundary every transport wraps. It
+//! This is not the App Server client boundary. New clients use
+//! [`crate::app_server::connection::AppServerConnection`], which multiplexes
+//! Sessions and directly reuses native attachment/projection operations.
+//!
+//! [`RuntimeClientEndpoint`] is the boundary the local stdio adapter wraps. It
 //! accepts *every* Runtime Client request — including `initialize` — and returns the
 //! correlated response, so protocol semantics live here and nowhere else.
 //!
@@ -57,7 +60,7 @@
 //! may mean runtime quiescence or active-lineage replacement rather than
 //! cancellation-request acceptance.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use super::attachment::RuntimeAttachment;
 use super::host::{EventDelivery, EventSubscription, RuntimeClientHost};
@@ -72,7 +75,7 @@ use super::types::{RequestId, RuntimeClientError, RuntimeClientRequest, RuntimeC
 /// quiescence without holding the attachment lock.
 pub struct RuntimeClientEndpoint {
     /// The runtime this endpoint speaks for.
-    host: RuntimeClientHost,
+    host: Weak<super::host::ClientInner>,
     /// Whether this endpoint is a read-only observation attachment. The
     /// host still owns the projection; this flag only selects attachment
     /// admission and fences control requests at the attachment boundary.
@@ -84,7 +87,7 @@ pub struct RuntimeClientEndpoint {
 impl core::fmt::Debug for RuntimeClientEndpoint {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RuntimeClientEndpoint")
-            .field("conversation_id", self.host.conversation_id())
+            .field("resident", &self.host.strong_count())
             .finish_non_exhaustive()
     }
 }
@@ -92,7 +95,7 @@ impl core::fmt::Debug for RuntimeClientEndpoint {
 impl RuntimeClientEndpoint {
     /// Creates an unattached endpoint over one runtime.
     #[must_use]
-    pub fn new(host: RuntimeClientHost) -> Self {
+    pub fn new(host: &RuntimeClientHost) -> Self {
         Self::new_with_mode(host, false)
     }
 
@@ -100,13 +103,13 @@ impl RuntimeClientEndpoint {
     /// projection. It may coexist with the host's control attachment and with
     /// other read-only endpoints.
     #[must_use]
-    pub(crate) fn new_read_only(host: RuntimeClientHost) -> Self {
+    pub(crate) fn new_read_only(host: &RuntimeClientHost) -> Self {
         Self::new_with_mode(host, true)
     }
 
-    fn new_with_mode(host: RuntimeClientHost, read_only: bool) -> Self {
+    fn new_with_mode(host: &RuntimeClientHost, read_only: bool) -> Self {
         Self {
-            host,
+            host: Arc::downgrade(&host.inner),
             read_only,
             attachment: Mutex::new(None),
         }
@@ -144,10 +147,13 @@ impl RuntimeClientEndpoint {
                 // Version negotiation, admission, identity allocation, and
                 // the linearized initial snapshot are all the host's, not
                 // the transport's.
+                let Some(host) = self.host.upgrade() else {
+                    return error(id, RuntimeClientError::NotAttached);
+                };
                 let attached = if self.read_only {
-                    self.host.attach_read_only(protocol_version)
+                    host.attach_read_only(protocol_version)
                 } else {
-                    self.host.attach(protocol_version)
+                    host.attach(protocol_version)
                 };
                 match attached {
                     Ok((attachment, result)) => {

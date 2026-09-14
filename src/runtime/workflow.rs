@@ -45,13 +45,16 @@ use tool::default_workflow_timeout_ms;
 /// Retained with the canonical outer result, not with an execution owner.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct WorkflowToolIdentity {
     pub workflow_id: WorkflowId,
     pub program_digest: String,
 }
 
 /// Runtime-owned identity, independent of model `ToolCall` text.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
 pub struct WorkflowRunId {
     /// Owning conversation.
     pub conversation_id: crate::runtime::identity::ConversationId,
@@ -62,7 +65,9 @@ pub struct WorkflowRunId {
 }
 
 /// Static source location; never a concrete execution authority.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
 pub struct WorkflowDefinitionPath {
     pub workflow_id: WorkflowId,
     /// Pairs of owner node and child key (Parallel branch or Loop `body`); empty for root.
@@ -70,7 +75,9 @@ pub struct WorkflowDefinitionPath {
 }
 
 /// A concrete block instance. Root/Parallel append zero; Loop appends its one-based iteration.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
 pub struct WorkflowBlockInstance {
     pub run: WorkflowRunId,
     pub definition: WorkflowDefinitionPath,
@@ -78,7 +85,9 @@ pub struct WorkflowBlockInstance {
 }
 
 /// One concrete node visit in an owning block instance.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
 pub struct WorkflowNodeInstance {
     pub block: WorkflowBlockInstance,
     pub node: String,
@@ -88,6 +97,7 @@ pub struct WorkflowNodeInstance {
 /// Bounded block/node observation; live state stays in the executor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum WorkflowExecutionOutcome {
     Completed,
     Failed,
@@ -100,6 +110,7 @@ pub enum WorkflowExecutionOutcome {
 /// Normal finite Loop completion; neither case claims business verification passed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum WorkflowLoopExit {
     Satisfied,
     Exhausted,
@@ -743,7 +754,7 @@ pub enum WorkflowAdmission {
     Disabled(Vec<WorkflowAdmissionDiagnostic>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct WorkflowAdmissionDiagnostic {
     pub path: String,
     pub reason: WorkflowDependencyFailure,
@@ -751,6 +762,7 @@ pub struct WorkflowAdmissionDiagnostic {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum WorkflowDependencyFailure {
     NotAdmitted,
     Materialization {

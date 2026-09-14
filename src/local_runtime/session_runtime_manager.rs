@@ -23,7 +23,9 @@ use crate::runtime::conversation_runtime::ConversationRuntime;
 use crate::runtime::identity::ConversationId;
 
 /// Process-local live composition identity. Never a durable or transport identity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+#[derive(schemars::JsonSchema)]
 pub struct RuntimeIncarnationId(u64);
 
 // Identity only, never a global active Session or runtime state. A stale handle
@@ -43,6 +45,7 @@ pub enum ResidencyState {
 /// A terminal operation error shared verbatim by every waiter in its flight.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RuntimeManagerError {
+    Client(crate::runtime_client::types::RuntimeClientError),
     SessionAlreadyResident {
         session_id: SessionId,
         resident_conversation: ConversationId,
@@ -54,6 +57,7 @@ pub enum RuntimeManagerError {
 impl std::fmt::Display for RuntimeManagerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Client(error) => write!(f, "{error:?}"),
             Self::SessionAlreadyResident {
                 session_id,
                 resident_conversation,
@@ -141,6 +145,20 @@ impl ManagedRuntime {
 struct ResidentRuntime {
     identity: Arc<ManagedRuntime>,
     composition: Mutex<Option<LocalConversationRuntime>>,
+    operations: watch::Sender<usize>,
+}
+
+/// Private, non-cloneable server-operation ownership. Never lent to a client.
+struct OperationLease(Option<Arc<ResidentRuntime>>);
+
+impl Drop for OperationLease {
+    fn drop(&mut self) {
+        let resident = self.0.take().expect("operation resident");
+        let operations = resident.operations.clone();
+        // Release strong ownership before publishing the drain acknowledgement.
+        drop(resident);
+        operations.send_modify(|count| *count -= 1);
+    }
 }
 impl ResidentRuntime {
     // Shutdown alone may clone execution authority. Never exposed to clients.
@@ -155,14 +173,100 @@ impl ResidentRuntime {
 
 /// Non-owning control/observation seam. Dropping it has no runtime side effects.
 /// Operations return owned facts, never runtime/host/storage handles. The local
-/// composition mutex covers each bounded synchronous operation, without await;
-/// unload takes the same slot after native shutdown and cannot leave a borrowed
-/// operation retaining resources. No global registry lock covers runtime work.
+/// composition mutex covers bounded synchronous helpers, without await. App
+/// Server work uses a registry-admitted server task and scoped operation lease;
+/// unload drains these before native shutdown and composition release. No
+/// global registry lock covers runtime work or an asynchronous wait.
 #[derive(Clone, Debug)]
 pub struct ManagedRuntimeClient {
     runtime: Weak<ManagedRuntime>,
 }
 impl ManagedRuntimeClient {
+    fn admit_operation(&self) -> Result<OperationLease, RuntimeManagerError> {
+        let identity = self
+            .runtime
+            .upgrade()
+            .ok_or(RuntimeManagerError::StaleIncarnation)?;
+        let registry = identity
+            .registry
+            .upgrade()
+            .ok_or(RuntimeManagerError::StaleIncarnation)?;
+        let state = registry.0.lock().expect("registry mutex");
+        let Some(Entry::Loaded(resident)) = state.entries.get(&identity.conversation) else {
+            return Err(RuntimeManagerError::StaleIncarnation);
+        };
+        if resident.identity.incarnation != identity.incarnation {
+            return Err(RuntimeManagerError::StaleIncarnation);
+        }
+        // Same lock as Loaded -> Unloading: no late increment is possible.
+        resident.operations.send_modify(|count| *count += 1);
+        Ok(OperationLease(Some(resident.clone())))
+    }
+
+    /// Admit work to a server-owned task. The caller receives only a reply channel;
+    /// cancellation or retention of that receiver cannot retain the operation lease.
+    pub(crate) fn start_operation<T, F, Fut>(
+        &self,
+        operation: F,
+    ) -> Result<tokio::sync::oneshot::Receiver<T>, RuntimeManagerError>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = T> + Send + 'static,
+    {
+        let lease = self.admit_operation()?;
+        #[cfg(test)]
+        let probe = {
+            let identity = &lease.0.as_ref().expect("operation resident").identity;
+            identity
+                .registry
+                .upgrade()
+                .expect("resident registry")
+                .0
+                .lock()
+                .expect("registry mutex")
+                .probes
+                .get(&identity.conversation)
+                .cloned()
+        };
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            #[cfg(test)]
+            if let Some(probe) = probe {
+                probe.before_operation.park().await;
+            }
+            let result = operation().await;
+            drop(lease);
+            let _ = sender.send(result);
+        });
+        Ok(receiver)
+    }
+    /// Reject use of an unloaded, unloading or replaced incarnation.
+    /// # Errors
+    /// Returns `StaleIncarnation` when residency has ended.
+    pub fn validate(&self) -> Result<(), RuntimeManagerError> {
+        self.current().map(|_| ())
+    }
+
+    /// Admit a non-owning controller and linearize its snapshot/subscription.
+    /// # Errors
+    /// Stale incarnations and conflicting controllers are rejected.
+    /// # Panics
+    /// Panics if a composition mutex is poisoned.
+    pub fn attach(
+        &self,
+    ) -> Result<crate::runtime_client::attachment::AttachedSnapshot, RuntimeManagerError> {
+        let lease = self.admit_operation()?;
+        let runtime = lease.0.as_ref().expect("operation resident");
+        let composition = runtime.composition.lock().expect("composition mutex");
+        composition
+            .as_ref()
+            .ok_or(RuntimeManagerError::StaleIncarnation)?
+            .host()
+            .inner
+            .admit_attachment(false, true)
+            .map_err(RuntimeManagerError::Client)
+    }
     fn current(&self) -> Result<Arc<ResidentRuntime>, RuntimeManagerError> {
         let runtime = self
             .runtime
@@ -283,6 +387,11 @@ pub struct SessionRuntimeManager {
     dependencies: Arc<LocalRuntimeDependencies>,
 }
 impl SessionRuntimeManager {
+    /// Durable authority shared with connection routing; no runtime is loaded.
+    #[must_use]
+    pub fn session_controller(&self) -> SessionController {
+        self.sessions.clone()
+    }
     /// Allocate the process runtime owner once; clone it for request handlers.
     /// The durable controller retains only this allocation claim, never residency.
     /// # Errors
@@ -466,6 +575,7 @@ impl SessionRuntimeManager {
                 .expect("process incarnation identity exhausted"),
         );
         Ok(Arc::new_cyclic(|resident| ResidentRuntime {
+            operations: watch::channel(0).0,
             identity: Arc::new(ManagedRuntime {
                 conversation: access.node.conversation_id,
                 incarnation,
@@ -518,6 +628,40 @@ impl SessionRuntimeManager {
                 return Ok(());
             }
         }
+    }
+
+    /// Claim unload only for the explicitly addressed live incarnation.
+    /// # Errors
+    /// Stale identities fail before any residency transition; shutdown failures
+    /// retain the native fail-closed Unloading slot.
+    /// # Panics
+    /// Panics if the registry mutex is poisoned.
+    pub async fn unload_incarnation(
+        &self,
+        id: &ConversationId,
+        expected: RuntimeIncarnationId,
+    ) -> Result<(), RuntimeManagerError> {
+        let flight = {
+            let mut registry = self.registry.0.lock().expect("registry mutex");
+            let Some(Entry::Loaded(runtime)) = registry.entries.get(id) else {
+                return Err(RuntimeManagerError::StaleIncarnation);
+            };
+            if runtime.identity.incarnation != expected {
+                return Err(RuntimeManagerError::StaleIncarnation);
+            }
+            let runtime = runtime.clone();
+            let flight = Flight::new();
+            registry.entries.insert(
+                id.clone(),
+                Entry::Unloading {
+                    _runtime: runtime.clone(),
+                    flight: flight.clone(),
+                },
+            );
+            self.spawn_unload(id.clone(), runtime, flight.clone(), None);
+            flight
+        };
+        flight.wait().await.map(|_| ())
     }
     /// Explicit targeted replacement. Old shutdown must succeed before cold
     /// resolution/composition; failure after that boundary leaves Unloaded.
@@ -586,12 +730,33 @@ impl SessionRuntimeManager {
         tokio::spawn(async move {
             #[cfg(test)]
             owner.probe(&id).before_shutdown.park().await;
+            #[cfg(test)]
+            owner.probe(&id).draining_operations.send_replace(true);
+            runtime
+                .operations
+                .subscribe()
+                .wait_for(|count| *count == 0)
+                .await
+                .expect("resident owns operation drain");
             let live = runtime.shutdown_runtime().expect("resident composition");
             if let Err(e) = live.shutdown().await {
                 terminal.finish(Err(error(format!("{e:?}"))));
                 return;
             }
             drop(live);
+            let host = runtime
+                .composition
+                .lock()
+                .expect("composition mutex")
+                .as_ref()
+                .expect("resident composition")
+                .host()
+                .clone();
+            if let Err(e) = host.inner.drain_projection().await {
+                terminal.finish(Err(error(format!("projection drain failed: {e}"))));
+                return;
+            }
+            drop(host);
             // Writer-transfer boundary: shutdown has permanently closed native
             // admission and proved settlement. Stale handles cannot reopen it.
             runtime

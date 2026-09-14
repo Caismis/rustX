@@ -90,6 +90,14 @@ remain owned by the Rust runtime; the TUI does not implement a parallel
 runtime or session system. See [`tui/README.md`](tui/README.md) for the
 user-visible command surface.
 
+That current Runtime Client wire contract is temporary pre-#290 infrastructure.
+The [App Server protocol](docs/app-server-protocol.md) (#288) is the unified,
+transport-neutral client boundary. #36 supplies first-class stdio JSONL and
+WebSocket bindings and the standalone server entry point; #290 moves local TUI
+to stdio JSONL with a TUI-owned App Server child and existing/remote TUI to
+WebSocket with an externally managed server. Ordinary local use needs no loopback
+WebSocket. Connection detach is separate from owner-driven child-process shutdown.
+
 ## Filesystem and native tools
 
 `--workspace` establishes the runtime's authoritative execution cwd and the
@@ -167,6 +175,7 @@ argument hints and interaction details.
 Normative detail remains in the owning documents:
 
 - [Architecture](docs/architecture.md)
+- [App Server protocol and generated clients](docs/app-server-protocol.md)
 - [Runtime Invariants](docs/invariants.md)
 - [Process-death conformance](docs/process-death-conformance.md)
 - [Development Plan](docs/development-plan.md)

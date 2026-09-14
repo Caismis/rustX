@@ -25,18 +25,22 @@ pub const MAX_WORKFLOW_CUT_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
+#[derive(schemars::JsonSchema)]
 pub struct WorkflowRevision(pub u64);
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct WorkflowSnapshot {
     pub revision: WorkflowRevision,
     pub runs: Vec<WorkflowRunView>,
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub omitted_runs: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct WorkflowRunView {
     pub id: WorkflowRunId,
     pub workflow_id: WorkflowId,
@@ -45,6 +49,7 @@ pub struct WorkflowRunView {
     pub tool_call_id: ToolCallId,
     pub state: WorkflowState,
     pub instances: Vec<WorkflowInstanceView>,
+    #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub omitted_instances: u64,
     pub steps_consumed: usize,
     pub steps_max: usize,
@@ -58,6 +63,7 @@ pub struct WorkflowRunView {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct WorkflowHandoff {
     pub state: String,
     pub path: String,
@@ -86,6 +92,7 @@ impl From<&crate::runtime::workspace::WorkspaceSettlement> for WorkflowHandoff {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum WorkflowState {
     Pending,
     Running,
@@ -96,6 +103,7 @@ pub enum WorkflowState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum WorkflowWait {
     Tool,
     Agent,
@@ -109,6 +117,7 @@ pub enum WorkflowWait {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum WorkflowNodeKind {
     Block,
     Agent,
@@ -122,6 +131,7 @@ pub enum WorkflowNodeKind {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct WorkflowInstanceView {
     pub block: WorkflowBlockInstance,
     pub node: Option<String>,

@@ -31,7 +31,7 @@ pub struct SessionAccess {
 }
 
 /// Durable native metadata/allocation access. Deletion execution and frozen
-/// cleanup authority are crate-private until #288 defines bounded protocol DTOs.
+/// cleanup authority remain crate-private; App Server exposes bounded DTOs only.
 ///
 /// ```compile_fail
 /// use rustx::local_runtime::session::deletion::DeletionRecord;
