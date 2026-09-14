@@ -731,6 +731,223 @@ export type Modality = 'text' | 'image' | 'file';
  */
 export type McpServerId = string;
 /**
+ * The semantic family of one admitted model-visible context fact.
+ */
+export type ContextKind =
+  | {
+      goal_status: GoalSnapshot;
+    }
+  | 'runtime_tool_observation'
+  | 'extension_environment'
+  | {
+      agent_status: AgentStatusGenerationMetadata;
+    };
+/**
+ * Durable phase, independent of automatic continuation activation.
+ */
+export type GoalPhase = 'active' | 'paused' | 'blocked' | 'complete';
+/**
+ * Trusted origin supplied by runtime, never by model arguments.
+ */
+export type GoalOrigin =
+  | {
+      message_id: MessageId;
+      attempt_id: AttemptId;
+      kind: 'human_attempt';
+    }
+  | {
+      kind: 'runtime_control';
+    };
+/**
+ * Identifies one attempt to execute an agent manifest.
+ */
+export type AttemptId = string;
+/**
+ * The stable identity of one code-owned Agent Status module.
+ *
+ * This identity belongs to the canonical message layer because an active
+ * Agent Status message must carry enough durable information for a later
+ * Surface scan to identify the modules it contains. It is intentionally a
+ * closed enum rather than extension metadata or a generic key/value field.
+ */
+export type AgentStatusModuleId = 'time' | 'background' | 'todo';
+/**
+ * A content block inside an `AssistantMessageBlock`.
+ */
+export type AssistantContentBlock =
+  | {
+      /**
+       * The text content.
+       */
+      text: string;
+      type: 'text';
+    }
+  | (ReasoningBlock & {
+      type: 'reasoning';
+    })
+  | (ToolCall & {
+      type: 'tool_call';
+    })
+  | (RefusalBlock & {
+      type: 'refusal';
+    })
+  | {
+      /**
+       * Durable artifact identity of the image.
+       */
+      artifact_id: string;
+      /**
+       * Optional short description or alt text.
+       */
+      alt?: string | null;
+      type: 'image';
+    };
+/**
+ * Provider-specific continuation state preserved by the runtime.
+ *
+ * `None` (absence) is the natural representation for protocols that carry no
+ * continuation state, such as `OpenAI` Chat Completions, which resend the
+ * full context instead of referencing a previous response.
+ */
+export type ProviderContinuationState =
+  | {
+      openai_responses: OpenAiResponsesContinuation;
+    }
+  | {
+      anthropic: AnthropicContinuation;
+    };
+/**
+ * Continuation state for the `OpenAI` Responses protocol.
+ *
+ * The Responses protocol supports two continuation modes, and the canonical
+ * boundary preserves either one without depending on a provider SDK:
+ *
+ * - [`OpenAiResponsesContinuation::Stored`]: stateful operation, continued
+ *   by referencing the provider-stored previous response.
+ * - [`OpenAiResponsesContinuation::Stateless`]: stateless operation
+ *   (`store: false`, zero-data-retention), continued by preserving the
+ *   previous response's output/reasoning items and passing them back on
+ *   later requests. This includes opaque encrypted reasoning content.
+ */
+export type OpenAiResponsesContinuation =
+  | {
+      stored: {
+        /**
+         * The provider-assigned response id of the previous response to
+         * continue.
+         */
+        previous_response_id: string;
+      };
+    }
+  | {
+      stateless: {
+        /**
+         * Ordered output/reasoning items from the previous response that
+         * must be passed back on the next request, including opaque
+         * encrypted reasoning content.
+         */
+        items: unknown[];
+      };
+    };
+/**
+ * A content block inside a tool result.
+ */
+export type ToolResultContent =
+  | {
+      /**
+       * The text content.
+       */
+      text: string;
+      type: 'text';
+    }
+  | {
+      /**
+       * The structured tool output value.
+       */
+      value: {
+        [k: string]: unknown;
+      };
+      type: 'json';
+    }
+  | {
+      /**
+       * Durable artifact identity of the file.
+       */
+      artifact_id: string;
+      /**
+       * Optional display name.
+       */
+      name?: string | null;
+      /**
+       * Optional MIME type.
+       */
+      mime_type?: string | null;
+      /**
+       * Optional human-readable description.
+       */
+      description?: string | null;
+      type: 'file';
+    }
+  | {
+      /**
+       * Durable artifact identity of the image.
+       */
+      artifact_id: string;
+      /**
+       * Optional short description or alt text.
+       */
+      alt?: string | null;
+      type: 'image';
+    };
+/**
+ * Runtime-owned managed textual-output continuation metadata of one tool
+ * result (Issue #86): where the complete — or honestly partial — textual
+ * output of the execution lives in the conversation's managed tool-output
+ * store.
+ *
+ * This is rustX runtime metadata, explicitly typed and separate from
+ * arbitrary tool-owned structured content (`ToolResultContent::Json`). It
+ * is not a semantic artifact, not a `FileReference`, and not a File
+ * modality: textual output stays textual. The locator is an advisory
+ * model-facing absolute path inside the read-only managed tool-output
+ * root — it is a locator, never filesystem authority.
+ *
+ * The two managed-output lifecycles both use this type: a foreground
+ * result references its lazy result spill (`results/result_N.txt`) only
+ * when the complete representation crossed the shared preview threshold,
+ * while a background result references its dispatch-allocated live-output
+ * file (`tasks/exec_N.output`). A size-only cutoff is never a semantic tool
+ * failure; `Partial`/`Unavailable` make output-storage failure explicit.
+ */
+export type ManagedOutputContinuation =
+  | {
+      /**
+       * The absolute locator inside the managed tool-output root.
+       */
+      locator: string;
+      type: 'complete';
+    }
+  | {
+      /**
+       * The absolute locator inside the managed tool-output root.
+       */
+      locator: string;
+      /**
+       * The output-storage failure diagnostic. Advisory only: it is
+       * bounded whenever the continuation is rendered.
+       */
+      diagnostic: string;
+      type: 'partial';
+    }
+  | {
+      /**
+       * The output-storage failure diagnostic. Advisory only: it is
+       * bounded whenever the continuation is rendered.
+       */
+      diagnostic: string;
+      type: 'unavailable';
+    };
+/**
  * One consolidated block of an immutable publication audit.
  *
  * Consolidation is what keeps the audit bounded: a stream that staged ten
@@ -849,124 +1066,6 @@ export type ExactInteger1 = string;
  * executor's settlement evidence at the terminal result.
  */
 export type ToolDeadlineKind = 'hard' | 'idle';
-/**
- * Durable phase, independent of automatic continuation activation.
- */
-export type GoalPhase = 'active' | 'paused' | 'blocked' | 'complete';
-/**
- * Trusted origin supplied by runtime, never by model arguments.
- */
-export type GoalOrigin =
-  | {
-      message_id: MessageId;
-      attempt_id: AttemptId;
-      kind: 'human_attempt';
-    }
-  | {
-      kind: 'runtime_control';
-    };
-/**
- * Identifies one attempt to execute an agent manifest.
- */
-export type AttemptId = string;
-/**
- * A content block inside a tool result.
- */
-export type ToolResultContent =
-  | {
-      /**
-       * The text content.
-       */
-      text: string;
-      type: 'text';
-    }
-  | {
-      /**
-       * The structured tool output value.
-       */
-      value: {
-        [k: string]: unknown;
-      };
-      type: 'json';
-    }
-  | {
-      /**
-       * Durable artifact identity of the file.
-       */
-      artifact_id: string;
-      /**
-       * Optional display name.
-       */
-      name?: string | null;
-      /**
-       * Optional MIME type.
-       */
-      mime_type?: string | null;
-      /**
-       * Optional human-readable description.
-       */
-      description?: string | null;
-      type: 'file';
-    }
-  | {
-      /**
-       * Durable artifact identity of the image.
-       */
-      artifact_id: string;
-      /**
-       * Optional short description or alt text.
-       */
-      alt?: string | null;
-      type: 'image';
-    };
-/**
- * Runtime-owned managed textual-output continuation metadata of one tool
- * result (Issue #86): where the complete — or honestly partial — textual
- * output of the execution lives in the conversation's managed tool-output
- * store.
- *
- * This is rustX runtime metadata, explicitly typed and separate from
- * arbitrary tool-owned structured content (`ToolResultContent::Json`). It
- * is not a semantic artifact, not a `FileReference`, and not a File
- * modality: textual output stays textual. The locator is an advisory
- * model-facing absolute path inside the read-only managed tool-output
- * root — it is a locator, never filesystem authority.
- *
- * The two managed-output lifecycles both use this type: a foreground
- * result references its lazy result spill (`results/result_N.txt`) only
- * when the complete representation crossed the shared preview threshold,
- * while a background result references its dispatch-allocated live-output
- * file (`tasks/exec_N.output`). A size-only cutoff is never a semantic tool
- * failure; `Partial`/`Unavailable` make output-storage failure explicit.
- */
-export type ManagedOutputContinuation =
-  | {
-      /**
-       * The absolute locator inside the managed tool-output root.
-       */
-      locator: string;
-      type: 'complete';
-    }
-  | {
-      /**
-       * The absolute locator inside the managed tool-output root.
-       */
-      locator: string;
-      /**
-       * The output-storage failure diagnostic. Advisory only: it is
-       * bounded whenever the continuation is rendered.
-       */
-      diagnostic: string;
-      type: 'partial';
-    }
-  | {
-      /**
-       * The output-storage failure diagnostic. Advisory only: it is
-       * bounded whenever the continuation is rendered.
-       */
-      diagnostic: string;
-      type: 'unavailable';
-    };
 /**
  * The public result of disposing a retained subagent workspace.
  */
@@ -1098,7 +1197,16 @@ export type WorkflowLoopExit = 'satisfied' | 'exhausted';
  * The `role` discriminator is stable: `user`, `assistant`, `tool`.
  * No additional top-level role exists.
  */
-export type MessageBlock = UserMessageBlock | AssistantMessageBlock | ToolMessageBlock;
+export type MessageBlock =
+  | (UserMessageBlock & {
+      role: 'user';
+    })
+  | (AssistantMessageBlock & {
+      role: 'assistant';
+    })
+  | (ToolMessageBlock & {
+      role: 'tool';
+    });
 /**
  * One ordered block of an in-flight Assistant message.
  */
@@ -1159,27 +1267,6 @@ export type InFlightBlock =
       arguments: string;
       type: 'tool_call';
     };
-/**
- * The semantic family of one admitted model-visible context fact.
- */
-export type ContextKind =
-  | {
-      goal_status: GoalSnapshot;
-    }
-  | 'runtime_tool_observation'
-  | 'extension_environment'
-  | {
-      agent_status: AgentStatusGenerationMetadata;
-    };
-/**
- * The stable identity of one code-owned Agent Status module.
- *
- * This identity belongs to the canonical message layer because an active
- * Agent Status message must carry enough durable information for a later
- * Surface scan to identify the modules it contains. It is intentionally a
- * closed enum rather than extension metadata or a generic key/value field.
- */
-export type AgentStatusModuleId = 'time' | 'background' | 'todo';
 /**
  * One structured Agent Status section of the external view.
  */
@@ -2240,7 +2327,7 @@ export type RuntimeClientEvent =
        * The tool-call content block that completed.
        */
       block_index: number;
-      call: ToolCall;
+      call: ToolCall1;
       type: 'tool_call_assembled';
     }
   | {
@@ -2304,7 +2391,7 @@ export type RuntimeClientEvent =
        * Identifies a tool definition in the capability set.
        */
       tool_id: string;
-      result: ToolExecutionResult2;
+      result: ToolExecutionResult3;
       type: 'tool_execution_settled';
     }
   | {
@@ -2318,7 +2405,16 @@ export type RuntimeClientEvent =
        * The `role` discriminator is stable: `user`, `assistant`, `tool`.
        * No additional top-level role exists.
        */
-      message: UserMessageBlock | AssistantMessageBlock | ToolMessageBlock;
+      message:
+        | (UserMessageBlock & {
+            role: 'user';
+          })
+        | (AssistantMessageBlock & {
+            role: 'assistant';
+          })
+        | (ToolMessageBlock & {
+            role: 'tool';
+          });
       /**
        * The durable transcript position, absent for hidden Context facts.
        */
@@ -3449,7 +3545,16 @@ export interface RuntimeClientTranscriptEntry {
         /**
          * The canonical or durably accepted message.
          */
-        message: UserMessageBlock | AssistantMessageBlock | ToolMessageBlock;
+        message:
+          | (UserMessageBlock & {
+              role: 'user';
+            })
+          | (AssistantMessageBlock & {
+              role: 'assistant';
+            })
+          | (ToolMessageBlock & {
+              role: 'tool';
+            });
         type: 'message';
       }
     | {
@@ -3466,7 +3571,7 @@ export interface RuntimeClientTranscriptEntry {
          */
         timestamp: string;
         /**
-         * Owning attempt.
+         * Identifies one attempt to execute an agent manifest.
          */
         attempt_id: string;
         /**
@@ -3534,7 +3639,7 @@ export interface RuntimeClientTranscriptEntry {
          */
         timestamp: string;
         /**
-         * Owning attempt.
+         * Identifies one attempt to execute an agent manifest.
          */
         attempt_id: string;
         /**
@@ -3593,21 +3698,394 @@ export interface RuntimeClientTranscriptEntry {
 }
 /**
  * Inbound information supplied to the current agent.
+ *
+ * A `UserMessageBlock` does not necessarily mean a human spoke: it is the
+ * canonical home for anything inbound, including messages from other agents
+ * (with [`UserSource::Agent`] provenance) and runtime compaction summaries
+ * (with [`InboundKind::CompactionSummary`] kind). It
+ * must never become `AssistantMessageBlock` or `ToolMessageBlock`, which are
+ * reserved for output and actions of the current agent.
  */
 export interface UserMessageBlock {
-  role: 'user';
+  /**
+   * Identifies a committed canonical message block.
+   */
+  id: string;
+  /**
+   * The inbound content.
+   */
+  content: UserContentBlock[];
+  /**
+   * Provenance: who supplied the inbound information.
+   */
+  source:
+    | 'human'
+    | {
+        agent: {
+          /**
+           * Identity of the sending agent.
+           */
+          agent_id: string;
+        };
+      }
+    | 'fleet'
+    | 'external_system'
+    | 'runtime'
+    | {
+        extension: {
+          /**
+           * The rustX-derived logical extension identity.
+           */
+          contributor: string;
+        };
+      };
+  /**
+   * Typed kind of inbound information.
+   */
+  kind?:
+    | {
+        goal_continuation: GoalRef;
+      }
+    | 'message'
+    | {
+        compaction_summary: CompactionSummaryMetadata;
+      }
+    | {
+        context: ContextKind;
+      };
+  /**
+   * The persisted UTC instant associated with the inbound message, when
+   * the producer supplied one.
+   *
+   * An ordinary asynchronously delivered inbound message
+   * ([`InboundKind::Message`]) carries the persisted instant of its
+   * delivery; the producer supplies the original timestamp explicitly and
+   * no wall-clock time is fabricated. Derived M4 compaction summaries
+   * ([`InboundKind::CompactionSummary`]) never carry one. Older or
+   * derived messages without a timestamp remain representable: the field
+   * defaults to `None` on deserialization and is omitted from the
+   * canonical encoding while absent.
+   */
+  timestamp?: string | null;
+}
+/**
+ * The cumulative native file-operation facts of one compaction summary
+ * (Issue #140).
+ *
+ * This is the typed canonical authority for *which files the retired history
+ * read and which files it modified*. It is derived deterministically from
+ * the canonical tool calls of the selected retired span — native
+ * `read(path)` contributes a read, native `edit(path)` and `write(path)`
+ * contribute a modification — merged with the metadata of every earlier
+ * compaction summary inside that same span. It records conversation facts,
+ * never current filesystem state: a path stays listed even when the file has
+ * since been deleted, and the rendered `<read-files>`/`<modified-files>`
+ * sections of the summary text are a model-visible projection of this value,
+ * never its source.
+ *
+ * The fields are private so every value, including one decoded from durable
+ * JSON, satisfies the canonical invariants: both lists are unique and in
+ * ascending byte order, and `read_files ∩ modified_files = ∅` (modification
+ * wins over read).
+ *
+ * ```compile_fail
+ * use rustx::message::types::CompactionSummaryMetadata;
+ *
+ * fn mutate(metadata: &mut CompactionSummaryMetadata) {
+ *     metadata.read_files = Vec::new();
+ * }
+ * ```
+ */
+export interface CompactionSummaryMetadata {
+  read_files?: string[];
+  modified_files?: string[];
+}
+/**
+ * Authoritative bounded durable record.
+ */
+export interface GoalSnapshot {
+  reference: GoalRef;
+  objective: string;
+  phase: GoalPhase;
+  blocked_reason?: string | null;
+  autonomous_round_budget: number;
+  autonomous_rounds_consumed: number;
+  origin: GoalOrigin;
+  last_round_message_id?: MessageId | null;
+}
+/**
+ * The structured durable identity of one canonical Agent Status generation.
+ *
+ * The descriptor is attached to [`ContextKind::AgentStatus`] itself. Its
+ * timestamp is the single Agent Status clock sample used to produce the
+ * generation, and its typed module list is the source of truth for active
+ * Surface visibility. Renderer text is never consulted for either fact.
+ *
+ * The fields are private so every value, including one decoded from durable
+ * JSON, has non-empty, duplicate-free membership in deterministic semantic
+ * order.
+ *
+ * ```compile_fail
+ * use rustx::message::types::AgentStatusGenerationMetadata;
+ *
+ * fn mutate(metadata: &mut AgentStatusGenerationMetadata) {
+ *     metadata.modules = Vec::new();
+ * }
+ * ```
+ */
+export interface AgentStatusGenerationMetadata {
+  generated_at: string;
+  modules: AgentStatusModuleId[];
 }
 /**
  * One completed model generation produced by the current agent.
+ *
+ * One generation becomes one immutable `AssistantMessageBlock` containing
+ * multiple content blocks. Streaming deltas are never committed here; they
+ * belong to `ModelEvent` until the generation completes. `send_message`
+ * results and other inbound material from other agents never appear in this
+ * role.
  */
 export interface AssistantMessageBlock {
-  role: 'assistant';
+  /**
+   * Identifies a committed canonical message block.
+   */
+  id: string;
+  /**
+   * The completed generation content.
+   */
+  content: AssistantContentBlock[];
+}
+/**
+ * Model reasoning content.
+ *
+ * Reasoning text is preserved for diagnostics, but reasoning/continuation
+ * state is never flattened into plain text: provider-specific opaque state
+ * survives on the [`ProviderContinuationState`] boundary for later
+ * continuation.
+ */
+export interface ReasoningBlock {
+  /**
+   * The reasoning text, when the provider exposed it.
+   */
+  text?: string | null;
+  /**
+   * Provider continuation state required to continue the generation.
+   */
+  provider_state?: ProviderContinuationState | null;
+}
+/**
+ * Continuation state for the `Anthropic` Messages protocol.
+ */
+export interface AnthropicContinuation {
+  /**
+   * Opaque provider state preserved verbatim by the adapter.
+   */
+  opaque: {
+    [k: string]: unknown;
+  };
+}
+/**
+ * One tool call issued by the current agent.
+ */
+export interface ToolCall {
+  /**
+   * Identity of this specific call, referenced by the matching
+   * `ToolMessageBlock` and tool-result events.
+   */
+  id: string;
+  /**
+   * Identity of the tool being called within the capability set.
+   */
+  tool_id: string;
+  /**
+   * Name of the tool at call time, sufficient for resolution together with
+   * `tool_id`.
+   */
+  name: string;
+  /**
+   * Arbitrary JSON arguments for the tool call.
+   */
+  arguments: {
+    [k: string]: unknown;
+  };
+}
+/**
+ * A refusal generated by the model.
+ */
+export interface RefusalBlock {
+  /**
+   * The refusal explanation text.
+   */
+  text: string;
 }
 /**
  * The result of one tool call produced by the current agent.
+ *
+ * This block is the canonical conversation record of an execution outcome
+ * and composes [`ToolExecutionResult`] as its single source of truth. For
+ * `send_message`-style platform tools, the result is only the delivery
+ * acceptance/rejection acknowledgment; a later reply from the recipient
+ * arrives as a `UserMessageBlock` with agent provenance and is never nested
+ * here.
  */
 export interface ToolMessageBlock {
-  role: 'tool';
+  /**
+   * Identifies a committed canonical message block.
+   */
+  id: string;
+  /**
+   * Identity of the tool call this block answers.
+   */
+  tool_call_id: string;
+  /**
+   * Identity of the executed tool.
+   */
+  tool_id: string;
+  result: ToolExecutionResult;
+}
+/**
+ * The normalized execution result.
+ */
+export interface ToolExecutionResult {
+  /**
+   * Immutable native Workflow identity on the existing outer result.
+   * Historical identity only: no execution state or continuation authority.
+   * Its retention is exactly that of this result, never a separate registry.
+   */
+  workflow?: WorkflowToolIdentity | null;
+  /**
+   * Typed execution status, including unknown external outcomes.
+   */
+  status:
+    | {
+        type: 'success';
+      }
+    | {
+        /**
+         * Human-readable error message.
+         */
+        error: string;
+        type: 'failed';
+      }
+    | {
+        /**
+         * The policy or human-readable approval reason.
+         */
+        reason: string;
+        type: 'denied';
+      }
+    | {
+        /**
+         * Why the execution was cancelled.
+         */
+        reason:
+          | 'user_requested'
+          | 'runtime_shutdown'
+          | 'parent_cancelled'
+          | 'subagent_execution_deadline_exceeded';
+        /**
+         * Whether cancellation won before executor start or while execution
+         * was already in flight.
+         */
+        phase: 'before_start' | 'during_execution';
+        type: 'cancelled';
+      }
+    | {
+        type: 'timed_out';
+      }
+    | {
+        /**
+         * A producer-owned diagnostic describing why certainty is
+         * unavailable. It is rendered into the bounded model-facing
+         * projection and is never parsed to decide semantics; the typed
+         * variant itself is the certainty claim.
+         */
+        detail: string;
+        type: 'outcome_unknown';
+      };
+  /**
+   * Tool-owned result content.
+   *
+   * This content is TOOL-OWNED: [`ToolResultContent::Json`] is arbitrary
+   * tool-owned structured data, and the runtime never infers semantics
+   * from its property names. rustX reserves no ordinary JSON field names;
+   * runtime-owned facts live in the typed fields of this struct. A
+   * provider-independent, bounded model-facing representation is produced
+   * by [`Self::model_facing_projection`]; producers do not append runtime
+   * status or managed-output continuation text here.
+   */
+  content?: ToolResultContent[];
+  /**
+   * Execution duration in integer milliseconds (stable for persistence).
+   */
+  duration_ms: number;
+  /**
+   * Process exit code where the tool executed a process.
+   */
+  exit_code?: number | null;
+  /**
+   * Durable artifact/file references produced by the execution.
+   */
+  artifacts?: FileReference[];
+  /**
+   * Truncation metadata where output was truncated.
+   */
+  truncation?: TruncationState | null;
+  /**
+   * Runtime-owned managed textual-output continuation metadata: where
+   * the complete — or honestly partial — textual output of this result
+   * lives in the conversation's managed tool-output store (Issue #86).
+   * Absent for results whose output fits the model-facing content.
+   *
+   * This is the one typed source of truth for complete-vs-partial
+   * managed output; producers never encode these facts as magic
+   * properties of tool-owned JSON, and generic runtime publication code
+   * consumes only this typed field, never arbitrary JSON keys.
+   */
+  managed_output?: ManagedOutputContinuation | null;
+}
+/**
+ * Runtime-owned identity, independent of model `ToolCall` text.
+ * Retained with the canonical outer result, not with an execution owner.
+ */
+export interface WorkflowToolIdentity {
+  workflow_id: WorkflowId;
+  program_digest: string;
+}
+/**
+ * A reference to a file artifact.
+ */
+export interface FileReference {
+  /**
+   * Durable artifact identity of the file.
+   */
+  artifact_id: string;
+  /**
+   * Optional display name.
+   */
+  name?: string | null;
+  /**
+   * Optional MIME type.
+   */
+  mime_type?: string | null;
+  /**
+   * Optional human-readable description.
+   */
+  description?: string | null;
+}
+/**
+ * Truncation metadata for tool output.
+ */
+export interface TruncationState {
+  /**
+   * Whether the result content was truncated.
+   */
+  truncated: boolean;
+  /**
+   * Size of the untruncated output in bytes, when known.
+   */
+  original_bytes?: number | null;
 }
 /**
  * The bounded immutable publication audit.
@@ -3618,7 +4096,7 @@ export interface PublicationAudit {
    */
   stream_id: string;
   /**
-   * The attempt that owned the stream.
+   * Identifies one attempt to execute an agent manifest.
    */
   attempt_id: string;
   /**
@@ -3828,19 +4306,6 @@ export interface GoalView {
   armed: boolean;
 }
 /**
- * Authoritative bounded durable record.
- */
-export interface GoalSnapshot {
-  reference: GoalRef;
-  objective: string;
-  phase: GoalPhase;
-  blocked_reason?: string | null;
-  autonomous_round_budget: number;
-  autonomous_rounds_consumed: number;
-  origin: GoalOrigin;
-  last_round_message_id?: MessageId | null;
-}
-/**
  * The external background execution read model.
  *
  * Projected from the authoritative [`ConversationBackgroundRegistry`]
@@ -3891,7 +4356,7 @@ export interface RuntimeClientBackgroundExecution {
   /**
    * The bounded terminal result, when terminal.
    */
-  result?: ToolExecutionResult | null;
+  result?: ToolExecutionResult1 | null;
 }
 /**
  * A bounded structured progress notification of one tool execution.
@@ -3922,7 +4387,7 @@ export interface ToolProgress {
  * `ToolMessageBlock` composes this type instead of duplicating its fields,
  * keeping one source of truth for tool results.
  */
-export interface ToolExecutionResult {
+export interface ToolExecutionResult1 {
   /**
    * Immutable native Workflow identity on the existing outer result.
    * Historical identity only: no execution state or continuation authority.
@@ -4019,48 +4484,6 @@ export interface ToolExecutionResult {
    * consumes only this typed field, never arbitrary JSON keys.
    */
   managed_output?: ManagedOutputContinuation | null;
-}
-/**
- * Runtime-owned identity, independent of model `ToolCall` text.
- * Retained with the canonical outer result, not with an execution owner.
- */
-export interface WorkflowToolIdentity {
-  workflow_id: WorkflowId;
-  program_digest: string;
-}
-/**
- * A reference to a file artifact.
- */
-export interface FileReference {
-  /**
-   * Durable artifact identity of the file.
-   */
-  artifact_id: string;
-  /**
-   * Optional display name.
-   */
-  name?: string | null;
-  /**
-   * Optional MIME type.
-   */
-  mime_type?: string | null;
-  /**
-   * Optional human-readable description.
-   */
-  description?: string | null;
-}
-/**
- * Truncation metadata for tool output.
- */
-export interface TruncationState {
-  /**
-   * Whether the result content was truncated.
-   */
-  truncated: boolean;
-  /**
-   * Size of the untruncated output in bytes, when known.
-   */
-  original_bytes?: number | null;
 }
 /**
  * The Runtime Client view of one subagent child (Issue #60).
@@ -5274,7 +5697,7 @@ export interface ForegroundToolExecution {
          * The assembled JSON arguments.
          */
         arguments: string;
-        result: ToolExecutionResult1;
+        result: ToolExecutionResult2;
         type: 'settled';
       };
 }
@@ -5284,7 +5707,7 @@ export interface ForegroundToolExecution {
  * `ToolMessageBlock` composes this type instead of duplicating its fields,
  * keeping one source of truth for tool results.
  */
-export interface ToolExecutionResult1 {
+export interface ToolExecutionResult2 {
   /**
    * Immutable native Workflow identity on the existing outer result.
    * Historical identity only: no execution state or continuation authority.
@@ -5528,7 +5951,14 @@ export interface InboundItemView {
   message: UserMessageBlock1;
 }
 /**
- * The canonical inbound message.
+ * Inbound information supplied to the current agent.
+ *
+ * A `UserMessageBlock` does not necessarily mean a human spoke: it is the
+ * canonical home for anything inbound, including messages from other agents
+ * (with [`UserSource::Agent`] provenance) and runtime compaction summaries
+ * (with [`InboundKind::CompactionSummary`] kind). It
+ * must never become `AssistantMessageBlock` or `ToolMessageBlock`, which are
+ * reserved for output and actions of the current agent.
  */
 export interface UserMessageBlock1 {
   /**
@@ -5591,62 +6021,6 @@ export interface UserMessageBlock1 {
    * canonical encoding while absent.
    */
   timestamp?: string | null;
-}
-/**
- * The cumulative native file-operation facts of one compaction summary
- * (Issue #140).
- *
- * This is the typed canonical authority for *which files the retired history
- * read and which files it modified*. It is derived deterministically from
- * the canonical tool calls of the selected retired span — native
- * `read(path)` contributes a read, native `edit(path)` and `write(path)`
- * contribute a modification — merged with the metadata of every earlier
- * compaction summary inside that same span. It records conversation facts,
- * never current filesystem state: a path stays listed even when the file has
- * since been deleted, and the rendered `<read-files>`/`<modified-files>`
- * sections of the summary text are a model-visible projection of this value,
- * never its source.
- *
- * The fields are private so every value, including one decoded from durable
- * JSON, satisfies the canonical invariants: both lists are unique and in
- * ascending byte order, and `read_files ∩ modified_files = ∅` (modification
- * wins over read).
- *
- * ```compile_fail
- * use rustx::message::types::CompactionSummaryMetadata;
- *
- * fn mutate(metadata: &mut CompactionSummaryMetadata) {
- *     metadata.read_files = Vec::new();
- * }
- * ```
- */
-export interface CompactionSummaryMetadata {
-  read_files?: string[];
-  modified_files?: string[];
-}
-/**
- * The structured durable identity of one canonical Agent Status generation.
- *
- * The descriptor is attached to [`ContextKind::AgentStatus`] itself. Its
- * timestamp is the single Agent Status clock sample used to produce the
- * generation, and its typed module list is the source of truth for active
- * Surface visibility. Renderer text is never consulted for either fact.
- *
- * The fields are private so every value, including one decoded from durable
- * JSON, has non-empty, duplicate-free membership in deterministic semantic
- * order.
- *
- * ```compile_fail
- * use rustx::message::types::AgentStatusGenerationMetadata;
- *
- * fn mutate(metadata: &mut AgentStatusGenerationMetadata) {
- *     metadata.modules = Vec::new();
- * }
- * ```
- */
-export interface AgentStatusGenerationMetadata {
-  generated_at: string;
-  modules: AgentStatusModuleId[];
 }
 /**
  * The latest observed finite drain boundary.
@@ -6062,7 +6436,7 @@ export interface RuntimeClientResourcesView {
    * capability set). A resource-only change may advance this revision while
    * retaining an identical capability revision.
    */
-  revision?: number & string;
+  revision?: string;
   /**
    * The runtime-loaded project instruction files, root-most to
    * workspace, in the exact order the runtime concatenated them.
@@ -6516,15 +6890,16 @@ export interface ToolCallStart {
   name: string;
 }
 /**
- * The fully assembled tool call.
+ * One tool call issued by the current agent.
  */
-export interface ToolCall {
+export interface ToolCall1 {
   /**
-   * Identifies one tool call issued by the current agent.
+   * Identity of this specific call, referenced by the matching
+   * `ToolMessageBlock` and tool-result events.
    */
   id: string;
   /**
-   * Identifies a tool definition in the capability set.
+   * Identity of the tool being called within the capability set.
    */
   tool_id: string;
   /**
@@ -6548,7 +6923,7 @@ export interface PublicationAudit1 {
    */
   stream_id: string;
   /**
-   * The attempt that owned the stream.
+   * Identifies one attempt to execute an agent manifest.
    */
   attempt_id: string;
   /**
@@ -6605,7 +6980,7 @@ export interface ToolProgress1 {
  * `ToolMessageBlock` composes this type instead of duplicating its fields,
  * keeping one source of truth for tool results.
  */
-export interface ToolExecutionResult2 {
+export interface ToolExecutionResult3 {
   /**
    * Immutable native Workflow identity on the existing outer result.
    * Historical identity only: no execution state or continuation authority.
@@ -6749,7 +7124,14 @@ export interface AgentStatusView1 {
   rendered: string;
 }
 /**
- * The canonical inbound message.
+ * Inbound information supplied to the current agent.
+ *
+ * A `UserMessageBlock` does not necessarily mean a human spoke: it is the
+ * canonical home for anything inbound, including messages from other agents
+ * (with [`UserSource::Agent`] provenance) and runtime compaction summaries
+ * (with [`InboundKind::CompactionSummary`] kind). It
+ * must never become `AssistantMessageBlock` or `ToolMessageBlock`, which are
+ * reserved for output and actions of the current agent.
  */
 export interface UserMessageBlock2 {
   /**
@@ -6864,7 +7246,7 @@ export interface RuntimeClientBackgroundExecution1 {
   /**
    * The bounded terminal result, when terminal.
    */
-  result?: ToolExecutionResult | null;
+  result?: ToolExecutionResult1 | null;
 }
 /**
  * The Runtime Client view of one subagent child (Issue #60).
@@ -7053,7 +7435,7 @@ export interface RuntimeClientResourcesView1 {
    * capability set). A resource-only change may advance this revision while
    * retaining an identical capability revision.
    */
-  revision?: number & string;
+  revision?: string;
   /**
    * The runtime-loaded project instruction files, root-most to
    * workspace, in the exact order the runtime concatenated them.
