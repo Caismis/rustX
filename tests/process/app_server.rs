@@ -12,7 +12,7 @@ use rustx::{
         session_controller::SessionController,
     },
 };
-use std::{path::PathBuf, process::Stdio};
+use std::{fmt::Write, path::PathBuf, process::Stdio};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, Command},
@@ -735,4 +735,481 @@ async fn app_server_websocket_drain_supervises_active_root_and_cold_resume() {
         }
     }))
     .await;
+}
+
+// APP-09 composition uses the existing external emulator, native source authoring,
+// and public protocol. The fixture above owns processes/paths, never Session state.
+use crate::common::provider_emulator;
+
+async fn result(
+    client: &driver::Driver,
+    call: rustx::app_server::protocol::Method,
+) -> rustx::app_server::protocol::MethodResult {
+    match rpc(client, 100, call).await {
+        rustx::app_server::protocol::Response::Success(response) => response.result,
+        response @ rustx::app_server::protocol::Response::Failure(_) => {
+            panic!("unexpected response: {response:?}")
+        }
+    }
+}
+
+async fn snapshot(
+    client: &driver::Driver,
+    target: &rustx::app_server::protocol::AttachmentTarget,
+) -> serde_json::Value {
+    use rustx::app_server::protocol::*;
+    let MethodResult::Snapshot { snapshot, .. } = result(
+        client,
+        Method::SessionSnapshot {
+            target: target.clone(),
+        },
+    )
+    .await
+    else {
+        panic!("snapshot")
+    };
+    serde_json::to_value(snapshot).unwrap()
+}
+
+async fn diagnostics(client: &driver::Driver) -> rustx::app_server::host::ServerDiagnostics {
+    use rustx::app_server::protocol::*;
+    let MethodResult::Diagnostics { snapshot } = result(client, Method::ServerDiagnostics {}).await
+    else {
+        panic!("diagnostics")
+    };
+    snapshot
+}
+
+async fn settled(
+    client: &driver::Driver,
+    target: &rustx::app_server::protocol::AttachmentTarget,
+) -> serde_json::Value {
+    loop {
+        let value = snapshot(client, target).await;
+        if value["attempt"]["phase"]["type"] == "settled" {
+            return value;
+        }
+        // Readiness polling only: the returned authoritative phase is evidence.
+        tokio::task::yield_now().await;
+    }
+}
+
+async fn start_turn(
+    client: &driver::Driver,
+    target: &rustx::app_server::protocol::AttachmentTarget,
+    text: &str,
+) {
+    use rustx::app_server::protocol::*;
+    result(
+        client,
+        Method::TurnStart {
+            target: target.clone(),
+            content: vec![rustx::message::types::UserContentBlock::Text(
+                rustx::message::content::TextBlock { text: text.into() },
+            )],
+        },
+    )
+    .await;
+}
+
+fn use_emulator(f: &Fixture, provider: &provider_emulator::ProviderEmulator) {
+    let catalog = f.root.path().join("home/.config/rustx/models.toml");
+    let text = std::fs::read_to_string(&catalog)
+        .unwrap()
+        .replace("http://127.0.0.1:9/v1", &provider.openai_base_url())
+        .replace("id = \"test\"", "id = \"integration-model\"");
+    std::fs::write(catalog, text).unwrap();
+    let settings = f.root.path().join("home/.config/rustx/settings.toml");
+    let text = std::fs::read_to_string(&settings)
+        .unwrap()
+        .replace("local/test", "local/integration-model");
+    std::fs::write(settings, text).unwrap();
+}
+
+#[tokio::test]
+async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
+    bounded(async {
+        use rustx::app_server::protocol::*;
+        let Some(provider) = provider_emulator::ProviderEmulator::start("tui_multi_session").await
+        else {
+            return;
+        };
+        let f = Fixture::new().await;
+        use_emulator(&f, &provider);
+        let (mut child, url) = f.ws().await;
+        let pid = child.id();
+        let client = driver::websocket(&url).await;
+        initialize_client(&client).await;
+        std::fs::write(
+            f.root.path().join("b/rustx.toml"),
+            "[agent.extensions.todo]\nenabled = false\n",
+        )
+        .unwrap();
+        let mut targets = Vec::new();
+        for cwd in ["a", "b"] {
+            let MethodResult::SessionTransition { session, .. } = result(
+                &client,
+                Method::SessionCreate {
+                    settings: SessionPersistentState::from_input(&SessionConfigInput::new(
+                        f.root.path().join(cwd),
+                    )),
+                },
+            )
+            .await
+            else {
+                panic!("create")
+            };
+            targets.push(attach(&client, session.id, 2).await);
+        }
+        let [a, b]: [AttachmentTarget; 2] = targets.try_into().unwrap();
+        start_turn(&client, &a, "tui multi-session: session A long task").await;
+        provider.await_gate("session-a-holding").await;
+        start_turn(&client, &b, "tui multi-session: session B quick task").await;
+        let b_done = settled(&client, &b).await;
+        assert_eq!(provider.requests().await.len(), 2);
+        assert!(b_done["effective_extensions"]["todo"].is_null());
+        // Drain through B's authoritative settlement publication. Every event
+        // before that cut must route to its original Session/Conversation.
+        loop {
+            use app_server_conformance::AppServerConformanceDriver;
+            let NotificationMethod::Event { target, event, .. } =
+                client.next_notification().await.notification
+            else {
+                panic!("unexpected invalidation")
+            };
+            assert!(target == a || target == b);
+            let rendered = serde_json::to_string(&event).unwrap();
+            assert!(!rendered.contains(if target == a {
+                "B answered"
+            } else {
+                "A is working"
+            }));
+            if target == b
+                && matches!(
+                    *event,
+                    rustx::runtime_client::event::RuntimeClientEvent::AttemptSettled { .. }
+                )
+            {
+                break;
+            }
+        }
+        assert_eq!(
+            snapshot(&client, &a).await["attempt"]["phase"]["type"],
+            "running"
+        );
+        assert_eq!(diagnostics(&client).await.loaded, 2);
+        assert_eq!(child.id(), pid);
+        assert_ne!(a.conversation_id, b.conversation_id);
+        let b_history = b_done["messages"].to_string();
+        assert!(b_history.contains("B answered while A was still working"));
+        assert!(!b_history.contains("A is working"));
+        client.close().await;
+        // A host observer has no Session attachment and cannot continue/answer
+        // work. Observe actual detach cleanup before releasing the provider.
+        let observer = driver::websocket(&url).await;
+        initialize_client(&observer).await;
+        while diagnostics(&observer).await.external_attachments != 0 {
+            tokio::task::yield_now().await;
+        }
+        provider.release_gate("session-a-holding").await;
+        while diagnostics(&observer).await.active_roots != 0 {
+            tokio::task::yield_now().await;
+        }
+        assert!(child.try_wait().unwrap().is_none());
+        let reconnected = driver::websocket(&url).await;
+        initialize_client(&reconnected).await;
+        let resumed = attach(&reconnected, a.session_id.clone(), 2).await;
+        assert_eq!(resumed.runtime_incarnation, a.runtime_incarnation);
+        assert_eq!(resumed.conversation_id, a.conversation_id);
+        assert_ne!(resumed.attachment_id, a.attachment_id);
+        let a_done = settled(&reconnected, &resumed).await;
+        assert_eq!(a_done["attempt"]["phase"]["outcome"]["type"], "completed");
+        assert!(!a_done["effective_extensions"]["todo"].is_null());
+        let history = a_done["messages"].to_string();
+        assert_eq!(
+            history.matches("A is working and has now finished").count(),
+            1
+        );
+        assert!(!history.contains("B answered"));
+        assert!(
+            a_done["pending_interactions"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!a_done["transcript"].to_string().contains("cancelled"));
+        assert_eq!(provider.requests().await.len(), 2, "no transport retry");
+        for (target, cwd) in [(&resumed, "a"), (&b, "b")] {
+            let MethodResult::Settings { settings, .. } = result(
+                &reconnected,
+                Method::SettingsRead {
+                    session_id: target.session_id.clone(),
+                },
+            )
+            .await
+            else {
+                panic!("settings")
+            };
+            assert_eq!(settings.cwd, f.root.path().join(cwd));
+        }
+        reconnected.close().await;
+        observer.close().await;
+        terminate(&child);
+        assert!(child.wait().await.unwrap().success());
+        provider.finish().await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn app_server_current_sources_persisted_selection_and_targeted_cold_replacement() {
+    bounded(async {
+        use rustx::app_server::protocol::*;
+        let Some(provider) =
+            provider_emulator::ProviderEmulator::start("app_server_replacement").await
+        else {
+            return;
+        };
+        let f = Fixture::new().await;
+        use_emulator(&f, &provider);
+        let source = f.root.path().join("home/.config/rustx/settings.toml");
+        let initial = std::fs::read_to_string(&source).unwrap();
+        let (mut child, url) = f.ws().await;
+        let client = driver::websocket(&url).await;
+        initialize_client(&client).await;
+        let a = attach(&client, f.sessions[0].clone(), 2).await;
+        let a_initial = snapshot(&client, &a).await;
+        // Explicit model choice belongs to the durable Session; omitted
+        // extension defaults remain current source authority on cold load.
+        let MethodResult::Settings {
+            revision,
+            mut settings,
+        } = result(
+            &client,
+            Method::SettingsRead {
+                session_id: a.session_id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("settings")
+        };
+        settings.model =
+            Some(serde_json::from_value(a_initial["model"]["configured"].clone()).unwrap());
+        result(
+            &client,
+            Method::SettingsReplace {
+                session_id: a.session_id.clone(),
+                expected_revision: revision,
+                settings: settings.clone(),
+            },
+        )
+        .await;
+        start_turn(&client, &a, "tui multi-session: session A long task").await;
+        provider.await_gate("session-a-holding").await;
+        let admitted = snapshot(&client, &a).await["attempt"].clone();
+        // One canonical current source edit; no alternate resolver or input path.
+        std::fs::write(
+            &source,
+            format!("{initial}\n[agent.extensions.todo]\nenabled = false\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            snapshot(&client, &a).await["effective_extensions"],
+            a_initial["effective_extensions"]
+        );
+        assert_eq!(
+            snapshot(&client, &a).await["attempt"]["model"],
+            admitted["model"]
+        );
+        let b = attach(&client, f.sessions[1].clone(), 3).await;
+        let b_initial = snapshot(&client, &b).await;
+        assert!(b_initial["effective_extensions"]["todo"].is_null());
+        assert!(!a_initial["effective_extensions"]["todo"].is_null());
+        start_turn(&client, &b, "tui multi-session: session B quick task").await;
+        provider.await_gate("session-b-holding").await;
+        provider.release_gate("session-a-holding").await;
+        let before = settled(&client, &a).await;
+        result(&client, Method::SessionUnload { target: a.clone() }).await;
+        assert_eq!(diagnostics(&client).await.loaded, 1);
+        let Response::Failure(stale) =
+            rpc(&client, 9, Method::TurnCancel { target: a.clone() }).await
+        else {
+            panic!("obsolete target accepted")
+        };
+        assert_eq!(stale.error.data, Some(ErrorData::StaleAttachment));
+        let cold = attach(&client, a.session_id.clone(), 4).await;
+        assert_ne!(cold.runtime_incarnation, a.runtime_incarnation);
+        assert_eq!(cold.conversation_id, a.conversation_id);
+        let after = snapshot(&client, &cold).await;
+        assert!(after["effective_extensions"]["todo"].is_null());
+        assert_eq!(
+            after["model"]["configured"],
+            a_initial["model"]["configured"]
+        );
+        assert_eq!(after["messages"], before["messages"]);
+        assert_eq!(
+            snapshot(&client, &b).await["effective_extensions"],
+            b_initial["effective_extensions"]
+        );
+        assert_eq!(
+            snapshot(&client, &b).await["attempt"]["phase"]["type"],
+            "running"
+        );
+        provider.release_gate("session-b-holding").await;
+        settled(&client, &b).await;
+        assert_eq!(diagnostics(&client).await.loaded, 2);
+        let MethodResult::Settings {
+            settings: persisted,
+            ..
+        } = result(
+            &client,
+            Method::SettingsRead {
+                session_id: a.session_id,
+            },
+        )
+        .await
+        else {
+            panic!("settings")
+        };
+        assert_eq!(persisted, settings);
+        assert_eq!(provider.requests().await.len(), 2);
+        client.close().await;
+        terminate(&child);
+        assert!(child.wait().await.unwrap().success());
+        provider.finish().await;
+    })
+    .await;
+}
+
+/// Reference higher-level host composition. Authentication has already supplied
+/// the two identities. Routing selects a whole process/source/root/environment;
+/// only public RPC creates/opens Sessions. This is not the internal `AppServerHost`
+/// and does not implement authentication, workspace isolation or restart policy.
+#[tokio::test]
+async fn app_server_reference_host_two_users_and_external_crash_recovery() {
+    bounded(async {
+        use rustx::app_server::protocol::*;
+        let Some(pa) = provider_emulator::ProviderEmulator::start("app_server_user_a").await else { return };
+        let Some(pb) = provider_emulator::ProviderEmulator::start("app_server_user_b").await else { return };
+        let users = [("a", Fixture::new().await, &pa), ("b", Fixture::new().await, &pb)];
+        let mut processes = Vec::new();
+        let mut clients = Vec::new();
+        let mut targets = Vec::new();
+        for (identity, user, provider) in &users {
+            let skill = user.root.path().join(format!("home/.agents/skills/host-{identity}"));
+            std::fs::create_dir_all(&skill).unwrap();
+            std::fs::write(skill.join("SKILL.md"), format!("---\nname: host-{identity}\ndescription: host-{identity}-only resource\n---\nUse this user's supplied workspace.\n")).unwrap();
+            let config = user.root.path().join("home/.config/rustx");
+            let catalog = std::fs::read_to_string(config.join("models.toml")).unwrap()
+                .replace("http://127.0.0.1:9/v1", &provider.openai_base_url())
+                .replace("id = \"test\"", &format!("id = \"user-{identity}\""));
+            std::fs::write(config.join("models.toml"), catalog).unwrap();
+            std::fs::write(config.join("settings.toml"), format!("[agent.model]\nmodel = \"local/user-{identity}\"\n[native_tools.bash]\napproval = \"never\"\n")).unwrap();
+            let authored = config.join("settings.toml");
+            let mut text = std::fs::read_to_string(&authored).unwrap();
+            write!(text, "\n[environment]\nRUSTX_HOST_MARKER = \"{identity}\"\n").unwrap();
+            std::fs::write(authored, text).unwrap();
+            let mut child = user.command("ws://127.0.0.1:0")
+                .arg("--user-settings").arg(config.join("settings.toml"))
+                .arg("--token-file").arg(user.root.path().join("token"))
+                .env("TEST_KEY", format!("fake-{identity}"))
+                .env("RUSTX_HOST_MARKER", identity).spawn().unwrap();
+            let line = BufReader::new(child.stderr.as_mut().unwrap()).lines().next_line().await.unwrap().unwrap();
+            let endpoint = line.strip_prefix("rustx app-server listening ").unwrap();
+            let client = driver::websocket(endpoint).await;
+            initialize_client(&client).await;
+            let MethodResult::SessionTransition { session, .. } = result(&client, Method::SessionCreate {
+                settings: SessionPersistentState::from_input(&SessionConfigInput::new(user.root.path().join("a")))
+            }).await else { panic!("created") };
+            result(&client, Method::SessionName { session_id: session.id.clone(), name: format!("user-{identity}-private") }).await;
+            let target = attach(&client, session.id, 2).await;
+            start_turn(&client, &target, &format!("host user {identity}")).await;
+            provider.await_gate("host-result").await;
+            assert!(provider.requests().await.iter().all(|request| request["credentialHeaders"].as_array().unwrap().iter().any(|header| header == "authorization")));
+            let requests = provider.requests().await;
+            assert!(requests[0]["body"].to_string().contains(&format!("host-{identity}-only resource")));
+            assert!(!requests[0]["body"].to_string().contains(if *identity == "a" { "host-b-only" } else { "host-a-only" }));
+            assert_eq!(std::fs::read(user.root.path().join("a/host-effect")).unwrap(), b"x");
+            let projected = snapshot(&client, &target).await;
+            assert!(projected["messages"].to_string().contains(&format!("{identity}:unset")));
+            assert!(projected["messages"].to_string().contains(user.root.path().join("a").to_str().unwrap()));
+            processes.push(child); clients.push(client); targets.push(target);
+        }
+        assert_ne!(processes[0].id(), processes[1].id());
+        // IDs are scoped to a user's root (and may have identical spellings).
+        // Even that spelling on the other process reads only its own metadata.
+        for (index, client) in clients.iter().enumerate() {
+            let other = 1 - index;
+            let list = result(client, Method::SessionList { query: Some(format!("user-{}-private", users[other].0)), offset: 0, limit: 32 }).await;
+            let MethodResult::Sessions { sessions, .. } = list else { panic!("list") };
+            assert!(sessions.is_empty());
+            let read = result(client, Method::SessionRead { session_id: targets[other].session_id.clone() }).await;
+            assert!(!serde_json::to_string(&read).unwrap().contains(users[other].1.root.path().to_str().unwrap()));
+        }
+        // Prove absent identities fail at the other root too, in both directions.
+        for (index, count) in [(0, 1), (1, 2)] {
+            let mut id = targets[index].session_id.clone();
+            for _ in 0..count {
+                let MethodResult::SessionTransition { session, .. } = result(&clients[index], Method::SessionCreate {
+                    settings: SessionPersistentState::from_input(&SessionConfigInput::new(users[index].1.root.path().join("b")))
+                }).await else { panic!("private Session") };
+                id = session.id;
+            }
+            let Response::Failure(failure) = rpc(&clients[1 - index], 12, Method::SessionRead { session_id: id.clone() }).await else { panic!("foreign Session readable") };
+            assert_eq!(failure.error.data, Some(ErrorData::UnknownSession { session_id: id }));
+        }
+        for (index, client) in clients.iter().enumerate() {
+            use app_server_conformance::AppServerConformanceDriver;
+            result(client, Method::ApprovalModeSet { target: targets[index].clone(), mode: rustx::runtime::types::ApprovalMode::FullAccess }).await;
+            loop {
+                let notification = client.next_notification().await;
+                let NotificationMethod::Event { target, event, .. } = notification.notification else { panic!("unexpected invalidation") };
+                assert_eq!(target, targets[index]);
+                assert!(!serde_json::to_string(&event).unwrap().contains(&format!("{}:unset", users[1 - index].0)));
+                if matches!(*event, rustx::runtime_client::event::RuntimeClientEvent::ApprovalModeChanged { .. }) { break; }
+            }
+        }
+        let a_pid = processes[0].id();
+        let a_before = snapshot(&clients[0], &targets[0]).await;
+        // B dies after its tool result has entered the second provider request.
+        // It cannot have received that request's gated answer, and restarting
+        // must neither replay the command nor start the untouched Sessions.
+        processes[1].kill().await.unwrap();
+        pb.await_client_disconnect().await;
+        pb.release_gate("host-result").await;
+        assert!(processes[0].try_wait().unwrap().is_none());
+        assert_eq!(processes[0].id(), a_pid);
+        let (mut replacement, url) = users[1].1.ws().await;
+        let recovered = driver::websocket(&url).await;
+        initialize_client(&recovered).await;
+        assert_eq!(diagnostics(&recovered).await.loaded, 0);
+        let MethodResult::Sessions { sessions, .. } = result(&recovered, Method::SessionList { query: None, offset: 0, limit: 32 }).await else { panic!("catalog") };
+        assert_eq!(sessions.len(), 5);
+        assert_eq!(diagnostics(&recovered).await.loaded, 0, "listing never starts Sessions");
+        let cold = attach(&recovered, targets[1].session_id.clone(), 3).await;
+        let after = snapshot(&recovered, &cold).await;
+        assert!(after["messages"].to_string().contains("b:unset"));
+        assert!(!after["messages"].to_string().contains("result-b"));
+        assert_eq!(std::fs::read(users[1].1.root.path().join("a/host-effect")).unwrap(), b"x");
+        assert_eq!(pb.requests().await.len(), 2);
+        assert_eq!(snapshot(&clients[0], &targets[0]).await["attempt"], a_before["attempt"]);
+        // Changing A's source is confined to A; B's admitted composition stays.
+        std::fs::write(users[0].1.root.path().join("home/.config/rustx/settings.toml"), "[agent.model]\nmodel = \"local/user-a\"\n[agent.extensions.todo]\nenabled = false\n").unwrap();
+        assert_eq!(snapshot(&recovered, &cold).await["effective_extensions"], after["effective_extensions"]);
+        result(&recovered, Method::SessionUnload { target: cold.clone() }).await;
+        let b_fresh = attach(&recovered, cold.session_id.clone(), 13).await;
+        assert_eq!(snapshot(&recovered, &b_fresh).await["model"], after["model"]);
+        assert_eq!(pb.requests().await.len(), 2, "source edits in A cannot trigger B replay");
+        pa.release_gate("host-result").await;
+        let completed = settled(&clients[0], &targets[0]).await;
+        assert!(completed["messages"].to_string().contains("result-a"));
+        assert!(!completed["messages"].to_string().contains("result-b"));
+        assert_eq!(pa.requests().await.len(), 2);
+        recovered.close().await;
+        terminate(&replacement); assert!(replacement.wait().await.unwrap().success());
+        for client in clients { client.close().await; }
+        terminate(&processes[0]); assert!(processes[0].wait().await.unwrap().success());
+        pa.finish().await; pb.finish().await;
+    }).await;
 }

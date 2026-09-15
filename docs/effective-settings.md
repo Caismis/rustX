@@ -1,5 +1,19 @@
 # Effective settings and configuration lifetimes
 
+## App Server configuration lifetimes
+
+| Lifetime | Authority / consequence |
+| --- | --- |
+| Process source bindings | Canonical user TOML/model paths, runtime root and captured credential environment; supplied by the host. |
+| Current source content | User/project TOML and resources are resolved by `UserConfigManager` on create/cold admission using explicit cwd. |
+| Persisted Session selections | Only intentional `SessionPersistentState` fields override current defaults; omission remains omission. |
+| Loaded runtime composition | Frozen until the native supported live update or targeted unload/cold replacement boundary. Editing a source alone does not mutate it. |
+| Admitted work | Keeps its attempt/resource/settings freeze; a subsequent source or live selection update cannot rewrite an admitted request. |
+
+The App Server has no parallel resolver or JSONC compatibility path. Targeted
+replacement affects one Session and rejects old attachment/incarnation control.
+See [durable settings](durable-sessions.md) and [acceptance flows](app-server-acceptance.md).
+
 rustX has several configuration authorities, not one mutable “current configuration”.
 The Rust launch resolver interprets disk inputs for a prospective launch. Composition
 captures a small redacted set of source facts. A running Session, approval policy,
@@ -7,8 +21,9 @@ resource generation, and admitted execution then have independent native owners.
 
 `rustx config show --sources` describes a **prospective next launch**. `/settings`
 describes the **attached native runtime**. They can legitimately disagree. Reading
-`/settings`, attaching, or reconnecting never opens configuration files or applies
-changes. The separate `/defaults user` operation reads the user document explicitly;
+`/settings` or reattaching to an already-loaded runtime does not reread configuration
+or apply changes. A cold attachment does resolve current sources. The separate
+`/defaults user` operation reads the user document explicitly;
 it does not refresh or replace the live snapshot.
 
 ## Field and action matrix
@@ -27,10 +42,10 @@ it does not refresh or replace the live snapshot.
 | Child model/profile/capabilities and compiled/admitted Workflow program/inputs | Existing Subagent and Workflow admission owners | Parent-frozen native specifications and compiled program | Immutable for admitted execution; no rediscovery in child workspace | Existing native evidence only | Already admitted specifications unchanged | No replay or automatic resume |
 | Show reasoning, expansion | TUI presentation preferences | Client-local preference | Immediate rendering change | Not saved through native settings API | No effect | Client presentation only |
 
-A new Session created **inside an existing local host** uses that host's captured
-launch defaults. Saving user defaults does not refresh this capture. A new launch
-can observe the saved values; explicitly resuming a Session still respects its
-persisted Session-local model selection.
+A fresh or cold-loaded Session inside an existing App Server resolves current
+source defaults. Saving defaults leaves already-loaded runtimes unchanged.
+Explicitly persisted Session selections still override the corresponding defaults
+on cold resume; the effective configuration itself is never persisted as intent.
 
 ## Daily controls
 

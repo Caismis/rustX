@@ -23,7 +23,7 @@ def web_console_dogfood() -> Scenario:
         Step(expected("Long action in A"), Stream(Text("A is running."), Gate("finish-a"), Text(" A finished."), Finish())),
         Step(expected("Use B while A runs"), Stream(Text("B stayed responsive."), Finish())),
         Step(expected("Approval please"), Stream(ToolCall("console-bash", "bash", json.dumps({
-            "command": "printf console-approved", "execution_mode": "foreground",
+            "command": "printf console-approved; printf x >> console-effect", "execution_mode": "foreground",
         })), Finish("tool_calls"))),
         Step(expected("console-approved"), Stream(Text("Approval completed."), Finish())),
         Step(expected("Questionnaire please"), Stream(ToolCall("console-question", "ask_user", questions), Finish("tool_calls"))),

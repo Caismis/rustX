@@ -192,8 +192,11 @@ jobs:
       - name: Build the binaries the boundary tests exec
         run: cargo build --bins
 
+      # App Server scripted contracts live under the manager's cfg(test) module
+      # to reach its private owner gates; their physical test class is still
+      # deterministic and Linux-only, despite this different name prefix.
       - name: Run unit tests and the in-crate boundary suites
-        run: 'cargo test --lib --bins --all-features -- --skip scripted_suites::'
+        run: 'cargo test --lib --bins --all-features -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::'
 
       - name: Run the external boundary targets
         env:
@@ -279,6 +282,8 @@ jobs:
 
       - name: Test
         working-directory: tui
+        env:
+          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         run: pnpm test
 
   app-server-protocol:
@@ -319,6 +324,11 @@ jobs:
           corepack enable
           corepack install
           pnpm install --frozen-lockfile
+      # Browser acceptance also connects the actual remote TUI client to the
+      # same server. Install its existing dependencies, never a private client.
+      - name: Install the TUI client used by shared-server browser acceptance
+        working-directory: tui
+        run: pnpm install --frozen-lockfile
       - name: Typecheck
         working-directory: web-console
         run: pnpm typecheck

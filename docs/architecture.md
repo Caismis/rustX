@@ -1,5 +1,33 @@
 # Architecture
 
+## App Server product topology
+
+In externally managed deployments, one authenticated user maps to one rustX
+App Server process, one configuration/source environment and one durable runtime
+root. A process hosts many durable Sessions and independently loaded runtimes;
+there is no process-global active Session. The manager admits at most one writable
+live runtime per Conversation, with one resident node per Session in v1.
+
+The higher-level host owns authentication, user/process routing, workspace
+allocation/isolation, environment/credential injection and external restart policy.
+The internal `AppServerHost` owns rustX admission/drain and diagnostics; it is not
+that higher-level product host. Configuration, catalog, runtime, interaction and
+projection owners retain their native authority after commit.
+
+```text
+local TUI   -> stdio JSONL -> TUI-owned App Server child
+Web Console -> WebSocket  -> externally managed App Server
+remote TUI  -> WebSocket  -> the same externally managed App Server
+                            one semantic protocol, many Sessions
+```
+
+Connection lifetime, runtime residency, durable Session lifetime and process
+lifetime are independent. Network disconnect is detach. Normal local TUI exit
+explicitly requests owned-child drain; persistent work across client exit uses an
+external server. Session cwd is execution/config-resolution context, not a
+filesystem sandbox. See [protocol and ownership](app-server-protocol.md) and the
+[composition evidence and developer flows](app-server-acceptance.md).
+
 Goal joins the existing Runtime Client projection contract: the inactive bootstrap
 cut seeds its bounded view, and native authoritative observations update that copy
 and publish `goal_changed` through the single cursor/replay owner. Journal Written

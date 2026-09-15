@@ -256,9 +256,9 @@ SESSION_A_PROMPT = "tui multi-session: session A long task"
 SESSION_B_PROMPT = "tui multi-session: session B quick task"
 
 
-def tui_multi_session() -> Scenario:
+def tui_multi_session(hold_b: bool = False) -> Scenario:
     return Scenario(
-        "tui_multi_session",
+        "app_server_replacement" if hold_b else "tui_multi_session",
         Step(
             Expect(
                 protocol=OPENAI_CHAT_COMPLETIONS,
@@ -278,14 +278,25 @@ def tui_multi_session() -> Scenario:
                 model=INTEGRATION_MODEL,
                 body_contains=(SESSION_B_PROMPT,),
             ),
-            Stream(Text("B answered while A was still working"), Finish("stop")),
+            Stream(Text("B answered while A was still working"),
+                   *((Gate("session-b-holding"),) if hold_b else ()), Finish("stop")),
         ),
     )
 
 
+def app_server_lifecycle() -> Scenario:
+    return Scenario("app_server_lifecycle", *(Step(
+        Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=INTEGRATION_MODEL,
+               body_contains=("lifecycle small turn",)),
+        Stream(Text("lifecycle result"), Finish()),
+    ) for _ in range(3)))
+
+
 SCENARIOS = {
+    "app_server_lifecycle": app_server_lifecycle,
     "tui_integration": tui_integration,
     "tui_multi_session": tui_multi_session,
+    "app_server_replacement": lambda: tui_multi_session(hold_b=True),
     "tui_ask_user_questionnaire": tui_ask_user_questionnaire,
     "tui_before_start_cancellation": tui_before_start_cancellation,
     "tui_compaction": tui_compaction,

@@ -59,6 +59,8 @@ const SKIP = existsSync(BINARY)
     : "uv is not installed; the shared provider emulator cannot run"
   : `the rustx binary is not built at ${BINARY}; run \`cargo build --bin rustx\``;
 
+if (SKIP !== undefined && process.env.RUSTX_REQUIRE_PROVIDER_EMULATOR) throw new Error(SKIP);
+
 const CREDENTIAL_VARIABLE = "RUSTX_TUI_INTEGRATION_KEY";
 const CREDENTIAL_VALUE = "integration-secret";
 /** 43 base64url characters, exactly as the server's credential bound requires. */
@@ -253,13 +255,19 @@ describe("local self-hosted mode: one owned App Server child over stdio", { skip
     }
   });
 
-  it("runs Session A while Session B is visible, and repairs A from authoritative state", { timeout: 120_000 }, async () => {
+  it("runs Session A while Session B is visible, and repairs A from authoritative state", { timeout: 120_000 }, async (t) => {
     const host = await AppServerHost.spawnLocal({
       binary: BINARY,
       launch: { runtimeRoot: server.runtimeRoot },
       env: server.env,
     });
     try {
+      const processIdentity = host.describe();
+      const sent: string[] = [];
+      const call = host.client.call.bind(host.client);
+      t.mock.method(host.client, "call", (...args: Parameters<typeof call>) => {
+        sent.push(args[0]); return call(...args);
+      });
       const a = await openSession(host, server.settings("multi-a"));
       const b = await openSession(host, server.settings("multi-b"));
       const stop = host.client.onNotification((message) => {
@@ -304,6 +312,11 @@ describe("local self-hosted mode: one owned App Server child over stdio", { skip
       assert.equal(returned.state.attempt?.phase.type, "settled");
       assert.ok(returned.resyncCount >= 1);
       assert.equal(host.childExit, undefined, "one child served both Sessions");
+      assert.equal(host.describe(), processIdentity, "focus preserves the exact child PID");
+      assert.equal((await provider.requests()).length, 2);
+      assert.equal(sent.some(method => ["turn/cancel", "session/unload"].includes(method)), false);
+      assert.equal(JSON.stringify(a.state.transcript).includes("B answered while A was still working"), false);
+      assert.equal(JSON.stringify(b.state.transcript).includes("A is working"), false);
       const page = await a.boundaries();
       assert.equal(page.boundaries.length, 1, "the committed user boundary is available for tree navigation");
       const original = await host.readSession(a.sessionId);
@@ -638,5 +651,54 @@ describe("cross-transport parity", { skip: SKIP }, () => {
       overStdio,
       "the same operations reach the same projection on both transports",
     );
+  });
+});
+
+describe("bounded product lifecycle", { skip: SKIP }, () => {
+  it("reclaims live registries and owned children across repeated stdio and WebSocket lifetimes", { timeout: 120_000 }, async () => {
+    for (const remote of [false, true]) {
+      const provider = await ProviderEmulator.start("app_server_lifecycle");
+      const server = ServerFixture.create("rustx-lifecycle-", provider.url("/v1"));
+      const external = remote ? await ExternalAppServer.start(server) : undefined;
+      let passed = false;
+      try {
+        for (let cycle = 0; cycle < 3; cycle++) {
+          const host = external
+            ? await AppServerHost.connectRemote({ endpoint: external.endpoint, token: TRANSPORT_TOKEN })
+            : await AppServerHost.spawnLocal({ binary: BINARY, launch: { runtimeRoot: server.runtimeRoot }, env: server.env });
+          try {
+            let baseline = (await host.client.call("server/diagnostics", {}, "diagnostics")).snapshot;
+            // On the same external process, wait for actual prior socket reaping.
+            // No elapsed duration establishes this resource claim.
+            while (remote && baseline.transport.websocket_connections !== 1) {
+              baseline = (await host.client.call("server/diagnostics", {}, "diagnostics")).snapshot;
+            }
+            assert.equal(baseline.loaded, 0);
+            const session = await openSession(host, server.settings(`cycle-${cycle}`));
+            await session.submitInbound([{ type: "text", text: "lifecycle small turn" }]);
+            await until(() => session.state.attempt?.phase.type === "settled", "small turn settles");
+            const snapshot = await host.client.call("session/snapshot", { target: session.target }, "snapshot");
+            assert.deepEqual(snapshot.snapshot.pending_interactions, []);
+            assert.deepEqual(snapshot.snapshot.background, []);
+            assert.deepEqual(snapshot.snapshot.subagents, []);
+            assert.deepEqual(snapshot.snapshot.workflows.runs, []);
+            await host.detach(session.sessionId);
+            const attached = await host.attach(session.sessionId);
+            await attached.unload();
+            const end = (await host.client.call("server/diagnostics", {}, "diagnostics")).snapshot;
+            for (const key of ["loaded", "loading", "unloading", "active_roots", "external_attachments"] as const) assert.equal(end[key], baseline[key], key);
+            assert.equal((await provider.requests()).length, cycle + 1);
+            const exit = await host.shutdown();
+            if (external) assert.equal(external.running, true);
+            else assert.equal(exit?.code, 0, "owned process is reaped every cycle");
+          } finally { await host.shutdown(); }
+        }
+        passed = true;
+      } finally {
+        await external?.stop();
+        if (passed) await provider.finish(); else await provider.stop();
+        server.cleanup();
+      }
+    }
   });
 });

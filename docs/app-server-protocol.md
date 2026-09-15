@@ -192,6 +192,9 @@ the child awaits an explicit owner signal. One WebSocket client closing never
 shuts down the listener or any other client. A deadline or second signal forces
 host termination without claiming semantic settlement.
 
+See [final composition acceptance and dogfooding](app-server-acceptance.md) for
+the reference product-host boundary, coverage map and two developer flows.
+
 ## Transport validation
 
 `tests/support/app_server_conformance.rs` supplies one expectation set for direct,
