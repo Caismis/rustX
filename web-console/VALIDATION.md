@@ -347,7 +347,7 @@ Final validation commands (Linux, Node 24.20.0, pinned pnpm 11.13.1):
 | repository | `cargo clippy --all-targets --all-features -- -D warnings` | Passed |
 | repository | `git diff --check` | Passed |
 | repository | `cargo build --bins` | Passed |
-| repository | `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 2804 passed, 1 existing ignored; bin/example targets passed |
+| repository | `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 2805 passed, 1 existing ignored; bin/example targets passed |
 | repository | `cargo test --test contracts --test provider --all-features` | 25 + 166 passed; 5 existing opt-in provider tests ignored |
 | repository | `cargo test --lib --all-features -- boundary_suites::` | 226 passed |
 | repository | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance` | 116 durable, 52 process, 53 subagent, 157 tools, 23 conformance passed |
@@ -413,7 +413,7 @@ PR #317; local Linux results do not substitute for the macOS job.
   lifetimes; they are not claimed as proof of pending-inbound consumer binding.
 - `cargo test --lib --all-features a_model_update_`: 2 passed.
   `cargo test --lib --all-features local_runtime::session_runtime_manager::tests::`:
-  70 passed, including v2 negotiation, storage-only upload, invalid/oversized
+  71 passed, including the non-text acceptance/admission race, v2 negotiation, storage-only upload, invalid/oversized
   carrier refusal, scoped reads and cold reopen. The complete process target
   covers a v1-only offer with a valid token and successful v2 reconnection.
 - `cargo test --test provider --all-features capability_boundary::`: 11 passed,
@@ -436,3 +436,55 @@ PR #317; local Linux results do not substitute for the macOS job.
 No additional Harness files were imported or adapted for the repair. The
 Subagent/Workflow cards are rustX product composition over existing native DTOs.
 Pinned provenance remains authoritative and unchanged.
+
+### Final consumer-boundary correction
+
+The review head `250c53db` incorrectly treated acceptance-time `current_attempt`
+presence as consumer binding. The correction removes that validator, its
+`CurrentAttempt.model` copy, `InboundAdmissionError::UnsupportedContent`, Runtime
+Client mapping, and unused `validate_user_content_modalities` helper. The existing
+request-level `validate_content_modalities` is unchanged.
+
+`tests/scripted/app_server/inbound_model.rs` exercises the real Session manager,
+durable store, native runtime and production OpenAI Chat adapter. For both image
+and file input it arms the existing `ConversationRuntime` `admission_gate`
+(`Gate`, backed by a mutex/condition variable), accepts inbound with A selected,
+waits for admission to park before the coordinator lock, then selects B. The
+pending content is checked directly in durable storage before releasing the gate.
+A registered settlement notification then proves the admitted Attempt froze B,
+consumed the pending item, and failed through the existing model-request
+capability validator, with zero HTTP attempts at the provider fixture. There are
+no sleeps or widened capabilities. The original active-A/future-B model lifetime
+regressions remain intact.
+
+CI run 34930949461 exposed a separate five-second presentation assertion racing
+completion of the real approval Tool's provider continuation. The browser test
+now awaits the emulator's explicit fourth `response_completed` observation before
+asserting that answer in Chat, using the existing bounded observation API. This
+changes test synchronization only; it does not alter interaction settlement.
+
+Final focused commands:
+
+- `cargo test --lib --all-features accepted_non_text_inbound_crosses_model_change_before_attempt_admission`: 1 test, both image/file cases passed, including durable request model B.
+- `cargo test --lib --all-features pending_inbound`: 6 passed.
+- `cargo test --lib --all-features safe_boundary`: 5 passed.
+- `cargo test --lib --all-features before_attempt_admission`: 3 passed.
+- The literal `admission_gate` name filter selected zero tests; the actual regression
+  is selected by its full name above (the gate is an existing synchronization field).
+
+The final complete command results are reflected in the validation table above.
+The new regression initially called a model mutation on the managed read handle;
+this compile error was corrected to call the existing native `model_set` owner.
+No runtime API was added to accommodate the test.
+
+The first final external-boundary run stopped in
+`runtime_config::ext256_reload_cannot_recompose_extensions_but_the_next_launch_does`
+with `local product storage is in use` on its third composition. The unchanged
+test passed in isolation (`cargo test --test process --all-features
+ext256_reload_cannot_recompose_extensions_but_the_next_launch_does`). The entire
+external command was rerun, rather than excluding that test or proceeding with
+unrun targets. This observation does not establish a runtime lock-lifetime fix;
+no unrelated storage behavior was changed in this repair.
+
+The complete external rerun passed: 23 conformance, 116 durable, 52 process,
+53 subagent and 157 Tool tests. Final Web E2E: 6 passed (24.6 seconds).

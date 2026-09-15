@@ -83,6 +83,9 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(page.getByRole('button', { name: 'Allow once' })).toBeEnabled();
     expect(JSON.parse(await page.getByLabel('Runtime facts').innerText()).pending_interactions[0].interaction).toEqual(pendingApproval);
     await page.getByRole('button', { name: 'Allow once' }).click();
+    // Observe the real provider continuation before asserting its presentation.
+    // Native Tool completion and provider response completion are separate boundaries.
+    await fixture.control('observations/await?kind=response_completed&count=4&timeoutMs=30000');
     await expect(page.getByText('Approval completed.', { exact: true })).toBeVisible();
     await send('Questionnaire please'); await expect(page.getByRole('region', { name: 'Questionnaire' })).toBeVisible();
     await reload(); await page.getByRole('radio', { name: 'Keep native', exact: true }).click(); await page.getByRole('button', { name: 'Submit answers' }).click();
