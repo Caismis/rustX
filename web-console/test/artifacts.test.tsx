@@ -54,7 +54,7 @@ it('mixed draft order and failed admission retain text and attachments, with det
   const file = new File(['text'], 'second.txt', { type: 'text/plain' });
   await act(async () => fireEvent.change(ui.getByLabelText('Attach files'), { target: { files: [image, file] } }));
   await act(async () => fireEvent.click(ui.getByRole('button', { name: 'Send' })));
-  expect(send).toHaveBeenCalledWith('keep me', false, [completed('first.png', 'one').receipt, completed('second.txt', 'two').receipt]);
+  expect(send).toHaveBeenCalledWith('keep me', [completed('first.png', 'one').receipt, completed('second.txt', 'two').receipt]);
   expect((ui.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('keep me');
   expect(ui.getByRole('button', { name: 'Remove second.txt' })).toBeTruthy();
   ui.unmount(); expect(revoke).toHaveBeenCalledTimes(1);
@@ -70,7 +70,7 @@ it('native batch upload preserves order and Send references receipts without a m
   const uploaded = [completed('first.png', 'one'), completed('second.txt', 'two')];
   server.socket.success(upload, { type: 'session_uploaded', files: uploaded });
   const receipts = (await work).map(item => item.receipt);
-  await server.client.send('A', 'text', false, receipts);
+  await server.client.send('A', 'text', receipts);
   const turns = server.requests.filter(item => item.request.method === 'turn/start');
   expect(turns).toHaveLength(1);
   expect(turns[0].request.params).toMatchObject({ content: [{ type: 'upload', ...receipts[0] }, { type: 'upload', ...receipts[1] }, { type: 'text', text: 'text' }] });

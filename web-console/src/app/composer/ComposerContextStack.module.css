@@ -1,0 +1,15 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
+/* Adapted from DeepSeek Harness ConversationRoot.module.css `.composerStack`
+   and its shared composer width axis: every dock card is the input card minus
+   four dock insets, so the stack and the composer stay one column. */
+.stack {
+  --dsh-composer-dock-inset: 8px;
+  --dsh-composer-stack-gap: 6px;
+
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: var(--dsh-composer-stack-gap);
+  min-width: 0;
+  padding-top: var(--dsh-composer-stack-gap);
+}

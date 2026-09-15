@@ -161,10 +161,11 @@ still publishes. Exactly-one settlement remains runtime-owned.
 The inspector exposes Session/Conversation identity, attachment/runtime incarnation,
 connection generation, cwd, observed residency, safe model/settings generation,
 active attempt, pending interactions, Subagents, Workflows and background counts.
-Native Tool calls/results use extracted disclosure cards. Todo, Goal, Workflow,
-Subagent, inbound and background/status values use simple JSON disclosure where
-specialized Harness semantics do not fit. Live versus last-observed values are
-labelled. Unknown residency is not inferred as unloaded.
+Native Tool calls/results use extracted disclosure cards. Current Todo, Goal and
+pending inbound state render as the composer context docks ([COMPOSER.md](COMPOSER.md)).
+Workflow, Subagent and background/status values keep their cards or JSON
+disclosure. Live versus last-observed values are labelled. Unknown residency is not
+inferred as unloaded.
 
 The raw log observes actual incoming/outgoing JSON-RPC text **before adaptation**.
 Responses retain their correlated method and Session where known. Filters match

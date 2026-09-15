@@ -871,6 +871,136 @@
         "diff",
         "provider configuration authority"
       ]
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx",
+      "destination": "web-console/src/app/composer/ComposerContextStack.tsx",
+      "treatment": "rewritten from: fixed Todo, Goal, Queue, Composer seats replace the slot-rendered conversation.input.dock",
+      "upstream_sha256": "401c33022b01b5b9203d769e8981dc49fa9bd49e288f2cac01c527b62a784767",
+      "retained_dependencies": [
+        "./ComposerContextStack.module.css",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis slots and registration order",
+        "renderSlotChain composer overlays",
+        "hero, workspace and settling chrome"
+      ]
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
+      "destination": "web-console/src/app/composer/ComposerContextStack.module.css",
+      "treatment": "adapted: composer stack rhythm and the shared dock-inset width axis only",
+      "upstream_sha256": "e4594b586dbfb9ff24e8dab528423128cfde19e5ee2f0a100c01c1b70c849582",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "hero and settling phases",
+        "width handles",
+        "sticky composer seat and scroll body"
+      ]
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.tsx",
+      "destination": "web-console/src/app/composer/TodoDock.tsx",
+      "treatment": "adapted: collapsed per-status summary, bounded expanded list and status glyph family; binds rustX TodoTask identity/status, adds a composed-empty strip, blocked_by and active_form",
+      "upstream_sha256": "1d1e9d87c12b505fc8bc2bdf9973fc349fb80b9385419e0247420ecdb1fc2f4a",
+      "retained_dependencies": [
+        "../../../../protocol/app-server/v4",
+        "../../bindings/composer-context",
+        "../../presentation/primitives/icons",
+        "./TodoDock.module.css",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "dsh-tool-todo client projection",
+        "useProjection host kit",
+        "Cordis slot registration",
+        "Harness locale runtime"
+      ]
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.module.css",
+      "destination": "web-console/src/app/composer/TodoDock.module.css",
+      "treatment": "adapted: card, header, bounded list and glyph colors; dependency label added",
+      "upstream_sha256": "52dfc34ccc56b06bf4badee35a3997ee499f023374a45a548ce40a8f960ce6eb",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": []
+    },
+    {
+      "upstream": "packages/client/ui-goal/src/client/GoalBar.tsx",
+      "destination": "web-console/src/app/composer/GoalDock.tsx",
+      "treatment": "adapted: strip, phase labels, single-flight icon actions and inline Enter/Escape edit form; binds rustX GoalView armed flag, adds budget editor, rounds/revision meta and lost-response uncertainty; no create or clear control",
+      "upstream_sha256": "fcd9ec77f6e40cf4220a883f276d59be5641768a606ff128a5aa209222a637fa",
+      "retained_dependencies": [
+        "../../../../protocol/app-server/v4",
+        "../../bindings/composer-context",
+        "../../client/app-server",
+        "../../presentation/primitives/icons",
+        "./GoalDock.module.css",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "dsh-goal client projection and GoalActivation source",
+        "Remote goal reads and activation events",
+        "Harness Tooltip and icon set",
+        "Cordis slot injection",
+        "clear/tombstone control"
+      ]
+    },
+    {
+      "upstream": "packages/client/ui-goal/src/client/GoalBar.module.css",
+      "destination": "web-console/src/app/composer/GoalDock.module.css",
+      "treatment": "adapted: dock column, strip, labels, inline input and icon buttons; meta, note and narrow-wrap rules added",
+      "upstream_sha256": "63b8f2ce75d6336ed07f2295afd0dd109a96690956625ac50688761d6b54eeb2",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": []
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.tsx",
+      "destination": "web-console/src/app/composer/QueueDock.tsx",
+      "treatment": "adapted: single-row strip, collapsible count header and sending echo rows; binds native inbound rows and MessageId-settled echoes",
+      "upstream_sha256": "682d5bb4aa11478acbac0f2e21ed1e129baddd18cbff732c64ae5bdb95fb738e",
+      "retained_dependencies": [
+        "../../bindings/composer-context",
+        "../../client/app-server",
+        "../../presentation/primitives/icons",
+        "./QueueDock.module.css",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Session Controller queue snapshot and updateQueue",
+        "edit, remove and per-row steer actions (WEB-06)",
+        "attachment thumbnails and image loading",
+        "Cordis slot registration"
+      ]
+    },
+    {
+      "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.module.css",
+      "destination": "web-console/src/app/composer/QueueDock.module.css",
+      "treatment": "adapted: standalone card instead of the input-card tuck; attachment and editor rules removed",
+      "upstream_sha256": "7b1a8a0d48ac401316db13d8d8b51530b15174ab6b6c49b699beef3967d42f81",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": []
     }
   ],
   "inspected": [
@@ -959,6 +1089,26 @@
     "packages/session/session-projection/package.json",
     "packages/session/session-projection/src/index.ts",
     "packages/session/session-projection/src/types.ts",
-    "packages/session/session-projection/tests/registry.spec.ts"
+    "packages/session/session-projection/tests/registry.spec.ts",
+    "packages/client/ui-goal/README.md",
+    "packages/client/ui-goal/src/client/GoalBar.tsx",
+    "packages/client/ui-goal/src/client/GoalBar.module.css",
+    "packages/client/ui-goal/src/client/activation-source.ts",
+    "packages/client/ui-goal/src/client/slots.ts",
+    "packages/client/ui-goal/src/client/locales.ts",
+    "packages/client/ui-goal/tests/goalbar.client.spec.tsx",
+    "packages/client/ui-conversation/src/client/skeleton/TodoPanel.tsx",
+    "packages/client/ui-conversation/src/client/skeleton/TodoPanel.module.css",
+    "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx",
+    "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
+    "packages/client/ui-conversation/src/client/queue/QueueDock.tsx",
+    "packages/client/ui-conversation/src/client/queue/QueueDock.module.css",
+    "packages/client/ui-conversation/src/client/contract/queue.ts",
+    "packages/client/ui-conversation/src/client/locales.ts",
+    "packages/client/ui-conversation/tests/todo-panel.client.spec.tsx",
+    "packages/client/ui-conversation/tests/queue-dock.client.spec.tsx",
+    "packages/client/ui-conversation/tests/skeleton.client.spec.tsx",
+    "packages/client/ui-conversation/tests/input-bar.client.spec.tsx",
+    "packages/client/ui-primitives/src/icons/index.tsx"
   ]
 }
