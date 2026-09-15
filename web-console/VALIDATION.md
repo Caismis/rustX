@@ -788,3 +788,13 @@ The macOS job budget is 40 minutes: the previous reviewed-head run spent about
 old 25-minute job deadline cancelled it. Native test liveness limits are unchanged.
 Final-head GitHub Actions results are recorded on PR #318 after all seven jobs
 finish; this local record alone makes no claim about pending remote jobs.
+
+
+The first pushed correction (`83eeaa84`, Actions run 34966252256) exposed one
+remaining test synchronization error in the Linux deterministic lane:
+`detach_never_mutates_background_or_mailbox_state` observed durable request #2
+and immediately assumed its mailbox-drain observation had published. The test
+now awaits the existing native attempt-settlement signal before checking the
+projected drain. The detached-running/mailbox-preservation assertions are
+unchanged; no delay, retry or assertion weakening was added. This is the same
+COMMIT/publication distinction enforced by the production cut contract.

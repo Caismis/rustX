@@ -4824,6 +4824,10 @@ mod tests {
         // same attempt.
         release_tx.send(true).expect("release");
         await_request_history_len(&fixture.host, 2).await;
+        // Request facts commit before their owner's semantic publication. The
+        // native attempt completion, not durable visibility, proves the drain
+        // observations have been published and may be folded by this snapshot.
+        fixture.runtime.settlement_signal().notified().await;
         let (settled, _) = fixture.host.snapshot().expect("snapshot");
         assert!(
             settled.inbound.pending.is_empty(),
