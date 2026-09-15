@@ -1,8 +1,9 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 // Generic disclosure and IN/OUT card extracted from DeepSeek Harness ui-tool/ToolRow.
 // Tool lifecycle labels are supplied verbatim from rustX; file/Remote slots removed.
 import { useState } from 'react';
-import { DisclosureRow } from './primitives/DisclosureRow';
-import { StateDot } from './primitives/StateDot';
+import { DisclosureRow } from '../../presentation/primitives/DisclosureRow';
+import { StateDot } from '../../presentation/primitives/StateDot';
 import css from './ToolRow.module.css';
 export function ToolRow({ title, summary, input, output, running = false }: {
   title: string; summary: string; input?: string; output?: string; running?: boolean;

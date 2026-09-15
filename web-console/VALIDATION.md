@@ -1,3 +1,163 @@
+# PR #316 blocking-review correction: canonical code settlement
+
+The initial PR CI run [34917901069](https://github.com/Caismis/rustX/actions/runs/34917901069)
+failed Developer Web Console: **101 passed, three failed**, all awkward-chunk
+settlement equalities in `markdown.test.tsx`. Provenance/build/E2E were skipped in
+that job. The original local 104-pass result below was real but insufficient.
+
+Reproduction on reviewed HEAD `4d45c704501fa04893ddf8dc681e904837032835`:
+`pnpm test` again passed 104 locally. Adding the controlled lazy-grammar regression
+without changing production code then failed both cases. Thus passing the old suite
+locally did not establish timing independence.
+
+Cause: CodeBlock returned `previous.body` after settlement when an unchanged
+highlighted streaming cache existed. That tree had a direct React `<pre>` and
+React-serialized styles; cold settlement used Shiki HTML inside a `<div>`. If Rust
+registered during streaming, the cache selected the first final representation.
+If registration happened after settlement, both paths used the second representation.
+The original tests did not control this async boundary; CI exposed the loaded arm.
+This was an architectural defect, not an irrelevant serialization difference.
+
+Correction: `streaming !== true` clears the incremental session and line cache.
+There is no `settledRef` or retained-stream settled mode. The settled HTML memo no
+longer depends on streaming output. Every highlighted settled fence uses the same
+cold-render path. Parser/freezing, incremental tokenization, grammar laziness,
+security and App Server code are unchanged.
+
+New `code-settlement.test.tsx` resets module state and gates the **real Rust grammar
+import** through a test-only mock. It observes plain output, releases the gate,
+awaits the actual registration notification inside React act, observes highlighted
+output, and compares complete DOM including wrappers/styles after settling the same
+instance against a cold mount. It covers registration before/after settlement and
+already-loaded streaming. Eager TypeScript and full-document tests now assert
+canonical settled equality instead of identity across settlement. All awkward-chunk,
+CRLF, frozen-prefix, completed-line retention and bounded-state assertions remain.
+
+All local correction checks passed: `pnpm typecheck`; three consecutive independent
+`pnpm test` runs (106 tests/eight files each); `pnpm check:provenance`; `pnpm build`;
+`pnpm test:e2e` (five passed); protocol `pnpm check`/`pnpm typecheck`; `cargo fmt --all -- --check`;
+`git diff --check`. Results and the corrected-head GitHub CI outcome are also
+recorded in the PR description after inspecting the completed run. No retry setting,
+arbitrary sleep, grammar eager-loading or weakened equality was added.
+
+The historical #304 record below predates this correction. Its statement about
+preserving DOM identity on settlement is superseded: retention applies **during
+streaming only**; final presentation is canonical and history-independent.
+
+---
+
+# Issue #304 validation record
+
+Recorded 2026-09-15, Linux; Node 24.20.0, pnpm 11.13.1. Original worktree
+`/home/caismis/Documents/codes/rustX`, branch `main`, HEAD
+`6dd1ef144fdfedbd99cb0c9dd9856e1e8defbf51` remained clean and unchanged.
+Feature worktree: `/home/caismis/Documents/codes/rustX-issue-304`, branch
+`issue-304-web-foundation`. Initial and final fetched base:
+`5a066dd642cbbaad8309fc7756daf4937b4fdf0a` (#292 merged). Base CI run
+34915683408 was successful. Issues #304/#303/#289 and WEB-02 #305 were inspected.
+
+## Checks executed
+
+| Directory | Command | Result |
+| --- | --- | --- |
+| web-console | `corepack enable`; `corepack install`; `pnpm install --frozen-lockfile` | Passed, including final frozen install after dependency additions |
+| tui | `pnpm install --frozen-lockfile` | Passed; required by existing shared-server browser test |
+| web-console | `pnpm typecheck` | Passed |
+| web-console | `pnpm test` | 104 tests, seven files passed |
+| web-console | `pnpm check:provenance` | 50 source records/import boundaries and 98 production dependency notices passed |
+| web-console | `node scripts/notices.ts --write` | Generated complete installed production-closure notices; subsequent check passed |
+| web-console | `pnpm build` | Passed, including production notice-byte verification |
+| root | `cargo build --bins` | Passed; ordinary real App Server and Tool supervisors |
+| test-support/fake-provider | `uv sync --frozen` | Passed |
+| web-console | `pnpm exec playwright install chromium` | Passed; Playwright used its Ubuntu 24.04 fallback binary for this Linux distribution |
+| web-console | `pnpm exec playwright test foundation.spec.ts` | Four focused browser contracts passed after fixes |
+| web-console | `pnpm test:e2e` | Five tests passed: original real-server scenario plus four foundation contracts |
+| protocol/app-server | `corepack install`; `pnpm install --frozen-lockfile`; `pnpm check`; `pnpm typecheck` | Passed; no generated schema/DTO/fixture changes |
+| root (also from web-console) | `cargo fmt --all -- --check`; `git diff --check` | Passed |
+
+No Rust code changed, so a new full Rust contract/conformance/clippy run was not
+necessary. Existing real-server acceptance and protocol generation were actually
+executed, not inferred from unchanged source.
+
+## Deterministic evidence
+
+- Original 43 native client/presentation/log tests retained. The sole existing
+  presentation-test edit changes the Questionnaire import after its layer move.
+  `test/e2e/console.spec.ts` is unchanged and still runs the production build
+  against the real Rust server/provider emulator and shared TUI client.
+- Incremental parser tests record grammar inputs: settled paragraphs leave later
+  parse slices; an 800-line open fence parses bounded completed-line slices.
+  Awkward 1/3/7/16-unit chunks, surrogate pairs, CRLF splits, lists and fences match
+  fresh-prefix rendering. Frozen DOM nodes retain identity.
+- A separate 1200-line structural traversal finds one retained code AST node,
+  fewer than 30 retained state objects, and fewer than four source-lengths of
+  retained strings; closing the fence converges with a fresh parse. No timing
+  benchmark is used as correctness evidence.
+- Rich semantic tests assert headings, emphasis, lists, links, quotes, inline/fenced
+  code, tables and KaTeX. Awkward math/delimiter chunks settle identically to a
+  one-shot document. Raw scripts, unsafe links, images/local paths and trusted TeX
+  commands cannot gain executable/document or workspace authority.
+- Highlighting tests compare incremental tokens with fresh tokens, preserve CRLF,
+  unknown-language fallback, completed line arrays and 32-line DOM groups, and
+  preserve unchanged highlighted DOM on settlement.
+- Chromium tests exercise actual Enter/Space, menu arrows/Home/End/typeahead,
+  disabled items, Tab exit, Escape/restoration, outside dismissal, popover focus
+  entry/tabbing and modal focus wrapping/restoration. A nested popover remains
+  interactive inside a native dialog and Escape closes the inner surface first.
+- Geometry tests at 390, 900 and 1440 pixels inspect real bounding boxes and no page
+  overflow. The fixture imports only foundation CSS, proving independence from
+  console styling. AppFrame remains presentation geometry with explicit children.
+- Provenance checks parse static/dynamic imports, verify recorded dependencies and
+  forbid presentation-to-product/protocol/client layer escapes. Build verifies
+  both notices verbatim in dist. Original pinned-source hashes remain available
+  for comparison with the separate reference checkout.
+
+## Fixes found during validation
+
+Initial typecheck caught a removed image-vocabulary export and absent installed
+TUI dependencies; both were corrected. Imported highlighting tests initially
+expected deliberately excluded Markdown/Ruby grammars; their relevant contracts
+were adapted to the selected Rust/Python closure, with CRLF assertions retained.
+A duplicate Python first-load assumption was corrected to use the untouched Rust
+lazy grammar. The first dialog browser test exposed Tab movement toward browser
+chrome; explicit first/last focus wrapping now passes. Shared anchored surfaces
+were moved outside shell clipping and tested inside the native modal.
+
+## Architecture review
+
+Generic presentation imports no app, bindings, client or generated protocol.
+Product cards now live in app/components, especially the native Questionnaire
+DTO/draft owner. Canonical messages remain server-projected plain text. Markdown
+ASTs, frozen elements, code token state and open/focus state are disposable browser
+presentation caches. No Harness runtime packages, RPCs, notifications, mutations,
+reconnect rules or interaction-lifecycle changes were added.
+
+The source inventory distinguishes inspected files from actual derivation. The
+external reference remains detached at the exact required SHA with a clean tree.
+Existing #289 headers were made explicit, and imported code/math/parser dependencies
+are pinned and licensed. README documents the two frontiers, linear retained-state
+bound, full settlement pass and known reference/math streaming behavior.
+
+## Browser QA and limitations
+
+Browser skill/plugin unavailable; repository Playwright used. Automated localhost
+acceptance exercised production console plus isolated foundation fixture, page
+identity, meaningful content, no Vite overlay, interaction state and screenshots.
+The generated desktop/mobile console and foundation screenshots were inspected.
+These are automated browser observations, not a separate manual dogfooding run.
+Chromium only; no paid provider, other browsers or new WEB product surfaces tested.
+
+No environment blocker prevented a required check. Non-failing tool warnings:
+Playwright's Linux fallback distribution, Node FORCE_COLOR/NO_COLOR, and Vite's
+500-kB chunk warning. The main bundle is approximately 1 MB minified (about 274 kB
+compressed), plus lazy Rust/Python grammars and KaTeX fonts. This bounded closure
+has a real payload cost; no performance claim is based on wall-clock test times.
+Streaming TeX remains literal and cross-frontier references self-heal at settlement.
+Long unstable paragraphs/lists or single lines still incur tail parsing, as
+explicitly documented; this is not a general constant-time document engine.
+
+---
+
 # Issue #289 validation record
 
 The attachment-lifecycle review correction and its fresh validation are recorded

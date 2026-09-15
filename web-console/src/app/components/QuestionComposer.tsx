@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 // Extracted from DeepSeek Harness QuestionComposer: recommendation labels,
 // mirror-growing answer field, option rows, page navigation, local drafts.
 // All Remote, plan-intent, slot-store, answer-lifetime and label-identity semantics
@@ -5,10 +6,10 @@
 import { useState } from 'react';
 import type { ChangeEvent } from 'react';
 import clsx from 'clsx';
-import type { QuestionSpecification, QuestionnaireSubmission } from '../../../protocol/app-server/v1';
-import { emptyDraft, submission, type QuestionDraft } from '../bindings/questionnaire';
-import { Button } from './primitives/Button';
-import { IconCheckOutline14, IconChevronLeftOutline14, IconChevronRightOutline14 } from './primitives/icons';
+import type { QuestionSpecification, QuestionnaireSubmission } from '../../../../protocol/app-server/v1';
+import { emptyDraft, submission, type QuestionDraft } from '../../bindings/questionnaire';
+import { Button } from '../../presentation/primitives/Button';
+import { IconCheckOutline14, IconChevronLeftOutline14, IconChevronRightOutline14 } from '../../presentation/primitives/icons';
 import css from './QuestionComposer.module.css';
 
 export function parseRecommendedLabel(label: string) {

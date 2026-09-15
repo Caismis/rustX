@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 // Selected MIT DeepSeek Harness glyphs; see PROVENANCE.md.
 import type { IconProps } from './props.ts'
 

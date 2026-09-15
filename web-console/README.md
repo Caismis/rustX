@@ -19,6 +19,7 @@ corepack install
 pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm test
+pnpm check:provenance
 pnpm build
 pnpm dev
 ```
@@ -70,9 +71,10 @@ requests provider/MCP configuration.
 
 ## Ownership and recovery
 
-- `src/presentation/`: extracted shell, sidebar, message bubbles, composer, Tool
-  disclosures, Approval card and Questionnaire form. Local state is disclosure,
-  form drafts and selection only. Unsupported upstream controls were removed.
+- `src/presentation/`: generic theme, primitives, responsive layout and incremental
+  Markdown. No imports of app, bindings, client or generated protocol are allowed.
+- `src/app/components/`: extracted product sidebar, bubbles, composer, Tool and
+  interaction cards. Questionnaire DTOs and draft encodings belong here and in bindings.
 - `src/app/` and `src/bindings/`: render generated native snapshots into these
   components and turn gestures into typed native operations. Canonical messages
   come from `snapshot.messages`; current activity comes from `snapshot.attempt`.
@@ -184,9 +186,9 @@ delete, start/steer/cancel, answer/decline/cancel interactions, resync, detach,
 unload/cold attach, disconnect/reconnect. No workspace manager, editor, terminal,
 provider setup, file navigation/upload, Harness commands, queue/retry, fork,
 policy preset, plugin controls or unsupported status actions remain. Conversation
-text is plain text; reasoning/Tool/other blocks have disclosures. Rich Markdown,
-image rendering and a separate historical transcript browser are outside this
-bounded console; canonical server-projected messages remain visible.
+text remains plain text in native projections. Assistant text uses the incremental
+Markdown foundation; reasoning/Tool/other blocks retain disclosures. Image loading
+and paginated transcript products belong to later WEB slices.
 
 ## Reproducible real-server browser fixture
 
@@ -259,3 +261,44 @@ Follow this exact order because the provider is scripted:
 
 See [VALIDATION.md](VALIDATION.md) for the exact checks and separately recorded
 browser dogfooding actually performed for this implementation.
+
+
+## WEB-01 reusable foundation
+
+Use direct imports from `presentation/primitives`, `presentation/layout` and
+`presentation/markdown`; there is one theme and no component registry or provider.
+`AppFrame` accepts optional `navigation`, `children`, `dock`, and `dockLabel`.
+It arranges three wide columns, moves the dock below at 1100px, and stacks at
+650px. Chat, Settings and Workspace supply their own occupants and actions.
+Menu/Popover own only their open/focus state. Dialog accepts controlled open/close.
+Button defaults to `type="button"`; Input and existing composer textareas retain
+native form semantics. Card/Feedback reuse the tokens for passive content/status.
+
+`MarkdownText` receives `{ text, streaming?, labels? }`. Canonical content is always
+plain text from rustX. The parser freezes all but the final two blocks and caches
+React elements with source-offset keys. An open top-level code fence advances a
+second frontier: only its last completed line/current partial line is reparsed.
+Completed highlighted lines retain tokens/grammar state and React groups of 32.
+Non-append text resets the generation. Settling performs one full math-aware parse,
+resolving references across freeze boundaries and replacing streaming caches.
+
+Memory invariant: one current source value (references may share it), one current
+frozen/tail AST, current rendered prefix/tail, and code-prefix/token caches, all
+O(current document size). There is no per-chunk AST or rendered-tree history.
+Immutable arrays copy references, not every historical tree. The open-fence
+frontier retains a constant number of code-value strings, not one per chunk.
+A single ever-growing paragraph/list, nested fence or single unterminated code
+line can still require reparsing the unstable tail; this is not a universal
+constant-time parser. Append detection compares the current source prefix.
+
+Streaming TeX intentionally stays literal; settled TeX uses untrusted KaTeX.
+Reference links/footnotes crossing a frozen boundary may stay literal until
+settlement, matching the pinned architecture. Raw HTML is text, links allow only
+HTTP(S)/mailto, and images are inert alt text. No workspace/file actions are exposed.
+Unknown code languages remain plain. Clipboard denial does not report success.
+
+The normal real-server acceptance test still runs against the production build.
+Additional browser contracts use an isolated Vite fixture on port 5174, excluded
+from the production entry tree, to exercise native focus and layout at 390/900/1440px.
+See [PROVENANCE.md](PROVENANCE.md) for the source/closure audit and
+[VALIDATION.md](VALIDATION.md) for WEB-01 evidence.

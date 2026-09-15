@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { App } from '../src/app/App';
-import { QuestionComposer } from '../src/presentation/QuestionComposer';
+import { QuestionComposer } from '../src/app/components/QuestionComposer';
 import { conversation } from '../src/bindings/projection';
 import { interaction, Server, snapshot } from './fixture';
 let server: Server;

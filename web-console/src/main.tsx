@@ -3,6 +3,7 @@ import { AppServerClient } from './client/app-server';
 import { App } from './app/App';
 import './presentation/theme/base.css';
 import './presentation/theme/tokens.css';
+import './presentation/theme/shiki.css';
 import './app/console.css';
 // One connection per page, outside React component lifecycle.
 const client = new AppServerClient();

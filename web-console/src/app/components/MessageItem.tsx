@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 // UserStyleBubble extraction from DeepSeek Harness ui-chat/MessageItem.
 // No Harness message nodes, pending echoes, retry countdowns, or action slots.
 import type { ReactNode } from 'react';

@@ -1,0 +1,18 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted Menu.module.css; see PROVENANCE.md. */
+.root { position: relative; display: inline-flex; align-self: flex-start; }
+.list {
+  position: fixed; z-index: 1100;
+  box-sizing: border-box; padding: 4px; display: flex; flex-direction: column;
+  min-width: 218px; max-width: min(360px, calc(100vw - 32px)); max-height: min(400px, 60dvh); overflow: auto;
+  border: 0; border-radius: 20px; background: var(--dsw-specific-menu);
+  --dsw-elevation-stroke-color: var(--dsw-alias-border-l1);
+  box-shadow: var(--dsw-elevation-prominent);
+}
+.item {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px;
+  padding: 8px 10px; border: none; border-radius: 10px; background: transparent;
+  cursor: pointer; font-size: 14px; line-height: 22px; color: var(--dsw-alias-label-primary); text-align: left;
+}
+.item:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
+.item:disabled { opacity: .4; cursor: not-allowed; }
+.item:focus-visible { outline: 2px solid var(--dsw-alias-link); outline-offset: -2px; }

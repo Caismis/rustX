@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 /* Base variables referenced by the token sheets and component CSS but defined
  * upstream (deepsuite theme/global.css) — supplied here so the composite
  * --dsw-font-* variables resolve and motion rides the upstream curve. Code
@@ -13,3 +14,10 @@
   --ds-transition-duration-fast: 0.1s;
   --ds-transition-duration-slow: 0.3s;
 }
+
+/* Shared browser baseline; product accents and layout remain with the app. */
+:root { font-family: var(--dsw-font-family); color-scheme: light; }
+body { margin: 0; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); }
+* { box-sizing: border-box; }
+button, input, textarea, select { font: inherit; }
+:where(button, input, textarea, select, summary, [tabindex]):focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 3px; }

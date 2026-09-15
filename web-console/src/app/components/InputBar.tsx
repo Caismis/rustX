@@ -1,7 +1,8 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 // Presentation extracted from DeepSeek Harness ui-conversation/InputBar.
 // Native textarea replaces Lexical/attachment/command/queue machines. No retry.
 import { useState } from 'react';
-import { Button } from './primitives/Button';
+import { Button } from '../../presentation/primitives/Button';
 import css from './InputBar.module.css';
 export function InputBar({ disabled, busy, active, onSend, onCancel }: {
   disabled: boolean; busy: boolean; active: boolean;
