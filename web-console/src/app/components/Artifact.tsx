@@ -1,4 +1,4 @@
-import type { ToolExecutionResult } from '../../../../protocol/app-server/v3';
+import type { ToolExecutionResult } from '../../../../protocol/app-server/v4';
 import { createContext, useContext, useEffect, useState } from 'react';
 import type { ArtifactResources } from '../../client/artifacts';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';

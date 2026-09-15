@@ -70,7 +70,7 @@ async fn initialize(connection: &AppServerConnection) {
         connection,
         0,
         Method::Initialize(InitializeParams {
-            protocol_version: 3,
+            protocol_version: 4,
             client: ClientIdentity {
                 name: "scripted".into(),
                 version: "1".into(),
@@ -133,7 +133,14 @@ async fn failed_unload_reclaims_route_without_notification_polling() {
                 &connection,
                 Method::TurnStart {
                     target: old,
-                    content: input("never execute")
+                    content: (input("never execute"))
+                        .into_iter()
+                        .map(|block| match block {
+                            crate::message::types::UserContentBlock::Text(text) =>
+                                crate::app_server::protocol::UserInputBlock::Text(text),
+                            _ => panic!("client fixtures must use text or issued receipts"),
+                        })
+                        .collect()
                 }
             )
             .await,
@@ -279,7 +286,14 @@ async fn admitted_async_operation_drains_before_unload_releases_resources() {
                 &connection,
                 Method::TurnStart {
                     target: target.clone(),
-                    content: input("must not run")
+                    content: (input("must not run"))
+                        .into_iter()
+                        .map(|block| match block {
+                            crate::message::types::UserContentBlock::Text(text) =>
+                                crate::app_server::protocol::UserInputBlock::Text(text),
+                            _ => panic!("client fixtures must use text or issued receipts"),
+                        })
+                        .collect()
                 }
             )
             .await,
@@ -327,7 +341,14 @@ async fn unload_claim_rejects_late_operations_and_old_incarnations() {
                     &connection,
                     Method::TurnStart {
                         target: old.clone(),
-                        content: input("never execute")
+                        content: (input("never execute"))
+                            .into_iter()
+                            .map(|block| match block {
+                                crate::message::types::UserContentBlock::Text(text) =>
+                                    crate::app_server::protocol::UserInputBlock::Text(text),
+                                _ => panic!("client fixtures must use text or issued receipts"),
+                            })
+                            .collect()
                     }
                 )
                 .await,
@@ -659,7 +680,7 @@ async fn initialize_and_malformed_wire_are_transactional() {
         let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":2,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 3, .. })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 4, .. })));
         initialize(&connection).await;
         for (json, expected_code) in [
             (r#"{"jsonrpc":"2.0","id":1,"method":"missing","params":{}}"#, -32601),
@@ -847,7 +868,14 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
                 20,
                 Method::TurnStart {
                     target: a.clone(),
-                    content: input("request-A")
+                    content: (input("request-A"))
+                        .into_iter()
+                        .map(|block| match block {
+                            crate::message::types::UserContentBlock::Text(text) =>
+                                crate::app_server::protocol::UserInputBlock::Text(text),
+                            _ => panic!("client fixtures must use text or issued receipts"),
+                        })
+                        .collect()
                 }
             ),
             call(
@@ -855,7 +883,14 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
                 21,
                 Method::TurnStart {
                     target: b.clone(),
-                    content: input("request-B")
+                    content: (input("request-B"))
+                        .into_iter()
+                        .map(|block| match block {
+                            crate::message::types::UserContentBlock::Text(text) =>
+                                crate::app_server::protocol::UserInputBlock::Text(text),
+                            _ => panic!("client fixtures must use text or issued receipts"),
+                        })
+                        .collect()
                 }
             ),
         );
@@ -973,7 +1008,15 @@ async fn stale_connection_cannot_retain_or_control_replacement() {
                 id: RequestId::Integer(50),
                 call: Method::TurnStart {
                     target: old,
-                    content: input("must not execute"),
+                    content: (input("must not execute"))
+                        .into_iter()
+                        .map(|block| match block {
+                            crate::message::types::UserContentBlock::Text(text) => {
+                                crate::app_server::protocol::UserInputBlock::Text(text)
+                            }
+                            _ => panic!("client fixtures must use text or issued receipts"),
+                        })
+                        .collect(),
                 },
             })
             .await;
@@ -1018,7 +1061,15 @@ async fn headless_approval_and_questionnaire_survive_detach_and_settle_once() {
                     60,
                     Method::TurnStart {
                         target: initial.clone(),
-                        content: input("request-A"),
+                        content: (input("request-A"))
+                            .into_iter()
+                            .map(|block| match block {
+                                crate::message::types::UserContentBlock::Text(text) => {
+                                    crate::app_server::protocol::UserInputBlock::Text(text)
+                                }
+                                _ => panic!("client fixtures must use text or issued receipts"),
+                            })
+                            .collect(),
                     },
                 )
                 .await;
@@ -1496,22 +1547,28 @@ async fn artifact_carrier_is_native_scoped_bounded_and_cold_reopen_safe() {
         let uploaded = call(
             &connection,
             910,
-            Method::ArtifactUpload {
+            Method::SessionUpload {
                 target: target.clone(),
-                data: "aGk=".into(),
+                files: vec![UploadBytes {
+                    name: "hello.txt".into(),
+                    data: "aGk=".into(),
+                }],
             },
         )
         .await;
-        assert!(matches!(uploaded, MethodResult::ArtifactUploaded { .. }));
+        assert!(matches!(uploaded, MethodResult::SessionUploaded { .. }));
         for data in [
             "not base64!".to_owned(),
             "A".repeat(crate::tools::artifacts::ARTIFACT_TRANSFER_MAX.div_ceil(3) * 4 + 1),
         ] {
             rejected(
                 &connection,
-                Method::ArtifactUpload {
+                Method::SessionUpload {
                     target: target.clone(),
-                    data,
+                    files: vec![UploadBytes {
+                        name: "hello.txt".into(),
+                        data,
+                    }],
                 },
             )
             .await;
@@ -1567,174 +1624,16 @@ async fn artifact_carrier_is_native_scoped_bounded_and_cold_reopen_safe() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn artifact_upload_capacity_is_shared_durable_and_path_safe() {
-    use crate::tools::artifacts::MAX_ARTIFACTS_PER_STORE;
-    bounded(async {
-        let f = Fixture::new().await;
-        let connection = AppServerConnection::new(f.host.clone());
-        initialize(&connection).await;
-        let mut target = attach(&connection, &f, 0).await;
-        let root = {
-            let managed = f.load(0).await.unwrap().unwrap();
-            let native = managed.inspect_runtime().unwrap();
-            let artifacts = native.tool_runtime().artifacts();
-            // Native Tool reservations and public uploads share one domain.
-            for _ in 0..MAX_ARTIFACTS_PER_STORE - 1 {
-                artifacts.create_artifact().unwrap();
-            }
-            artifacts.root().to_path_buf()
-        };
-        let MethodResult::ArtifactUploaded { artifact_id } = call(
-            &connection,
-            920,
-            Method::ArtifactUpload {
-                target: target.clone(),
-                data: "aGk=".into(),
-            },
-        )
-        .await
-        else {
-            panic!("final slot should upload");
-        };
-        assert_eq!(
-            artifact_id.as_str(),
-            format!("artifact_{MAX_ARTIFACTS_PER_STORE}")
-        );
-        let contents = || -> std::collections::BTreeMap<_, _> {
-            std::fs::read_dir(&root)
-                .unwrap()
-                .map(|entry| {
-                    let entry = entry.unwrap();
-                    // Other native owners may retain child directories here;
-                    // ArtifactStore reservations and byte files are direct children.
-                    let bytes = entry
-                        .file_type()
-                        .unwrap()
-                        .is_file()
-                        .then(|| std::fs::read(entry.path()).unwrap());
-                    (entry.file_name(), bytes)
-                })
-                .collect()
-        };
-        let before = contents();
-        // Repeat across native unload/cold reopen; a new connection follows.
-        for _ in 0..2 {
-            for _ in 0..2 {
-                let response = connection
-                    .handle_request(Request {
-                        jsonrpc: JsonRpcVersion::V2,
-                        id: RequestId::Integer(921),
-                        call: Method::ArtifactUpload {
-                            target: target.clone(),
-                            data: "bm8=".into(),
-                        },
-                    })
-                    .await;
-                let encoded = serde_json::to_string(&response).unwrap();
-                let Response::Failure(Failure { error, .. }) = response else {
-                    panic!("capacity must reject");
-                };
-                assert_eq!(error.data, Some(ErrorData::InvalidState));
-                assert_eq!(
-                    error.message,
-                    "artifact capacity exhausted (maximum 256 identities)"
-                );
-                assert!(!encoded.contains(root.to_str().unwrap()));
-                assert!(!encoded.contains(f.workspaces[0].to_str().unwrap()));
-                assert_eq!(
-                    contents(),
-                    before,
-                    "rejection changes no reservation or byte file"
-                );
-                assert!(!root.join("artifact_257.reserved").exists());
-                assert!(!root.join("artifact_257.bin").exists());
-            }
-            assert_eq!(
-                call(
-                    &connection,
-                    922,
-                    Method::ArtifactRead {
-                        target: target.clone(),
-                        artifact_id: artifact_id.clone(),
-                    }
-                )
-                .await,
-                MethodResult::ArtifactBytes {
-                    data: "aGk=".into()
-                }
-            );
-            let MethodResult::Snapshot { snapshot, .. } = call(
-                &connection,
-                923,
-                Method::SessionSnapshot {
-                    trace_records: vec![],
-                    target: target.clone(),
-                },
-            )
-            .await
-            else {
-                panic!("runtime remains usable");
-            };
-            assert!(snapshot.messages.is_empty());
-            assert!(snapshot.inbound.pending.is_empty());
-            assert!(snapshot.attempt.is_none());
-            assert_eq!(f.provider.attempt_count(), 0);
-            call(
-                &connection,
-                924,
-                Method::SessionUnload {
-                    target: target.clone(),
-                },
-            )
-            .await;
-            target = attach(&connection, &f, 0).await;
-        }
-        // Connection lifetime also cannot reset the durable capacity.
-        connection.close();
-        let reconnected = AppServerConnection::new(f.host.clone());
-        initialize(&reconnected).await;
-        let target = attach(&reconnected, &f, 0).await;
-        assert_eq!(
-            rejected(
-                &reconnected,
-                Method::ArtifactUpload {
-                    target: target.clone(),
-                    data: "aGk=".into(),
-                }
-            )
-            .await,
-            ErrorData::InvalidState
-        );
-        assert_eq!(contents(), before);
-        assert_eq!(
-            call(
-                &reconnected,
-                925,
-                Method::ArtifactRead {
-                    target,
-                    artifact_id
-                }
-            )
-            .await,
-            MethodResult::ArtifactBytes {
-                data: "aGk=".into()
-            }
-        );
-        assert_eq!(f.provider.attempt_count(), 0);
-        reconnected.close();
-        f.close().await;
-    })
-    .await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn trace_reads_are_read_only_and_reconnect_repairs_the_same_native_facts() {
     bounded(async {
         let f = Fixture::new().await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let target = attach(&connection, &f, 0).await;
-        call(&connection, 900, Method::TurnStart { target: target.clone(), content: input("request-A") }).await;
+        call(&connection, 900, Method::TurnStart { target: target.clone(), content: (input("request-A")).into_iter().map(|block| match block {
+                    crate::message::types::UserContentBlock::Text(text) => crate::app_server::protocol::UserInputBlock::Text(text),
+                    _ => panic!("client fixtures must use text or issued receipts"),
+                }).collect()}).await;
         f.gates[0].wait_entered().await;
         let before = call(&connection, 901, Method::SessionSnapshot { trace_records: vec![], target: target.clone() }).await;
         let read = call(&connection, 902, Method::Trace { target: target.clone(), before: None, limit: 32 }).await;
@@ -1765,4 +1664,110 @@ async fn trace_reads_are_read_only_and_reconnect_repairs_the_same_native_facts()
         final_connection.close();
         f.close().await;
     }).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn workspace_upload_receipt_admission_and_model_projection_use_one_owner() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let other = attach(&connection, &f, 1).await;
+        let MethodResult::SessionUploaded { files } = call(&connection, 1001, Method::SessionUpload {
+            target: target.clone(), files: vec![UploadBytes { name: "picture.png".into(), data: "Tk9UX0VBR0VSTFlfSU5KRUNURUQ=".into() }],
+        }).await else { panic!("committed upload"); };
+        let native = f.load(0).await.unwrap().unwrap().inspect_runtime().unwrap();
+        assert!(native.tool_runtime().durable_store().load_canonical().unwrap().is_empty());
+        rejected(&connection, Method::TurnStart { target: other, content: vec![UserInputBlock::Upload(files[0].receipt.clone())] }).await;
+        assert!(native.tool_runtime().durable_store().load_canonical().unwrap().is_empty());
+        assert_eq!(std::fs::read(&files[0].path).unwrap(), b"NOT_EAGERLY_INJECTED");
+        let body = "request-A\n  exact body  \n";
+        call(&connection, 1002, Method::TurnStart { target: target.clone(), content: vec![UserInputBlock::Upload(files[0].receipt.clone()), UserInputBlock::Text(crate::message::content::TextBlock { text: body.into() })] }).await;
+        f.gates[0].wait_entered().await;
+        let requests = f.provider.request_bodies();
+        assert_eq!(requests.len(), 1, "a text-only provider accepts a workspace image");
+        let request: serde_json::Value = serde_json::from_str(&requests[0]).unwrap();
+        let user = request["messages"].as_array().unwrap().iter().find(|message| message["content"][0]["text"].as_str().is_some_and(|s| s.contains("user_uploaded_files"))).unwrap();
+        assert_eq!(user["content"][0]["text"], format!("<user_uploaded_files>\n  <file name=\"picture.png\" path=\"{}\" />\n</user_uploaded_files>\n\n{body}", files[0].path));
+        assert!(!requests[0].contains("NOT_EAGERLY_INJECTED"));
+        let snapshots = native.request_history().page(None, 4).unwrap().snapshots;
+        assert_eq!(snapshots[0].upload_projection.files[0].path, files[0].path);
+        let history = native.tool_runtime().durable_store().load_canonical().unwrap();
+        let canonical = serde_json::to_string(&history).unwrap();
+        assert!(canonical.contains("uploaded_file"));
+        assert!(!canonical.contains(&files[0].path));
+        assert!(!canonical.contains("artifact_id"));
+        f.gates[0].release();
+        connection.close(); f.close().await;
+    }).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn lost_upload_waiter_does_not_cancel_or_replay_the_owned_commit() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let controller = f.manager.session_controller();
+        let gate = std::sync::Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let release = gate.arm_scoped();
+        *controller.upload_commit_gate.lock().unwrap() = Some(gate.clone());
+        let caller = connection.clone();
+        let waiter = tokio::spawn(async move {
+            call(
+                &caller,
+                1010,
+                Method::SessionUpload {
+                    target,
+                    files: vec![UploadBytes {
+                        name: "lost.txt".into(),
+                        data: "aGk=".into(),
+                    }],
+                },
+            )
+            .await
+        });
+        tokio::task::spawn_blocking(move || gate.wait_entered())
+            .await
+            .unwrap();
+        waiter.abort();
+        let _ = waiter.await;
+        connection.close();
+        *controller.upload_commit_gate.lock().unwrap() = None;
+        drop(release);
+        // The next allocation acquires the same preparation owner after the
+        // abandoned protocol waiter has left; no scheduler timing is evidence.
+        controller
+            .upload(
+                &f.sessions[0].id,
+                None,
+                vec![crate::local_runtime::session::uploads::UploadFile {
+                    name: "fence.txt".into(),
+                    bytes: vec![],
+                }],
+            )
+            .await
+            .unwrap();
+        let registry = controller
+            .catalog
+            .lock()
+            .await
+            .upload_registry(&f.sessions[0].id)
+            .unwrap();
+        assert_eq!(registry.allocations.len(), 2);
+        assert!(registry.allocations.values().all(|a| a.ready));
+        assert_eq!(
+            registry
+                .allocations
+                .values()
+                .filter(|a| a.files[0].name == "lost.txt")
+                .count(),
+            1
+        );
+        assert!(f.provider.request_bodies().is_empty());
+        f.close().await;
+    })
+    .await;
 }

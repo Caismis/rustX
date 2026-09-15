@@ -56,6 +56,12 @@ pub struct SessionAccess {
 /// ```
 #[derive(Clone, Debug)]
 pub struct SessionController {
+    #[cfg(test)]
+    pub(crate) upload_commit_gate:
+        Arc<std::sync::Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>>,
+    #[cfg(test)]
+    pub(crate) copy_upload_gate:
+        Arc<std::sync::Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>>,
     pub(crate) catalog: Arc<tokio::sync::Mutex<SessionCatalog>>,
     // Allocation of the one process runtime owner, not ownership of its registry.
     pub(crate) runtime_owner: Arc<std::sync::OnceLock<()>>,
@@ -68,6 +74,81 @@ pub struct SessionController {
     copy_gate: Arc<std::sync::Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>>,
 }
 impl SessionController {
+    /// Commit a transport-independent batch to the addressed Session workspace.
+    /// # Errors
+    /// Invalid names, stale Session authority and durability failures are explicit.
+    /// # Panics
+    /// Panics only if internal allocation invariants or test gates are corrupted.
+    pub async fn upload(
+        &self,
+        id: &SessionId,
+        node: Option<&SessionNodeId>,
+        files: Vec<super::session::uploads::UploadFile>,
+    ) -> Result<Vec<super::session::uploads::UploadedFile>, SessionError> {
+        let _preparation = self.preparation.lock().await;
+        let access = self.acquire_session(id, node).await?;
+        let fail = |e: std::io::Error| SessionError::Catalog {
+            detail: e.to_string(),
+        };
+        let workspace = access.settings.cwd.canonicalize().map_err(fail)?;
+        if workspace.to_str().is_none() {
+            return Err(SessionError::Catalog {
+                detail: "upload workspace must be UTF-8".into(),
+            });
+        }
+        let mut registry = self.catalog.lock().await.upload_registry(id)?;
+        let batch = registry.claim(workspace, &files).map_err(fail)?;
+        // Durable ownership first. Even failed materialization is deletion work.
+        self.catalog
+            .lock()
+            .await
+            .commit_uploads(id, registry.clone())?;
+        registry.materialize(id, &batch, &files).map_err(fail)?;
+        #[cfg(test)]
+        {
+            let gate = self.upload_commit_gate.lock().unwrap().clone();
+            if let Some(gate) = gate {
+                tokio::task::spawn_blocking(move || gate.enter())
+                    .await
+                    .unwrap();
+            }
+        }
+        registry.verify_materialized(id, &batch).map_err(fail)?;
+        registry
+            .allocations
+            .get_mut(&batch)
+            .expect("claimed batch")
+            .ready = true;
+        // Semantic commit point: synced complete files plus durable ready registry.
+        self.catalog
+            .lock()
+            .await
+            .commit_uploads(id, registry.clone())?;
+        registry.receipts(id, &batch).map_err(fail)
+    }
+
+    /// Validate server receipts and author typed canonical content.
+    /// # Errors
+    /// Unknown, incomplete and cross-Session receipts are rejected.
+    pub async fn uploaded_content(
+        &self,
+        id: &SessionId,
+        receipts: &[super::session::uploads::UploadReceipt],
+    ) -> Result<Vec<crate::message::types::UserContentBlock>, SessionError> {
+        let registry = self.catalog.lock().await.upload_registry(id)?;
+        receipts
+            .iter()
+            .map(|receipt| {
+                registry
+                    .receipt_ref(id, receipt)
+                    .map(crate::message::types::UserContentBlock::UploadedFile)
+                    .map_err(|e| SessionError::Catalog {
+                        detail: e.to_string(),
+                    })
+            })
+            .collect()
+    }
+
     /// Open one root without selecting, resolving, or composing a Session.
     /// # Errors
     /// Competing controllers, invalid schemas and storage failures are explicit.
@@ -83,10 +164,15 @@ impl SessionController {
             None => SessionCatalog::empty(&controller)?,
         };
         catalog.retain_lifecycle(controller);
+        catalog.recover_upload_preparations()?;
         Ok(Self::new(catalog))
     }
     pub(crate) fn new(catalog: SessionCatalog) -> Self {
         Self {
+            #[cfg(test)]
+            upload_commit_gate: Arc::default(),
+            #[cfg(test)]
+            copy_upload_gate: Arc::default(),
             catalog: Arc::new(tokio::sync::Mutex::new(catalog)),
             runtime_owner: Arc::default(),
             preparation: Arc::new(tokio::sync::Mutex::new(())),
@@ -269,6 +355,7 @@ impl SessionController {
     ) -> Result<SessionTransitionResult, SessionError> {
         self.copy_lineage(id, node, revision, boundary, false).await
     }
+    #[allow(clippy::too_many_lines)] // One prepare/copy/publication transaction.
     pub(crate) async fn copy_lineage(
         &self,
         id: &SessionId,
@@ -306,7 +393,7 @@ impl SessionController {
                     .unwrap();
             }
         }
-        let (prepared, editor_content, origin) = if let Some(message) = boundary {
+        let (mut prepared, editor_content, origin) = if let Some(message) = boundary {
             let (prepared, editor) = if tree {
                 snapshot.prepare_tree_node_at_user_message(
                     id,
@@ -338,6 +425,75 @@ impl SessionController {
                 },
             )
         };
+        if !tree {
+            let destination = crate::durable::SqliteConversationStore::open_existing(
+                prepared.conversation_id.clone(),
+                &prepared.database_path,
+            )
+            .map_err(SessionError::Store)?;
+            let messages = destination.load_canonical().map_err(SessionError::Store)?;
+            let has_uploads = messages.iter().any(|m| matches!(m, crate::message::types::MessageBlock::User(u) if u.content.iter().any(|b| matches!(b, crate::message::types::UserContentBlock::UploadedFile(_)))));
+            if has_uploads {
+                let workspace =
+                    prepared
+                        .state
+                        .cwd
+                        .canonicalize()
+                        .map_err(|e| SessionError::Catalog {
+                            detail: e.to_string(),
+                        })?;
+                self.catalog
+                    .lock()
+                    .await
+                    .claim_upload_preparation(&prepared.session_id, &workspace)?;
+                prepared.uploads = match snapshot.upload_registry(id)?.copy_required(
+                    id,
+                    &prepared.session_id,
+                    &workspace,
+                    &messages,
+                ) {
+                    Ok(uploads) => uploads,
+                    Err(error) => {
+                        snapshot.discard_prepared_upload_lineage(&prepared)?;
+                        self.catalog
+                            .lock()
+                            .await
+                            .finish_upload_preparation(&prepared.session_id)?;
+                        return Err(SessionError::Catalog {
+                            detail: error.to_string(),
+                        });
+                    }
+                };
+                #[cfg(test)]
+                {
+                    let gate = self.copy_upload_gate.lock().unwrap().clone();
+                    if let Some(gate) = gate {
+                        tokio::task::spawn_blocking(move || gate.enter())
+                            .await
+                            .unwrap();
+                    }
+                }
+                if let Err(error) = prepared
+                    .uploads
+                    .verify_all_materialized(&prepared.session_id)
+                {
+                    for workspace in prepared.uploads.roots() {
+                        super::session::uploads::cleanup(&workspace, &prepared.session_id)
+                            .map_err(|e| SessionError::Catalog {
+                                detail: e.to_string(),
+                            })?;
+                    }
+                    snapshot.discard_prepared_upload_lineage(&prepared)?;
+                    self.catalog
+                        .lock()
+                        .await
+                        .finish_upload_preparation(&prepared.session_id)?;
+                    return Err(SessionError::Catalog {
+                        detail: error.to_string(),
+                    });
+                }
+            }
+        }
         let mut catalog = self.catalog.lock().await;
         let result = if tree {
             catalog.publish_node(id, &prepared, access.node.id.clone(), origin)
@@ -350,7 +506,18 @@ impl SessionController {
                 catalog.snapshot(if tree { id } else { &prepared.session_id })?,
                 Some(error.to_string()),
             ),
-            Err(error) => return Err(error),
+            Err(error) => {
+                for workspace in prepared.uploads.roots() {
+                    super::session::uploads::cleanup(&workspace, &prepared.session_id).map_err(
+                        |e| SessionError::Catalog {
+                            detail: e.to_string(),
+                        },
+                    )?;
+                }
+                snapshot.discard_prepared_upload_lineage(&prepared)?;
+                catalog.finish_upload_preparation(&prepared.session_id)?;
+                return Err(error);
+            }
         };
         Ok(SessionTransitionResult {
             session,
@@ -576,7 +743,7 @@ mod tests {
         assert_eq!(reads.1.sessions.len(), 2);
         let bytes = std::fs::read(root.path().join("sessions/catalog.json")).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(json["schema_version"], 8);
+        assert_eq!(json["schema_version"], 9);
         assert!(json.get("active_session").is_none());
         assert!(
             serde_json::to_value(&reads.1.sessions)

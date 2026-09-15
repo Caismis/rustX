@@ -718,6 +718,21 @@ impl ClientInner {
         &self,
         content: Vec<crate::message::types::UserContentBlock>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        if content
+            .iter()
+            .any(|b| !matches!(b, crate::message::types::UserContentBlock::Text(_)))
+        {
+            return Err(RuntimeClientError::InvalidRequest {
+                message: "user uploads require server-issued Session receipts".into(),
+            });
+        }
+        self.submit_session_inbound(content)
+    }
+
+    pub(crate) fn submit_session_inbound(
+        &self,
+        content: Vec<crate::message::types::UserContentBlock>,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.ensure_writable_runtime()?;
         let runtime = self
             .runtime
@@ -1301,37 +1316,6 @@ impl ClientInner {
                 message: "artifact unavailable or exceeds 256 KiB".into(),
             })?;
         Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
-    }
-
-    pub(crate) fn artifact_upload(
-        &self,
-        data: &str,
-    ) -> Result<crate::runtime::identity::ArtifactId, RuntimeClientError> {
-        use base64::Engine;
-        self.ensure_session_runtime_live()?;
-        let invalid = || RuntimeClientError::InvalidState {
-            message: "artifact upload unsupported, invalid or exceeds 256 KiB".into(),
-        };
-        if data.len() > crate::tools::artifacts::ARTIFACT_TRANSFER_MAX.div_ceil(3) * 4 {
-            return Err(invalid());
-        }
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(data)
-            .map_err(|_| invalid())?;
-        self.runtime
-            .as_ref()
-            .ok_or_else(invalid)?
-            .tool_runtime()
-            .artifacts()
-            .put_bounded(&bytes)
-            .map_err(|error| match error {
-                crate::tools::artifacts::ArtifactError::CapacityExhausted { .. } => {
-                    RuntimeClientError::InvalidState {
-                        message: error.to_string(),
-                    }
-                }
-                _ => invalid(),
-            })
     }
 
     /// Reads the authoritative session model state through the folded

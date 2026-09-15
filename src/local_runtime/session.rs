@@ -75,12 +75,13 @@ use crate::runtime::identity::{ConversationId, MessageId, ToolCallId};
 /// the promise is refused rather than silently reinterpreted. Because a
 /// version-3 destination's real provenance was discarded at seed time, no
 /// migration can reconstruct it, and none is attempted.
+/// Version 9 owns workspace upload allocations and frozen private-copy claims.
 /// Version 8 removes global focus and persists only explicit Session inputs, with
 /// per-Session settings revisions. Schema 7 materialized model defaults cannot be
 /// distinguished from user choices; older development schemas are refused.
 /// Version 7 co-locates live Sessions and pending-only frozen cleanup authority,
 /// with generation-checked publication. Older development schemas are rejected.
-pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 8;
+pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 9;
 
 /// The largest display name a Session may carry.
 pub const SESSION_NAME_LIMIT: usize = 120;
@@ -318,6 +319,7 @@ pub struct HistoricalConversationSnapshot {
 /// unreferenced private directory.
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedLineage {
+    pub(crate) uploads: uploads::UploadRegistry,
     pub(crate) session_id: SessionId,
     pub(crate) node_id: SessionNodeId,
     pub(crate) conversation_id: ConversationId,
@@ -385,6 +387,7 @@ impl SessionPersistentState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 struct CatalogDocument {
+    upload_preparations: BTreeMap<SessionId, Vec<PathBuf>>,
     generation: u64,
     deletions: BTreeMap<SessionId, deletion::DeletionRecord>,
     schema_version: u32,
@@ -396,6 +399,7 @@ struct CatalogDocument {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 struct PersistedSession {
+    uploads: uploads::UploadRegistry,
     id: SessionId,
     /// Absent until a user names this Session; see [`SessionSnapshot::name`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -482,6 +486,7 @@ fn lineage_of(
 }
 
 pub(crate) mod deletion;
+pub mod uploads;
 
 /// The native durable `SessionCatalog` and graph authority.
 #[derive(Debug, Clone)]
@@ -526,6 +531,7 @@ impl SessionCatalog {
             document: CatalogDocument {
                 generation: 0,
                 deletions: BTreeMap::new(),
+                upload_preparations: BTreeMap::new(),
                 schema_version: SESSION_CATALOG_SCHEMA_VERSION,
                 next_session_ordinal: 1,
                 next_node_ordinal: 1,
@@ -727,7 +733,7 @@ impl SessionCatalog {
             .and_then(serde_json::Value::as_u64)
             != Some(u64::from(SESSION_CATALOG_SCHEMA_VERSION))
         {
-            return Err(SessionError::Catalog { detail: "unsupported session catalog schema; schema 8 requires explicit Session inputs and has no global focus; old development schemas are refused".into() });
+            return Err(SessionError::Catalog { detail: "unsupported session catalog schema; schema 9 requires Session-owned upload allocations; old development schemas are refused".into() });
         }
         let document: CatalogDocument =
             serde_json::from_slice(&bytes).map_err(|error| SessionError::Catalog {
@@ -855,6 +861,7 @@ impl SessionCatalog {
         sessions.insert(
             session_id.clone(),
             PersistedSession {
+                uploads: uploads::UploadRegistry::default(),
                 id: session_id.clone(),
                 name: None,
                 created_at: now,
@@ -866,6 +873,7 @@ impl SessionCatalog {
             },
         );
         let document = CatalogDocument {
+            upload_preparations: BTreeMap::new(),
             deletions: BTreeMap::new(),
             schema_version: SESSION_CATALOG_SCHEMA_VERSION,
             generation: 0,
@@ -1441,6 +1449,7 @@ impl SessionCatalog {
         initialize_database(&self.product, &database_path, &conversation_id, &seed)?;
         Ok((
             PreparedLineage {
+                uploads: uploads::UploadRegistry::default(),
                 session_id: session_id.clone(),
                 node_id,
                 conversation_id,
@@ -1464,6 +1473,7 @@ impl SessionCatalog {
         let database_path = conversation_database_path(&self.root, &session_id, &conversation_id);
         initialize_database(&self.product, &database_path, &conversation_id, seed)?;
         Ok(PreparedLineage {
+            uploads: uploads::UploadRegistry::default(),
             session_id,
             node_id,
             conversation_id,
@@ -1695,6 +1705,7 @@ impl SessionCatalog {
         next.sessions.insert(
             prepared.session_id.clone(),
             PersistedSession {
+                uploads: prepared.uploads.clone(),
                 id: prepared.session_id.clone(),
                 // Every Session is published unnamed. A generated label —
                 // "New session", "Fork of session-3" — is not a name a user
@@ -1709,6 +1720,7 @@ impl SessionCatalog {
                 settings_revision: 0,
             },
         );
+        next.upload_preparations.remove(&prepared.session_id);
         next.next_session_ordinal = native_successor(prepared.session_id.as_str(), "session-")?;
         next.next_node_ordinal = native_successor(prepared.node_id.as_str(), "node-")?;
         Ok(next)
@@ -1895,17 +1907,23 @@ fn active_user_boundary<'a>(
 fn text_only_editor_content(
     user: &UserMessageBlock,
 ) -> Result<Vec<UserContentBlock>, SessionError> {
-    if user
-        .content
-        .iter()
-        .any(|content| !matches!(content, UserContentBlock::Text(_)))
-    {
+    if user.content.iter().any(|content| {
+        !matches!(
+            content,
+            UserContentBlock::Text(_) | UserContentBlock::UploadedFile(_)
+        )
+    }) {
         return Err(SessionError::Seed {
             detail: "fork/tree editor restoration currently supports text user content only"
                 .to_owned(),
         });
     }
-    Ok(user.content.clone())
+    Ok(user
+        .content
+        .iter()
+        .filter(|content| matches!(content, UserContentBlock::Text(_)))
+        .cloned()
+        .collect())
 }
 
 /// Cuts one source lineage at the boundary a `prepare_*` selected, and
@@ -2211,10 +2229,17 @@ fn validate_document(document: &CatalogDocument) -> Result<(), SessionError> {
             ),
         });
     }
+    uploads::validate_preparations(document)?;
     deletion::validate_records(document)?;
     let mut conversation_ids = BTreeSet::new();
     let mut node_ids = BTreeSet::new();
     for (session_id, session) in &document.sessions {
+        session
+            .uploads
+            .validate()
+            .map_err(|e| SessionError::Catalog {
+                detail: e.to_string(),
+            })?;
         if !session.state.cwd.is_absolute()
             || session
                 .state
@@ -2338,7 +2363,9 @@ fn preview_of(message: &UserMessageBlock) -> Option<String> {
         .iter()
         .filter_map(|block| match block {
             UserContentBlock::Text(block) => Some(block.text.as_str()),
-            UserContentBlock::Image(_) | UserContentBlock::File(_) => None,
+            UserContentBlock::UploadedFile(_)
+            | UserContentBlock::Image(_)
+            | UserContentBlock::File(_) => None,
         })
         .collect::<Vec<_>>()
         .join(" ");

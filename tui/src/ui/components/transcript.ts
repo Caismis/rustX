@@ -451,7 +451,11 @@ function renderCommitted(
         labels.push("compaction summary");
       }
       const body = message.content
-        .map((block) => (block.type === "text" ? block.text : `(${block.type})`))
+        .map((block) => {
+          if (block.type === "text") return block.text;
+          if (block.type === "uploaded_file") return `Uploaded file: ${block.name}`;
+          return `(${block.type})`;
+        })
         .join("\n");
       const blocks: TranscriptBlock[] = [];
       if (labels.length > 0) {

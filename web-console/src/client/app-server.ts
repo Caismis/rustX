@@ -2,9 +2,9 @@ import { TRACE_LIMIT, TRACE_PAGE_SIZE, prependTrace, refreshTrace, replaceTrace,
 import type {
   AttachmentTarget, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
-  SessionPersistentState, SessionSummary, ServerCapabilities, UserContentBlock,
-} from '../../../protocol/app-server/v3';
-import { ARTIFACT_MAX_BYTES, DRAFT_MAX_FILES } from './artifacts';
+  SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
+} from '../../../protocol/app-server/v4';
+import { UPLOAD_MAX_BYTES, UPLOAD_BATCH_MAX_BYTES, DRAFT_MAX_FILES } from './uploads';
 import { HISTORY_LIMIT, HISTORY_PAGE_SIZE, prependTranscript, refreshTranscript, replaceTranscript, type TranscriptCache } from './transcript';
 import { ProtocolLog, type WireContext } from './protocol-log';
 
@@ -118,7 +118,7 @@ export class AppServerClient {
     const generation = this.state.generation;
     this.publish({ connection: reconnect ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v3', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v4', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -136,12 +136,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 3, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 4, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (hello.protocol_version !== 3 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v3 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (hello.protocol_version !== 4 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v4 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       this.initialized = true;
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
@@ -467,34 +467,30 @@ export class AppServerClient {
     if (!this.initialized || view?.attachment !== 'attached' || !view.target) throw new Error('Session is not authoritatively attached. Refresh or reconnect.');
     return view.target;
   }
-  async send(id: string, text: string, steer = false, files: readonly File[] = []) {
+  async upload(id: string, files: readonly File[]): Promise<UploadedFile[]> {
     const target = this.target(id);
     const generation = this.state.generation;
-    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
-    if (files.length > DRAFT_MAX_FILES || files.some(file => file.size > ARTIFACT_MAX_BYTES)) throw new Error('Choose at most 8 attachments, each at most 256 KiB.');
-    const content: UserContentBlock[] = text ? [{ type: 'text', text }] : [];
-    if (files.length) {
-      // Advisory presentation check, not a binding to an eventual consumer.
-      // Pending input can miss an Attempt's finite mailbox watermark. Actual
-      // model requests validate their own frozen capabilities before provider I/O.
-      const { snapshot } = await this.request({ method: 'session/snapshot', params: { target } }, 'snapshot');
-      if (!current()) throw new Error('Attachment target changed; draft retained.');
-      const model = snapshot.attempt?.phase.type === 'settled' || !snapshot.attempt ? snapshot.model?.effective : snapshot.attempt.model?.primary;
-      const modalities = model?.capabilities.inputModalities ?? [];
-      if (files.some(file => !modalities.includes(file.type.startsWith('image/') ? 'image' : 'file'))) throw new Error('The effective model does not support these attachments. Draft retained.');
-      // Sequential, finite uploads leave transport capacity for live snapshots.
-      for (const file of files) {
-        const bytes = new Uint8Array(await file.arrayBuffer());
-        if (!current()) throw new Error('Attachment target changed; draft retained.');
-        let binary = '';
-        for (const byte of bytes) binary += String.fromCharCode(byte);
-        const modality = file.type.startsWith('image/') ? 'image' : 'file';
-        const uploaded = await this.request({ method: 'artifact/upload', params: { target, data: btoa(binary) } }, 'artifact_uploaded');
-        if (!current()) throw new Error('Attachment target changed; draft retained.');
-        content.push(modality === 'image' ? { type: 'image', artifact_id: uploaded.artifact_id, alt: file.name }
-          : { type: 'file', artifact_id: uploaded.artifact_id, name: file.name, mime_type: file.type });
-      }
+    if (!files.length || files.length > DRAFT_MAX_FILES || files.some(file => file.size > UPLOAD_MAX_BYTES)
+      || files.reduce((sum, file) => sum + file.size, 0) > UPLOAD_BATCH_MAX_BYTES) throw new Error('Choose at most 8 files, 256 KiB each and 512 KiB per batch.');
+    const encoded = [];
+    for (const file of files) {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = '';
+      for (const byte of bytes) binary += String.fromCharCode(byte);
+      encoded.push({ name: file.name, data: btoa(binary) });
     }
+    if (!this.current(generation) || !sameTarget(this.state.views[id]?.target, target)) throw new Error('Upload target changed before transfer.');
+    const uploaded = await this.request({ method: 'session/upload', params: { target, files: encoded } }, 'session_uploaded');
+    if (!this.current(generation) || !sameTarget(this.state.views[id]?.target, target)) throw new Error('Upload outcome belongs to an obsolete view. Remove this draft selection; do not replay it.');
+    return uploaded.files;
+  }
+  async send(id: string, text: string, steer = false, receipts: readonly UploadReceipt[] = []) {
+    const target = this.target(id);
+    if (receipts.length > DRAFT_MAX_FILES || receipts.some(receipt => receipt.session_id !== id)) throw new Error('Invalid Session upload receipts.');
+    const content: UserInputBlock[] = [
+      ...receipts.map(receipt => ({ type: 'upload' as const, ...receipt })),
+      ...(text ? [{ type: 'text' as const, text }] : []),
+    ];
     return this.request({ method: steer ? 'turn/steer' : 'turn/start', params: { target, content } }, 'inbound_accepted');
   }
   async cancelTurn(id: string) { return this.request({ method: 'turn/cancel', params: { target: this.target(id) } }, 'cancellation_accepted'); }

@@ -1078,7 +1078,9 @@ fn text_content(
         .iter()
         .map(|block| match block {
             UserContentBlock::Text(text) => text.text.len(),
-            UserContentBlock::Image(_) | UserContentBlock::File(_) => 0,
+            UserContentBlock::UploadedFile(_)
+            | UserContentBlock::Image(_)
+            | UserContentBlock::File(_) => 0,
         })
         .sum::<usize>();
     if bytes == 0 || bytes > MAX_CONTEXT_TEXT_BYTES {

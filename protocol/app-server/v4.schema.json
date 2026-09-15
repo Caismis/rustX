@@ -65,7 +65,7 @@
           "properties": {
             "method": {
               "type": "string",
-              "const": "artifact/upload"
+              "const": "session/upload"
             },
             "params": {
               "type": "object",
@@ -73,14 +73,17 @@
                 "target": {
                   "$ref": "#/$defs/AttachmentTarget"
                 },
-                "data": {
-                  "type": "string"
+                "files": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/UploadBytes"
+                  }
                 }
               },
               "additionalProperties": false,
               "required": [
                 "target",
-                "data"
+                "files"
               ]
             }
           },
@@ -1148,7 +1151,7 @@
                 "content": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/$defs/UserContentBlock"
+                    "$ref": "#/$defs/UserInputBlock"
                   }
                 }
               },
@@ -1180,7 +1183,7 @@
                 "content": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/$defs/UserContentBlock"
+                    "$ref": "#/$defs/UserInputBlock"
                   }
                 }
               },
@@ -1434,6 +1437,23 @@
     "ArtifactId": {
       "description": "Identifies a durable artifact produced or referenced by the runtime.\n\nAn artifact is identified by an opaque runtime-owned id, never by a\nlocal filesystem path: paths are executor concerns and are not a\nuniversal durable artifact identity.",
       "type": "string"
+    },
+    "UploadBytes": {
+      "description": "Bounded JSON carrier. The Session domain accepts decoded bytes.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "data": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "data"
+      ]
     },
     "DefaultScope": {
       "type": "string",
@@ -1924,11 +1944,11 @@
       "type": "string",
       "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
     },
-    "UserContentBlock": {
-      "description": "A content block inside a `UserMessageBlock`.",
+    "UserInputBlock": {
+      "description": "Clients author text and reference completed server receipts only.",
       "oneOf": [
         {
-          "description": "Plain text.",
+          "description": "A plain text content block.",
           "type": "object",
           "properties": {
             "text": {
@@ -1947,69 +1967,29 @@
           ]
         },
         {
-          "description": "An image reference.",
+          "description": "A server-issued capability, scoped to exactly one Session.",
           "type": "object",
           "properties": {
-            "artifact_id": {
-              "description": "Durable artifact identity of the image.",
-              "$ref": "#/$defs/ArtifactId"
+            "session_id": {
+              "$ref": "#/$defs/SessionId"
             },
-            "alt": {
-              "description": "Optional short description or alt text.",
-              "type": [
-                "string",
-                "null"
-              ]
+            "batch_id": {
+              "type": "string"
+            },
+            "token": {
+              "type": "string"
             },
             "type": {
               "type": "string",
-              "const": "image"
+              "const": "upload"
             }
           },
           "additionalProperties": false,
           "required": [
             "type",
-            "artifact_id"
-          ]
-        },
-        {
-          "description": "A file reference.",
-          "type": "object",
-          "properties": {
-            "artifact_id": {
-              "description": "Durable artifact identity of the file.",
-              "$ref": "#/$defs/ArtifactId"
-            },
-            "name": {
-              "description": "Optional display name.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "mime_type": {
-              "description": "Optional MIME type.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "description": {
-              "description": "Optional human-readable description.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "type": "string",
-              "const": "file"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "artifact_id"
+            "session_id",
+            "batch_id",
+            "token"
           ]
         }
       ]
@@ -2693,18 +2673,21 @@
         {
           "type": "object",
           "properties": {
-            "artifact_id": {
-              "$ref": "#/$defs/ArtifactId"
+            "files": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/UploadedFile"
+              }
             },
             "type": {
               "type": "string",
-              "const": "artifact_uploaded"
+              "const": "session_uploaded"
             }
           },
           "additionalProperties": false,
           "required": [
             "type",
-            "artifact_id"
+            "files"
           ]
         },
         {
@@ -3369,6 +3352,65 @@
             "capability_revision"
           ]
         }
+      ]
+    },
+    "UploadedFile": {
+      "description": "A successful ordered file allocation. Paths are a presentation of ownership,\nnever input authority or canonical message identity.",
+      "type": "object",
+      "properties": {
+        "receipt": {
+          "$ref": "#/$defs/UploadReceipt"
+        },
+        "file": {
+          "$ref": "#/$defs/UploadedFileRef"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "receipt",
+        "file",
+        "path"
+      ]
+    },
+    "UploadReceipt": {
+      "description": "A server-issued capability, scoped to exactly one Session.",
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        },
+        "batch_id": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "session_id",
+        "batch_id",
+        "token"
+      ]
+    },
+    "UploadedFileRef": {
+      "description": "Runtime-authored identity of a Session-owned mutable workspace file.\nThe owning Session supplies allocation roots; history never stores host paths.",
+      "type": "object",
+      "properties": {
+        "batch_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "batch_id",
+        "name"
       ]
     },
     "ServerDiagnostics": {
@@ -5463,6 +5505,118 @@
         }
       ]
     },
+    "UserContentBlock": {
+      "description": "A content block inside a `UserMessageBlock`.",
+      "oneOf": [
+        {
+          "description": "Session-owned workspace upload, independent of managed Tool artifacts.",
+          "type": "object",
+          "properties": {
+            "batch_id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "uploaded_file"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "batch_id",
+            "name"
+          ]
+        },
+        {
+          "description": "Plain text.",
+          "type": "object",
+          "properties": {
+            "text": {
+              "description": "The text content.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "A Tool-generated managed image notification, never a human upload.",
+          "type": "object",
+          "properties": {
+            "artifact_id": {
+              "description": "Durable artifact identity of the image.",
+              "$ref": "#/$defs/ArtifactId"
+            },
+            "alt": {
+              "description": "Optional short description or alt text.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "artifact_id"
+          ]
+        },
+        {
+          "description": "A Tool-generated managed file notification, never a human upload.",
+          "type": "object",
+          "properties": {
+            "artifact_id": {
+              "description": "Durable artifact identity of the file.",
+              "$ref": "#/$defs/ArtifactId"
+            },
+            "name": {
+              "description": "Optional display name.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mime_type": {
+              "description": "Optional MIME type.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": {
+              "description": "Optional human-readable description.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "file"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "artifact_id"
+          ]
+        }
+      ]
+    },
     "UserSource": {
       "description": "Provenance of inbound information.\n\nProvenance is metadata; it never changes the message role.",
       "oneOf": [
@@ -6454,7 +6608,7 @@
       ]
     },
     "FileReference": {
-      "description": "A reference to a file artifact.",
+      "description": "A reference to a Tool-generated managed file artifact; never a user upload.",
       "type": "object",
       "properties": {
         "artifact_id": {

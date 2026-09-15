@@ -396,6 +396,12 @@ impl ManagedRuntimeClient {
         &self,
         content: Vec<crate::message::types::UserContentBlock>,
     ) -> Result<crate::runtime::conversation_runtime::InboundAdmission, RuntimeManagerError> {
+        if content
+            .iter()
+            .any(|block| !matches!(block, crate::message::types::UserContentBlock::Text(_)))
+        {
+            return Err(error("user uploads require server-issued Session receipts"));
+        }
         let lease = self.admit_operation()?;
         let runtime = lease.0.as_ref().expect("operation resident");
         let composition = runtime.composition.lock().expect("composition mutex");

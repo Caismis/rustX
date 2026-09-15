@@ -148,7 +148,8 @@ Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses rollback journaling (`DELETE`), `synchronous=FULL`, foreign keys, and a busy timeout. Development
 schema `SQLITE_SCHEMA_VERSION` is the only accepted schema; incompatible
-development schemas fail explicitly at open and are not migrated. Version 35
+development schemas fail explicitly at open and are not migrated. Version 36 records typed Session upload references and frozen
+request-time path projection. Version 35
 requires the fixed Event Journal Trace presentation indexes; both absent and
 redefined current-schema indexes are rejected. Version 34
 adds native revisioned Goal state and atomic Goal/inbound accounting. Version 32

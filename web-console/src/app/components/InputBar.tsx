@@ -1,38 +1,60 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 // Presentation extracted from DeepSeek Harness ui-conversation/InputBar.
 // Native textarea replaces Lexical/attachment/command/queue machines. No retry.
-import { useEffect, useState } from 'react';
-import { ARTIFACT_MAX_BYTES, DRAFT_MAX_FILES } from '../../client/artifacts';
+import { useEffect, useState, useRef } from 'react';
+import { UPLOAD_MAX_BYTES, UPLOAD_BATCH_MAX_BYTES, DRAFT_MAX_FILES } from '../../client/uploads';
+import type { UploadReceipt, UploadedFile } from '../../../../protocol/app-server/v4';
+import { OutcomeUncertain } from '../../client/app-server';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { Button } from '../../presentation/primitives/Button';
 import css from './InputBar.module.css';
-export function InputBar({ disabled, busy, active, onSend, onCancel }: {
+export function InputBar({ disabled, busy, active, onSend, onUpload, onCancel }: {
   disabled: boolean; busy: boolean; active: boolean;
-  onSend: (text: string, steer: boolean, files: readonly File[]) => Promise<boolean>; onCancel: () => void;
+  onSend: (text: string, steer: boolean, receipts: readonly UploadReceipt[]) => Promise<boolean>;
+  onUpload: (files: readonly File[]) => Promise<UploadedFile[]>; onCancel: () => void;
 }) {
-  const [files, setFiles] = useState<File[]>([]);
+  type DraftFile = { id: number; file: File; status: 'uploading' | 'complete' | 'failed' | 'uncertain'; receipt?: UploadReceipt; error?: string };
+  const [files, setFiles] = useState<DraftFile[]>([]);
+  const nextId = useRef(0);
+  const transferring = useRef(false);
   const [error, setError] = useState('');
   const [dragging, setDragging] = useState(false);
+  const pending = files.some(file => file.status !== 'complete');
   const pick = (picked: File[]) => {
-    if (files.length + picked.length > DRAFT_MAX_FILES || picked.some(file => file.size > ARTIFACT_MAX_BYTES)) { setError('Choose at most 8 files, each at most 256 KiB.'); return; }
-    setError(''); setFiles(current => [...current, ...picked]);
+    if (!picked.length || transferring.current) return;
+    if (files.length + picked.length > DRAFT_MAX_FILES || picked.some(file => file.size > UPLOAD_MAX_BYTES)
+      || picked.reduce((sum, file) => sum + file.size, 0) > UPLOAD_BATCH_MAX_BYTES) { setError('Choose at most 8 files, 256 KiB each and 512 KiB per batch.'); return; }
+    const batch: DraftFile[] = picked.map(file => ({ id: nextId.current++, file, status: 'uploading' }));
+    transferring.current = true;
+    setError(''); setFiles(current => [...current, ...batch]);
+    void onUpload(picked).then(uploaded => {
+      if (uploaded.length !== batch.length) throw new Error('Invalid upload response; outcome uncertain.');
+      setFiles(current => current.map(file => {
+        const index = batch.findIndex(item => item.id === file.id);
+        return index < 0 ? file : { ...file, status: 'complete', receipt: uploaded[index].receipt };
+      }));
+    }).catch(cause => {
+      setFiles(current => current.map(file => batch.some(item => item.id === file.id)
+        ? { ...file, status: cause instanceof OutcomeUncertain ? 'uncertain' : 'failed', error: String(cause) } : file));
+    }).finally(() => { transferring.current = false; });
   };
   const [draft, setDraft] = useState('');
   const submit = async (steer = false) => {
-    if (disabled || busy || (!draft.trim() && !files.length)) return;
+    if (disabled || busy || pending || (!draft.trim() && !files.length)) return;
     const submitted = draft;
-    if (await onSend(submitted, steer, files)) { setDraft(current => current === submitted ? '' : current); setFiles([]); }
+    if (await onSend(submitted, steer, files.map(file => file.receipt!))) { setDraft(current => current === submitted ? '' : current); setFiles([]); }
   };
   return <div className={css.root} onDragOver={event => { if (!disabled && !busy && event.dataTransfer.types.includes('Files')) { event.preventDefault(); setDragging(true); } }}
     onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }}
     onDrop={event => { event.preventDefault(); setDragging(false); if (!disabled && !busy) pick(Array.from(event.dataTransfer.files)); }}>
     {dragging && <div className="attachment-drop" role="status">Drop attachments · 8 files · 256 KiB each</div>}
     {error && <p role="alert">{error}</p>}
-    <div className="attachment-rail" aria-label="Draft attachments">{files.map((file, index) => <DraftAttachment key={index} file={file} remove={() => setFiles(current => current.filter((_, i) => i !== index))} />)}</div>
+    <div className="attachment-rail" aria-label="Draft attachments">{files.map(item => <div key={item.id}><DraftAttachment file={item.file} remove={() => setFiles(current => current.filter(file => file.id !== item.id))} /><small role="status">{item.status === 'complete' ? 'Uploaded' : item.status === 'uploading' ? 'Uploading…' : item.status === 'uncertain' ? 'Upload outcome uncertain. Remove selection; no automatic replay.' : item.error}</small></div>)}</div>
     <div className={css.card} data-composer-card>
       <div className={css.scroll}><div className={css.grow}>
         <textarea className={css.input} aria-label="Message" placeholder="Give this Session a task…"
           value={draft} disabled={disabled || busy} rows={3} onChange={event => setDraft(event.target.value)}
+          onPaste={event => { const pasted = Array.from(event.clipboardData.files); if (pasted.length) { event.preventDefault(); pick(pasted); } }}
           onKeyDown={event => {
             if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
               event.preventDefault(); void submit();
@@ -44,8 +66,8 @@ export function InputBar({ disabled, busy, active, onSend, onCancel }: {
         <span className="muted">Enter to send · Shift+Enter for newline</span>
         <div className={css.trailing}>
           {active && <Button size="sm" variant="outline" disabled={disabled || busy} onClick={onCancel}>Cancel turn</Button>}
-          {active && <Button size="sm" variant="outline" disabled={disabled || busy || (!draft.trim() && !files.length)} onClick={() => void submit(true)}>Steer</Button>}
-          <Button variant="primary" disabled={disabled || busy || (!draft.trim() && !files.length)} onClick={() => void submit()}>{busy ? 'Awaiting acknowledgement…' : 'Send'}</Button>
+          {active && <Button size="sm" variant="outline" disabled={disabled || busy || pending || (!draft.trim() && !files.length)} onClick={() => void submit(true)}>Steer</Button>}
+          <Button variant="primary" disabled={disabled || busy || pending || (!draft.trim() && !files.length)} onClick={() => void submit()}>{busy ? 'Awaiting acknowledgement…' : 'Send'}</Button>
         </div>
       </div>
     </div>

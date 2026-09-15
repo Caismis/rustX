@@ -1,7 +1,7 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Rewritten from ui-trajectory; see PROVENANCE.md. */
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { TraceEntry, TraceKind, TraceText } from '../../../protocol/app-server/v3';
+import type { TraceEntry, TraceKind, TraceText } from '../../../protocol/app-server/v4';
 import type { TraceCache } from '../client/trace';
 import { TRACE_LIMIT } from '../client/trace';
 import { Button } from '../presentation/primitives/Button';

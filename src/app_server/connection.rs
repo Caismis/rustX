@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use super::protocol::{
     APP_SERVER_PROTOCOL_VERSION, AttachmentTarget, ErrorData, Failure, InitializeParams,
     JsonRpcVersion, Method, MethodResult, Notification, NotificationMethod, Request, RequestId,
-    Response, RpcError, ServerCapabilities, Success,
+    Response, RpcError, ServerCapabilities, Success, UserInputBlock,
 };
 use crate::local_runtime::session::SessionId;
 use crate::local_runtime::session_controller::SessionController;
@@ -305,6 +305,7 @@ impl AppServerConnection {
             let route = self.route(target)?;
             let client = route.client.clone();
             let changed = self.changed.clone();
+            let sessions = self.sessions.clone();
             let receiver = {
                 let routes = self.routes.lock().expect("routes mutex");
                 if routes.closed
@@ -330,6 +331,7 @@ impl AppServerConnection {
                                     route,
                                     authority.map_err(client_error)?,
                                     changed,
+                                    sessions,
                                 )
                                 .await
                             }
@@ -663,7 +665,7 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::ApprovalModeSet { target, .. }
         | Method::Capability { target, .. }
         | Method::ArtifactRead { target, .. }
-        | Method::ArtifactUpload { target, .. }
+        | Method::SessionUpload { target, .. }
         | Method::Trace { target, .. }
         | Method::Transcript { target, .. }
         | Method::Goal { target, .. }
@@ -692,6 +694,7 @@ async fn dispatch_runtime(
     route: Arc<Route>,
     authority: Arc<crate::runtime_client::host::ClientInner>,
     changed: Arc<tokio::sync::Notify>,
+    sessions: SessionController,
 ) -> Result<MethodResult, RpcError> {
     match method {
         Method::DefaultsRead { target: _, scope } => {
@@ -715,19 +718,48 @@ async fn dispatch_runtime(
                 .artifact_read(&artifact_id)
                 .map_err(client_error)?,
         }),
-        Method::ArtifactUpload { target: _, data } => Ok(MethodResult::ArtifactUploaded {
-            artifact_id: authority
-                .artifact_upload(&data)
-                .map_err(|error| match error {
-                    // This carrier authors bounded, path-free InvalidState diagnostics,
-                    // including ArtifactStore capacity. Do not discard that distinction
-                    // or forward unsanitized filesystem errors from other operations.
-                    RuntimeClientError::InvalidState { message } => {
-                        rpc_error(-32000, &message, Some(ErrorData::InvalidState))
+        Method::SessionUpload { target, files } => {
+            use base64::Engine;
+            // 512 KiB decoded per batch -> <=699,072 base64 bytes for eight
+            // files, leaving >300 KiB of the 1 MiB frame for JSON/routing.
+            const FILE_MAX: usize = 256 * 1024;
+            const BATCH_MAX: usize = 512 * 1024;
+            if files.is_empty() || files.len() > 8 {
+                return Err(domain(ErrorData::InvalidParams));
+            }
+            let mut total = 0usize;
+            let files = files
+                .into_iter()
+                .map(|file| {
+                    if file.name.len() > 255 || file.data.len() > FILE_MAX.div_ceil(3) * 4 {
+                        return Err(domain(ErrorData::InvalidParams));
                     }
-                    error => client_error(error),
-                })?,
-        }),
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(file.data)
+                        .map_err(|_| domain(ErrorData::InvalidParams))?;
+                    total += bytes.len();
+                    if bytes.len() > FILE_MAX || total > BATCH_MAX {
+                        return Err(domain(ErrorData::InvalidParams));
+                    }
+                    Ok(crate::local_runtime::session::uploads::UploadFile {
+                        name: file.name,
+                        bytes,
+                    })
+                })
+                .collect::<Result<Vec<_>, RpcError>>()?;
+            let node = sessions
+                .catalog
+                .lock()
+                .await
+                .conversation_lineage(&target.session_id, &target.conversation_id)
+                .map_err(session_error)?
+                .0;
+            let files = sessions
+                .upload(&target.session_id, Some(&node.id), files)
+                .await
+                .map_err(session_error)?;
+            Ok(MethodResult::SessionUploaded { files })
+        }
         Method::ModelGet { target: _ } => native_result(authority.model_get()),
         Method::ModelCatalog { target: _ } => native_result(authority.model_catalog()),
         Method::ModelSet { target: _, config } => native_result(authority.model_set(*config)),
@@ -800,8 +832,22 @@ async fn dispatch_runtime(
             changed.notify_one();
             Ok(MethodResult::Subscribed { after_cursor })
         }
-        Method::TurnStart { target: _, content } | Method::TurnSteer { target: _, content } => {
-            native_result(authority.submit_inbound(content))
+        Method::TurnStart { target, content } | Method::TurnSteer { target, content } => {
+            let mut canonical = Vec::with_capacity(content.len());
+            for block in content {
+                match block {
+                    UserInputBlock::Text(text) => {
+                        canonical.push(crate::message::types::UserContentBlock::Text(text));
+                    }
+                    UserInputBlock::Upload(receipt) => canonical.extend(
+                        sessions
+                            .uploaded_content(&target.session_id, &[receipt])
+                            .await
+                            .map_err(session_error)?,
+                    ),
+                }
+            }
+            native_result(authority.submit_session_inbound(canonical))
         }
         Method::TurnCancel { target: _ } => native_result(authority.cancel_current_attempt()),
         Method::InteractionRespond {

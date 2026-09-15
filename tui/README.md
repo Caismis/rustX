@@ -26,7 +26,7 @@ arguments (including `init` declarations). Streams and exit status are forwarded
 All [configuration semantics](../docs/configuration-diagnostics.md) stay in Rust.
 
 Foreground Workflow Tool cards expose expandable native execution details under
-App Server protocol v3. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
+App Server protocol v4. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
 execution settlement, business checks and human Review are separate. Responses
 use the root HITL queue and children expose authoritative subagent status. See the
 [native projection contract](../docs/workflow-run-projection.md).
@@ -121,7 +121,7 @@ Connect to an externally managed App Server with:
 pnpm --dir tui start --connect ws://127.0.0.1:8080 --token-file /private/user/socket-token --cwd /srv/project --session SESSION_ID
 ```
 
-Both modes use the same typed client and generated v3 DTOs. `--user-settings`,
+Both modes use the same typed client and generated v4 DTOs. `--user-settings`,
 `--models`, and `--runtime-root` bind the local child process. Session settings
 such as `--cwd`, `--config`, and `--model` travel through `session/create`;
 paths resolve on the server. Local mode may default `--cwd` from the TUI
@@ -180,7 +180,7 @@ model's own frozen registry. See the
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v3)
+  -> initialize (App Server protocol v4)
   -> session/create or choose a durable Session
   -> session/attach (authoritative snapshot, cursor, subscription)
   -> interactive
@@ -951,3 +951,8 @@ client outcome. Terminal transport ends observation without replay or migration.
 Direct Tool restrictions leave separately selected Agent/Workflow dispatch intact.
 A model request with no Tool surfaces also needs empty Agent/Workflow selections
 and no Tool-providing Native Extensions.
+
+See [Session-owned workspace uploads](../docs/session-uploads.md) for receipt admission, model paths, fork copies and durable cleanup.
+
+Canonical workspace uploads render their typed basenames in the transcript.
+The TUI does not parse model XML or assume client filesystem paths exist remotely.

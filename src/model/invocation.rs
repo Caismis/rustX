@@ -1296,7 +1296,9 @@ pub fn validate_content_modalities(
             ModelInputMessage::Canonical(MessageBlock::User(user)) => {
                 for content in &user.content {
                     match content {
-                        UserContentBlock::Text(_) => require(Modality::Text),
+                        UserContentBlock::Text(_) | UserContentBlock::UploadedFile(_) => {
+                            require(Modality::Text);
+                        }
                         UserContentBlock::Image(_) => require(Modality::Image),
                         UserContentBlock::File(_) => require(Modality::File),
                     }

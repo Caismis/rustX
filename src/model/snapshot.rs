@@ -94,6 +94,8 @@ pub struct AgentStatusStart {
 /// A provider-independent frozen request boundary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RequestSnapshot {
+    /// Exact request-time uploaded paths; never canonical history identity.
+    pub upload_projection: crate::model::uploads::UploadProjection,
     /// Stable durable identity of this actual request.
     pub request_id: RequestId,
     /// Request identity.
@@ -205,6 +207,7 @@ impl RequestSnapshot {
     ) -> Self {
         let provisional_message_id = identity.provisional_message_id();
         Self {
+            upload_projection: crate::model::uploads::UploadProjection::default(),
             request_id: identity.request_id(),
             identity,
             provisional_message_id,
@@ -260,6 +263,9 @@ impl RequestSnapshot {
         canonical: &[crate::message::types::MessageBlock],
     ) -> Result<ModelRequest, RequestReconstructionError> {
         let mut messages = canonical_input(canonical);
+        self.upload_projection
+            .apply(&mut messages)
+            .map_err(RequestReconstructionError::Conversation)?;
         if self.unresolved_output_carryover.is_some()
             && self.unresolved_output_carryover_source.is_none()
         {
