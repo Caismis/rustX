@@ -7973,14 +7973,23 @@ model = "scripted/scripted"
             .snapshot(&crate::local_runtime::SessionId::new("session-1"))
             .expect("source snapshot");
 
-        supervisor.arm_catalog_write_fault_after_rename().await;
-        let response = endpoint
-            .handle_request_async(RuntimeClientRequest::SessionFork {
+        let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let release = gate.arm_scoped();
+        supervisor.install_copy_publication_gate(gate.clone());
+        let (response, ()) = tokio::join!(
+            endpoint.handle_request_async(RuntimeClientRequest::SessionFork {
                 id: crate::runtime_client::RequestId::new(30),
                 surface_revision: revision,
                 message_id,
-            })
-            .await;
+            }),
+            async {
+                tokio::task::spawn_blocking(move || gate.wait_entered())
+                    .await
+                    .unwrap();
+                supervisor.arm_catalog_write_fault_after_rename().await;
+                drop(release);
+            }
+        );
         let Some(RuntimeClientResult::SessionCommittedRestartRequired {
             session,
             editor_content,
@@ -7991,7 +8000,16 @@ model = "scripted/scripted"
         };
         assert!(response.error.is_none());
         assert!(diagnostic.contains("durability is uncertain"));
-        assert_eq!(editor_content, Some(submit_content(prompt)));
+        assert_eq!(
+            editor_content,
+            Some(vec![
+                crate::local_runtime::session::uploads::UserInputBlock::Text(
+                    crate::message::content::TextBlock {
+                        text: prompt.into()
+                    }
+                )
+            ])
+        );
 
         let reopened = SessionCatalog::open_existing(catalog_root.path())
             .expect("open fork")
@@ -8076,7 +8094,16 @@ model = "scripted/scripted"
         };
         assert!(response.error.is_none());
         assert!(diagnostic.contains("durability is uncertain"));
-        assert_eq!(editor_content, Some(submit_content(prompt)));
+        assert_eq!(
+            editor_content,
+            Some(vec![
+                crate::local_runtime::session::uploads::UserInputBlock::Text(
+                    crate::message::content::TextBlock {
+                        text: prompt.into()
+                    }
+                )
+            ])
+        );
         assert_eq!(session.id, source.id.as_str());
         assert_ne!(session.active_node, source.active_node.as_str());
 

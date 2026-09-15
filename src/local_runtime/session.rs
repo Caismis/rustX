@@ -506,6 +506,8 @@ pub struct SessionCatalog {
     lifecycle: Option<std::sync::Arc<crate::runtime::local_storage::ProductController>>,
     #[cfg(test)]
     write_fault: Arc<Mutex<Option<CatalogWriteFault>>>,
+    #[cfg(test)]
+    preparation_cleanup_fault: Arc<std::sync::atomic::AtomicBool>,
     /// Test-only gate parked between the Surface-head observation and the
     /// acceptance-watermark read of `is_unused`, so a race regression can
     /// replay the exact adoption interleaving against the classifier.
@@ -541,6 +543,8 @@ impl SessionCatalog {
             lifecycle: None,
             #[cfg(test)]
             write_fault: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            preparation_cleanup_fault: Arc::default(),
             #[cfg(test)]
             classification_gate: None,
         };
@@ -750,6 +754,8 @@ impl SessionCatalog {
             #[cfg(test)]
             write_fault: Arc::new(Mutex::new(None)),
             #[cfg(test)]
+            preparation_cleanup_fault: Arc::default(),
+            #[cfg(test)]
             classification_gate: None,
         }))
     }
@@ -890,6 +896,8 @@ impl SessionCatalog {
             lifecycle: None,
             #[cfg(test)]
             write_fault: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            preparation_cleanup_fault: Arc::default(),
             #[cfg(test)]
             classification_gate: None,
         })
@@ -1390,7 +1398,7 @@ impl SessionCatalog {
         SessionError,
     > {
         let user = active_user_boundary(source, message_id)?;
-        let editor_content = text_only_editor_content(user)?;
+        let editor_content = restorable_editor_content(user)?;
         let (session_id, node_id, conversation_id) = self.allocate_ids();
         let seed = lineage_cut(&conversation_id, source, Some(message_id))?;
         let prepared =
@@ -1416,7 +1424,7 @@ impl SessionCatalog {
     > {
         self.snapshot(session_id)?;
         let user = active_user_boundary(source, message_id)?;
-        let editor_content = text_only_editor_content(user)?;
+        let editor_content = restorable_editor_content(user)?;
         let mut node_ordinal = self.document.next_node_ordinal.max(1);
         let (node_id, conversation_id, database_path) = loop {
             let node_id = SessionNodeId::new(format!("node-{node_ordinal}"));
@@ -1568,6 +1576,7 @@ impl SessionCatalog {
                 .reject_pending_identity(&session_id, &node_id, &conversation_id)
                 .is_ok()
                 && !self.document.sessions.contains_key(&session_id)
+                && !self.document.upload_preparations.contains_key(&session_id)
                 && !node_taken
                 && !conversation_taken
                 && !db.exists()
@@ -1899,12 +1908,11 @@ fn active_user_boundary<'a>(
         })
 }
 
-/// The native editor restoration contract is currently text-only. Rejecting
-/// other canonical user blocks here keeps a fork/tree transition from
-/// pretending that an image or file reference is equivalent to a placeholder
-/// string. The typed payload remains `Vec<UserContentBlock>` so a structured
-/// editor can extend this contract without changing Session lineage rules.
-fn text_only_editor_content(
+/// Retain the exact supported canonical editor facts. The controller copies
+/// required uploads before independent publication and converts these facts to
+/// destination-owned draft receipts. Managed artifact blocks have no human draft
+/// admission contract and are rejected explicitly.
+fn restorable_editor_content(
     user: &UserMessageBlock,
 ) -> Result<Vec<UserContentBlock>, SessionError> {
     if user.content.iter().any(|content| {
@@ -1914,16 +1922,11 @@ fn text_only_editor_content(
         )
     }) {
         return Err(SessionError::Seed {
-            detail: "fork/tree editor restoration currently supports text user content only"
+            detail: "fork/tree editor restoration supports human text and Session uploads only"
                 .to_owned(),
         });
     }
-    Ok(user
-        .content
-        .iter()
-        .filter(|content| matches!(content, UserContentBlock::Text(_)))
-        .cloned()
-        .collect())
+    Ok(user.content.clone())
 }
 
 /// Cuts one source lineage at the boundary a `prepare_*` selected, and
@@ -2575,6 +2578,11 @@ pub enum SessionError {
     /// crossed, or it was crossed but the final durability barrier was not
     /// proven.
     CatalogCommit { error: CatalogCommitError },
+    /// Private cleanup failed; retain both the operation and cleanup diagnostics.
+    PreparationCleanupPending {
+        operation: Box<SessionError>,
+        cleanup: Box<SessionError>,
+    },
     /// The catalog or its graph is malformed.
     Catalog { detail: String },
     /// Durable conversation storage rejected a seed or validation read.
@@ -2614,6 +2622,10 @@ impl core::fmt::Display for SessionError {
                     path.display()
                 ),
             },
+            Self::PreparationCleanupPending { operation, cleanup } => write!(
+                f,
+                "{operation}; private preparation cleanup pending: {cleanup}"
+            ),
             Self::Catalog { detail } => write!(f, "session catalog: {detail}"),
             Self::Store(error) => write!(f, "conversation seed: {error}"),
             Self::Seed { detail } => write!(f, "conversation seed: {detail}"),

@@ -6,6 +6,7 @@ use crate::local_runtime::session_controller::SessionController;
 use crate::message::types::{
     InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
+use crate::model::uploads::UploadProjectionResolver;
 use crate::runtime::conversation_runtime::Gate;
 use crate::runtime::identity::MessageId;
 use std::sync::Arc;
@@ -256,13 +257,14 @@ async fn fork_and_clone_copy_current_cut_before_publication_and_survive_source_d
             b"current mutable bytes"
         );
         assert!(
-            !file_path(
+            file_path(
                 workspace.path(),
                 &SessionId::new("session-2"),
                 &orphan[0].file.batch_id,
                 &orphan[0].file.name
             )
             .exists()
+                == fork
         );
         assert!(controller.catalog.try_lock().is_ok());
         drop(release);
@@ -284,8 +286,8 @@ async fn fork_and_clone_copy_current_cut_before_publication_and_survive_source_d
         .unwrap();
         let messages = crate::model::input::canonical_input(&store.load_canonical().unwrap());
         let projection =
-            SessionUploadOwner::new(root.path(), destination.active_conversation_id.clone())
-                .projection(&messages)
+            SessionUploadResolver::new(root.path(), destination.active_conversation_id.clone())
+                .resolve(&messages)
                 .unwrap();
         assert_eq!(projection.files[0].path, destination_path.to_str().unwrap());
         drop(store);
@@ -471,7 +473,7 @@ async fn same_session_branch_shares_uploads_and_private_copy_claim_recovers_afte
         .catalog
         .lock()
         .await
-        .claim_upload_preparation(&staged, workspace.path())
+        .claim_upload_preparation(&staged, &[workspace.path().to_path_buf()])
         .unwrap();
     let staged_root = session_directory(workspace.path(), &staged, true).unwrap();
     drop(staged_root);
@@ -568,10 +570,10 @@ async fn context_estimates_the_same_rendering_as_provider_input() {
         estimator.clone(),
     )
     .unwrap();
-    engine.set_upload_owner(SessionUploadOwner::new(
+    engine.set_upload_resolver(Arc::new(SessionUploadResolver::new(
         root.path(),
         session.active_conversation_id,
-    ));
+    )));
     let mut rendered = canonical.clone();
     engine.project_uploads(&mut rendered).unwrap();
     assert_eq!(
@@ -693,4 +695,356 @@ async fn uploads_cannot_nest_inside_another_sessions_cleanup_root() {
     assert!(controller.read_session(&b.id).await.is_ok());
     delete(&controller, &b.id).await;
     assert!(workspace.path().is_dir());
+}
+
+#[tokio::test]
+async fn failed_copy_cleanup_retains_the_frozen_claim_until_recovery_finishes() {
+    let root = tempdir().unwrap();
+    let workspace = tempdir().unwrap();
+    let controller = SessionController::open(root.path()).unwrap();
+    let source = controller
+        .create_session(settings(workspace.path()))
+        .await
+        .unwrap()
+        .session;
+    let files = controller
+        .upload(
+            &source.id,
+            None,
+            vec![file("first", b"source"), file("missing", b"remove")],
+        )
+        .await
+        .unwrap();
+    let access = controller.acquire_session(&source.id, None).await.unwrap();
+    let store =
+        SqliteConversationStore::open(source.active_conversation_id.clone(), &access.database_path)
+            .unwrap();
+    store.append_canonical(&user("input", &files)).unwrap();
+    let revision = store.load_head().unwrap().revision;
+    drop(store);
+    drop(access);
+    std::fs::remove_file(&files[1].path).unwrap();
+    controller
+        .catalog
+        .lock()
+        .await
+        .preparation_cleanup_fault
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let error = controller
+        .clone_session(&source.id, None, revision)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        SessionError::PreparationCleanupPending { .. }
+    ));
+    let destination = SessionId::new("session-2");
+    let residue = file_path(
+        workspace.path(),
+        &destination,
+        &files[0].file.batch_id,
+        "first",
+    );
+    assert_eq!(std::fs::read(&residue).unwrap(), b"source");
+    assert!(root.path().join("sessions/session-2").is_dir());
+    assert!(controller.read_session(&destination).await.is_err());
+    let frozen = controller
+        .catalog
+        .lock()
+        .await
+        .document
+        .upload_preparations
+        .clone();
+    assert_eq!(frozen[&destination], vec![workspace.path().to_path_buf()]);
+    assert!(
+        controller
+            .catalog
+            .lock()
+            .await
+            .recover_upload_preparations()
+            .is_err()
+    );
+    assert_eq!(
+        controller.catalog.lock().await.document.upload_preparations,
+        frozen
+    );
+    // The claim reserves identity even if native residue was independently removed.
+    // A new Session must not consume this still-owned upload cleanup authority.
+    std::fs::remove_dir_all(root.path().join("sessions/session-2")).unwrap();
+    let unrelated = controller
+        .create_session(settings(workspace.path()))
+        .await
+        .unwrap()
+        .session;
+    assert_ne!(unrelated.id, destination);
+    assert_eq!(
+        controller.catalog.lock().await.document.upload_preparations,
+        frozen
+    );
+    // The fault is removed at process restart; the durable workset must survive it.
+    drop(controller);
+    let controller = SessionController::open(root.path()).unwrap();
+    assert!(
+        controller
+            .catalog
+            .lock()
+            .await
+            .document
+            .upload_preparations
+            .is_empty()
+    );
+    assert!(!residue.exists());
+    assert!(controller.read_session(&unrelated.id).await.is_ok());
+    assert!(!root.path().join("sessions/session-2").exists());
+    assert_eq!(std::fs::read(&files[0].path).unwrap(), b"source");
+    assert!(controller.read_session(&source.id).await.is_ok());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn branch_publication_faults_preserve_commit_semantics_and_only_discard_private_nodes() {
+    for after_rename in [false, true] {
+        let root = tempdir().unwrap();
+        let workspace = tempdir().unwrap();
+        let controller = SessionController::open(root.path()).unwrap();
+        let source = controller
+            .create_session(settings(workspace.path()))
+            .await
+            .unwrap()
+            .session;
+        let other = controller
+            .create_session(settings(workspace.path()))
+            .await
+            .unwrap()
+            .session;
+        let source_files = controller
+            .upload(&source.id, None, vec![file("source", b"source")])
+            .await
+            .unwrap();
+        let other_files = controller
+            .upload(&other.id, None, vec![file("other", b"other")])
+            .await
+            .unwrap();
+        let access = controller.acquire_session(&source.id, None).await.unwrap();
+        let store = SqliteConversationStore::open(
+            source.active_conversation_id.clone(),
+            &access.database_path,
+        )
+        .unwrap();
+        store
+            .append_canonical(&user("first", &source_files))
+            .unwrap();
+        store.append_canonical(&user("boundary", &[])).unwrap();
+        let revision = store.load_head().unwrap().revision;
+        let conversations = access
+            .database_path
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        drop(store);
+        drop(access);
+        let before = controller.read_session(&source.id).await.unwrap();
+        let existing = std::fs::read_dir(&conversations)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect::<Vec<_>>();
+        let gate = Arc::new(Gate::default());
+        let release = gate.arm_scoped();
+        *controller.copy_publication_gate.lock().unwrap() = Some(gate.clone());
+        let worker = controller.clone();
+        let id = source.id.clone();
+        let node = source.active_node.clone();
+        let branch = tokio::spawn(async move {
+            worker
+                .branch_session_node(&id, &node, revision, &MessageId::new("boundary"))
+                .await
+        });
+        tokio::task::spawn_blocking(move || gate.wait_entered())
+            .await
+            .unwrap();
+        let staged = std::fs::read_dir(&conversations)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| !existing.contains(p))
+            .unwrap();
+        assert!(controller.catalog.try_lock().is_ok());
+        if after_rename {
+            controller
+                .catalog
+                .lock()
+                .await
+                .arm_write_fault_after_rename();
+        } else {
+            controller
+                .catalog
+                .lock()
+                .await
+                .arm_write_fault_before_rename();
+        }
+        drop(release);
+        let result = branch.await.unwrap();
+        if after_rename {
+            let result = result.unwrap();
+            assert!(result.durability_diagnostic.is_some());
+            assert_eq!(result.session.node_count, 2);
+            assert!(staged.exists());
+        } else {
+            assert!(matches!(
+                result,
+                Err(SessionError::CatalogCommit {
+                    error: super::super::CatalogCommitError::NotCommitted { .. }
+                })
+            ));
+            assert_eq!(controller.read_session(&source.id).await.unwrap(), before);
+            assert!(!staged.exists());
+            assert_eq!(
+                std::fs::read_dir(&conversations).unwrap().count(),
+                existing.len()
+            );
+        }
+        assert_eq!(std::fs::read(&source_files[0].path).unwrap(), b"source");
+        assert_eq!(std::fs::read(&other_files[0].path).unwrap(), b"other");
+        assert!(controller.read_session(&other.id).await.is_ok());
+        assert!(
+            controller
+                .catalog
+                .lock()
+                .await
+                .document
+                .upload_preparations
+                .is_empty()
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restored_editor_uploads_are_ordered_owned_and_prepared_before_publication() {
+    for tree in [false, true] {
+        let root = tempdir().unwrap();
+        let workspace = tempdir().unwrap();
+        let controller = SessionController::open(root.path()).unwrap();
+        let source = controller
+            .create_session(settings(workspace.path()))
+            .await
+            .unwrap()
+            .session;
+        let files = controller
+            .upload(&source.id, None, vec![file("A", b"A"), file("B", b"B")])
+            .await
+            .unwrap();
+        let body = "\n Please analyze it.  \r\n";
+        let content = vec![
+            UserContentBlock::UploadedFile(files[0].file.clone()),
+            UserContentBlock::Text(crate::message::content::TextBlock { text: body.into() }),
+            UserContentBlock::UploadedFile(files[1].file.clone()),
+        ];
+        let access = controller.acquire_session(&source.id, None).await.unwrap();
+        let store = SqliteConversationStore::open(
+            source.active_conversation_id.clone(),
+            &access.database_path,
+        )
+        .unwrap();
+        let MessageBlock::User(mut input) = user("boundary", &[]) else {
+            unreachable!()
+        };
+        input.content = content.clone();
+        store.append_canonical(&MessageBlock::User(input)).unwrap();
+        let revision = store.load_head().unwrap().revision;
+        drop(store);
+        drop(access);
+        let gate = Arc::new(Gate::default());
+        let release = gate.arm_scoped();
+        *controller.copy_publication_gate.lock().unwrap() = Some(gate.clone());
+        let worker = controller.clone();
+        let id = source.id.clone();
+        let node = source.active_node.clone();
+        let fork = tokio::spawn(async move {
+            worker
+                .copy_lineage(
+                    &id,
+                    Some(&node),
+                    revision,
+                    Some(&MessageId::new("boundary")),
+                    tree,
+                )
+                .await
+        });
+        tokio::task::spawn_blocking(move || gate.wait_entered())
+            .await
+            .unwrap();
+        let destination = if tree {
+            source.id.clone()
+        } else {
+            SessionId::new("session-2")
+        };
+        for f in &files {
+            assert!(
+                file_path(
+                    workspace.path(),
+                    &destination,
+                    &f.file.batch_id,
+                    &f.file.name
+                )
+                .exists()
+            );
+        }
+        assert_eq!(
+            controller
+                .list_sessions(None, 0, 20)
+                .await
+                .unwrap()
+                .sessions
+                .len(),
+            1
+        );
+        drop(release);
+        let result = fork.await.unwrap().unwrap();
+        let editor = result.editor_content.unwrap();
+        let [
+            UserInputBlock::Upload(a),
+            UserInputBlock::Text(text),
+            UserInputBlock::Upload(b),
+        ] = &editor[..]
+        else {
+            panic!("exact restored order");
+        };
+        assert_eq!(text.text, body);
+        assert_eq!(a.session_id, destination);
+        assert_eq!(b.session_id, destination);
+        if !tree {
+            assert!(
+                controller
+                    .uploaded_content(&destination, &[files[0].receipt.clone()])
+                    .await
+                    .is_err()
+            );
+            delete(&controller, &source.id).await;
+        }
+        assert_eq!(
+            controller
+                .uploaded_content(&destination, &[a.clone(), b.clone()])
+                .await
+                .unwrap(),
+            vec![content[0].clone(), content[2].clone()]
+        );
+        for f in &files {
+            assert_eq!(
+                std::fs::read(file_path(
+                    workspace.path(),
+                    &destination,
+                    &f.file.batch_id,
+                    &f.file.name
+                ))
+                .unwrap(),
+                f.file.name.as_bytes()
+            );
+        }
+        assert_eq!(
+            std::fs::read_dir(workspace.path().join(".agents/uploads"))
+                .unwrap()
+                .count(),
+            1
+        );
+    }
 }

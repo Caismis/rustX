@@ -28,6 +28,14 @@ pub struct UploadReceipt {
     pub batch_id: String,
     pub token: String,
 }
+/// Clients author text and reference completed server receipts only.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum UserInputBlock {
+    Text(crate::message::content::TextBlock),
+    Upload(UploadReceipt),
+}
+
 /// A successful ordered file allocation. Paths are a presentation of ownership,
 /// never input authority or canonical message identity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -347,6 +355,33 @@ impl UploadRegistry {
             &reference.name,
         ))
     }
+    pub(crate) fn editor_input(
+        &self,
+        session: &SessionId,
+        content: &[crate::message::types::UserContentBlock],
+    ) -> io::Result<Vec<UserInputBlock>> {
+        use crate::message::types::UserContentBlock;
+        content
+            .iter()
+            .map(|block| match block {
+                UserContentBlock::Text(text) => Ok(UserInputBlock::Text(text.clone())),
+                UserContentBlock::UploadedFile(reference) => {
+                    self.resolve(session, reference)?;
+                    let entry = self.allocations[&reference.batch_id]
+                        .files
+                        .iter()
+                        .find(|e| e.name == reference.name)
+                        .expect("resolved upload");
+                    Ok(UserInputBlock::Upload(UploadReceipt {
+                        session_id: session.clone(),
+                        batch_id: reference.batch_id.clone(),
+                        token: entry.token.clone(),
+                    }))
+                }
+                _ => Err(invalid("unsupported editor content")),
+            })
+            .collect()
+    }
     pub(crate) fn receipts(
         &self,
         session: &SessionId,
@@ -488,38 +523,31 @@ impl UploadRegistry {
         source: &SessionId,
         destination: &SessionId,
         workspace: &Path,
-        messages: &[crate::message::types::MessageBlock],
+        references: &[UploadedFileRef],
     ) -> io::Result<Self> {
-        use crate::message::types::{MessageBlock, UserContentBlock};
         validate_workspace(workspace)?;
         let mut result = Self::default();
-        for message in messages {
-            if let MessageBlock::User(user) = message {
-                for content in &user.content {
-                    if let UserContentBlock::UploadedFile(reference) = content {
-                        self.resolve(source, reference)?;
-                        let original = &self.allocations[&reference.batch_id];
-                        let entry = original
-                            .files
-                            .iter()
-                            .find(|e| e.name == reference.name)
-                            .expect("resolved entry");
-                        let allocation = result
-                            .allocations
-                            .entry(reference.batch_id.clone())
-                            .or_insert_with(|| UploadAllocation {
-                                workspace: workspace.to_path_buf(),
-                                files: Vec::new(),
-                                ready: false,
-                            });
-                        if !allocation.files.iter().any(|e| e.name == entry.name) {
-                            allocation.files.push(UploadEntry {
-                                name: entry.name.clone(),
-                                token: identity()?,
-                            });
-                        }
-                    }
-                }
+        for reference in references {
+            self.resolve(source, reference)?;
+            let original = &self.allocations[&reference.batch_id];
+            let entry = original
+                .files
+                .iter()
+                .find(|e| e.name == reference.name)
+                .expect("resolved entry");
+            let allocation = result
+                .allocations
+                .entry(reference.batch_id.clone())
+                .or_insert_with(|| UploadAllocation {
+                    workspace: workspace.to_path_buf(),
+                    files: Vec::new(),
+                    ready: false,
+                });
+            if !allocation.files.iter().any(|e| e.name == entry.name) {
+                allocation.files.push(UploadEntry {
+                    name: entry.name.clone(),
+                    token: identity()?,
+                });
             }
         }
         let copy = || -> io::Result<()> {
@@ -565,10 +593,7 @@ impl UploadRegistry {
             }
             destination_root.sync_all()
         };
-        if let Err(error) = copy() {
-            cleanup(workspace, destination)?;
-            return Err(error);
-        }
+        copy()?;
         for allocation in result.allocations.values_mut() {
             allocation.ready = true;
         }
@@ -579,18 +604,20 @@ impl UploadRegistry {
 /// Read-only resolution capability. The durable Session catalog owns lifetime;
 /// cloning or dropping a runtime resolver never allocates or removes uploads.
 #[derive(Debug, Clone)]
-pub(crate) struct SessionUploadOwner {
+pub(crate) struct SessionUploadResolver {
     catalog: PathBuf,
     conversation: crate::runtime::identity::ConversationId,
 }
-impl SessionUploadOwner {
+impl SessionUploadResolver {
     pub(crate) fn new(root: &Path, conversation: crate::runtime::identity::ConversationId) -> Self {
         Self {
             catalog: root.join("sessions/catalog.json"),
             conversation,
         }
     }
-    pub(crate) fn projection(
+}
+impl crate::model::uploads::UploadProjectionResolver for SessionUploadResolver {
+    fn resolve(
         &self,
         messages: &[crate::model::input::ModelInputMessage],
     ) -> Result<crate::model::uploads::UploadProjection, String> {
@@ -648,18 +675,64 @@ impl SessionUploadOwner {
 }
 
 impl SessionCatalog {
-    pub(crate) fn discard_prepared_upload_lineage(
+    pub(crate) fn discard_prepared_session(
         &self,
         prepared: &super::PreparedLineage,
     ) -> Result<(), SessionError> {
-        if self.document.sessions.contains_key(&prepared.session_id) {
+        self.discard_private_session_id(&prepared.session_id)
+    }
+    pub(crate) fn discard_prepared_node(
+        &self,
+        prepared: &super::PreparedLineage,
+    ) -> Result<(), SessionError> {
+        let session = self
+            .document
+            .sessions
+            .get(&prepared.session_id)
+            .ok_or_else(|| SessionError::UnknownSession {
+                session_id: prepared.session_id.clone(),
+            })?;
+        if session
+            .nodes
+            .values()
+            .any(|n| n.conversation_id == prepared.conversation_id)
+        {
+            return Err(SessionError::Catalog {
+                detail: "cannot discard a published node".into(),
+            });
+        }
+        let database = self.database_path(&prepared.session_id, &prepared.conversation_id);
+        let directory = database.parent().expect("conversation parent");
+        let directory = self
+            .product
+            .confined(directory)
+            .map_err(|e| SessionError::Catalog {
+                detail: e.to_string(),
+            })?;
+        match std::fs::remove_dir_all(&directory) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(SessionError::Catalog {
+                    detail: e.to_string(),
+                });
+            }
+        }
+        File::open(directory.parent().expect("conversations root"))
+            .and_then(|f| f.sync_all())
+            .map_err(|e| SessionError::Catalog {
+                detail: e.to_string(),
+            })
+    }
+    fn discard_private_session_id(&self, id: &SessionId) -> Result<(), SessionError> {
+        if self.document.sessions.contains_key(id) {
             return Err(SessionError::Catalog {
                 detail: "cannot discard a published Session".into(),
             });
         }
         let path = self
             .product
-            .confined(&self.root.join(prepared.session_id.as_str()))
+            .confined(&self.root.join(id.as_str()))
             .map_err(|e| SessionError::Catalog {
                 detail: e.to_string(),
             })?;
@@ -686,7 +759,7 @@ impl SessionCatalog {
     pub(crate) fn claim_upload_preparation(
         &mut self,
         id: &SessionId,
-        workspace: &Path,
+        workspaces: &[PathBuf],
     ) -> Result<(), SessionError> {
         if self.document.sessions.contains_key(id)
             || self.document.upload_preparations.contains_key(id)
@@ -697,7 +770,7 @@ impl SessionCatalog {
         }
         let mut next = self.document.clone();
         next.upload_preparations
-            .insert(id.clone(), vec![workspace.to_path_buf()]);
+            .insert(id.clone(), workspaces.to_vec());
         self.commit(next)
     }
     pub(crate) fn finish_upload_preparation(&mut self, id: &SessionId) -> Result<(), SessionError> {
@@ -708,35 +781,63 @@ impl SessionCatalog {
         next.upload_preparations.remove(id);
         self.commit(next)
     }
-    /// Root controller admission proves no preparation task survived this process.
-    /// Recovery consumes only its frozen allocation claims, never workspace scans.
+    /// Frozen workspace roots and the identity-derived private Session allocation
+    /// form one cleanup workset. No metadata is consumed by this operation.
+    pub(crate) fn cleanup_upload_preparation(&self, id: &SessionId) -> Result<(), SessionError> {
+        #[cfg(test)]
+        if self
+            .preparation_cleanup_fault
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(SessionError::Catalog {
+                detail: "injected private upload cleanup failure".into(),
+            });
+        }
+        let roots =
+            self.document
+                .upload_preparations
+                .get(id)
+                .ok_or_else(|| SessionError::Catalog {
+                    detail: "missing private preparation authority".into(),
+                })?;
+        for workspace in roots {
+            cleanup(workspace, id).map_err(|e| SessionError::Catalog {
+                detail: e.to_string(),
+            })?;
+        }
+        self.discard_private_session_id(id)
+    }
+    pub(crate) fn claim_upload_workspace(
+        &mut self,
+        id: &SessionId,
+        workspace: &Path,
+    ) -> Result<(), SessionError> {
+        validate_workspace(workspace).map_err(|e| SessionError::Catalog {
+            detail: e.to_string(),
+        })?;
+        let mut next = self.document.clone();
+        let roots = next
+            .upload_preparations
+            .get_mut(id)
+            .ok_or_else(|| SessionError::Catalog {
+                detail: "missing private preparation authority".into(),
+            })?;
+        if !roots.contains(&workspace.to_path_buf()) {
+            roots.push(workspace.to_path_buf());
+        }
+        self.commit(next)
+    }
+    /// Root admission retries exactly the frozen workset. Only successful cleanup
+    /// permits the durable claim to be consumed.
     pub(crate) fn recover_upload_preparations(&mut self) -> Result<(), SessionError> {
-        for (id, workspaces) in self.document.upload_preparations.clone() {
-            for workspace in workspaces {
-                cleanup(&workspace, &id).map_err(|e| SessionError::Catalog {
-                    detail: e.to_string(),
-                })?;
-            }
-            let private = self
-                .product
-                .confined(&self.root.join(id.as_str()))
-                .map_err(|e| SessionError::Catalog {
-                    detail: e.to_string(),
-                })?;
-            match std::fs::remove_dir_all(private) {
-                Ok(()) => {}
-                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-                Err(e) => {
-                    return Err(SessionError::Catalog {
-                        detail: e.to_string(),
-                    });
-                }
-            }
-            File::open(&self.root)
-                .and_then(|f| f.sync_all())
-                .map_err(|e| SessionError::Catalog {
-                    detail: e.to_string(),
-                })?;
+        for id in self
+            .document
+            .upload_preparations
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+        {
+            self.cleanup_upload_preparation(&id)?;
             self.finish_upload_preparation(&id)?;
         }
         Ok(())
@@ -748,7 +849,6 @@ pub(super) fn validate_preparations(document: &super::CatalogDocument) -> Result
         super::validate_id(id.as_str(), "prepared upload Session")?;
         if document.sessions.contains_key(id)
             || document.deletions.contains_key(id)
-            || roots.is_empty()
             || roots.iter().any(|root| {
                 !root.is_absolute()
                     || root.components().any(|c| {

@@ -6,6 +6,15 @@ use crate::message::{
 use crate::model::input::ModelInputMessage;
 use serde::{Deserialize, Serialize};
 
+/// Core-owned, read-only resolution boundary. Implementations supply Session-owned
+/// paths; context/model code has no knowledge of their persistence.
+pub trait UploadProjectionResolver: std::fmt::Debug + Send + Sync {
+    /// Resolve only the upload facts needed by this finite model input.
+    /// # Errors
+    /// Unknown or unavailable ownership is explicit; no canonical facts are created.
+    fn resolve(&self, messages: &[ModelInputMessage]) -> Result<UploadProjection, String>;
+}
+
 /// Request-time paths, frozen separately from canonical history for replay.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UploadProjection {

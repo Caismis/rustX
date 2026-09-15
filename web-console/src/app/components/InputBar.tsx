@@ -4,7 +4,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { UPLOAD_MAX_BYTES, UPLOAD_BATCH_MAX_BYTES, DRAFT_MAX_FILES } from '../../client/uploads';
 import type { UploadReceipt, UploadedFile } from '../../../../protocol/app-server/v4';
-import { OutcomeUncertain } from '../../client/app-server';
+import { isOutcomeUncertain } from '../../client/app-server';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { Button } from '../../presentation/primitives/Button';
 import css from './InputBar.module.css';
@@ -21,7 +21,8 @@ export function InputBar({ disabled, busy, active, onSend, onUpload, onCancel }:
   const [dragging, setDragging] = useState(false);
   const pending = files.some(file => file.status !== 'complete');
   const pick = (picked: File[]) => {
-    if (!picked.length || transferring.current) return;
+    if (!picked.length) return;
+    if (transferring.current) { setError('Additional files were not added. Wait for the current upload to finish, then select them again.'); return; }
     if (files.length + picked.length > DRAFT_MAX_FILES || picked.some(file => file.size > UPLOAD_MAX_BYTES)
       || picked.reduce((sum, file) => sum + file.size, 0) > UPLOAD_BATCH_MAX_BYTES) { setError('Choose at most 8 files, 256 KiB each and 512 KiB per batch.'); return; }
     const batch: DraftFile[] = picked.map(file => ({ id: nextId.current++, file, status: 'uploading' }));
@@ -35,7 +36,7 @@ export function InputBar({ disabled, busy, active, onSend, onUpload, onCancel }:
       }));
     }).catch(cause => {
       setFiles(current => current.map(file => batch.some(item => item.id === file.id)
-        ? { ...file, status: cause instanceof OutcomeUncertain ? 'uncertain' : 'failed', error: String(cause) } : file));
+        ? { ...file, status: isOutcomeUncertain(cause) ? 'uncertain' : 'failed', error: String(cause) } : file));
     }).finally(() => { transferring.current = false; });
   };
   const [draft, setDraft] = useState('');
@@ -49,7 +50,7 @@ export function InputBar({ disabled, busy, active, onSend, onUpload, onCancel }:
     onDrop={event => { event.preventDefault(); setDragging(false); if (!disabled && !busy) pick(Array.from(event.dataTransfer.files)); }}>
     {dragging && <div className="attachment-drop" role="status">Drop attachments · 8 files · 256 KiB each</div>}
     {error && <p role="alert">{error}</p>}
-    <div className="attachment-rail" aria-label="Draft attachments">{files.map(item => <div key={item.id}><DraftAttachment file={item.file} remove={() => setFiles(current => current.filter(file => file.id !== item.id))} /><small role="status">{item.status === 'complete' ? 'Uploaded' : item.status === 'uploading' ? 'Uploading…' : item.status === 'uncertain' ? 'Upload outcome uncertain. Remove selection; no automatic replay.' : item.error}</small></div>)}</div>
+    <div className="attachment-rail" aria-label="Draft attachments">{files.map(item => <div key={item.id}><DraftAttachment file={item.file} remove={() => setFiles(current => current.filter(file => file.id !== item.id))} /><small role="status">{item.status === 'complete' ? 'Uploaded' : item.status === 'uploading' ? 'Uploading…' : item.status === 'uncertain' ? 'Upload outcome uncertain. Reconnect and inspect authoritative state; do not replay.' : item.error}</small></div>)}</div>
     <div className={css.card} data-composer-card>
       <div className={css.scroll}><div className={css.grow}>
         <textarea className={css.input} aria-label="Message" placeholder="Give this Session a task…"

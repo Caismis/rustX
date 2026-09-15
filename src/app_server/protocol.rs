@@ -6,7 +6,6 @@
 use serde::{Deserialize, Serialize};
 
 use crate::local_runtime::session::{SessionId, SessionNodeId, SessionPersistentState};
-use crate::message::types::UserContentBlock;
 use crate::runtime::identity::{ConversationId, MessageId};
 use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
@@ -79,13 +78,7 @@ pub struct UploadBytes {
     pub name: String,
     pub data: String,
 }
-/// Clients author text and reference completed server receipts only.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum UserInputBlock {
-    Text(crate::message::content::TextBlock),
-    Upload(crate::local_runtime::session::uploads::UploadReceipt),
-}
+pub use crate::local_runtime::session::uploads::UserInputBlock;
 
 /// A single public method space, with no nested Runtime Client envelope.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -423,7 +416,7 @@ pub enum MethodResult {
     },
     SessionTransition {
         session: crate::local_runtime::session::SessionSnapshot,
-        editor_content: Option<Vec<UserContentBlock>>,
+        editor_content: Option<Vec<crate::local_runtime::session::uploads::UserInputBlock>>,
         durability_diagnostic: Option<String>,
     },
     Sessions {

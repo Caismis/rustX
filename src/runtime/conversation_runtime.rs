@@ -1863,7 +1863,7 @@ impl RuntimeInner {
             Arc::clone(&self.monotonic_clock),
         )?;
         if let Some(owner) = &self.tool_runtime.uploads {
-            context.engine.set_upload_owner(owner.clone());
+            context.engine.set_upload_resolver(owner.clone());
         }
         Ok(context)
     }

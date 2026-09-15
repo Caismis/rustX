@@ -63,6 +63,9 @@ interface Pending {
 export class OutcomeUncertain extends Error {
   constructor() { super('Response lost after transmission. Outcome uncertain; the request was not replayed. Reconnect and inspect authoritative state.'); }
 }
+export function isOutcomeUncertain(error: unknown): boolean {
+  return error instanceof OutcomeUncertain || (error instanceof RpcFailure && error.error.data?.kind === "committed_durability_uncertain");
+}
 export class RpcFailure extends Error {
   constructor(readonly error: Extract<Response, { error: unknown }>['error']) { super(`${error.message} (${error.code})${error.data ? `: ${JSON.stringify(error.data)}` : ''}`); }
 }

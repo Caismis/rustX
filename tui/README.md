@@ -956,3 +956,7 @@ See [Session-owned workspace uploads](../docs/session-uploads.md) for receipt ad
 
 Canonical workspace uploads render their typed basenames in the transcript.
 The TUI does not parse model XML or assume client filesystem paths exist remotely.
+
+Fork/tree restoration retains ordered upload receipts with the exact draft text.
+The composer reports restored uploads and submits native receipts with the draft;
+it never assumes a source or client filesystem path exists on the target host.

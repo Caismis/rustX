@@ -1146,7 +1146,7 @@ pub enum RuntimeClientResult {
         session: SessionView,
         /// Optional uncommitted editor content restored by fork/tree branch.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        editor_content: Option<Vec<UserContentBlock>>,
+        editor_content: Option<Vec<crate::local_runtime::session::uploads::UserInputBlock>>,
         /// Whether the client must reattach to compose the selected lineage.
         restart_required: bool,
     },
@@ -1161,7 +1161,7 @@ pub enum RuntimeClientResult {
         session: SessionView,
         /// Optional uncommitted editor content restored by fork/tree branch.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        editor_content: Option<Vec<UserContentBlock>>,
+        editor_content: Option<Vec<crate::local_runtime::session::uploads::UserInputBlock>>,
         /// Bounded diagnostic for the replacement path.
         diagnostic: String,
     },
@@ -1597,9 +1597,11 @@ mod tests {
                 active_conversation_id: ConversationId::new("conversation-2"),
                 node_count: 1,
             },
-            editor_content: Some(vec![UserContentBlock::Text(TextBlock {
-                text: "fork-draft-exact-7f3b".to_owned(),
-            })]),
+            editor_content: Some(vec![
+                crate::local_runtime::session::uploads::UserInputBlock::Text(TextBlock {
+                    text: "fork-draft-exact-7f3b".to_owned(),
+                }),
+            ]),
             diagnostic: "catalog visibility committed; durability uncertain".to_owned(),
         };
         let value = serde_json::to_value(&result).expect("serialize transition result");

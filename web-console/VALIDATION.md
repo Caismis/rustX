@@ -1,5 +1,9 @@
 # Issue #319: Session-owned workspace uploads
 
+The [PR #320 correction record](../docs/pr-320-review-validation.md) supersedes
+the initial validation for cleanup, editor restoration, resolution layering, and
+committed upload uncertainty.
+
 See the [complete validation record](../docs/issue-319-validation.md) and
 [upload contract](../docs/session-uploads.md). Web sends native receipts; typed
 canonical metadata rebuilds transcript attachments after reconnect. The browser

@@ -1129,9 +1129,11 @@ impl LocalConversationCore {
                         detail: format!("{error:?}"),
                     })?;
 
-            tool_runtime.uploads = Some(super::session::uploads::SessionUploadOwner::new(
-                &product_root,
-                conversation_id.clone(),
+            tool_runtime.uploads = Some(Arc::new(
+                super::session::uploads::SessionUploadResolver::new(
+                    &product_root,
+                    conversation_id.clone(),
+                ),
             ));
 
             // 7-8. The base tool registry with the explicit native composition,

@@ -665,3 +665,10 @@ a represented semantic prefix and native lifecycle snapshot on live hosts, witho
 folding observations or changing the live cursor. Inactive durable inspection
 captures its own SQLite frontier and has no live publication boundary.
 This remains mandatory protocol v4; no compatibility path is provided.
+
+### Fork editor input
+
+Session transitions return `editor_content` as ordered `UserInputBlock` values,
+ready for `turn/start`: exact text plus server-issued upload receipts. Independent
+forks copy editor-boundary uploads before publication; same-Session branches share
+Session ownership. This finalizes the v4 contract in the unmerged upload change.

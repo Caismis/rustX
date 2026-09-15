@@ -1698,6 +1698,15 @@ async fn workspace_upload_receipt_admission_and_model_projection_use_one_owner()
         assert!(canonical.contains("uploaded_file"));
         assert!(!canonical.contains(&files[0].path));
         assert!(!canonical.contains("artifact_id"));
+        // Replay must not consult current ownership metadata, even if it changes.
+        let controller = f.manager.session_controller();
+        let mut registry = controller.catalog.lock().await.upload_registry(&target.session_id).unwrap();
+        registry.allocations.get_mut(&files[0].file.batch_id).unwrap().workspace = f.workspaces[1].clone();
+        controller.catalog.lock().await.commit_uploads(&target.session_id, registry).unwrap();
+        let reconstructed = snapshots[0].reconstruct_from_canonical(&history).unwrap();
+        let frozen = serde_json::to_string(&reconstructed.messages).unwrap();
+        assert!(frozen.contains(&files[0].path));
+        assert!(!frozen.contains(f.workspaces[1].to_str().unwrap()));
         f.gates[0].release();
         connection.close(); f.close().await;
     }).await;
@@ -1767,6 +1776,145 @@ async fn lost_upload_waiter_does_not_cancel_or_replay_the_owned_commit() {
             1
         );
         assert!(f.provider.request_bodies().is_empty());
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn restored_destination_receipts_admit_a_turn_after_source_deletion() {
+    bounded(async {
+        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::local_runtime::session::uploads::UploadFile;
+        use crate::message::types::{
+            InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+        };
+        let f = Fixture::new().await;
+        let controller = f.manager.session_controller();
+        let source = &f.sessions[0];
+        let files = controller
+            .upload(
+                &source.id,
+                None,
+                vec![
+                    UploadFile {
+                        name: "A.txt".into(),
+                        bytes: b"A".to_vec(),
+                    },
+                    UploadFile {
+                        name: "B.txt".into(),
+                        bytes: b"B".to_vec(),
+                    },
+                ],
+            )
+            .await
+            .unwrap();
+        let body = "request-A\n preserve body  \n";
+        let access = controller.acquire_session(&source.id, None).await.unwrap();
+        let store = SqliteConversationStore::open(
+            source.active_conversation_id.clone(),
+            &access.database_path,
+        )
+        .unwrap();
+        store
+            .append_canonical(&MessageBlock::User(UserMessageBlock {
+                id: crate::runtime::identity::MessageId::new("boundary"),
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+                content: vec![
+                    UserContentBlock::UploadedFile(files[0].file.clone()),
+                    UserContentBlock::Text(crate::message::content::TextBlock {
+                        text: body.into(),
+                    }),
+                    UserContentBlock::UploadedFile(files[1].file.clone()),
+                ],
+            }))
+            .unwrap();
+        let revision = store.load_head().unwrap().revision;
+        drop(store);
+        drop(access);
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let MethodResult::SessionTransition {
+            session: destination,
+            editor_content: Some(editor),
+            ..
+        } = call(
+            &connection,
+            1100,
+            Method::SessionFork {
+                session_id: source.id.clone(),
+                node_id: None,
+                surface_revision: revision,
+                boundary: Some(crate::runtime::identity::MessageId::new("boundary")),
+            },
+        )
+        .await
+        else {
+            panic!("fork with editor receipts");
+        };
+        let crate::local_runtime::session::deletion::SessionDeleteResult::Preview { preview } =
+            controller.delete_preview(&source.id).await
+        else {
+            panic!("preview");
+        };
+        controller
+            .delete_session(&source.id, &preview.target_revision)
+            .await
+            .unwrap();
+        let target = attach_session(&connection, &destination).await;
+        rejected(
+            &connection,
+            Method::TurnStart {
+                target: target.clone(),
+                content: vec![UserInputBlock::Upload(files[0].receipt.clone())],
+            },
+        )
+        .await;
+        let [
+            UserInputBlock::Upload(a),
+            UserInputBlock::Text(text),
+            UserInputBlock::Upload(b),
+        ] = &editor[..]
+        else {
+            panic!("ordered editor");
+        };
+        assert_eq!(a.session_id, destination.id);
+        assert_eq!(b.session_id, destination.id);
+        assert_eq!(text.text, body);
+        call(
+            &connection,
+            1101,
+            Method::TurnStart {
+                target,
+                content: editor,
+            },
+        )
+        .await;
+        f.gates[0].wait_entered().await;
+        let request: serde_json::Value =
+            serde_json::from_str(&f.provider.request_bodies()[0]).unwrap();
+        let input = request["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find_map(|m| {
+                m["content"][0]["text"]
+                    .as_str()
+                    .filter(|s| s.contains("user_uploaded_files"))
+            })
+            .unwrap();
+        assert!(input.ends_with(body));
+        assert!(input.find("A.txt").unwrap() < input.find("B.txt").unwrap());
+        assert!(input.contains(&format!("/uploads/{}/", destination.id.as_str())));
+        assert!(!input.contains(&format!("/uploads/{}/", source.id.as_str())));
+        f.gates[0].release();
+        connection.close();
+        f.manager
+            .unload(&destination.active_conversation_id)
+            .await
+            .unwrap();
         f.close().await;
     })
     .await;

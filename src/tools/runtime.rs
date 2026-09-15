@@ -298,7 +298,7 @@ impl ConversationRuntimeConfig {
 /// replaced.
 #[derive(Clone)]
 pub struct ConversationToolRuntime {
-    pub(crate) uploads: Option<crate::local_runtime::session::uploads::SessionUploadOwner>,
+    pub(crate) uploads: Option<Arc<dyn crate::model::uploads::UploadProjectionResolver>>,
     workflows: crate::runtime::workflow::read_model::WorkflowReadModel,
     conversation_id: ConversationId,
     workspace: Workspace,

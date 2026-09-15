@@ -377,7 +377,7 @@ impl EstimateCorrection {
 /// The deterministic context engine.
 #[derive(Clone)]
 pub struct ContextEngine {
-    uploads: Option<crate::local_runtime::session::uploads::SessionUploadOwner>,
+    uploads: Option<Arc<dyn crate::model::uploads::UploadProjectionResolver>>,
     config: ContextConfig,
     estimator: Arc<dyn TokenEstimator>,
 }
@@ -421,9 +421,9 @@ impl ContextEngine {
         })
     }
 
-    pub(crate) fn set_upload_owner(
+    pub(crate) fn set_upload_resolver(
         &mut self,
-        owner: crate::local_runtime::session::uploads::SessionUploadOwner,
+        owner: Arc<dyn crate::model::uploads::UploadProjectionResolver>,
     ) {
         self.estimator = Arc::new(UploadEstimator {
             inner: self.estimator.clone(),
@@ -436,7 +436,7 @@ impl ContextEngine {
         messages: &mut [ModelInputMessage],
     ) -> Result<crate::model::uploads::UploadProjection, ContextError> {
         let projection = match &self.uploads {
-            Some(owner) => owner.projection(messages).map_err(|e| malformed(&e))?,
+            Some(owner) => owner.resolve(messages).map_err(|e| malformed(&e))?,
             None => crate::model::uploads::UploadProjection::default(),
         };
         projection.apply(messages).map_err(|e| malformed(&e))?;
@@ -1156,7 +1156,7 @@ fn cannot_fit(
 
 struct UploadEstimator {
     inner: Arc<dyn TokenEstimator>,
-    owner: crate::local_runtime::session::uploads::SessionUploadOwner,
+    owner: Arc<dyn crate::model::uploads::UploadProjectionResolver>,
 }
 impl TokenEstimator for UploadEstimator {
     fn estimate_input(
@@ -1166,7 +1166,7 @@ impl TokenEstimator for UploadEstimator {
         tools: &[ModelToolDefinition],
     ) -> u64 {
         let mut rendered = messages.to_vec();
-        let Ok(projection) = self.owner.projection(messages) else {
+        let Ok(projection) = self.owner.resolve(messages) else {
             return u64::MAX;
         };
         if projection.apply(&mut rendered).is_err() {
@@ -1176,7 +1176,7 @@ impl TokenEstimator for UploadEstimator {
     }
     fn estimate_conversation_input(&self, messages: &[MessageBlock]) -> u64 {
         let mut rendered = canonical_input(messages);
-        let Ok(projection) = self.owner.projection(&rendered) else {
+        let Ok(projection) = self.owner.resolve(&rendered) else {
             return u64::MAX;
         };
         if projection.apply(&mut rendered).is_err() {

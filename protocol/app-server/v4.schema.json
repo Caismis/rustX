@@ -3030,7 +3030,7 @@
                 "null"
               ],
               "items": {
-                "$ref": "#/$defs/UserContentBlock"
+                "$ref": "#/$defs/UserInputBlock"
               }
             },
             "durability_diagnostic": {

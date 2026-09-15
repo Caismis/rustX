@@ -657,7 +657,7 @@ export type MethodResult =
     }
   | {
       session: SessionSnapshot;
-      editor_content?: UserContentBlock[] | null;
+      editor_content?: UserInputBlock[] | null;
       durability_diagnostic?: string | null;
       type: 'session_transition';
     }

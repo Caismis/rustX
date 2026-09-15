@@ -72,6 +72,8 @@ Neither file bytes nor system-prompt changes enter this projection. Images use
 this same filesystem contract without requiring provider-native image modality.
 The model uses ordinary native filesystem tools with the absolute paths.
 
+Local Runtime supplies the core-owned `UploadProjectionResolver` capability;
+Context Engine and Tool runtime know no catalog path or persistence implementation.
 Context estimates apply the same rendering before measuring input and retained
 conversation budgets. Provider adapters contain no upload XML logic. Request
 Snapshots freeze resolved paths separately from canonical identity so historical
@@ -80,18 +82,33 @@ request replay does not consult changing workspace state.
 ## Fork, branch and cleanup
 
 Same-Session branches reuse the registry and perform no file copies. Independent
-fork/clone scans exactly the prepared canonical historical cut, copies only its
-referenced current file bytes into destination-owned allocations, and preserves
-batch/basename identities. Copies and durability barriers complete before the
-existing catalog publication boundary. Copied files are checked again for safe
-regular-file access immediately before publication. A missing required source fails before
-visibility; staged destination residue is removed. Private copy allocations are
-claimed durably before copying and abandoned claims are recovered by the root
-Session controller and local CLI startup from their exact frozen workset.
+fork/clone scans exactly the prepared canonical Ledger cut plus the selected User
+message restored into the editor. It copies only those required current file bytes
+into destination-owned allocations, preserving batch/basename identities. Copies
+and durability barriers complete before the existing catalog publication boundary.
+A missing required source fails before visibility.
 
-The selected fork boundary prompt is outside the copied cut. Existing text-only
-editor restoration returns its text; it does not copy or manufacture attachment
-receipts for excluded history. A client can upload new files before resubmission.
+The selected boundary is outside destination history but is returned faithfully as
+ordered `UserInputBlock` draft input: text and destination-issued upload receipts.
+Its uploads therefore belong to the destination before publication too. Source
+receipts cannot be reused in the destination. Same-Session branch drafts receive
+receipts from the shared Session registry. The TUI preserves those receipts and
+exact restored text through later submission; no client invents canonical facts.
+
+Every private independent Session preparation has one durable claim. Its Session ID
+owns the native private Session/conversation allocation; its frozen workspace list
+owns destination uploads (the list may be empty). Low-level copying never cleans
+or consumes claims. The controller cleans the complete frozen workset outside the
+catalog mutex, and only successful cleanup permits claim removal. Cleanup failure
+returns both operation and cleanup errors while retaining the claim. App Server
+and local CLI startup retry that same workset. Publication atomically consumes the
+claim into the visible Session.
+
+Same-Session branch publication failure has a different cleanup owner: it removes
+only the unpublished conversation directory. It never discards the existing
+Session or touches shared uploads. Pre-rename failure retains its original
+`NotCommitted` semantics; post-rename visibility returns the authoritative node
+and durability diagnostic without unpublished cleanup.
 
 Publication transfers the prepared upload registry into the destination Session
 atomically. Source deletion cannot invalidate the destination. Uploads are mutable

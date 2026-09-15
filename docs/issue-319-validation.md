@@ -1,4 +1,7 @@
-# Issue #319 validation
+# Issue #319 initial implementation validation
+
+This records the original PR implementation. See [PR #320 review corrections](pr-320-review-validation.md)
+for the corrected lifecycle/editor contracts and final validation.
 
 ## Repository and scope
 

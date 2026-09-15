@@ -127,3 +127,39 @@ it('Blob uses safe authoritative MIME while semantic image bytes may omit MIME',
   }
   resources.dispose(); expect(revoke).toHaveBeenCalledTimes(3);
 });
+
+it('committed durability uncertainty remains an uncertain draft without replay', async () => {
+  await server.attached('A'); server.held.add('session/upload');
+  const send = vi.fn(async () => true);
+  const ui = render(<InputBar disabled={false} busy={false} active={false} onUpload={files => server.client.upload('A', files)} onSend={send} onCancel={() => {}} />);
+  const file = new File(['x'], 'file.txt'); Object.defineProperty(file, 'arrayBuffer', { value: async () => new Uint8Array([1]).buffer });
+  await act(async () => fireEvent.change(ui.getByLabelText('Attach files'), { target: { files: [file] } }));
+  const request = await server.waitFor('session/upload', 1);
+  await act(async () => server.socket.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'Operation rejected', data: { kind: 'committed_durability_uncertain' } } }));
+  expect(ui.getByText(/Upload outcome uncertain. Reconnect/)).toBeTruthy();
+  expect((ui.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(send).not.toHaveBeenCalled();
+  expect(server.requests.filter(item => item.request.method === 'session/upload')).toHaveLength(1);
+});
+
+
+it.each(['picker', 'drop', 'paste'] as const)('explicitly refuses a second %s selection during an active upload', async source => {
+  let finish!: (files: UploadedFile[]) => void;
+  const first = new Promise<UploadedFile[]>(resolve => { finish = resolve; });
+  const upload = vi.fn().mockReturnValueOnce(first).mockResolvedValueOnce([completed('second.txt', 'two')]);
+  const ui = render(<InputBar disabled={false} busy={false} active={false} onUpload={upload} onSend={vi.fn()} onCancel={() => {}} />);
+  const a = new File(['a'], 'first.txt'), b = new File(['b'], 'second.txt');
+  fireEvent.change(ui.getByLabelText('Attach files'), { target: { files: [a] } });
+  if (source === 'picker') fireEvent.change(ui.getByLabelText('Attach files'), { target: { files: [b] } });
+  if (source === 'drop') fireEvent.drop(ui.container.firstElementChild!, { dataTransfer: { files: [b] } });
+  if (source === 'paste') fireEvent.paste(ui.getByLabelText('Message'), { clipboardData: { files: [b] } });
+  expect(ui.getByRole('alert').textContent).toContain('Additional files were not added');
+  expect(upload).toHaveBeenCalledTimes(1);
+  expect(ui.queryByRole('button', { name: 'Remove second.txt' })).toBeNull();
+  await act(async () => finish([completed('first.txt', 'one')]));
+  expect(upload).toHaveBeenCalledTimes(1);
+  await act(async () => fireEvent.change(ui.getByLabelText('Attach files'), { target: { files: [b] } }));
+  expect(upload).toHaveBeenCalledTimes(2);
+  expect(ui.getByRole('button', { name: 'Remove second.txt' })).toBeTruthy();
+  expect(ui.queryByRole('alert')).toBeNull();
+});

@@ -107,3 +107,7 @@ can remain separately inspector-visible and receive native lifecycle repairs.
 
 See [Native Trace](../docs/trace.md) for server projection ownership, request/retry
 grouping, current snapshot repair, redaction and deliberate inspector omissions.
+
+Upload uncertainty includes typed `committed_durability_uncertain` RPC failures,
+as well as response loss. Such drafts remain uncertain and require reconciliation
+through authoritative state/reconnect; no mutation is automatically replayed.

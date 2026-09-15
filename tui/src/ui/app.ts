@@ -67,6 +67,7 @@ import {
 import { correlateTools } from "../presentation/tools.ts";
 import { selectTodos } from "../presentation/todos.ts";
 import type { PresentationState } from "../presentation/state.ts";
+import { editorText, editorSubmission } from "../app-server/editor.ts";
 import { AppServerRequestError } from "../app-server/client.ts";
 import type { AppServerHost } from "../app-server/host.ts";
 import type { AppServerSession } from "../app-server/session.ts";
@@ -78,7 +79,7 @@ import type {
   SessionView,
   ToolCallId,
   InteractionRef,
-  UserContentBlock,
+  UserInputBlock,
 } from "../protocol/app-server.ts";
 import {
   BoundarySelector,
@@ -200,6 +201,8 @@ export class RustxTuiApp {
     conversation: this.#conversationContext(),
   }));
   readonly #editor: Editor;
+  #restoredEditor: UserInputBlock[] | undefined;
+  readonly #restoredUploads = new Text("", 0, 0);
   readonly #loader: Loader;
 
   #preferences: PresentationPreferences = defaultPreferences();
@@ -275,6 +278,7 @@ export class RustxTuiApp {
     this.#tui.addChild(this.#transient);
     this.#tui.addChild(this.#todos);
     this.#tui.addChild(new Spacer(1));
+    this.#tui.addChild(this.#restoredUploads);
     this.#tui.addChild(this.#editor);
     this.#tui.addChild(this.#footer);
 
@@ -411,7 +415,7 @@ export class RustxTuiApp {
   async #focusSession(
     sessionId: string,
     nodeId: string | undefined,
-    editorContent: UserContentBlock[] | undefined,
+    editorContent: UserInputBlock[] | undefined,
     notice: string | undefined,
     lease: PresentationLease,
     confirmedNodeChange = false,
@@ -457,9 +461,10 @@ export class RustxTuiApp {
         await next.resync();
       }
       if (this.#session !== next || this.#host.client.closed !== undefined) return;
-      if (editorContent !== undefined) {
-        this.#editor.setText(editorText(editorContent));
-      }
+      this.#restoredEditor = editorContent;
+      const uploads = editorContent?.filter(block => block.type === "upload").length ?? 0;
+      this.#restoredUploads.setText(uploads ? `${uploads} restored uploaded file(s) will be sent with this draft.` : "");
+      if (editorContent !== undefined) this.#editor.setText(editorText(editorContent));
       this.#showTransient("info", notice ?? `showing session ${sessionId}`);
       this.#renderState(next.state);
     } catch (error: unknown) {
@@ -647,7 +652,18 @@ export class RustxTuiApp {
     if (this.#session === undefined || this.#switching || this.#finished) return;
     const lease = this.#presentationLease();
     const line = text.trim();
-    if (line.length === 0) {
+    if (line.length === 0 && !this.#restoredEditor?.some(block => block.type === "upload")) return;
+    if (this.#restoredEditor !== undefined && !line.startsWith("/")) {
+      try {
+        await this.#session.submitInbound(editorSubmission(this.#restoredEditor, text));
+        if (this.#isCurrentPresentationLease(lease)) {
+          this.#restoredEditor = undefined;
+          this.#restoredUploads.setText("");
+          this.#editor.setText("");
+        }
+      } catch (error) {
+        if (this.#isCurrentPresentationLease(lease)) this.#showTransient("error", `draft admission failed: ${compactDiagnostic(error)}`);
+      }
       return;
     }
     this.#editor.addToHistory(text);
@@ -1780,18 +1796,6 @@ export class RustxTuiApp {
     }
     resolve(code);
   }
-}
-
-function editorText(content: UserContentBlock[] | undefined): string {
-  const nonText = (content ?? []).find((block) => block.type !== "text");
-  if (nonText !== undefined) {
-    throw new Error(
-      `fork/tree editor restoration does not support ${nonText.type} content yet`,
-    );
-  }
-  return (content ?? [])
-    .map((block) => (block.type === "text" ? block.text : ""))
-    .join("\n");
 }
 
 function sameSessionLineage(expected: SessionView, actual: SessionView): boolean {
