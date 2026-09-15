@@ -183,10 +183,11 @@ The log is disposable diagnostics, never durable history. No fetch or remote
 telemetry is used by it.
 
 Supported native gestures: list/create/open, delete preview and revision-checked
-delete, start/steer/cancel, answer/decline/cancel interactions, resync, detach,
-unload/cold attach, disconnect/reconnect. No workspace manager, editor, terminal,
-provider setup, file navigation/upload, Harness commands, queue/retry, fork,
-policy preset, plugin controls or unsupported status actions remain. Conversation
+delete, one Send/Queue delivery action and cancel, Goal pause/resume/edit,
+answer/decline/cancel interactions, resync, detach, unload/cold attach,
+disconnect/reconnect. No workspace manager, editor, terminal, provider setup, file
+navigation, Harness commands, client-owned queue editing or retry, fork, policy
+preset, plugin controls or unsupported status actions remain. Conversation
 text remains plain text in native projections. Assistant text uses the incremental
 Markdown foundation; reasoning/Tool/other blocks retain disclosures. Image loading
 and paginated transcript products belong to later WEB slices.

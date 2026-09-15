@@ -215,6 +215,30 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
     ]);
     expect(methods().filter(method => CONFIGURATION_WRITES.includes(method))).toEqual([]);
   });
+  it('a budget the protocol u32 cannot represent never reaches the wire; u32::MAX does', async () => {
+    await mount(withGoal(goal({ autonomous_rounds_consumed: 2 })));
+    fireEvent.click(goalButton('Edit round budget'));
+    const box = () => within(dock('Goal')).getByRole('spinbutton', { name: 'Autonomous round budget' });
+    const save = () => goalButton('Save round budget');
+    // Grammar failures, and positive integers beyond the wire `u32`, are refused
+    // locally. The huge decimal must not round, reach Infinity or become JSON null.
+    for (const value of ['', '0', '2.5', '1e3', '+12', '04', '4294967296', '4294967300', '9'.repeat(40), '1'.repeat(400)]) {
+      fireEvent.change(box(), { target: { value } });
+      expect(save()).toHaveProperty('disabled', true);
+      fireEvent.keyDown(box(), { key: 'Enter' });
+    }
+    expect(goalControls()).toEqual([]);
+    expect(methods()).not.toContain('goal/control');
+    // The exact maximum is representable: the browser sends it and the owner refuses it.
+    fireEvent.change(box(), { target: { value: '4294967295' } });
+    expect(save()).toHaveProperty('disabled', false);
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    expect((await within(dock('Goal')).findByRole('alert')).textContent).toBe('Invalid Goal transition or value');
+    expect(goalControls()).toEqual([{ action: 'mutate', expected: { id: 'goal-1', revision: '3' }, mutation: { action: 'budget', rounds: 4294967295 } }]);
+    // Serialized as the exact integer, never a rounded value or null.
+    const sent = server.requests.filter(item => item.request.method === 'goal/control').at(-1)!.request;
+    expect(JSON.stringify(sent)).toContain('"rounds":4294967295');
+  });
   it('a stale CAS refusal rereads authority, unlocks on the new observation and is never retried', async () => {
     await mount(withGoal(goal()));
     // A committed native write this client has not observed yet.

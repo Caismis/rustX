@@ -21,6 +21,18 @@ const BudgetGlyph = () => <svg width={14} height={14} viewBox="0 0 14 14" fill="
   <path d="M2.5 4h9M2.5 7h6M2.5 10h3.5" stroke="currentColor" strokeWidth="1.2" />
 </svg>;
 
+/** `GoalMutation::Budget.rounds` is a wire `u32`. The draft is parsed exactly,
+ * through `BigInt`, so a decimal the protocol integer cannot represent is refused
+ * here rather than after a lossy conversion: `Number` would silently round a large
+ * value, reach `Infinity`, and serialize as JSON `null`. This is representability
+ * only — GoalDomain still owns the range, the consumption floor and legality. */
+const U32_MAX = 0xffff_ffffn;
+function parseBudget(draft: string): number | undefined {
+  if (!/^[1-9]\d*$/.test(draft)) return undefined;
+  const parsed = BigInt(draft);
+  return parsed > U32_MAX ? undefined : Number(parsed);
+}
+
 const AWAITING: Record<Awaiting['kind'], string> = {
   applied: 'Goal control applied. Controls stay locked until the authoritative Goal state is reread.',
   rejected: 'Controls stay locked until the authoritative Goal state is reread.',
@@ -76,11 +88,19 @@ export function GoalDock({ state, observation, disabled, mutate }: {
     if (outcome.status === 'applied' && field) { returnFocus.current = field; setEditing(undefined); }
     if (outcome.status === 'uncertain' || !outcome.observed) setAwaiting({ at: latestObservation.current, kind: outcome.status });
   };
-  // Input grammar only. GoalDomain owns the budget range, consumption and transitions.
-  const draftValid = !!editing && (editing.field === 'objective' ? editing.draft.trim() !== '' : /^[1-9]\d*$/.test(editing.draft));
+  // Input grammar and wire representability only. GoalDomain owns the budget
+  // range, the consumption floor and transition legality.
+  const budgetRounds = editing?.field === 'budget' ? parseBudget(editing.draft) : undefined;
+  const draftValid = !!editing && (editing.field === 'objective' ? editing.draft.trim() !== '' : budgetRounds !== undefined);
   const save = () => {
-    if (!editing || !draftValid || locked) return;
-    void run(editing.field === 'objective' ? { action: 'edit', objective: editing.draft.trim() } : { action: 'budget', rounds: Number(editing.draft) }, editing.field);
+    if (!editing || locked) return;
+    if (editing.field === 'objective') {
+      const objective = editing.draft.trim();
+      if (objective) void run({ action: 'edit', objective }, 'objective');
+      return;
+    }
+    // A Budget mutation is constructed only from a losslessly representable value.
+    if (budgetRounds !== undefined) void run({ action: 'budget', rounds: budgetRounds }, 'budget');
   };
   const cancel = () => { if (!editing || pending) return; returnFocus.current = editing.field; setEditing(undefined); };
   const open = (field: Field) => { setError(undefined); setEditing({ field, draft: field === 'objective' ? goal.objective : String(goal.autonomous_round_budget) }); };

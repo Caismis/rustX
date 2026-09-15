@@ -98,11 +98,16 @@ Revision-only changes (autonomous round admission) keep an open draft; a change 
 the authoritative objective or budget drops the matching draft so it can never be
 written over content its author did not see.
 
-The browser validates only input grammar: a non-empty objective and a positive
-integer budget. The round-budget range, the consumption floor and transition
-legality belong to GoalDomain; a syntactically valid out-of-domain value is sent
-and its typed refusal is shown. Goal controls never write extension enablement,
-and disabling the extension deletes no Goal state.
+The browser validates only input grammar and protocol representability: a non-empty
+objective, and a budget that is a positive decimal integer the wire `u32` of
+`GoalMutation::Budget.rounds` can represent exactly. The draft is parsed through
+`BigInt` and refused above `4294967295`, so a value that would round, reach
+`Infinity` or serialize as JSON `null` never becomes a typed mutation.
+
+Everything semantic stays server-owned: the `1..=100` round-budget range, the
+consumption floor and transition legality belong to GoalDomain. A representable
+out-of-domain value is sent and its typed refusal is shown. Goal controls never
+write extension enablement, and disabling the extension deletes no Goal state.
 
 ### Queue and composer delivery
 
@@ -153,10 +158,17 @@ viewports. The real-server browser test measures the alignment at 1440px and 390
 
 ## Relationship to #319 / PR #320
 
-PR #320 (#319) replaces the ArtifactId user-upload path with Session-owned
-workspace uploads and moves the App Server protocol to v4. This slice wraps the
-existing `InputBar` without touching upload behaviour; its only composer changes
-are the single delivery action and removal of the `steer` send flag. It is built on
-`main` before #320 and must be rebased onto `main` after #320 merges, keeping v4
-`session/upload` receipts and this single delivery action, then revalidated. No
-v3/v4 or old/new upload compatibility path is added.
+PR #320 (#319) is merged. User uploads are Session-owned workspace uploads and the
+App Server protocol is **v4**; this slice is rebased onto that `main`. The stack
+wraps the existing `InputBar` without changing upload behaviour: a draft transfers
+through `session/upload` first, and the single delivery action carries the resulting
+typed `UploadReceipt`s as ordinary content.
+
+```text
+send(sessionId, text, uploadReceipts) -> turn/start { content: [upload…, text] }
+```
+
+There is no `steer` flag, no second send method, no `artifact/upload` user path and
+no v3/v4 or old/new upload compatibility path. Upload receipts are content only:
+they never participate in the accepted-`MessageId` identity contract above, and an
+uncertain upload leaves its draft card uncertain rather than being replayed.

@@ -581,11 +581,14 @@ projected drain. The detached-running/mailbox-preservation assertions are
 unchanged; no delay, retry or assertion weakening was added. This is the same
 COMMIT/publication distinction enforced by the production cut contract.
 
-## WEB-04 composer context docks (#307) — 2026-09-15
+## WEB-04 composer context docks (#307) — 2026-09-15; rebased 2026-09-16
 
-Base: `origin/main` `e256998f` (WEB-03 merged). The Harness checkout was reverified
-at `c291e7961a515f6d7af9304e7fd1d257929aef26`. Ownership is recorded in
-[COMPOSER.md](COMPOSER.md) and provenance in [PROVENANCE.md](PROVENANCE.md).
+Base: `origin/main` `289bd22e`. PR #320 (#319) is merged, so this slice sits on
+Session-owned workspace uploads and **App Server v4**. It was first validated on
+`e256998f` (WEB-03), then rebased onto `289bd22e` and revalidated end to end; every
+command below is the rebased-head run, not the pre-rebase one. The Harness checkout
+was reverified at `c291e7961a515f6d7af9304e7fd1d257929aef26`. Ownership is recorded
+in [COMPOSER.md](COMPOSER.md) and provenance in [PROVENANCE.md](PROVENANCE.md).
 
 ### Owner audit
 
@@ -596,9 +599,9 @@ at `c291e7961a515f6d7af9304e7fd1d257929aef26`. Ownership is recorded in
   GoalDomain names pause, resume, objective and budget as user controls.
 - Queue: `snapshot.inbound.pending` and `snapshot.attempt`. `turn/start` and
   `turn/steer` dispatch to the same native `submit_inbound`.
-- No App Server protocol, Rust owner or schema change. Generated v3 DTOs did not drift.
+- No App Server protocol, Rust owner or schema change. Generated v4 DTOs did not drift.
 
-### Deterministic evidence (`test/composer-context.test.tsx`, 25 tests)
+### Deterministic evidence (`test/composer-context.test.tsx`, 26 tests)
 
 Todo absent/empty/tasks and native order, deleted tombstones hidden, projection-only
 updates with historical `todo` Tool facts present, no Todo mutation or configuration
@@ -636,11 +639,20 @@ itself stays locked for unobserved applied/refused outcomes until a new observat
 lost response stays uncertain with one request; an obsolete result leaves the dock
 unlocked and silent.
 
-**Goal validation ownership.** The Web budget form accepts any positive integer; the
-hardcoded native ceiling and consumption floor were removed. The fixture refuses as
-GoalDomain does: 150 and a value below consumption are sent, refused with the typed
-reason and unlock after reread; the next deliberate value is applied. Source check
-confirms no `MAX_ROUND_BUDGET` remains in the dock.
+**Goal validation ownership and protocol representability.** The Web budget form owns
+input grammar and wire representability only; the hardcoded native ceiling and
+consumption floor stay removed. `GoalMutation::Budget.rounds` is a Rust `u32`
+(`src/goal.rs`), so the draft is parsed through `BigInt` and refused above
+`4294967295`: a syntactically positive integer the protocol integer cannot hold never
+becomes a typed mutation, and so can never round, reach `Infinity` or serialize as
+JSON `null`. Regressions: `''`, `'0'`, `'2.5'`, `'1e3'`, `'+12'`, `'04'`,
+`4294967296`, `4294967300`, and 40-digit and 400-digit decimals all leave the form
+invalid and emit no `goal/control` at all; `4294967295` is representable, so the
+browser sends it and the request serializes as exactly `"rounds":4294967295` for
+GoalDomain to refuse. The fixture still refuses as GoalDomain does: 150 and a value
+below consumption are sent, refused with the typed reason and unlock after reread;
+the next deliberate value is applied. Source check confirms no `MAX_ROUND_BUDGET`
+and no consumption floor remain in the dock.
 
 ### Real App Server acceptance (`test/e2e/composer.spec.ts`)
 
@@ -657,31 +669,78 @@ reload rebuild the same revision, Todo list and empty queue; alignment holds at
 1440px and 390px with no horizontal overflow. The provider scenario must be fully
 consumed, so no unexpected continuation round was admitted.
 
-### Commands (Linux, feature worktree)
+### Commands (Linux, rebased feature worktree)
+
+Every row below is a rebased-head run. The Rust rows are new for this slice: #320
+brought substantial Rust, runtime and protocol change into the base, so the contract
+and boundary suites were run here rather than deferred to CI on the grounds that
+this slice's own diff is Web-only.
 
 | Directory | Exact command | Result |
 | --- | --- | --- |
 | root | `cargo fmt --all -- --check` | Passed |
 | root | `git diff --check` | Passed |
+| root | `cargo clippy --all-targets --all-features -- -D warnings` | Passed |
 | root | `cargo build --bins` | Passed |
-| test-support/fake-provider | `uv run --frozen pytest` | 51 passed |
+| root | `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 2,849 passed; 0 failed; 1 ignored; 226 boundary tests filtered out |
+| root | `cargo test --test contracts --test provider --all-features` | 25 contracts + 166 provider passed; five opt-in live-provider tests ignored |
+| root | `cargo test --lib --all-features -- boundary_suites::` | 226 passed, 0 failed |
+| root | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance` | 401 passed, 0 failed: durable 116, process 52, subagent 53, tools 157, conformance 23 |
+| test-support/fake-provider | `uv sync --frozen`; `uv run --frozen pytest` | 51 passed |
 | protocol/app-server | `pnpm install --frozen-lockfile` | Passed |
-| protocol/app-server | `pnpm check` | Passed; no generated schema/TypeScript drift |
+| protocol/app-server | `pnpm check` | Passed; generated v4 schema/TypeScript showed no drift |
 | protocol/app-server | `pnpm typecheck` | Passed |
 | web-console | `pnpm install --frozen-lockfile` | Passed |
 | web-console | `pnpm typecheck` | Passed |
-| web-console | `pnpm test` | 177 passed, 15 files (corrected head) |
+| web-console | `pnpm test` | 181 passed, 15 files (26 composer-context tests) |
 | web-console | `pnpm check:provenance` | 64 source records and 100 production package notices passed |
 | web-console | `pnpm build` (via `pnpm test:e2e`) | Passed; existing non-fatal bundle-size advisory |
 | web-console | `RUSTX_BINARY=../target/debug/rustx pnpm test:e2e` | 7 passed against the real App Server, including `composer.spec.ts` |
 | tui | `pnpm install --frozen-lockfile` | Passed (required by web-console typecheck) |
 | tui | `pnpm typecheck` | Passed |
-| tui | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test` | 810 passed, zero skipped (corrected head) |
+| tui | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test` | 816 passed, zero skipped |
 
-The corrected head reran every row above: `pnpm test:e2e` again passed 7, including
-`composer.spec.ts`. PR #320 was still open and `origin/main` unchanged at
-`e256998f`, so this branch was not rebased; it must be rebased onto `main` after
-#320 merges and revalidated before merge.
+This is the Linux lane only; it makes no claim about the macOS-only
+platform-boundary job, which GitHub Actions runs on the pushed head.
 
-No Rust source changed, so the Rust contract/boundary suites were not rerun locally. `main`'s own latest macOS run (34975160232)
-fails in `runtime_client::python_capability`, independent of this diff.
+### Host-contention flake, recorded rather than waived
+
+One early local run of `cargo test --lib --bins --examples --all-features -- --skip
+boundary_suites::` reported `2848 passed; 1 failed` while the TUI integration suite
+and the browser e2e run — both of which spawn the real `rustx` binary and the
+provider emulator — were executing concurrently on the same host. Re-run alone, the
+identical command reports `2849 passed; 0 failed; 1 ignored; 226 filtered out`,
+matching `main`'s own CI at `289bd22e` exactly (2849 passed, 0 failed, 1 ignored,
+226 filtered) and so confirming the same test set. This branch changes no Rust
+source, manifest or toolchain — only `web-console/` and one fake-provider Python
+scenario — so the transient failure was host contention, not a branch regression.
+Nothing was retried until green, no test was skipped, weakened or excluded, and no
+sleep was added; GitHub Actions on the pushed head remains the authoritative gate.
+
+### Rebase onto App Server v4 `main`
+
+This branch was rebased onto `289bd22e` (PR #320 merged), and every row above is the
+rebased-head run, not the pre-rebase one. Conflicts were resolved by ownership rather
+than by taking either side wholesale:
+
+- `src/client/app-server.ts` keeps #320's `upload()` and receipt-carrying `send()`,
+  and #321's accepted-`MessageId` submissions, `settleSubmissions` and `controlGoal`
+  convergence. `send()` lost its `steer` flag and always calls `turn/start`.
+- `src/app/components/InputBar.tsx` keeps #320's upload lifecycle (transfer-refusal,
+  receipt retention, uncertain outcomes, paste/drop) and #321's single Send/Queue
+  action; the Steer button is gone.
+- `src/app/App.tsx` keeps `onUpload` wired through the `ComposerContextStack`.
+- `test/artifacts.test.tsx` keeps #320's `session/upload` tests; the deleted
+  `artifact/upload` modality-preflight tests were not resurrected.
+- `CHAT.md` keeps #320's attachment section.
+
+Every #321 import of `protocol/app-server/v3` moved to the post-#320 generated `v4`,
+including the two `retained_dependencies` records in `source-inventory.json`, which
+`pnpm check:provenance` re-verifies against each file's actual imports.
+`Submission.content` is now `UserInputBlock[]`, matching what `send()` actually
+builds. No v3/v4 or old/new upload compatibility path exists.
+
+Because #320 carries substantial Rust, runtime and protocol change, the full Rust
+contract and boundary suites were run locally on the rebased head rather than skipped
+on the grounds that this slice's own diff is Web-only: the diff is, but its base is
+not.
