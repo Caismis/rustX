@@ -1,6 +1,8 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 // Presentation extracted from DeepSeek Harness ui-conversation/InputBar.
 // Native textarea replaces Lexical/attachment/command/queue machines. No retry.
+// The delivery label follows the authoritative attempt; rustX has one native
+// inbound path, so there is no separate browser queue/steer mode.
 import { useEffect, useState } from 'react';
 import { ARTIFACT_MAX_BYTES, DRAFT_MAX_FILES } from '../../client/artifacts';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
@@ -8,7 +10,7 @@ import { Button } from '../../presentation/primitives/Button';
 import css from './InputBar.module.css';
 export function InputBar({ disabled, busy, active, onSend, onCancel }: {
   disabled: boolean; busy: boolean; active: boolean;
-  onSend: (text: string, steer: boolean, files: readonly File[]) => Promise<boolean>; onCancel: () => void;
+  onSend: (text: string, files: readonly File[]) => Promise<boolean>; onCancel: () => void;
 }) {
   const [files, setFiles] = useState<File[]>([]);
   const [error, setError] = useState('');
@@ -18,10 +20,10 @@ export function InputBar({ disabled, busy, active, onSend, onCancel }: {
     setError(''); setFiles(current => [...current, ...picked]);
   };
   const [draft, setDraft] = useState('');
-  const submit = async (steer = false) => {
+  const submit = async () => {
     if (disabled || busy || (!draft.trim() && !files.length)) return;
     const submitted = draft;
-    if (await onSend(submitted, steer, files)) { setDraft(current => current === submitted ? '' : current); setFiles([]); }
+    if (await onSend(submitted, files)) { setDraft(current => current === submitted ? '' : current); setFiles([]); }
   };
   return <div className={css.root} onDragOver={event => { if (!disabled && !busy && event.dataTransfer.types.includes('Files')) { event.preventDefault(); setDragging(true); } }}
     onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }}
@@ -41,11 +43,10 @@ export function InputBar({ disabled, busy, active, onSend, onCancel }: {
       </div></div>
       <div className={css.row}>
         <label>Attach files<input type="file" multiple aria-label="Attach files" disabled={disabled || busy} onChange={event => { pick(Array.from(event.target.files ?? [])); event.target.value = ''; }} /></label>
-        <span className="muted">Enter to send · Shift+Enter for newline</span>
+        <span className="muted" data-delivery={active ? 'queue' : 'send'}>{active ? 'Attempt running · Enter queues for its next safe boundary' : 'Enter to send · Shift+Enter for newline'}</span>
         <div className={css.trailing}>
           {active && <Button size="sm" variant="outline" disabled={disabled || busy} onClick={onCancel}>Cancel turn</Button>}
-          {active && <Button size="sm" variant="outline" disabled={disabled || busy || (!draft.trim() && !files.length)} onClick={() => void submit(true)}>Steer</Button>}
-          <Button variant="primary" disabled={disabled || busy || (!draft.trim() && !files.length)} onClick={() => void submit()}>{busy ? 'Awaiting acknowledgement…' : 'Send'}</Button>
+          <Button variant="primary" disabled={disabled || busy || (!draft.trim() && !files.length)} onClick={() => void submit()}>{busy ? 'Awaiting acknowledgement…' : active ? 'Queue' : 'Send'}</Button>
         </div>
       </div>
     </div>

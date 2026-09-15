@@ -217,3 +217,26 @@ The second review's semantic-publication receipts, contiguous history rebase,
 separately retained selection and canonical artifact merge are also rustX-authored.
 They add no Harness source files or dependencies. The existing source inventory
 and MIT notices remain the sole provenance mechanism.
+
+## WEB-04 composer context docks
+
+The external checkout was reverified at the exact pinned SHA before changes. The
+`inspected` array adds the ui-goal and ui-conversation READMEs, `GoalBar` with its
+activation source, slots, locales and tests, `TodoPanel`, `QueueDock`, the queue
+contract, `ConversationRoot` composer-stack geometry, the Harness `InputBar`
+submit-mode code and the Todo/Queue/skeleton/input-bar tests, plus the ui-primitives
+README and icon set.
+
+| Upstream, relative to `packages/client/` | Local destination under `src/` | Treatment |
+| --- | --- | --- |
+| `ui-conversation/src/client/skeleton/ConversationRoot.{tsx,module.css}` | `app/composer/ComposerContextStack.*` | Fixed Todo/Goal/Queue/Composer seats and the shared dock-inset width axis; no slot registry, overlay chain, hero or sticky seat. |
+| `ui-conversation/src/client/skeleton/TodoPanel.{tsx,module.css}` | `app/composer/TodoDock.*` | Collapsed summary, bounded list and glyph family bound to native `TodoTask`; composed-empty strip, `blocked_by` and `active_form` added. |
+| `ui-goal/src/client/GoalBar.{tsx,module.css}` | `app/composer/GoalDock.*` | Strip, phase labels, single-flight actions and inline Enter/Escape form bound to `GoalView`; budget editor, rounds/revision meta and uncertainty added; clear and the Harness activation source excluded. |
+| `ui-conversation/src/client/queue/QueueDock.{tsx,module.css}` | `app/composer/QueueDock.*` | Single-row strip, count header and sending echo bound to native inbound rows and MessageId settlement; edit/remove/steer actions, thumbnails and the input-card tuck excluded. |
+| `ui-primitives/src/icons/index.tsx` | `presentation/primitives/icons/index.tsx` | Existing record; seven dock glyphs (Checklist, Queue, Goal, Pause, Play, Edit, Close) copied verbatim. |
+
+Excluded semantic owners: Harness Session Controller queue store and `updateQueue`,
+`dsh-goal` projection/activation Remote reads, `dsh-tool-todo` projection, Cordis
+slots and registration order, Harness locale runtime, Tooltip. The binding module,
+client Goal control, provisional-echo settlement, fixture, deterministic tests and
+the real-server scenario are rustX-authored.

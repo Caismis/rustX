@@ -54,7 +54,7 @@ it('mixed draft order and failed admission retain text and attachments, with det
   const file = new File(['text'], 'second.txt', { type: 'text/plain' });
   fireEvent.change(ui.getByLabelText('Attach files'), { target: { files: [image, file] } });
   await act(async () => fireEvent.click(ui.getByRole('button', { name: 'Send' })));
-  expect(send).toHaveBeenCalledWith('keep me', false, [image, file]);
+  expect(send).toHaveBeenCalledWith('keep me',[image, file]);
   expect((ui.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('keep me');
   expect(ui.getByRole('button', { name: 'Remove second.txt' })).toBeTruthy();
   ui.unmount(); expect(revoke).toHaveBeenCalledTimes(1);
@@ -67,7 +67,7 @@ const model = (supported: boolean): SessionModelView => {
 };
 it('effective modality refusal sends neither upload nor turn', async () => {
   await server.attached('A'); server.held.add('session/snapshot');
-  const work = server.client.send('A', 'keep text', false, [new File(['x'], 'image.png', { type: 'image/png' })]);
+  const work = server.client.send('A', 'keep text',[new File(['x'], 'image.png', { type: 'image/png' })]);
   server.socket.success(server.requests.at(-1)!.request, { type: 'snapshot', cursor: '1', snapshot: { ...snapshot(), model: model(false) } });
   await expect(work).rejects.toThrow('does not support');
   expect(server.requests.some(item => ['artifact/upload', 'turn/start'].includes(item.request.method))).toBe(false);
@@ -76,7 +76,7 @@ it('supported draft upload retains mixed order and sends one typed content seque
   await server.attached('A'); server.held.add('session/snapshot'); server.held.add('artifact/upload');
   const files = [new File(['x'], 'first.png', { type: 'image/png' }), new File(['y'], 'second.txt', { type: 'text/plain' })];
   for (const file of files) Object.defineProperty(file, 'arrayBuffer', { value: async () => new Uint8Array([1]).buffer });
-  const work = server.client.send('A', 'text', false, files);
+  const work = server.client.send('A', 'text',files);
   server.socket.success(server.requests.at(-1)!.request, { type: 'snapshot', cursor: '1', snapshot: { ...snapshot(), model: model(true) } });
   const first = await server.waitFor('artifact/upload', 1); server.socket.success(first, { type: 'artifact_uploaded', artifact_id: 'artifact_1' });
   const second = await server.waitFor('artifact/upload', 2); server.socket.success(second, { type: 'artifact_uploaded', artifact_id: 'artifact_2' });
@@ -112,17 +112,17 @@ it('URL retention stops at sixteen and releasing one slot permits a new read', a
 it('oversized upload drafts are rejected without any model or upload request', async () => {
   await server.attached('A'); const before = server.requests.length;
   const oversized = new File([new Uint8Array(ARTIFACT_MAX_BYTES + 1)], 'huge');
-  await expect(server.client.send('A', 'keep text', false, [oversized])).rejects.toThrow('256 KiB');
+  await expect(server.client.send('A', 'keep text',[oversized])).rejects.toThrow('256 KiB');
   expect(server.requests).toHaveLength(before);
 });
 it('active Attempt preflight uses frozen capabilities even when Session changes', async () => {
   await server.attached('A'); server.held.add('session/snapshot');
-  const work = server.client.send('A', 'steer draft', true, [new File(['x'], 'image.png', { type: 'image/png' })]);
+  const work = server.client.send('A', 'queued draft', [new File(['x'], 'image.png', { type: 'image/png' })]);
   server.socket.success(server.requests.at(-1)!.request, { type: 'snapshot', cursor: '2', snapshot: {
     ...snapshot(), model: model(true), attempt: { attempt_id: 'a', turn: 1, phase: { type: 'running' }, model: { primary: model(false).effective, summary: { mode: 'session' } } },
   } });
   await expect(work).rejects.toThrow('does not support');
-  expect(server.requests.some(item => ['artifact/upload', 'turn/steer'].includes(item.request.method))).toBe(false);
+  expect(server.requests.some(item => ['artifact/upload', 'turn/start'].includes(item.request.method))).toBe(false);
 });
 it('Blob uses safe authoritative MIME while semantic image bytes may omit MIME', async () => {
   await server.attached('A'); server.held.add('artifact/read');

@@ -51,6 +51,11 @@ args = [${JSON.stringify(resolve(root, 'web-console/test/e2e/image-mcp.py'))}]
 approval = "never"
 [agent.tools.sources]
 image_fixture = ["render_image"]
+` : scenario === 'web_composer_context' ? `
+[agent.extensions.todo]
+enabled = true
+[agent.extensions.goal]
+enabled = true
 ` : '';
     const writeSettings = (model = 'console-model') => writeFileSync(settings, `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[native_tools.bash]\napproval = "always"\n[agent.model]\nmodel = "fixture/${model}"\n` + imageSource);
     writeSettings();
