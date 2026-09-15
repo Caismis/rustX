@@ -1,8 +1,9 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 // Adapted from DeepSeek Harness ui-goal GoalBar: the strip, phase labels, icon
 // actions, single-flight controls and inline edit form. rustX GoalDomain owns
-// phase, revision, budget, activation and CAS; this card owns only its draft and
-// action feedback. There is no create, clear or complete control here.
+// phase, revision, budget, activation, CAS and every value/transition limit;
+// this card owns only its draft, action feedback and a lock pending authority.
+// There is no create, clear or complete control here.
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { GoalMutation, GoalRef } from '../../../../protocol/app-server/v4';
 import type { GoalDockState } from '../../bindings/composer-context';
@@ -12,17 +13,23 @@ import {
 } from '../../presentation/primitives/icons';
 import css from './GoalDock.module.css';
 
-/** Native autonomous-round bound (`goal::MAX_ROUND_BUDGET`); the owner validates again. */
-const MAX_ROUND_BUDGET = 100;
 type Field = 'objective' | 'budget';
+/** A control outcome not yet followed by a successful authoritative snapshot read. */
+type Awaiting = { at: object | undefined; kind: 'applied' | 'rejected' | 'uncertain' };
 
 const BudgetGlyph = () => <svg width={14} height={14} viewBox="0 0 14 14" fill="none" aria-hidden>
   <path d="M2.5 4h9M2.5 7h6M2.5 10h3.5" stroke="currentColor" strokeWidth="1.2" />
 </svg>;
 
+const AWAITING: Record<Awaiting['kind'], string> = {
+  applied: 'Goal control applied. Controls stay locked until the authoritative Goal state is reread.',
+  rejected: 'Controls stay locked until the authoritative Goal state is reread.',
+  uncertain: 'Goal control outcome uncertain. It was not replayed; waiting for an authoritative reread.',
+};
+
 export function GoalDock({ state, observation, disabled, mutate }: {
   state: GoalDockState | undefined;
-  /** Identity of the authoritative snapshot rendered; only a newer read settles uncertainty. */
+  /** Identity of the rendered authoritative snapshot. The client replaces it only after a successful read. */
   observation: object | undefined;
   disabled: boolean;
   mutate: (expected: GoalRef, mutation: GoalMutation) => Promise<GoalControlOutcome>;
@@ -31,7 +38,7 @@ export function GoalDock({ state, observation, disabled, mutate }: {
   const [editing, setEditing] = useState<{ field: Field; draft: string }>();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string>();
-  const [uncertainAt, setUncertainAt] = useState<object>();
+  const [awaiting, setAwaiting] = useState<Awaiting>();
   const inFlight = useRef(false);
   const latestObservation = useRef(observation);
   const returnFocus = useRef<Field>(undefined);
@@ -54,21 +61,23 @@ export function GoalDock({ state, observation, disabled, mutate }: {
   });
 
   if (!state || !goal) return null;
-  const uncertain = uncertainAt !== undefined && uncertainAt === observation;
-  const locked = disabled || pending || uncertain;
-  const minimum = Math.max(1, goal.autonomous_rounds_consumed);
+  // Only a newer authoritative observation releases the lock: never request
+  // completion, acknowledgement alone, a rerender or a timer.
+  const locking = awaiting !== undefined && awaiting.at === observation ? awaiting : undefined;
+  const locked = disabled || pending || !!locking;
   const run = async (mutation: GoalMutation, field?: Field) => {
     if (inFlight.current) return;
     inFlight.current = true; setPending(true); setError(undefined);
-    // The rendered authoritative GoalRef is the CAS token. Refusal rereads; nothing is retried.
+    // The rendered authoritative GoalRef is the CAS token. Nothing is retried.
     const outcome = await mutate(goal.reference, mutation);
     inFlight.current = false; setPending(false);
-    if (outcome.status === 'applied') { if (field) { returnFocus.current = field; setEditing(undefined); } }
-    else if (outcome.status === 'rejected') setError(outcome.reason);
-    else if (outcome.status === 'uncertain') setUncertainAt(latestObservation.current);
+    if (outcome.status === 'obsolete') return;
+    if (outcome.status === 'rejected') setError(outcome.reason);
+    if (outcome.status === 'applied' && field) { returnFocus.current = field; setEditing(undefined); }
+    if (outcome.status === 'uncertain' || !outcome.observed) setAwaiting({ at: latestObservation.current, kind: outcome.status });
   };
-  const draftValid = !!editing && (editing.field === 'objective' ? editing.draft.trim() !== ''
-    : /^\d+$/.test(editing.draft) && Number(editing.draft) >= minimum && Number(editing.draft) <= MAX_ROUND_BUDGET);
+  // Input grammar only. GoalDomain owns the budget range, consumption and transitions.
+  const draftValid = !!editing && (editing.field === 'objective' ? editing.draft.trim() !== '' : /^[1-9]\d*$/.test(editing.draft));
   const save = () => {
     if (!editing || !draftValid || locked) return;
     void run(editing.field === 'objective' ? { action: 'edit', objective: editing.draft.trim() } : { action: 'budget', rounds: Number(editing.draft) }, editing.field);
@@ -86,7 +95,7 @@ export function GoalDock({ state, observation, disabled, mutate }: {
       <span className={css.glyph} aria-hidden><IconGoalOutline16 size={14} /></span>
       {editing
         ? <input className={css.input} autoFocus aria-label={editing.field === 'objective' ? 'Goal objective' : 'Autonomous round budget'}
-          {...editing.field === 'budget' ? { type: 'number', min: minimum, max: MAX_ROUND_BUDGET, step: 1, inputMode: 'numeric' as const } : { type: 'text' }}
+          {...editing.field === 'budget' ? { type: 'number', min: 1, step: 1, inputMode: 'numeric' as const } : { type: 'text' }}
           value={editing.draft} disabled={pending} onChange={event => setEditing({ field: editing.field, draft: event.target.value })} onKeyDown={onKeyDown} />
         : <><span className={css.label}>{label}</span><span className={css.objective} title={goal.objective}>{goal.objective}</span></>}
       <span className={css.meta}>{goal.autonomous_rounds_consumed}/{goal.autonomous_round_budget} rounds · r{goal.reference.revision}</span>
@@ -103,6 +112,6 @@ export function GoalDock({ state, observation, disabled, mutate }: {
     </div>
     {goal.phase === 'blocked' && goal.blocked_reason && <p className={css.note}>Blocked: {goal.blocked_reason}</p>}
     {error && <p className={css.error} role="alert">{error}</p>}
-    {uncertain && <p className={css.note} role="status">Goal control outcome uncertain. It was not replayed; waiting for an authoritative reread.</p>}
+    {locking && <p className={css.note} role="status">{AWAITING[locking.kind]}</p>}
   </section>;
 }
