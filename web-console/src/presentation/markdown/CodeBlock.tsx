@@ -20,8 +20,8 @@ export interface CodeBlockProps {
    * a per-instance {@link StreamingHighlightSession}, which re-tokenizes only
    * appended text and keeps completed line groups (and DOM) untouched. The
    * caller must keep the component instance stable across growth (a
-   * stream-stable React key); an unchanged streamed fence also retains that
-   * tree when it settles. Cold settled callers get shiki's HTML.
+   * stream-stable React key). Settlement discards these transient caches and
+   * always uses the same renderer as a cold settled mount.
    */
   streaming?: boolean | undefined
   /** Extra class merged onto the wrapper (callers position; this component draws). */
@@ -85,29 +85,13 @@ export function CodeBlock({ code, lang, streaming, className, contentRef, lineNu
     nextLine: number
     body: ReactNode
   } | null>(null)
-  const settledRef = useRef(false)
   const streamedBody = useMemo(() => {
-    if (!highlighting) {
+    // Settlement is a boundary, not another cache mode. Never retain a
+    // streaming tree based on whether a lazy grammar happened to load in time.
+    if (streaming !== true || !highlighting) {
       sessionRef.current = null
       lineCacheRef.current = null
-      settledRef.current = false
       return undefined
-    }
-    if (streaming !== true) {
-      const previous = lineCacheRef.current
-      if (previous !== null && previous.code === trimmed && previous.lang === lang) {
-        settledRef.current = true
-        return previous.body
-      }
-      sessionRef.current = null
-      lineCacheRef.current = null
-      settledRef.current = true
-      return undefined
-    }
-    if (settledRef.current) {
-      sessionRef.current = null
-      lineCacheRef.current = null
-      settledRef.current = false
     }
     sessionRef.current ??= new StreamingHighlightSession()
     const frame = sessionRef.current.updateFrame(trimmed, lang)
@@ -140,10 +124,10 @@ export function CodeBlock({ code, lang, streaming, className, contentRef, lineNu
     return body
   }, [streaming, highlighting, trimmed, lang, loaded])
   const html = useMemo(
-    () => (highlighting && streaming !== true && streamedBody === undefined
+    () => (highlighting && streaming !== true
       ? highlightToHtml(trimmed, lang)
       : undefined),
-    [streaming, highlighting, streamedBody, trimmed, lang, loaded],
+    [streaming, highlighting, trimmed, lang, loaded],
   )
   const [copied, setCopied] = useState(false)
 

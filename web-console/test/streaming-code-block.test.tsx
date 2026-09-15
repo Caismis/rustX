@@ -252,18 +252,17 @@ describe('CodeBlock streaming arm', () => {
     expect(view.getByText('IDENTIFICATION DIVISION.')).toBeTruthy()
   })
 
-  it('the settle transition preserves the highlighted DOM when the code is unchanged', () => {
+  it('settles eager TypeScript through the canonical cold renderer and restarts streaming cleanly', () => {
     const code = 'const answer = 42\n'
     const view = render(<CodeBlock code={code} lang="ts" streaming {...LABELS} />)
-    const streamedLine = view.container.querySelector('pre.shiki .line')
-    const streamedText = view.container.querySelector('pre.shiki')?.textContent
+    expect(view.container.querySelector('pre.shiki')).not.toBeNull()
     view.rerender(<CodeBlock code={code} lang="ts" {...LABELS} />)
-    const settledText = view.container.querySelector('pre.shiki')?.textContent
-    expect(streamedText).toBe('const answer = 42')
-    expect(settledText).toBe(streamedText)
-    expect(view.container.querySelector('pre.shiki .line')).toBe(streamedLine)
+    const cold = render(<CodeBlock code={code} lang="ts" {...LABELS} />)
+    expect(view.container.innerHTML).toBe(cold.container.innerHTML)
     view.rerender(<CodeBlock code={code} lang="ts" streaming {...LABELS} />)
-    expect(view.container.querySelector('pre.shiki')?.textContent).toBe(streamedText)
-    expect(view.container.querySelector('pre.shiki .line')).toBe(streamedLine)
+    const freshStream = render(<CodeBlock code={code} lang="ts" streaming {...LABELS} />)
+    expect(view.container.innerHTML).toBe(freshStream.container.innerHTML)
+    view.rerender(<CodeBlock code={code} lang="ts" {...LABELS} />)
+    expect(view.container.innerHTML).toBe(cold.container.innerHTML)
   })
 })

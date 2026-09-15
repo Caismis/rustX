@@ -1,3 +1,51 @@
+# PR #316 blocking-review correction: canonical code settlement
+
+The initial PR CI run [34917901069](https://github.com/Caismis/rustX/actions/runs/34917901069)
+failed Developer Web Console: **101 passed, three failed**, all awkward-chunk
+settlement equalities in `markdown.test.tsx`. Provenance/build/E2E were skipped in
+that job. The original local 104-pass result below was real but insufficient.
+
+Reproduction on reviewed HEAD `4d45c704501fa04893ddf8dc681e904837032835`:
+`pnpm test` again passed 104 locally. Adding the controlled lazy-grammar regression
+without changing production code then failed both cases. Thus passing the old suite
+locally did not establish timing independence.
+
+Cause: CodeBlock returned `previous.body` after settlement when an unchanged
+highlighted streaming cache existed. That tree had a direct React `<pre>` and
+React-serialized styles; cold settlement used Shiki HTML inside a `<div>`. If Rust
+registered during streaming, the cache selected the first final representation.
+If registration happened after settlement, both paths used the second representation.
+The original tests did not control this async boundary; CI exposed the loaded arm.
+This was an architectural defect, not an irrelevant serialization difference.
+
+Correction: `streaming !== true` clears the incremental session and line cache.
+There is no `settledRef` or retained-stream settled mode. The settled HTML memo no
+longer depends on streaming output. Every highlighted settled fence uses the same
+cold-render path. Parser/freezing, incremental tokenization, grammar laziness,
+security and App Server code are unchanged.
+
+New `code-settlement.test.tsx` resets module state and gates the **real Rust grammar
+import** through a test-only mock. It observes plain output, releases the gate,
+awaits the actual registration notification inside React act, observes highlighted
+output, and compares complete DOM including wrappers/styles after settling the same
+instance against a cold mount. It covers registration before/after settlement and
+already-loaded streaming. Eager TypeScript and full-document tests now assert
+canonical settled equality instead of identity across settlement. All awkward-chunk,
+CRLF, frozen-prefix, completed-line retention and bounded-state assertions remain.
+
+All local correction checks passed: `pnpm typecheck`; three consecutive independent
+`pnpm test` runs (106 tests/eight files each); `pnpm check:provenance`; `pnpm build`;
+`pnpm test:e2e` (five passed); protocol `pnpm check`/`pnpm typecheck`; `cargo fmt --all -- --check`;
+`git diff --check`. Results and the corrected-head GitHub CI outcome are also
+recorded in the PR description after inspecting the completed run. No retry setting,
+arbitrary sleep, grammar eager-loading or weakened equality was added.
+
+The historical #304 record below predates this correction. Its statement about
+preserving DOM identity on settlement is superseded: retention applies **during
+streaming only**; final presentation is canonical and history-independent.
+
+---
+
 # Issue #304 validation record
 
 Recorded 2026-09-15, Linux; Node 24.20.0, pnpm 11.13.1. Original worktree

@@ -119,13 +119,15 @@ describe('incremental streaming rendering', () => {
     settled.unmount()
   })
 
-  it('keeps a highlighted fence mounted across the final full-document parse', () => {
+  it('settles a highlighted fence through the canonical full-document render', () => {
     const doc = 'before.\n\n```ts\nconst answer = 42\n```\n\nafter.'
     const live = render(<MarkdownText text={doc} streaming />)
     const line = live.container.querySelector('pre.shiki .line')
     expect(line).not.toBeNull()
     live.rerender(<MarkdownText text={doc} />)
-    expect(live.container.querySelector('pre.shiki .line')).toBe(line)
+    const cold = render(<MarkdownText text={doc} />)
+    expect(live.container.innerHTML).toBe(cold.container.innerHTML)
+    cold.unmount()
     live.unmount()
   })
 })

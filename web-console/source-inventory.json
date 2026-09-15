@@ -544,7 +544,7 @@
     {
       "upstream": "packages/client/ui-primitives/src/markdown/CodeBlock.tsx",
       "destination": "web-console/src/presentation/markdown/CodeBlock.tsx",
-      "treatment": "adapted",
+      "treatment": "adapted: incremental streaming line groups; rustX discards streaming-only code-render state at settlement and always uses canonical cold-settled rendering, independent of lazy-grammar timing",
       "upstream_sha256": "bb7d7f9d71aaaa8f4a8bedc7b8167b0d8ed00c6d302cd16534d5acff776b4502",
       "retained_dependencies": [
         "../primitives/clipboard.ts",
@@ -650,7 +650,7 @@
     {
       "upstream": "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
       "destination": "web-console/test/markdown-incremental.test.tsx",
-      "treatment": "adapted: native Vitest imports and local presentation entry",
+      "treatment": "adapted: native Vitest imports and local presentation entry; settlement DOM-identity assertions replaced by exact canonical cold-settled equality",
       "upstream_sha256": "e837f099eb162d2e03dc05b57765aaa179fa637468e5b3ecc79098eb3ddf0439",
       "retained_dependencies": [
         "../src/presentation/markdown/incremental.ts",
@@ -666,7 +666,7 @@
     {
       "upstream": "packages/client/ui-primitives/tests/streaming-code-block.client.spec.tsx",
       "destination": "web-console/test/streaming-code-block.test.tsx",
-      "treatment": "adapted: native Vitest imports and local presentation entry",
+      "treatment": "adapted: native Vitest imports and local presentation entry; settlement DOM-identity assertions replaced by exact canonical cold-settled equality",
       "upstream_sha256": "523df11c0d14992289961e8d0bc1db25147d422c69d216172314e7886fd18a8b",
       "retained_dependencies": [
         "../src/presentation/markdown/CodeBlock.tsx",
