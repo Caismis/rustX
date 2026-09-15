@@ -145,7 +145,14 @@ pub async fn representative_scenario(
                 mode: ApprovalMode::FullAccess
             }
         ),
-        call(driver, 4, Method::SessionSnapshot { target: b.clone() }),
+        call(
+            driver,
+            4,
+            Method::SessionSnapshot {
+                trace_records: vec![],
+                target: b.clone()
+            }
+        ),
     );
     assert!(matches!(
         changed_a,
@@ -327,8 +334,15 @@ pub async fn representative_scenario(
         snapshot.approval_mode_revision,
         snapshot_a.approval_mode_revision + 2
     );
-    let MethodResult::Snapshot { snapshot, .. } =
-        call(driver, 9, Method::SessionSnapshot { target: b.clone() }).await
+    let MethodResult::Snapshot { snapshot, .. } = call(
+        driver,
+        9,
+        Method::SessionSnapshot {
+            trace_records: vec![],
+            target: b.clone(),
+        },
+    )
+    .await
     else {
         panic!("snapshot B")
     };

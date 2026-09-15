@@ -188,8 +188,15 @@ async fn adapter_disconnect_cannot_settle_approval_or_questionnaire() {
                 let direct = app_server_conformance::DirectDriver(&replacement);
                 initialize(&direct).await;
                 let target = attach(&direct, &f).await;
-                let MethodResult::Snapshot { snapshot, .. } =
-                    call(&direct, 3, Method::SessionSnapshot { target }).await
+                let MethodResult::Snapshot { snapshot, .. } = call(
+                    &direct,
+                    3,
+                    Method::SessionSnapshot {
+                        trace_records: vec![],
+                        target,
+                    },
+                )
+                .await
                 else {
                     panic!("snapshot");
                 };
@@ -365,6 +372,7 @@ async fn request_admission_overflow_releases_transport_but_not_server_operation_
                 jsonrpc: JsonRpcVersion::V2,
                 id: RequestId::Integer(i64::try_from(id).unwrap()),
                 call: Method::SessionSnapshot {
+                    trace_records: vec![],
                     target: target.clone(),
                 },
             };
@@ -547,11 +555,26 @@ async fn one_pending_session_request_does_not_serialize_another_session() {
             };
             let probe = f.manager.probe(&a.conversation_id);
             probe.before_operation.arm();
-            let pending = call(&client, 3, Method::SessionSnapshot { target: a });
+            let pending = call(
+                &client,
+                3,
+                Method::SessionSnapshot {
+                    trace_records: vec![],
+                    target: a,
+                },
+            );
             let independent = async {
                 probe.before_operation.entered().await;
                 assert!(matches!(
-                    call(&client, 4, Method::SessionSnapshot { target: b }).await,
+                    call(
+                        &client,
+                        4,
+                        Method::SessionSnapshot {
+                            trace_records: vec![],
+                            target: b
+                        }
+                    )
+                    .await,
                     MethodResult::Snapshot { .. }
                 ));
                 probe.before_operation.release();

@@ -378,11 +378,11 @@ export class AppServerClient {
         this.dirty.delete(id);
         const resync = this.resubscribe.delete(id);
         if (resync) this.setSession(id, { attachment: 'resynchronizing', trace: replaceTrace({ entries: [], next_cursor: null }, this.state.views[id]?.trace), history: replaceTranscript({ entries: [] }, this.state.views[id]?.history) });
-        const result = await this.request({ method: 'session/snapshot', params: { target } }, 'snapshot');
+        const result = await this.request({ method: 'session/snapshot', params: { target, trace_records: this.state.views[id]?.trace?.page.entries.map(entry => entry.position) ?? [] } }, 'snapshot');
         if (!current()) return;
         if (result.snapshot.conversation_id !== target.conversation_id) throw new Error('Mismatched snapshot conversation.');
         if (BigInt(result.cursor) >= BigInt(this.state.views[id].cursor ?? '0')) {
-          this.setSession(id, { snapshot: result.snapshot, cursor: result.cursor, history: refreshTranscript(this.state.views[id]?.history, result.snapshot.transcript), trace: refreshTrace(this.state.views[id]?.trace, result.snapshot.trace), error: undefined });
+          this.setSession(id, { snapshot: result.snapshot, cursor: result.cursor, history: refreshTranscript(this.state.views[id]?.history, result.snapshot.transcript), trace: refreshTrace(this.state.views[id]?.trace, result.snapshot.trace, result.snapshot.trace_updates), error: undefined });
           this.reconcileInteractions(id);
         }
         if (resync) await this.request({ method: 'session/subscribe', params: { target, after_cursor: result.cursor } }, 'subscribed');
@@ -426,7 +426,12 @@ export class AppServerClient {
     this.setSession(id, { trace: { ...cache, loading: true, error: undefined } });
     try {
       const result = await this.request({ method: 'session/trace', params: { target, before: cache.page.next_cursor, limit } }, 'trace');
-      if (current()) this.setSession(id, { trace: prependTrace(this.state.views[id].trace!, result.page) });
+      if (current()) {
+        this.setSession(id, { trace: prependTrace(this.state.views[id].trace!, result.page) });
+        // Include newly loaded identities in a repair even if their terminal
+        // notification raced this pending historical read.
+        await this.refresh(id);
+      }
     } catch (error) {
       if (current()) this.setSession(id, { trace: { ...this.state.views[id].trace!, loading: false, error: String(error) } });
       throw error;

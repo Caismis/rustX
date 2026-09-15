@@ -119,6 +119,9 @@ use crate::tools::types::ToolProgress;
 // allocation to the hot observation path. The size spread is by design.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ConversationObservation {
+    /// Committed Journal prefix, enqueued under the native store serialization
+    /// lock. It becomes visible only when folded with the client cursor.
+    JournalCommitted(Option<u64>),
     /// Bounded authoritative replacement, ordered under the Goal mutex.
     GoalChanged(crate::goal::GoalView),
     /// Activation-only transition; the durable read-model copy is unchanged.
@@ -730,6 +733,12 @@ impl PendingObservations {
         {
             let _ = sender.send(());
         }
+    }
+}
+
+impl crate::durable::presentation::JournalObserver for PendingObservations {
+    fn committed(&self, through: Option<u64>) {
+        self.push(ConversationObservation::JournalCommitted(through));
     }
 }
 

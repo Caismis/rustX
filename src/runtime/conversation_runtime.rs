@@ -2111,6 +2111,10 @@ impl RuntimeInner {
             .map(crate::goal::GoalDomain::view)
             .transpose()
             .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
+        let journal_through = self
+            .store
+            .observe_journal(queue.clone())
+            .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
         self.interaction.install_observer(observer.clone());
         // ---- T1: the mailbox (frozen: an inactive conversation refuses
         //          inbound) ----
@@ -2153,6 +2157,7 @@ impl RuntimeInner {
             self.capability.install_observer_and_snapshot(observer);
         drop(state);
         Ok(RuntimeBootstrapSnapshot {
+            journal_through,
             conversation_id: self.conversation_id.clone(),
             shutting_down,
             messages,
@@ -5526,6 +5531,7 @@ impl std::error::Error for RuntimeBootstrapError {}
 /// Every one of those facts arrives through the live observation stream.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeBootstrapSnapshot {
+    pub journal_through: u64,
     pub goal: Option<crate::goal::GoalView>,
     /// The conversation identity.
     pub conversation_id: ConversationId,

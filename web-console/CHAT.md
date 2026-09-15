@@ -117,7 +117,7 @@ payloads are omitted from the finite protocol diagnostic log.
 
 ## WEB-02 review corrections
 
-The mandatory App Server vocabulary is v2 (`rustx.app-server.v3` and generated
+The mandatory App Server vocabulary is v3 (`rustx.app-server.v3` and generated
 `protocol/app-server/v3.ts` / `v3.schema.json`). v1 initialization and v1-only
 WebSocket offers are rejected; there is no compatibility mode. Runtime Client
 retains its independently versioned contract.

@@ -19,6 +19,7 @@ use crate::runtime::identity::{
 use crate::tools::types::ToolExecutionStatus;
 
 pub const TRACE_PAGE_LIMIT: usize = 32;
+pub const TRACE_RECORD_LIMIT: usize = 512;
 pub const TRACE_TEXT_BYTES: usize = 2048;
 pub const TRACE_BLOCK_LIMIT: usize = 8;
 const ANCHORS: &[&str] = &[
@@ -56,6 +57,28 @@ impl TraceCursor {
 pub struct TracePage {
     pub entries: Vec<TraceEntry>,
     pub next_cursor: Option<TraceCursor>,
+}
+
+/// Refresh of a loaded record, resolved by the server at the snapshot cut.
+/// No browser lifecycle inference or replacement of canonical payloads.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TraceLifecycle {
+    pub id: String,
+    pub state: TraceState,
+    pub timing: TraceTiming,
+    pub request: Option<TraceRequestOutcome>,
+    pub message_id: Option<MessageId>,
+    pub artifacts: Vec<TraceArtifact>,
+    pub truncated: bool,
+}
+
+/// Mutable request outcome only; immutable historical input is not repeated.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TraceRequestOutcome {
+    pub failure_kind: Option<crate::model::error::ModelErrorKind>,
+    pub usage: Option<ModelUsage>,
 }
 
 /// Server-resolved grouping. Native `TurnId` is the logical model step within
@@ -196,6 +219,11 @@ pub struct TraceProjection<'a> {
     through: u64,
 }
 impl<'a> TraceProjection<'a> {
+    /// Materialize the exact prefix captured by the native observation cut.
+    pub(crate) fn through(store: &'a dyn ConversationStore, through: u64) -> Self {
+        Self { store, through }
+    }
+
     /// Capture one durable read cut. All subsequent joins exclude newer facts.
     /// # Errors
     /// Returns the durable read error without interpreting it as absent history.
@@ -269,6 +297,68 @@ impl<'a> TraceProjection<'a> {
             next_cursor,
         })
     }
+    pub(crate) fn refresh(
+        &self,
+        records: &[TraceCursor],
+        snapshot: &super::snapshot::RuntimeClientSnapshot,
+    ) -> Result<Vec<TraceLifecycle>, ConversationStoreError> {
+        if records.len() > TRACE_RECORD_LIMIT {
+            return Err(ConversationStoreError::InvalidReference(
+                "too many Trace records".into(),
+            ));
+        }
+        records
+            .iter()
+            .map(|cursor| {
+                let sequence = cursor.sequence()?;
+                let anchor = self
+                    .store
+                    .read_presentation_events(&FactQuery {
+                        scope: FactScope::All,
+                        kinds: ANCHORS.to_vec(),
+                        before: Some(sequence.saturating_add(1)),
+                        after: sequence.saturating_sub(1),
+                        ascending: false,
+                        through: self.through,
+                        limit: 1,
+                    })?
+                    .pop();
+                let Some(anchor) = anchor.filter(|event| event.sequence == sequence) else {
+                    return Ok(None);
+                };
+                let mut entry = self.entry(&anchor)?;
+                repair_entries(std::slice::from_mut(&mut entry), snapshot);
+                bound_entry(&mut entry);
+                let mut update = TraceLifecycle {
+                    id: entry.id,
+                    state: entry.state,
+                    timing: entry.timing,
+                    request: entry.request.map(|request| TraceRequestOutcome {
+                        failure_kind: request.failure_kind,
+                        usage: request.usage,
+                    }),
+                    message_id: entry.message_id,
+                    artifacts: entry.artifacts,
+                    truncated: entry.truncated,
+                };
+                // Leave room for the ordinary snapshot in the 1 MiB transport.
+                // Oversized optional references are visibly partial, never an
+                // excuse to omit the lifecycle of a loaded active record.
+                if serde_json::to_vec(&update)
+                    .expect("typed Trace update")
+                    .len()
+                    > 1024
+                {
+                    update.artifacts.clear();
+                    update.message_id = None;
+                    update.truncated = true;
+                }
+                Ok(Some(update))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(|updates| updates.into_iter().flatten().collect())
+    }
+
     fn ending(
         &self,
         scope: FactScope,
@@ -619,11 +709,19 @@ fn tool_state(state: &ToolExecutionStatus) -> TraceState {
 /// Current runtime proof may label an otherwise unresolved durable start as
 /// running. Terminal Journal facts always win; no elapsed duration is invented.
 pub(crate) fn repair_live(snapshot: &mut super::snapshot::RuntimeClientSnapshot) {
+    let mut page = std::mem::take(&mut snapshot.trace);
+    repair_entries(&mut page.entries, snapshot);
+    snapshot.trace = page;
+}
+pub(crate) fn repair_entries(
+    entries: &mut [TraceEntry],
+    snapshot: &super::snapshot::RuntimeClientSnapshot,
+) {
     use super::snapshot::{ForegroundToolState, RuntimeClientAttemptPhase};
     use crate::runtime::subagent::SubagentState as S;
     use crate::runtime::workflow::read_model::WorkflowState as W;
     use crate::tools::background::BackgroundLifecycle as B;
-    for entry in &mut snapshot.trace.entries {
+    for entry in entries {
         if entry.state != TraceState::Incomplete {
             continue;
         }

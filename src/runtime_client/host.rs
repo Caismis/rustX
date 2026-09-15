@@ -352,6 +352,8 @@ pub(crate) struct ClientInner {
     /// Whether the projection worker task was spawned.
     worker_started: AtomicBool,
     worker: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    #[cfg(test)]
+    trace_cut_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 /// Root-side publication authority installed into the parent subagent
@@ -611,13 +613,7 @@ impl ClientInner {
         } else {
             self.refresh_transcript_page(&mut state)?;
         }
-        let (mut snapshot, cursor) = state.projection.snapshot()?;
-        snapshot.trace = super::trace::TraceProjection::new(self.store.as_ref())
-            .and_then(|projection| projection.page(None, super::trace::TRACE_PAGE_LIMIT))
-            .map_err(|_| RuntimeClientError::RuntimeFailure {
-                message: "Trace attachment read failed".into(),
-            })?;
-        super::trace::repair_live(&mut snapshot);
+        let (mut snapshot, cursor, through) = state.projection.snapshot_cut()?;
         let next_attachment_seq = state
             .next_attachment_seq
             .checked_add(1)
@@ -656,6 +652,7 @@ impl ClientInner {
         if let Some(subscription) = subscription {
             attachment.store_subscription(subscription);
         }
+        self.materialize_trace(&mut snapshot, through, &[])?;
         Ok(super::attachment::AttachedSnapshot {
             attachment,
             snapshot,
@@ -947,6 +944,19 @@ impl ClientInner {
         &self,
     ) -> Result<(super::snapshot::RuntimeClientSnapshot, RuntimeClientCursor), RuntimeClientError>
     {
+        self.snapshot_with_trace(&[])
+    }
+
+    pub(crate) fn snapshot_with_trace(
+        &self,
+        records: &[super::trace::TraceCursor],
+    ) -> Result<(super::snapshot::RuntimeClientSnapshot, RuntimeClientCursor), RuntimeClientError>
+    {
+        if records.len() > super::trace::TRACE_RECORD_LIMIT {
+            return Err(RuntimeClientError::InvalidRequest {
+                message: "Trace refresh limit is 512".into(),
+            });
+        }
         self.ensure_session_runtime_live()?;
         let mut state = self.lock_state();
         if self.read_only {
@@ -954,14 +964,35 @@ impl ClientInner {
         } else {
             self.refresh_transcript_page(&mut state)?;
         }
-        let (mut snapshot, cursor) = state.projection.snapshot()?;
-        snapshot.trace = super::trace::TraceProjection::new(self.store.as_ref())
-            .and_then(|projection| projection.page(None, super::trace::TRACE_PAGE_LIMIT))
+        let (mut snapshot, cursor, through) = state.projection.snapshot_cut()?;
+        drop(state);
+        self.materialize_trace(&mut snapshot, through, records)?;
+        Ok((snapshot, cursor))
+    }
+
+    fn materialize_trace(
+        &self,
+        snapshot: &mut super::snapshot::RuntimeClientSnapshot,
+        through: u64,
+        records: &[super::trace::TraceCursor],
+    ) -> Result<(), RuntimeClientError> {
+        #[cfg(test)]
+        if let Some(hook) = self.trace_cut_hook.lock().unwrap().take() {
+            hook();
+        }
+        snapshot.trace = super::trace::TraceProjection::through(self.store.as_ref(), through)
+            .page(None, super::trace::TRACE_PAGE_LIMIT)
             .map_err(|_| RuntimeClientError::RuntimeFailure {
                 message: "Trace snapshot read failed".into(),
             })?;
-        super::trace::repair_live(&mut snapshot);
-        Ok((snapshot, cursor))
+        super::trace::repair_live(snapshot);
+        snapshot.trace_updates =
+            super::trace::TraceProjection::through(self.store.as_ref(), through)
+                .refresh(records, snapshot)
+                .map_err(|_| RuntimeClientError::InvalidRequest {
+                    message: "Invalid Trace refresh".into(),
+                })?;
+        Ok(())
     }
 
     pub(crate) fn goal_control(
@@ -993,11 +1024,19 @@ impl ClientInner {
                 message: "Trace limit must be 1..=32".into(),
             });
         }
-        let page = super::trace::TraceProjection::new(self.store.as_ref())
+        let current = self
+            .state
+            .lock()
+            .expect("runtime client host lock poisoned")
+            .projection
+            .snapshot()?
+            .0;
+        let mut page = super::trace::TraceProjection::new(self.store.as_ref())
             .and_then(|projection| projection.page(before.as_ref(), limit))
             .map_err(|_| RuntimeClientError::InvalidRequest {
                 message: "Trace read failed or cursor is invalid".into(),
             })?;
+        super::trace::repair_entries(&mut page.entries, &current);
         Ok(RuntimeClientResult::TracePage { page })
     }
 
@@ -1918,6 +1957,8 @@ impl RuntimeClientHost {
             pending,
             worker_started: AtomicBool::new(false),
             worker: Mutex::new(None),
+            #[cfg(test)]
+            trace_cut_hook: Mutex::new(None),
         });
         // No authoritative runtime can enqueue observations into this host,
         // but using the normal worker setup keeps attachment/subscription
@@ -2053,6 +2094,8 @@ impl RuntimeClientHost {
             pending,
             worker_started: AtomicBool::new(false),
             worker: Mutex::new(None),
+            #[cfg(test)]
+            trace_cut_hook: Mutex::new(None),
         });
         if let Some(runtime) = inner.runtime.as_ref() {
             runtime.set_interaction_provider_available(true);
@@ -5806,6 +5849,84 @@ mod tests {
         // The folded snapshot agrees with the event stream.
         let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert_eq!(&snapshot.resources, resources);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn trace_snapshot_cut_excludes_commits_after_cursor_capture() {
+        let (_, fixture) =
+            host_fixture_with_native_tools(Vec::new(), ToolRegistry::new(), status_engine(), true)
+                .await;
+        let inner = fixture.host.weak_inner().upgrade().unwrap();
+        inner.park_projection_worker();
+        let (attachment, _) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let (baseline, cursor) = fixture.host.snapshot().unwrap();
+        let subscription = attachment.subscribe_events(cursor).unwrap();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        *inner.trace_cut_hook.lock().unwrap() = Some(Box::new(move || {
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        }));
+        let host = fixture.host.clone();
+        let task = tokio::task::spawn_blocking(move || host.snapshot().unwrap());
+        entered_rx.recv().unwrap(); // Cursor and Journal prefix captured; host lock released.
+        let committed = inner
+            .store
+            .append_event(crate::events::RuntimeEventEnvelope {
+                schema_version: 1,
+                event_id: crate::runtime::identity::EventId::new("after-trace-cut"),
+                sequence: 0,
+                conversation_id: inner.conversation_id.clone(),
+                attempt_id: Some(crate::runtime::identity::AttemptId::new("after-cut")),
+                turn_id: None,
+                timestamp: chrono::Utc::now(),
+                event: crate::events::RuntimeEvent::AttemptStarted {
+                    attempt_id: crate::runtime::identity::AttemptId::new("after-cut"),
+                },
+            })
+            .unwrap();
+        assert!(inner.queued_observations() > 0);
+        assert_eq!(host_projection_snapshot(&inner).1, cursor);
+        release_tx.send(()).unwrap();
+        let (before, returned) = task.await.unwrap();
+        assert_eq!(returned, cursor);
+        assert_eq!(before.trace, baseline.trace);
+        assert!(matches!(subscription.try_next(), EventDelivery::Pending));
+        // Historical reads have their own frontier, but never fold the queue or move C.
+        let _ = inner.trace_page(None, 32).unwrap();
+        assert_eq!(host_projection_snapshot(&inner).1, cursor);
+        inner.pending.unpark();
+        let (continuous, after_cursor) = fixture.host.snapshot().unwrap();
+        assert!(after_cursor > cursor);
+        let id = format!("trace:{}", committed.sequence);
+        assert_eq!(
+            continuous
+                .trace
+                .entries
+                .iter()
+                .filter(|entry| entry.id == id)
+                .count(),
+            1
+        );
+        assert!(matches!(subscription.try_next(), EventDelivery::Event(_)));
+        drop(attachment);
+        let (_, reconnect) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let RuntimeClientResult::Initialized {
+            snapshot: reconnect,
+            cursor,
+            ..
+        } = reconnect
+        else {
+            panic!("snapshot")
+        };
+        assert_eq!(reconnect.trace, continuous.trace);
+        assert_eq!(cursor, after_cursor);
     }
 
     /// The exact snapshot/cursor race, interleaving A (snapshot wins): the

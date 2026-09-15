@@ -204,3 +204,11 @@ packages/session/session-projection/src/index.ts
 packages/session/session-projection/src/types.ts
 packages/session/session-projection/tests/registry.spec.ts
 ```
+
+### PR #318 native review corrections
+
+The Journal cut receipt, SQLite schema/index contract, loaded-record lifecycle
+refresh and cache epoch regressions are rustX-authored. No additional Harness
+implementation or dependencies were copied. The existing `trajectory.test.tsx`
+source record continues to identify its adapted upstream presentation contracts;
+the new historical-selection regression exercises rustX's native lifecycle DTO.

@@ -30,3 +30,10 @@ pub struct FactQuery {
     pub through: u64,
     pub limit: usize,
 }
+
+/// Leaf, non-authoritative observation of a committed Journal prefix. Called
+/// under the store serialization lock; implementations may only enqueue.
+pub trait JournalObserver: Send + Sync {
+    /// None fences the read model if a committed prefix cannot be established.
+    fn committed(&self, through: Option<u64>);
+}

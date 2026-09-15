@@ -680,3 +680,10 @@ for source authorities, ordering, read cuts, repair, bounds and unavailable fact
 Version 3 identifies this complete mandatory vocabulary. Protocol 2 and its
 WebSocket subprotocol are rejected; there are no aliases or dual-version paths.
 Generated Rust Schema/TypeScript, Web Console and TUI all negotiate version 3.
+
+`session/snapshot` optionally accepts `trace_records: TraceCursor[]` (maximum 512)
+for the client's bounded loaded window. `snapshot.trace_updates` contains typed
+native lifecycle repairs for those identities, including records older than the
+newest Trace page. Both the newest page and repairs use the Journal prefix
+captured with the returned Runtime Client cursor, never a later SQLite frontier.
+This remains mandatory protocol v3; no compatibility path is provided.

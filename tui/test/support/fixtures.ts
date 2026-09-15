@@ -270,7 +270,7 @@ export function snapshot(
       })),
     };
   return {
-    trace: { entries: [] },
+    trace_updates: [], trace: { entries: [] },
     launch_settings: null,
     goal: null,
     // The runtime always projects its own composition for a live or frozen

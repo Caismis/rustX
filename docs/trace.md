@@ -53,27 +53,68 @@ Pages can begin/end inside an Attempt or Step; every row carries its resolved
 native grouping. Pagination ends even when encoded-byte bounds reduce page size.
 
 The SQLite seam performs bounded indexed seeks on existing Journal rows, then
-exact immutable snapshot/Ledger joins. Each read captures a durable frontier;
+exact immutable snapshot/Ledger joins. Each historical page captures its own fixed durable frontier;
 all event joins exclude later facts. No page scans the entire Journal, Ledger or
 snapshot collection. Expression indexes accelerate existing rows and introduce
 no semantic authority. Reads do not advance the Runtime Client subscription
 cursor, change revisions, consume inbound work or settle/cancel anything.
 
-The ordinary attach/snapshot response includes a bounded newest Trace window,
-with current runtime labels where the owner positively proves them. The existing
-`session/event` notifications invalidate the Web snapshot; request-only changes
-use payloadless `trace_changed`. No raw event payload is exposed for this purpose.
-The newest snapshot repairs Trace after reconnect/resync just as after continuous
-observation. Historical page reads return durable evidence, without pretending
-an unresolved historical start proves a live executor.
+The ordinary attach/snapshot response includes a bounded newest Trace window.
+Its linearization point is `RuntimeClientProjection::snapshot_cut()` under the
+host projection mutex, after draining pending observations. The structured cut
+captures the snapshot, Runtime Client cursor and represented Journal prefix.
+Trace queries run **after releasing that mutex**, bounded by that captured prefix.
+They never obtain an independent latest SQLite frontier.
+
+The store's serialized connection guard publishes a leaf `JournalCommitted`
+observation after a successful commit and before releasing the connection lock.
+It carries only the committed `next_event_sequence` prefix, not event payloads.
+Rollback, duplicate commits and reads cannot advance it. Installation captures a
+bootstrap prefix under the same store lock. Folding this observation advances the
+projection's represented prefix and publishes the existing payloadless
+`trace_changed` invalidation at a Runtime Client cursor. Thus a commit after a
+snapshot cut belongs to a subsequent observation/cursor, even when its durable
+rows already exist while Trace is being materialized. The observer cannot execute,
+settle or recover anything; failure to establish its prefix fences the client
+projection. It is not a second event stream or stored projection.
+
+Historical `session/trace` reads repair their returned entries against a copied
+native runtime projection without draining observations or moving the live cursor.
+Exact positive lifecycle evidence applies regardless of anchor age. For loaded
+records outside the newest tail, `session/snapshot` accepts at most 512 opaque
+`trace_records` positions and returns `snapshot.trace_updates`, resolved at the
+**same snapshot cut**. These bounded typed patches carry lifecycle/timing, safe
+request usage/failure details and canonical artifact references (at most 1 KiB
+per update; oversized optional references are omitted with `truncated`); no arbitrary
+payload or raw event is exposed. Background execution ID, Subagent ID, structured
+Workflow run ID, and the existing exact Attempt/request/Tool/interaction identities
+are the only correlations. Durable terminal facts win; absent native evidence
+stays incomplete. No in-flight duration is synthesized.
 
 The browser has a separate Trace cache (512 entries / 4 MiB estimated encoded
 UTF-16 size), independent from transcript and live cursors. Connection generation,
-full attachment target and Trace epoch fence older responses. Newest snapshot
-facts replace overlapping rows; gaps, bounds or unresolved rows outside the new
-tail cause deterministic replacement. Reconnect/reattach/resync replaces the
-window. Older history can be fetched again. Selection uses stable Trace IDs;
-removal reports that the selected record left the loaded window.
+full attachment target and Trace epoch fence older responses. Ordinary newest-tail
+refreshes preserve loaded older rows, their cursor, epoch and selection, even
+without overlap. Server patches update those rows by stable Trace identity.
+Paging completion requests another repair so settlement while an older read was
+pending cannot leave the newly loaded record stale. Reconnect/reattach/resync,
+explicit latest, or the finite retention bound replace the window. Selection
+reports removal only when the selected identity actually leaves that window.
+Notifications remain invalidation signals; the browser never folds Journal facts.
+
+## Durable schema contract
+
+SQLite schema **35** replaces development schema 34. Native Trace historical
+projection requires the fixed Event Journal presentation indexes. Older stores
+are rejected, with no migration, lazy index installation or compatible reader.
+Current-version stores missing or redefining any required index are also rejected.
+The nine indexes cover kind, Attempt, Step, request ID, scoped ToolCall, execution
+ID, Subagent ID, Workflow run ID and interaction ID, each ending in kind/sequence
+where applicable. The finite query seam explicitly selects the appropriate index
+and performs one bounded equality/range seek per allowlisted event kind; tests
+inspect `EXPLAIN QUERY PLAN` for the actual reader SQL in both directions.
+SQLite schema 35, native Runtime Client version 35 and App Server version 3 are
+independent version domains, despite the first two currently sharing a number.
 
 ## Truthful timing and bounds
 

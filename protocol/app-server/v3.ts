@@ -258,6 +258,12 @@ export type Request1 =
       method: 'session/snapshot';
       params: {
         target: AttachmentTarget;
+        /**
+         * Bounded loaded Trace identities to repair at the same snapshot cut.
+         *
+         * @maxItems 512
+         */
+        trace_records?: TraceCursor[];
       };
     }
   | {
@@ -5434,6 +5440,12 @@ export interface RuntimeClientSnapshot {
   transcript: RuntimeClientTranscriptPage1;
   trace: TracePage1;
   /**
+   * Lifecycle repairs for explicitly requested loaded Trace identities.
+   *
+   * @maxItems 512
+   */
+  trace_updates: TraceLifecycle[];
+  /**
    * The current/latest attempt view, when any attempt exists.
    */
   attempt?: RuntimeClientAttempt | null;
@@ -5748,6 +5760,26 @@ export interface RuntimeClientTranscriptPage1 {
 export interface TracePage1 {
   entries: TraceEntry[];
   next_cursor?: TraceCursor | null;
+}
+/**
+ * Refresh of a loaded record, resolved by the server at the snapshot cut.
+ * No browser lifecycle inference or replacement of canonical payloads.
+ */
+export interface TraceLifecycle {
+  id: string;
+  state: TraceState;
+  timing: TraceTiming;
+  request?: TraceRequestOutcome | null;
+  message_id?: MessageId | null;
+  artifacts: TraceArtifact[];
+  truncated: boolean;
+}
+/**
+ * Mutable request outcome only; immutable historical input is not repeated.
+ */
+export interface TraceRequestOutcome {
+  failure_kind?: ModelErrorKind | null;
+  usage?: ModelUsage | null;
 }
 /**
  * The external attempt view of the Runtime Client projection.

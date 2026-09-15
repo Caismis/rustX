@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Trajectory, visibleTrace } from '../src/app/Trajectory';
-import { replaceTrace } from '../src/client/trace';
+import { replaceTrace, refreshTrace } from '../src/client/trace';
 import { traceEntry } from './trace-fixture';
 import { App } from '../src/app/App';
 import { Server, snapshot } from './fixture';
@@ -111,4 +111,21 @@ it('follows appended records only at the tail, preserves the reader anchor on pr
   fireEvent.scroll(ledger);
   entries = entries.map(entry => ({ ...entry, output: [{ text: 'stream changes above and below the anchor', truncated: false, redacted: false }] })); update();
   expect(ledger.scrollTop).toBe(1080);
+});
+
+it('selected historical inspector updates terminal details beyond the newest tail', () => {
+  const old = traceEntry(1, { state: 'running', timing: { started_at: '2026-09-15T00:00:00Z' } });
+  const cache = replaceTrace({ entries: [old], next_cursor: 'trace:1' });
+  const ui = render(<Trajectory cache={cache} loadEarlier={() => {}} latest={() => {}} />);
+  fireEvent.click(screen.getByTitle('Request #1 · historical-model'));
+  const next = refreshTrace(cache, { entries: [traceEntry(100)] }, [{
+    id: old.id, state: 'completed', timing: { ...old.timing, duration_ms: '2500' },
+    request: { usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } }, artifacts: [], truncated: false,
+  }]);
+  ui.rerender(<Trajectory cache={next} loadEarlier={() => {}} latest={() => {}} />);
+  const inspector = screen.getByLabelText('Trace record inspector');
+  expect(within(inspector).getByText('request-1')).toBeDefined();
+  expect(within(inspector).getByText('completed')).toBeDefined();
+  fireEvent.click(within(inspector).getByRole('tab', { name: 'Timing' }));
+  expect(within(inspector).getByText('2500 ms')).toBeDefined();
 });

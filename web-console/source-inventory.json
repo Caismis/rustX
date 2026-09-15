@@ -848,7 +848,7 @@
     },
     {
       "upstream": "packages/client/ui-trajectory/tests/table.client.spec.tsx",
-      "treatment": "inspected and rewritten for native Trace props",
+      "treatment": "inspected and rewritten for native Trace props; rustX-authored historical lifecycle selection regression",
       "upstream_sha256": "2394738759cc3300e46bf01b97c9c3b59458f6b65809e11919505e264138f775",
       "destination": "web-console/test/trajectory.test.tsx",
       "retained_dependencies": [

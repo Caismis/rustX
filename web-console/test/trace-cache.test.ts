@@ -11,14 +11,14 @@ it('prepends overlapping pages exactly once and retains native numeric order', (
   expect(prependTrace(next, { entries: [entry(9), entry(10)], next_cursor: 'trace:9' })).toEqual(next);
   expect(prependTrace(next, { entries: [] }).page.next_cursor).toBeUndefined();
 });
-it('ordinary live refresh retains provable overlap; gaps discard the cache', () => {
+it('ordinary live refresh preserves older pages even without newest-tail overlap', () => {
   const first = replaceTrace({ entries: [entry(8), entry(9)], next_cursor: 'trace:8' });
   const live = refreshTrace(first, { entries: [entry(9), entry(10)], next_cursor: 'trace:9' });
   expect(live.epoch).toBe(first.epoch);
   expect(live.page.entries?.map(item => item.id)).toEqual(['trace:8', 'trace:9', 'trace:10']);
   const gap = refreshTrace(live, { entries: [entry(20)], next_cursor: 'trace:20' });
-  expect(gap.epoch).toBeGreaterThan(live.epoch);
-  expect(gap.page.entries).toEqual([entry(20)]);
+  expect(gap.epoch).toBe(live.epoch);
+  expect(gap.page.entries.map(item => item.id)).toEqual(['trace:8', 'trace:9', 'trace:10', 'trace:20']);
 });
 it('retention is finite', () => {
   const full = replaceTrace({ entries: Array.from({ length: TRACE_LIMIT }, (_, i) => entry(i + 1)), next_cursor: 'trace:1' });
@@ -67,4 +67,49 @@ it('reattachment in the same connection rejects the old page and duplicate load 
   server.socket.success(request, { type: 'trace', page: { entries: [entry(9)] } }); await older;
   expect(server.client.getSnapshot().views.A.trace?.page.entries).toEqual([entry(10)]);
   expect(server.requests.filter(item => item.request.method === 'session/trace')).toHaveLength(1);
+});
+
+it('native lifecycle patches repair old records without replacing history or cursor', () => {
+  const old = { ...entry(1), state: 'running' as const };
+  const first = replaceTrace({ entries: [old, entry(2)], next_cursor: 'trace:1' });
+  const updated = refreshTrace(first, { entries: [entry(100)] }, [
+    { id: old.id, state: 'completed', artifacts: [], truncated: false, timing: { ...old.timing, duration_ms: '123' } },
+  ]);
+  expect(updated.epoch).toBe(first.epoch);
+  expect(updated.page.next_cursor).toBe(first.page.next_cursor);
+  expect(updated.page.entries.map(item => item.id)).toEqual([old.id, 'trace:2', 'trace:100']);
+  expect(updated.page.entries.find(item => item.id === old.id)).toMatchObject({ state: 'completed', timing: { ...old.timing, duration_ms: '123' } });
+});
+
+it('paging completion repairs newly loaded interests after a terminal notification raced the page', async () => {
+  server = new Server();
+  server.snapshots.set('A', { ...snapshot(), trace: { entries: [entry(100)], next_cursor: 'trace:100' } });
+  await server.attached('A'); server.held.add('session/trace');
+  const older = server.client.loadEarlierTrace('A');
+  const request = await server.waitFor('session/trace', 1);
+  const old = entry(1, { state: 'running' });
+  await server.update('A', { ...snapshot(), trace: { entries: [entry(100), entry(101)], next_cursor: 'trace:100' }, trace_updates: [{
+    id: old.id, state: 'completed', timing: old.timing, artifacts: [], truncated: false,
+  }] });
+  server.socket.success(request, { type: 'trace', page: { entries: [old] } });
+  await older;
+  expect(server.client.getSnapshot().views.A.trace?.page.entries[0]).toMatchObject({ id: old.id, state: 'completed' });
+  const snapshots = server.requests.filter(item => item.request.method === 'session/snapshot');
+  expect(snapshots.at(-1)?.request.params).toMatchObject({ trace_records: ['trace:1', 'trace:100', 'trace:101'] });
+});
+
+it('newly revealed prefix rows keep server order around stable overlap anchors', () => {
+  const cache = replaceTrace({ entries: [entry(1), entry(2), entry(100)], next_cursor: 'trace:1' });
+  const refreshed = refreshTrace(cache, { entries: [entry(98), entry(99), entry(100), entry(101)] });
+  expect(refreshed.page.entries.map(row => row.id)).toEqual(['trace:1', 'trace:2', 'trace:98', 'trace:99', 'trace:100', 'trace:101']);
+  expect(refreshed.epoch).toBe(cache.epoch);
+});
+
+it('the first repaired tail restores older paging in a new resync epoch', () => {
+  const old = replaceTrace({ entries: [entry(1)], next_cursor: 'trace:1' });
+  const empty = replaceTrace({ entries: [], next_cursor: null }, old);
+  const repaired = refreshTrace(empty, { entries: [entry(100)], next_cursor: 'trace:100' });
+  expect(repaired.epoch).toBe(empty.epoch);
+  expect(repaired.epoch).toBeGreaterThan(old.epoch);
+  expect(repaired.page.next_cursor).toBe('trace:100');
 });

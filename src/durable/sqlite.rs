@@ -244,7 +244,9 @@ use super::inbox::{
 /// Version 33 requires rollback journaling for non-creating management reads
 /// and the separated local product workspace allocation contract.
 /// Version 34 adds native revisioned Goal state and atomic Goal/inbound accounting.
-pub const SQLITE_SCHEMA_VERSION: i64 = 34;
+/// Version 35 requires the fixed Journal presentation indexes for bounded Trace
+/// seeks. Older development stores are rejected, never lazily repaired.
+pub const SQLITE_SCHEMA_VERSION: i64 = 35;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -300,6 +302,7 @@ pub(crate) enum RequestStartFaultOperation {
 pub struct SqliteConversationStore {
     conversation_id: ConversationId,
     conn: Arc<Mutex<Connection>>,
+    journal_observer: Mutex<Option<(Arc<dyn super::presentation::JournalObserver>, u64)>>,
     lifecycle: Option<Arc<crate::runtime::local_storage::ConversationAccess>>,
     #[cfg(test)]
     pub(crate) fail_accept_remaining: Arc<AtomicUsize>,
@@ -343,6 +346,53 @@ impl std::fmt::Debug for SqliteConversationStore {
             .debug_struct("SqliteConversationStore")
             .field("conversation_id", &self.conversation_id)
             .finish_non_exhaustive()
+    }
+}
+
+/// Publishes only successfully committed Journal advancement, before releasing
+/// the store lock. Rollbacks and read-only guards cannot advance the prefix.
+struct StoreGuard<'a> {
+    connection: MutexGuard<'a, Connection>,
+    changes: u64,
+    observer: &'a Mutex<Option<(Arc<dyn super::presentation::JournalObserver>, u64)>>,
+}
+impl std::ops::Deref for StoreGuard<'_> {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        &self.connection
+    }
+}
+impl std::ops::DerefMut for StoreGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Connection {
+        &mut self.connection
+    }
+}
+fn journal_prefix(connection: &Connection) -> Result<u64, ConversationStoreError> {
+    let through: i64 = connection
+        .query_row(
+            "SELECT next_event_sequence FROM rustx_store WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| storage(error.to_string()))?;
+    sequence_from_i64(through)
+}
+impl Drop for StoreGuard<'_> {
+    fn drop(&mut self) {
+        if self.connection.total_changes() == self.changes || !self.connection.is_autocommit() {
+            return;
+        }
+        let mut subscription = self.observer.lock().expect("Journal observer lock");
+        if let Some((observer, previous)) = subscription.as_mut() {
+            match journal_prefix(&self.connection) {
+                Ok(through) if through > *previous => {
+                    *previous = through;
+                    observer.committed(Some(through));
+                }
+                Err(_) => observer.committed(None),
+                _ => {}
+            }
+        }
     }
 }
 
@@ -538,6 +588,7 @@ impl SqliteConversationStore {
         Self {
             conversation_id,
             conn: Arc::new(Mutex::new(connection)),
+            journal_observer: Mutex::new(None),
             lifecycle: None,
             #[cfg(test)]
             head_read_probe: Mutex::new(None),
@@ -576,10 +627,17 @@ impl SqliteConversationStore {
         }
     }
 
-    fn lock(&self) -> Result<MutexGuard<'_, Connection>, ConversationStoreError> {
-        self.conn
+    fn lock(&self) -> Result<StoreGuard<'_>, ConversationStoreError> {
+        let connection = self
+            .conn
             .lock()
-            .map_err(|_| storage("the conversation store connection is poisoned"))
+            .map_err(|_| storage("the conversation store connection is poisoned"))?;
+        let changes = connection.total_changes();
+        Ok(StoreGuard {
+            connection,
+            changes,
+            observer: &self.journal_observer,
+        })
     }
 
     /// Fails the next `count` publication staging commits.
@@ -2305,6 +2363,16 @@ impl ConversationStore for SqliteConversationStore {
         Ok((persisted.event, transcript_cursor))
     }
 
+    fn observe_journal(
+        &self,
+        observer: Arc<dyn super::presentation::JournalObserver>,
+    ) -> Result<u64, ConversationStoreError> {
+        let connection = self.lock()?;
+        let through = journal_prefix(&connection)?;
+        *self.journal_observer.lock().expect("Journal observer lock") = Some((observer, through));
+        Ok(through)
+    }
+
     fn presentation_frontier(&self) -> Result<u64, ConversationStoreError> {
         let value: i64 = self
             .lock()?
@@ -2319,79 +2387,10 @@ impl ConversationStore for SqliteConversationStore {
         &self,
         query: &super::presentation::FactQuery,
     ) -> Result<Vec<RuntimeEventEnvelope>, ConversationStoreError> {
-        use super::presentation::FactScope;
-        use rusqlite::types::Value;
-        if query.limit == 0 || query.limit > 129 || query.kinds.is_empty() || query.kinds.len() > 32
-        {
-            return Err(storage("invalid presentation fact query bound"));
-        }
-        let mut values = vec![
-            Value::Integer(seq_to_i64(query.through)?),
-            Value::Integer(seq_to_i64(
-                query.before.unwrap_or(query.through.saturating_add(1)),
-            )?),
-        ];
-        let scope = match &query.scope {
-            FactScope::All => String::new(),
-            FactScope::Step(attempt, turn) => {
-                values.push(Value::Text(attempt.to_string()));
-                values.push(Value::Text(turn.to_string()));
-                " AND attempt_id = ?3 AND turn_id = ?4".to_owned()
-            }
-            FactScope::Attempt(attempt) => {
-                values.push(Value::Text(attempt.to_string()));
-                " AND attempt_id = ?3".to_owned()
-            }
-            FactScope::ToolCall {
-                call_id,
-                attempt,
-                turn,
-            } => {
-                values.push(Value::Text(call_id.clone()));
-                values.push(
-                    attempt
-                        .as_ref()
-                        .map_or(Value::Null, |id| Value::Text(id.to_string())),
-                );
-                values.push(
-                    turn.as_ref()
-                        .map_or(Value::Null, |id| Value::Text(id.to_string())),
-                );
-                " AND json_extract(event_json, '$.event.tool_call_id') = ?3 AND attempt_id IS ?4 AND turn_id IS ?5".to_owned()
-            }
-            other => {
-                let (field, value) = match other {
-                    FactScope::Request(value) => ("request_id", value),
-                    FactScope::Execution(value) => ("execution_id", value),
-                    FactScope::Subagent(value) => ("subagent_id", value),
-                    FactScope::Workflow(value) => ("run_id", value),
-                    FactScope::Interaction(value) => ("interaction_id", value),
-                    FactScope::All
-                    | FactScope::Step(..)
-                    | FactScope::Attempt(..)
-                    | FactScope::ToolCall { .. } => unreachable!(),
-                };
-                values.push(Value::Text(value.clone()));
-                format!(" AND json_extract(event_json, '$.event.{field}') = ?3")
-            }
-        };
+        let statements = presentation_statements(query)?;
         let connection = self.lock()?;
         let mut events: Vec<RuntimeEventEnvelope> = Vec::new();
-        // One equality-index seek per allowlisted kind, each with its own
-        // LIMIT. IN + ORDER BY could otherwise sort the entire matching past.
-        for kind in &query.kinds {
-            let mut params = values.clone();
-            params.push(Value::Text((*kind).to_owned()));
-            let kind_param = params.len();
-            params.push(Value::Integer(seq_to_i64(query.after)?));
-            let after_param = params.len();
-            params.push(Value::Integer(
-                i64::try_from(query.limit).map_err(|_| storage("fact limit"))?,
-            ));
-            let direction = if query.ascending { "ASC" } else { "DESC" };
-            let sql = format!("SELECT event_json FROM events WHERE sequence <= ?1 AND sequence < ?2{scope}
-                AND json_extract(event_json, '$.event.type') = ?{kind_param} AND sequence > ?{after_param}
-                ORDER BY sequence {direction} LIMIT ?{}", params.len());
+        for (sql, params) in statements {
             let mut statement = connection
                 .prepare(&sql)
                 .map_err(|_| storage("presentation query preparation failed"))?;
@@ -4630,7 +4629,138 @@ fn validate_existing_schema(connection: &Connection) -> Result<(), ConversationS
     verify_schema_shape(connection)
 }
 
-#[allow(clippy::too_many_lines)] // One schema, one place.
+#[allow(clippy::too_many_lines)] // Closed indexed scope vocabulary in one place.
+/// The actual bounded SQL used by the reader and its query-plan contract tests.
+fn presentation_statements(
+    query: &super::presentation::FactQuery,
+) -> Result<Vec<(String, Vec<rusqlite::types::Value>)>, ConversationStoreError> {
+    use super::presentation::FactScope;
+    use rusqlite::types::Value;
+    if query.limit == 0 || query.limit > 129 || query.kinds.is_empty() || query.kinds.len() > 32 {
+        return Err(storage("invalid presentation fact query bound"));
+    }
+    let mut values = vec![
+        Value::Integer(seq_to_i64(query.through)?),
+        Value::Integer(seq_to_i64(
+            query.before.unwrap_or(query.through.saturating_add(1)),
+        )?),
+    ];
+    let scope = match &query.scope {
+        FactScope::All => String::new(),
+        FactScope::Step(attempt, turn) => {
+            values.push(Value::Text(attempt.to_string()));
+            values.push(Value::Text(turn.to_string()));
+            " AND attempt_id = ?3 AND turn_id = ?4".to_owned()
+        }
+        FactScope::Attempt(attempt) => {
+            values.push(Value::Text(attempt.to_string()));
+            " AND attempt_id = ?3".to_owned()
+        }
+        FactScope::ToolCall {
+            call_id,
+            attempt,
+            turn,
+        } => {
+            values.push(Value::Text(call_id.clone()));
+            values.push(
+                attempt
+                    .as_ref()
+                    .map_or(Value::Null, |id| Value::Text(id.to_string())),
+            );
+            values.push(
+                turn.as_ref()
+                    .map_or(Value::Null, |id| Value::Text(id.to_string())),
+            );
+            " AND json_extract(event_json, '$.event.tool_call_id') = ?3 AND attempt_id IS ?4 AND turn_id IS ?5".to_owned()
+        }
+        other => {
+            let (field, value) = match other {
+                FactScope::Request(value) => ("request_id", value),
+                FactScope::Execution(value) => ("execution_id", value),
+                FactScope::Subagent(value) => ("subagent_id", value),
+                FactScope::Workflow(value) => ("run_id", value),
+                FactScope::Interaction(value) => ("interaction_id", value),
+                FactScope::All
+                | FactScope::Step(..)
+                | FactScope::Attempt(..)
+                | FactScope::ToolCall { .. } => unreachable!(),
+            };
+            values.push(Value::Text(value.clone()));
+            format!(" AND json_extract(event_json, '$.event.{field}') = ?3")
+        }
+    };
+    let index = match query.scope {
+        FactScope::All => "events_kind_idx",
+        FactScope::Attempt(..) => "events_attempt_kind_idx",
+        FactScope::Step(..) => "events_step_kind_idx",
+        FactScope::Request(..) => "events_request_id_kind_idx",
+        FactScope::ToolCall { .. } => "events_tool_call_scope_kind_idx",
+        FactScope::Execution(..) => "events_execution_id_kind_idx",
+        FactScope::Subagent(..) => "events_subagent_id_kind_idx",
+        FactScope::Workflow(..) => "events_run_id_kind_idx",
+        FactScope::Interaction(..) => "events_interaction_id_kind_idx",
+    };
+    // Index selection is part of the bounded read contract, independent of
+    // SQLite statistics and unrelated kind cardinalities.
+    let mut statements = Vec::new();
+    for kind in &query.kinds {
+        let mut params = values.clone();
+        params.push(Value::Text((*kind).to_owned()));
+        let kind_param = params.len();
+        params.push(Value::Integer(seq_to_i64(query.after)?));
+        let after_param = params.len();
+        params.push(Value::Integer(
+            i64::try_from(query.limit).map_err(|_| storage("fact limit"))?,
+        ));
+        let direction = if query.ascending { "ASC" } else { "DESC" };
+        let sql = format!("SELECT event_json FROM events INDEXED BY {index} WHERE sequence <= ?1 AND sequence < ?2{scope}
+                AND json_extract(event_json, '$.event.type') = ?{kind_param} AND sequence > ?{after_param}
+                ORDER BY sequence {direction} LIMIT ?{}", params.len());
+        statements.push((sql, params));
+    }
+    Ok(statements)
+}
+
+const PRESENTATION_INDEXES: &[(&str, &str)] = &[
+    (
+        "events_kind_idx",
+        "json_extract(event_json, '$.event.type'), sequence",
+    ),
+    (
+        "events_attempt_kind_idx",
+        "attempt_id, json_extract(event_json, '$.event.type'), sequence",
+    ),
+    (
+        "events_step_kind_idx",
+        "attempt_id, turn_id, json_extract(event_json, '$.event.type'), sequence",
+    ),
+    (
+        "events_request_id_kind_idx",
+        "json_extract(event_json, '$.event.request_id'), json_extract(event_json, '$.event.type'), sequence",
+    ),
+    (
+        "events_tool_call_scope_kind_idx",
+        "json_extract(event_json, '$.event.tool_call_id'), attempt_id, turn_id, json_extract(event_json, '$.event.type'), sequence",
+    ),
+    (
+        "events_execution_id_kind_idx",
+        "json_extract(event_json, '$.event.execution_id'), json_extract(event_json, '$.event.type'), sequence",
+    ),
+    (
+        "events_subagent_id_kind_idx",
+        "json_extract(event_json, '$.event.subagent_id'), json_extract(event_json, '$.event.type'), sequence",
+    ),
+    (
+        "events_run_id_kind_idx",
+        "json_extract(event_json, '$.event.run_id'), json_extract(event_json, '$.event.type'), sequence",
+    ),
+    (
+        "events_interaction_id_kind_idx",
+        "json_extract(event_json, '$.event.interaction_id'), json_extract(event_json, '$.event.type'), sequence",
+    ),
+];
+
+#[allow(clippy::too_many_lines)] // One fixed development schema; no migrations.
 fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
     connection
         .execute_batch(
@@ -4759,15 +4889,6 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
             CREATE INDEX IF NOT EXISTS transcript_order_reference_idx ON transcript_order(reference_kind, reference_id);
             CREATE INDEX IF NOT EXISTS surface_ops_revision_idx ON surface_ops(revision);
             CREATE INDEX IF NOT EXISTS events_sequence_idx ON events(sequence);
-            CREATE INDEX IF NOT EXISTS events_kind_idx ON events(json_extract(event_json, '$.event.type'), sequence);
-            CREATE INDEX IF NOT EXISTS events_attempt_kind_idx ON events(attempt_id, json_extract(event_json, '$.event.type'), sequence);
-            CREATE INDEX IF NOT EXISTS events_step_kind_idx ON events(attempt_id, turn_id, json_extract(event_json, '$.event.type'), sequence);
-            CREATE INDEX IF NOT EXISTS events_request_id_kind_idx ON events(json_extract(event_json, '$.event.request_id'), json_extract(event_json, '$.event.type'), sequence);
-            CREATE INDEX IF NOT EXISTS events_tool_call_scope_kind_idx ON events(json_extract(event_json, '$.event.tool_call_id'), attempt_id, turn_id, json_extract(event_json, '$.event.type'), sequence);
-            CREATE INDEX IF NOT EXISTS events_execution_id_kind_idx ON events(json_extract(event_json, '$.event.execution_id'), json_extract(event_json, '$.event.type'), sequence);
-            CREATE INDEX IF NOT EXISTS events_subagent_id_kind_idx ON events(json_extract(event_json, '$.event.subagent_id'), json_extract(event_json, '$.event.type'), sequence);
-            CREATE INDEX IF NOT EXISTS events_run_id_kind_idx ON events(json_extract(event_json, '$.event.run_id'), json_extract(event_json, '$.event.type'), sequence);
-            CREATE INDEX IF NOT EXISTS events_interaction_id_kind_idx ON events(json_extract(event_json, '$.event.interaction_id'), json_extract(event_json, '$.event.type'), sequence);
 
             CREATE INDEX IF NOT EXISTS events_attempt_idx ON events(attempt_id, sequence);
             CREATE INDEX IF NOT EXISTS request_snapshots_surface_idx ON request_snapshots(surface_revision);
@@ -4776,6 +4897,11 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
             CREATE INDEX IF NOT EXISTS publication_streams_settlement_idx ON publication_streams(settlement);",
         )
         .map_err(|error| storage(format!("create schema: {error}")))?;
+    for (name, expression) in PRESENTATION_INDEXES {
+        connection
+            .execute_batch(&format!("CREATE INDEX {name} ON events({expression});"))
+            .map_err(|error| storage(format!("create presentation index: {error}")))?;
+    }
     connection
         .execute(
             "INSERT OR IGNORE INTO rustx_store(id,schema_version,conversation_id,next_inbound_sequence,next_event_sequence,next_transcript_position,todo_progress_sequence,pending_unresolved_output_stream_id) VALUES(1,?1,'',0,0,0,0,NULL)",
@@ -4801,6 +4927,14 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
 
 #[allow(clippy::too_many_lines)] // One required-shape table, one place.
 fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreError> {
+    for (name, expression) in PRESENTATION_INDEXES {
+        let sql: Option<String> = connection.query_row("SELECT sql FROM sqlite_schema WHERE type='index' AND name=?1 AND tbl_name='events'", [name], |row| row.get(0)).optional().map_err(|error| storage(error.to_string()))?;
+        if sql.as_deref() != Some(format!("CREATE INDEX {name} ON events({expression})").as_str()) {
+            return Err(ConversationStoreError::IncompatibleSchema(format!(
+                "missing or invalid presentation index {name}"
+            )));
+        }
+    }
     let required = [
         (
             "rustx_store",
@@ -10248,7 +10382,7 @@ mod tests {
                 result,
                 Err(ConversationStoreError::SchemaVersionMismatch {
                     stored: 32,
-                    expected: 34
+                    expected: 35
                 })
             ));
         }
@@ -12722,7 +12856,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 34);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 35);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -12791,7 +12925,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 34);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 35);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -12806,6 +12940,167 @@ mod tests {
             serde_json::from_str::<RuntimeEventEnvelope>(V31_SUBAGENT_OWNERSHIP).is_err(),
             "the typed vocabulary cannot interpret a schema-31 ownership fact"
         );
+    }
+
+    #[test]
+    fn journal_cut_observer_reports_commits_but_never_reads_or_rollbacks() {
+        #[derive(Default)]
+        struct Observer(Mutex<Vec<Option<u64>>>);
+        impl super::super::presentation::JournalObserver for Observer {
+            fn committed(&self, through: Option<u64>) {
+                self.0.lock().unwrap().push(through);
+            }
+        }
+        let id = ConversationId::new("journal-cut");
+        let store = SqliteConversationStore::in_memory(id.clone()).unwrap();
+        let observer = Arc::new(Observer::default());
+        assert_eq!(store.observe_journal(observer.clone()).unwrap(), 0);
+        let mut event = envelope(
+            &id,
+            "committed",
+            Some(AttemptId::new("attempt")),
+            RuntimeEvent::TurnStarted,
+        );
+        event.turn_id = Some(TurnId::new("1"));
+        let committed = store.append_event(event.clone()).unwrap();
+        assert_eq!(*observer.0.lock().unwrap(), vec![Some(committed.sequence)]);
+        assert!(store.append_event(event).is_err()); // Rejected duplicate is not a new cut.
+        store.presentation_frontier().unwrap();
+        store.load_head().unwrap();
+        {
+            let mut connection = store.lock().unwrap();
+            let transaction = connection.transaction().unwrap();
+            transaction.execute("UPDATE rustx_store SET next_event_sequence = next_event_sequence + 1 WHERE id = 1", []).unwrap();
+            transaction.rollback().unwrap();
+        }
+        assert_eq!(*observer.0.lock().unwrap(), vec![Some(committed.sequence)]);
+        assert_eq!(
+            journal_prefix(&store.lock().unwrap()).unwrap(),
+            committed.sequence
+        );
+    }
+
+    #[test]
+    fn trace_schema_indexes_are_required_and_queries_use_them() {
+        use super::super::presentation::{FactQuery, FactScope};
+        let store =
+            SqliteConversationStore::in_memory(ConversationId::new("trace-indexes")).unwrap();
+        let connection = store.conn.lock().unwrap();
+        verify_schema_shape(&connection).unwrap();
+        let scopes = [
+            (FactScope::All, "events_kind_idx"),
+            (
+                FactScope::Attempt(AttemptId::new("a")),
+                "events_attempt_kind_idx",
+            ),
+            (
+                FactScope::Step(AttemptId::new("a"), TurnId::new("1")),
+                "events_step_kind_idx",
+            ),
+            (FactScope::Request("r".into()), "events_request_id_kind_idx"),
+            (
+                FactScope::ToolCall {
+                    call_id: "c".into(),
+                    attempt: Some(AttemptId::new("a")),
+                    turn: Some(TurnId::new("1")),
+                },
+                "events_tool_call_scope_kind_idx",
+            ),
+            (
+                FactScope::Execution("e".into()),
+                "events_execution_id_kind_idx",
+            ),
+            (
+                FactScope::Subagent("s".into()),
+                "events_subagent_id_kind_idx",
+            ),
+            (FactScope::Workflow("w".into()), "events_run_id_kind_idx"),
+            (
+                FactScope::Interaction("i".into()),
+                "events_interaction_id_kind_idx",
+            ),
+        ];
+        for (scope, index) in scopes {
+            for ascending in [false, true] {
+                let query = FactQuery {
+                    scope: scope.clone(),
+                    kinds: vec!["attempt_started", "turn_started"],
+                    before: Some(99),
+                    after: 2,
+                    ascending,
+                    through: 100,
+                    limit: 32,
+                };
+                for (sql, params) in presentation_statements(&query).unwrap() {
+                    let plan = connection
+                        .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                        .unwrap()
+                        .query_map(rusqlite::params_from_iter(params), |row| {
+                            row.get::<_, String>(3)
+                        })
+                        .unwrap()
+                        .collect::<Result<Vec<_>, _>>()
+                        .unwrap()
+                        .join("\n");
+                    assert!(
+                        plan.contains(&format!("SEARCH events USING INDEX {index}")),
+                        "{plan}"
+                    );
+                    assert!(
+                        !plan.contains("SCAN ") && !plan.contains("TEMP B-TREE"),
+                        "{plan}"
+                    );
+                }
+            }
+        }
+        for (name, expression) in PRESENTATION_INDEXES {
+            connection
+                .execute_batch(&format!("DROP INDEX {name}"))
+                .unwrap();
+            assert!(matches!(
+                verify_schema_shape(&connection),
+                Err(ConversationStoreError::IncompatibleSchema { .. })
+            ));
+            connection
+                .execute_batch(&format!("CREATE INDEX {name} ON events(sequence)"))
+                .unwrap();
+            assert!(
+                verify_schema_shape(&connection).is_err(),
+                "a matching name is insufficient"
+            );
+            connection
+                .execute_batch(&format!(
+                    "DROP INDEX {name}; CREATE INDEX {name} ON events({expression})"
+                ))
+                .unwrap();
+            verify_schema_shape(&connection).unwrap();
+        }
+    }
+
+    #[test]
+    fn schema_34_without_fixed_trace_index_contract_is_rejected() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("old.sqlite");
+        let id = ConversationId::new("old-trace");
+        {
+            let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+            store
+                .conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE rustx_store SET schema_version = 34 WHERE id = 1",
+                    [],
+                )
+                .unwrap();
+        }
+        assert!(matches!(
+            SqliteConversationStore::open(id, &path),
+            Err(ConversationStoreError::SchemaVersionMismatch {
+                stored: 34,
+                expected: 35
+            })
+        ));
     }
 
     /// The other half of the gate: a store this runtime creates records the
@@ -12826,7 +13121,7 @@ mod tests {
                 )
                 .unwrap()
         };
-        assert_eq!(stored, 34);
+        assert_eq!(stored, 35);
         assert_eq!(stored, SQLITE_SCHEMA_VERSION);
         SqliteConversationStore::open(conversation_id, &path).expect("a current store reopens");
     }

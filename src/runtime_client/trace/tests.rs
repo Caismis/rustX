@@ -27,7 +27,41 @@ fn event(store: &dyn ConversationStore, kind: E, seconds: i64) -> RuntimeEventEn
     }
 }
 fn append(store: &dyn ConversationStore, kind: E, seconds: i64) {
-    store.append_event(event(store, kind, seconds)).unwrap();
+    let envelope = event(store, kind, seconds);
+    match &envelope.event {
+        E::BackgroundExecutionCommitted { .. } => {
+            crate::durable::inbox::ConversationInboundCapability::commit_background_ownership(
+                store, envelope,
+            )
+            .unwrap();
+        }
+        E::BackgroundTerminalPublished {
+            message_id,
+            execution_id,
+            ..
+        } => {
+            store
+                .accept_inbound_with_event(
+                    crate::durable::InboundDraft {
+                        message_id: Some(message_id.clone()),
+                        source: crate::message::types::UserSource::Runtime,
+                        kind: crate::message::types::InboundKind::Message,
+                        content: vec![crate::message::types::UserContentBlock::Text(
+                            crate::message::TextBlock {
+                                text: "settled".into(),
+                            },
+                        )],
+                        timestamp: timestamp(seconds),
+                        correlation: Some(format!("background:{execution_id}")),
+                    },
+                    envelope,
+                )
+                .unwrap();
+        }
+        _ => {
+            store.append_event(envelope).unwrap();
+        }
+    }
 }
 fn start(store: &dyn ConversationStore) {
     append(
@@ -643,5 +677,214 @@ fn trace_workflow_runs_join_exact_native_identity_not_definition_name() {
     assert_eq!(
         entries[1].native_id.as_deref(),
         Some(serde_json::to_string(&runs[1]).unwrap().as_str())
+    );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Two independent native lifecycles across one controlled history.
+fn old_background_and_workflow_records_are_repaired_and_settle_by_identity() {
+    use crate::runtime::identity::{RuntimeResourceRevision, ToolExecutionId};
+    use crate::runtime::workflow::read_model::{WorkflowRunView, WorkflowState};
+    use crate::runtime::workflow::{WorkflowId, WorkflowRunId};
+    use crate::runtime_client::projection::RuntimeClientProjection;
+    use crate::runtime_client::snapshot::{CapabilityView, RuntimeClientBackgroundExecution};
+    use crate::tools::background::BackgroundLifecycle;
+    let store = SqliteConversationStore::in_memory(ConversationId::new("long-running")).unwrap();
+    store.initialize(&[]).unwrap();
+    let execution = ToolExecutionId::new("old-background");
+    let workflow = WorkflowId::parse("old-workflow").unwrap();
+    let run = WorkflowRunId {
+        conversation_id: store.conversation_id().clone(),
+        attempt_id: AttemptId::new("attempt-a"),
+        invocation: 1,
+    };
+    append(
+        &store,
+        E::BackgroundExecutionCommitted {
+            execution_id: execution.clone(),
+            tool_call_id: ToolCallId::new("background-call"),
+            tool_id: ToolId::new("tool"),
+            tool_name: "tool".into(),
+        },
+        0,
+    );
+    append(
+        &store,
+        E::WorkflowStarted {
+            tool_call_id: ToolCallId::new("workflow-call"),
+            workflow_id: workflow.clone(),
+            run_id: run.clone(),
+        },
+        1,
+    );
+    let old = page(&store);
+    let positions: Vec<_> = old
+        .entries
+        .iter()
+        .map(|entry| entry.position.clone())
+        .collect();
+    for n in 2..70 {
+        append(&store, E::TurnStarted, n);
+    }
+    let mut snapshot = RuntimeClientProjection::new(
+        store.conversation_id().clone(),
+        vec![],
+        CapabilityView {
+            revision: CapabilityRevision::new(1),
+            tools: vec![],
+            available_tools: vec![],
+            skills: vec![],
+            sources: vec![],
+        },
+        None,
+        16,
+    )
+    .snapshot()
+    .unwrap()
+    .0;
+    snapshot.background.push(RuntimeClientBackgroundExecution {
+        execution_id: execution.clone(),
+        tool_id: ToolId::new("tool"),
+        tool_name: "tool".into(),
+        state: BackgroundLifecycle::Running,
+        progress: None,
+        result: None,
+    });
+    snapshot.workflows.runs.push(WorkflowRunView {
+        id: run.clone(),
+        workflow_id: workflow.clone(),
+        program_digest: "digest".into(),
+        resource_revision: RuntimeResourceRevision::new(1),
+        tool_call_id: ToolCallId::new("workflow-call"),
+        state: WorkflowState::Running,
+        instances: vec![],
+        omitted_instances: 0,
+        steps_consumed: 0,
+        steps_max: 10,
+        agents_consumed: 0,
+        candidate: None,
+        candidate_users: 0,
+        handoff: None,
+    });
+    let projection = TraceProjection::new(&store).unwrap();
+    snapshot.trace = projection.page(None, 32).unwrap();
+    assert!(
+        snapshot
+            .trace
+            .entries
+            .iter()
+            .all(|entry| !positions.contains(&entry.position))
+    );
+    let mut historical = snapshot.trace.clone();
+    while let Some(before) = historical.next_cursor {
+        historical = projection.page(Some(&before), 32).unwrap();
+    }
+    repair_entries(&mut historical.entries, &snapshot);
+    for position in &positions {
+        let entry = historical
+            .entries
+            .iter()
+            .find(|entry| &entry.position == position)
+            .unwrap();
+        assert_eq!(entry.state, TraceState::Running);
+        assert_eq!(entry.timing.duration_ms, None);
+    }
+    let live = projection.refresh(&positions, &snapshot).unwrap();
+    assert!(live.iter().all(|entry| entry.state == TraceState::Running));
+    append(
+        &store,
+        E::BackgroundTerminalPublished {
+            execution_id: execution,
+            message_id: MessageId::new("terminal"),
+            state: crate::events::BackgroundTerminalState::Succeeded,
+        },
+        100,
+    );
+    append(
+        &store,
+        E::WorkflowCompleted {
+            workflow_id: workflow,
+            run_id: run,
+        },
+        101,
+    );
+    // The captured old cut cannot pick up later terminals, even with the same snapshot.
+    assert_eq!(projection.refresh(&positions, &snapshot).unwrap(), live);
+    let settled = TraceProjection::new(&store)
+        .unwrap()
+        .refresh(&positions, &snapshot)
+        .unwrap();
+    assert_eq!(
+        settled.iter().map(|entry| &entry.id).collect::<Vec<_>>(),
+        live.iter().map(|entry| &entry.id).collect::<Vec<_>>()
+    );
+    assert!(
+        settled
+            .iter()
+            .all(|entry| entry.state == TraceState::Completed
+                && entry.timing.duration_ms == Some(100_000))
+    );
+    // Durable terminal facts win even over a copied, positively running runtime view.
+    assert_eq!(settled.len(), 2);
+}
+
+#[test]
+fn loaded_lifecycle_refresh_is_bounded_and_never_repeats_internal_request_input() {
+    use crate::runtime_client::projection::RuntimeClientProjection;
+    use crate::runtime_client::snapshot::CapabilityView;
+    let store = SqliteConversationStore::in_memory(ConversationId::new("refresh-bounds")).unwrap();
+    store.initialize(&[]).unwrap();
+    start(&store);
+    request(&store, 0); // Oversized private prompt/schema/provider/MCP fields.
+    let projection = TraceProjection::new(&store).unwrap();
+    let page = projection.page(None, 32).unwrap();
+    let position = page
+        .entries
+        .iter()
+        .find(|entry| entry.kind == TraceKind::Request)
+        .unwrap()
+        .position
+        .clone();
+    let snapshot = RuntimeClientProjection::new(
+        store.conversation_id().clone(),
+        vec![],
+        CapabilityView {
+            revision: CapabilityRevision::new(1),
+            tools: vec![],
+            available_tools: vec![],
+            skills: vec![],
+            sources: vec![],
+        },
+        None,
+        16,
+    )
+    .snapshot()
+    .unwrap()
+    .0;
+    let updates = projection
+        .refresh(&vec![position.clone(); TRACE_RECORD_LIMIT], &snapshot)
+        .unwrap();
+    assert_eq!(updates.len(), TRACE_RECORD_LIMIT);
+    for update in &updates {
+        assert!(serde_json::to_vec(update).unwrap().len() <= 1024);
+    }
+    let wire = serde_json::to_string(&updates).unwrap();
+    assert!(wire.len() <= TRACE_RECORD_LIMIT * 1025 + 2);
+    for forbidden in [
+        "PRIVATE",
+        "credential",
+        "/home/private",
+        "private-mcp",
+        "private-schema",
+        "effective_system_prompt",
+        "context_input",
+        "tool_schema",
+    ] {
+        assert!(!wire.contains(forbidden));
+    }
+    assert!(
+        projection
+            .refresh(&vec![position; TRACE_RECORD_LIMIT + 1], &snapshot)
+            .is_err()
     );
 }

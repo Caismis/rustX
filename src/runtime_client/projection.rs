@@ -208,6 +208,7 @@ enum ForegroundSettlement {
 /// leaf queue; every acquisition of this lock drains that queue first, so
 /// the projection folds the coordinator's commits in order.
 pub(crate) struct RuntimeClientProjection {
+    journal_through: u64,
     /// The cursor of the last published event (0 = nothing published yet).
     cursor: RuntimeClientCursor,
     /// Set when the cursor space is exhausted: publishing stops and
@@ -241,6 +242,7 @@ impl RuntimeClientProjection {
         replay_limit: usize,
     ) -> Self {
         Self {
+            journal_through: 0,
             cursor: RuntimeClientCursor::new(0),
             exhausted: false,
             snapshot: RuntimeClientSnapshot {
@@ -262,6 +264,7 @@ impl RuntimeClientProjection {
                 messages: initial_messages,
                 transcript: super::snapshot::RuntimeClientTranscriptPage::default(),
                 trace: super::trace::TracePage::default(),
+                trace_updates: Vec::new(),
                 attempt: None,
                 inbound: InboundDiagnostics {
                     pending: Vec::new(),
@@ -355,6 +358,7 @@ impl RuntimeClientProjection {
         &mut self,
         seed: &crate::runtime::conversation_runtime::RuntimeBootstrapSnapshot,
     ) {
+        self.journal_through = seed.journal_through;
         self.snapshot.transcript = super::snapshot::transcript_page_view(seed.transcript.clone())
             .expect("runtime bootstrap transcript is valid");
         self.snapshot.shutting_down = seed.shutting_down;
@@ -403,6 +407,7 @@ impl RuntimeClientProjection {
         if self.exhausted {
             return;
         }
+        self.journal_through = envelope.sequence;
         let event = &envelope.event;
         match event {
             RuntimeEvent::CompactionStarted
@@ -501,6 +506,14 @@ impl RuntimeClientProjection {
     #[allow(clippy::too_many_lines)]
     fn fold(&mut self, observation: ConversationObservation) -> Vec<RuntimeClientEvent> {
         match observation {
+            ConversationObservation::JournalCommitted(through) => {
+                if let Some(through) = through {
+                    self.journal_through = through;
+                } else {
+                    self.exhausted = true;
+                }
+                vec![RuntimeClientEvent::TraceChanged]
+            }
             ConversationObservation::GoalChanged(view) => {
                 if self.snapshot.goal.as_ref() == Some(&view) {
                     return Vec::new();
@@ -1677,6 +1690,14 @@ impl RuntimeClientProjection {
             return Err(RuntimeClientError::ProjectionExhausted);
         }
         Ok((self.snapshot.clone(), self.cursor))
+    }
+
+    /// Captured under the same host lock as the snapshot and subscription.
+    pub(crate) fn snapshot_cut(
+        &self,
+    ) -> Result<(RuntimeClientSnapshot, RuntimeClientCursor, u64), RuntimeClientError> {
+        let (snapshot, cursor) = self.snapshot()?;
+        Ok((snapshot, cursor, self.journal_through))
     }
 
     /// Replaces only the derived durable transcript page with a fresh

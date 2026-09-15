@@ -781,9 +781,12 @@ async fn dispatch_runtime(
                 next_offset,
             })
         }
-        Method::SessionSnapshot { target: _ } => native_result(
+        Method::SessionSnapshot {
+            target: _,
+            trace_records,
+        } => native_result(
             authority
-                .snapshot()
+                .snapshot_with_trace(&trace_records)
                 .map(|(snapshot, cursor)| RuntimeClientResult::Snapshot { snapshot, cursor }),
         ),
         Method::SessionSubscribe {

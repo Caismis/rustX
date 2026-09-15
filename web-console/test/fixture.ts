@@ -14,7 +14,7 @@ export function snapshot(id = 'A'): RuntimeClientSnapshot {
       attempt: 'frozen_admission', presentation: 'client_local', saved_defaults: 'next_launch', extensions: 'launch_capture',
     },
     conversation_id: `conversation-${id}`, shutting_down: false, effective_approval_mode: 'policy',
-    workflows: { revision: '0', runs: [], omitted_runs: 0 }, messages: [], transcript: { entries: [] }, trace: { entries: [] },
+    workflows: { revision: '0', runs: [], omitted_runs: 0 }, messages: [], transcript: { entries: [] }, trace_updates: [], trace: { entries: [] },
     inbound: {}, capabilities: { revision: '0' }, pending_interactions: [],
   };
 }

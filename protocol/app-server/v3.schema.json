@@ -1081,6 +1081,15 @@
               "properties": {
                 "target": {
                   "$ref": "#/$defs/AttachmentTarget"
+                },
+                "trace_records": {
+                  "description": "Bounded loaded Trace identities to repair at the same snapshot cut.",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/TraceCursor"
+                  },
+                  "maxItems": 512,
+                  "default": []
                 }
               },
               "additionalProperties": false,
@@ -8856,6 +8865,14 @@
           "description": "Bounded native Trace read window; independent from transcript and live cursors.",
           "$ref": "#/$defs/TracePage"
         },
+        "trace_updates": {
+          "description": "Lifecycle repairs for explicitly requested loaded Trace identities.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceLifecycle"
+          },
+          "maxItems": 512
+        },
         "attempt": {
           "description": "The current/latest attempt view, when any attempt exists.",
           "anyOf": [
@@ -8978,6 +8995,7 @@
         "messages",
         "transcript",
         "trace",
+        "trace_updates",
         "inbound",
         "capabilities"
       ]
@@ -9655,6 +9673,85 @@
         "operation",
         "diagnostic"
       ]
+    },
+    "TraceLifecycle": {
+      "description": "Refresh of a loaded record, resolved by the server at the snapshot cut.\nNo browser lifecycle inference or replacement of canonical payloads.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/TraceState"
+        },
+        "timing": {
+          "$ref": "#/$defs/TraceTiming"
+        },
+        "request": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceRequestOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceArtifact"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "state",
+        "timing",
+        "artifacts",
+        "truncated"
+      ]
+    },
+    "TraceRequestOutcome": {
+      "description": "Mutable request outcome only; immutable historical input is not repeated.",
+      "type": "object",
+      "properties": {
+        "failure_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelErrorKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "RuntimeClientAttempt": {
       "description": "The external attempt view of the Runtime Client projection.\n\nThe view folds attempt lifecycle, turn progress, in-flight agent\noutput, and foreground tool execution into one structured read model.",

@@ -221,7 +221,13 @@ pub enum Method {
     #[serde(rename = "session/detach")]
     SessionDetach { target: AttachmentTarget },
     #[serde(rename = "session/snapshot")]
-    SessionSnapshot { target: AttachmentTarget },
+    SessionSnapshot {
+        target: AttachmentTarget,
+        /// Bounded loaded Trace identities to repair at the same snapshot cut.
+        #[serde(default)]
+        #[schemars(length(max = 512))]
+        trace_records: Vec<crate::runtime_client::trace::TraceCursor>,
+    },
     #[serde(rename = "session/subscribe")]
     SessionSubscribe {
         target: AttachmentTarget,

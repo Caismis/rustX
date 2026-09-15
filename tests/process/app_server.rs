@@ -763,6 +763,7 @@ async fn snapshot(
     let MethodResult::Snapshot { snapshot, .. } = result(
         client,
         Method::SessionSnapshot {
+            trace_records: vec![],
             target: target.clone(),
         },
     )

@@ -130,6 +130,9 @@ pub struct RuntimeClientSnapshot {
     pub transcript: RuntimeClientTranscriptPage,
     /// Bounded native Trace read window; independent from transcript and live cursors.
     pub trace: super::trace::TracePage,
+    /// Lifecycle repairs for explicitly requested loaded Trace identities.
+    #[schemars(length(max = 512))]
+    pub trace_updates: Vec<super::trace::TraceLifecycle>,
     /// The current/latest attempt view, when any attempt exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempt: Option<RuntimeClientAttempt>,

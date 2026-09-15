@@ -1732,6 +1732,12 @@ pub trait ConversationStore: Send + Sync + 'static {
         event: RuntimeEventEnvelope,
     ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError>;
 
+    /// Atomically install the leaf Journal observer and capture its initial prefix.
+    fn observe_journal(
+        &self,
+        observer: std::sync::Arc<dyn super::presentation::JournalObserver>,
+    ) -> Result<u64, ConversationStoreError>;
+
     /// Latest committed Journal position, read without enumerating history.
     fn presentation_frontier(&self) -> Result<u64, ConversationStoreError>;
 
