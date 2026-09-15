@@ -313,6 +313,10 @@ pub enum BackgroundLifecycle {
 pub trait BackgroundObserver: Send + Sync {
     /// Observes one authoritative registry transition snapshot.
     fn on_snapshot(&self, snapshot: &BackgroundExecutionSnapshot);
+    /// Publishes installed native state together with its exact durable receipt.
+    fn on_committed(&self, snapshot: &BackgroundExecutionSnapshot, _sequence: u64) {
+        self.on_snapshot(snapshot);
+    }
 }
 
 /// The narrow durability-failure seam of the background settlement owner
@@ -694,6 +698,8 @@ struct BackgroundRegistryState {
     /// boundary; never present outside `#[cfg(test)]`.
     #[cfg(test)]
     commit_hook: Option<Arc<test_sync::CommitBoundaryHook>>,
+    #[cfg(test)]
+    publication_hook: Option<Arc<test_sync::CommitBoundaryHook>>,
 }
 
 /// The conversation-owned authoritative background registry.
@@ -745,6 +751,8 @@ impl ConversationBackgroundRegistry {
                 durability_gate: None,
                 #[cfg(test)]
                 commit_hook: None,
+                #[cfg(test)]
+                publication_hook: None,
             })),
             resources,
             state_version,
@@ -764,6 +772,11 @@ impl ConversationBackgroundRegistry {
     pub(crate) fn install_commit_boundary_hook(&self, hook: Arc<test_sync::CommitBoundaryHook>) {
         let mut state = self.state();
         state.commit_hook = Some(hook);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_publication_hook(&self, hook: Arc<test_sync::CommitBoundaryHook>) {
+        self.state().publication_hook = Some(hook);
     }
 
     /// Installs the durability-failure sink of the owning conversation
@@ -1082,6 +1095,7 @@ impl ConversationBackgroundRegistry {
     ///
     /// Returns [`BackgroundDispatchError::ConversationInactive`] when the
     /// owning conversation runtime has not been activated.
+    #[allow(clippy::too_many_lines)] // Ownership COMMIT, rollback and native installation form one boundary.
     pub fn commit_dispatch(
         &self,
         mut prepared: PreparedBackgroundDispatch,
@@ -1188,19 +1202,26 @@ impl ConversationBackgroundRegistry {
                 &prepared_record.record,
                 self.resources.clock.now(),
             );
-            if let Err(error) = self
+            let committed = match self
                 .resources
                 .mailbox
                 .commit_background_ownership(ownership)
             {
-                prepared_record.runner.abort();
-                self.resources
-                    .tool_output
-                    .discard_background_output(&prepared.execution_id);
-                prepared.committed = true;
-                return Err(BackgroundDispatchError::Durable {
-                    detail: error.to_string(),
-                });
+                Ok(committed) => committed,
+                Err(error) => {
+                    prepared_record.runner.abort();
+                    self.resources
+                        .tool_output
+                        .discard_background_output(&prepared.execution_id);
+                    prepared.committed = true;
+                    return Err(BackgroundDispatchError::Durable {
+                        detail: error.to_string(),
+                    });
+                }
+            };
+            #[cfg(test)]
+            if let Some(hook) = state.publication_hook.take() {
+                hook.enter();
             }
             let result = accepted_result(
                 &prepared.execution_id,
@@ -1215,7 +1236,9 @@ impl ConversationBackgroundRegistry {
             let next_index = state.records.len();
             state.index.insert(execution_id.clone(), next_index);
             state.records.push(prepared_record.record);
-            Self::observe_record(&state, next_index);
+            if let Some(observer) = &state.observer {
+                observer.on_committed(&snapshot_of(&state.records[next_index]), committed.sequence);
+            }
             prepared.committed = true;
             gate.notify_one();
             Ok(BackgroundDispatchOutcome::Accepted {
@@ -1497,8 +1520,14 @@ impl ConversationBackgroundRegistry {
             settled,
         );
         let draft = inbound_draft(notification, correlation);
+        let mut committed_sequence = None;
         match self.resources.mailbox.accept_draft_with_event(draft, event) {
-            Ok(_) => {
+            Ok((_, committed)) => {
+                #[cfg(test)]
+                if let Some(hook) = state.publication_hook.take() {
+                    hook.enter();
+                }
+                committed_sequence = Some(committed.sequence);
                 let record = &mut state.records[index];
                 record.lifecycle = settled;
                 record.result = Some(stored);
@@ -1517,7 +1546,13 @@ impl ConversationBackgroundRegistry {
                 record.notification = NotificationState::Failed;
             }
         }
-        Self::observe_record(&state, index);
+        if let Some(sequence) = committed_sequence {
+            if let Some(observer) = &state.observer {
+                observer.on_committed(&snapshot_of(&state.records[index]), sequence);
+            }
+        } else {
+            Self::observe_record(&state, index);
+        }
         drop(state);
         self.notify_state_change();
     }
@@ -1657,8 +1692,14 @@ impl ConversationBackgroundRegistry {
             candidate.settled,
         );
         let draft = inbound_draft(notification, correlation);
+        let mut committed_sequence = None;
         match self.resources.mailbox.accept_draft_with_event(draft, event) {
-            Ok(_) => {
+            Ok((_, committed)) => {
+                #[cfg(test)]
+                if let Some(hook) = state.publication_hook.take() {
+                    hook.enter();
+                }
+                committed_sequence = Some(committed.sequence);
                 let record = &mut state.records[index];
                 record.lifecycle = candidate.settled;
                 record.result = Some(candidate.result);
@@ -1669,7 +1710,13 @@ impl ConversationBackgroundRegistry {
                 state.records[index].notification = NotificationState::Failed;
             }
         }
-        Self::observe_record(&state, index);
+        if let Some(sequence) = committed_sequence {
+            if let Some(observer) = &state.observer {
+                observer.on_committed(&snapshot_of(&state.records[index]), sequence);
+            }
+        } else {
+            Self::observe_record(&state, index);
+        }
         let snapshot = snapshot_of(&state.records[index]);
         drop(state);
         self.notify_state_change();

@@ -129,3 +129,91 @@ The 64px thumbnails, 240px file cards and original-image dialog follow the inspe
 attachment presentation. Deliberate deviation: durable bytes load on explicit
 activation so a large history page cannot eagerly consume the finite image budget.
 The original is rendered at fit-to-viewport size; no thumbnail bytes are durable.
+
+## WEB-03 Trace / Trajectory
+
+Reverified the same external checkout at
+`c291e7961a515f6d7af9304e7fd1d257929aef26` before implementing #306. The existing
+`inspected` list now includes WEB-03 paths; it is an inspection inventory, not a
+claim that every upstream feature was ported.
+
+| Inspected upstream input | WEB-03 treatment |
+| --- | --- |
+| `ui-trajectory/src/client/TrajectoryTable.tsx`, `TrajectoryTimeline.tsx`, `trajectory-search-index.ts`, `trajectory-virtual-rows.ts` | Rewritten into `src/app/Trajectory.tsx`: native Trace props, timing lanes, bounded loaded-window search, stable selection and end-anchored virtualization |
+| `ui-trajectory/src/client/TrajectoryTable.module.css` | Adapted dense row/inspector geometry into `src/app/Trajectory.module.css`, using existing rustX theme tokens |
+| `ui-trajectory/tests/table.client.spec.tsx` | Adapted selection/folding/scroll interaction contracts into `test/trajectory.test.tsx`, with measured deterministic layout |
+| Trajectory contract, record, event projection, snapshot builder, Assistant/compaction definitions and layout/virtual-row/snapshot-builder tests | Inspected only; their Session event interpretation and state machines are excluded |
+| `ui-conversation` request inspection/selection, `ui-tool` ToolRow/tree, `ui-primitives` disclosures and tests, `session-projection` types/registry/tests and package docs | Inspected native-data/presentation boundary; existing WEB-01/02 primitives and artifact components reused, no new Harness runtime imports |
+
+Retained external presentation dependencies: existing React, CSS Modules and
+rustX-owned primitives; added `@tanstack/react-virtual` 3.14.9 (locked dependency
+closure includes `@tanstack/virtual-core` 3.17.7). The original Harness manifest
+also selects React Virtual starting at 3.14.9. `diff`, Cordis, Session Controller,
+Host/Remote APIs, dynamic view/service registries, provider configuration,
+workspace mutation and Harness event/node assembly were deliberately excluded.
+The existing generated dependency notice file includes the TanStack MIT notices.
+
+No upstream server projection was copied. `runtime_client::trace`, the internal
+durable query seam and Web Trace cache are rustX-authored. The implementation
+uses rustX logical Step/request identities and terminal certainty; it does not
+claim Harness request payload visibility, compaction IDs, first-token timing,
+plugin records or other semantics rustX cannot truthfully supply. See
+[Trace architecture](../docs/trace.md) for the explicit field withholding policy.
+
+### WEB-03 inspected paths
+
+The following implementation, test, style and package inputs were inspected for
+this change (relevant sections of the large files). The adaptation subset is the
+table above; all other paths below are inspection-only. Existing WEB-01/02 source
+records continue to own the reused primitives, Markdown and artifact UI.
+
+```text
+packages/client/ui-conversation/README.md
+packages/client/ui-conversation/package.json
+packages/client/ui-conversation/src/client/contract/request-inspection.ts
+packages/client/ui-conversation/tests/selection-survival.client.spec.tsx
+packages/client/ui-primitives/README.md
+packages/client/ui-primitives/package.json
+packages/client/ui-primitives/src/DisclosureRow.tsx
+packages/client/ui-primitives/tests/atoms.client.spec.tsx
+packages/client/ui-tool/README.md
+packages/client/ui-tool/package.json
+packages/client/ui-tool/src/client/tool/components/ToolRow.module.css
+packages/client/ui-tool/src/client/tool/components/ToolRow.tsx
+packages/client/ui-tool/tests/tool-row.client.spec.tsx
+packages/client/ui-trajectory/README.md
+packages/client/ui-trajectory/package.json
+packages/client/ui-trajectory/src/client/TrajectoryTable.module.css
+packages/client/ui-trajectory/src/client/TrajectoryTable.tsx
+packages/client/ui-trajectory/src/client/TrajectoryTimeline.tsx
+packages/client/ui-trajectory/src/client/trajectory-assistant-definition.ts
+packages/client/ui-trajectory/src/client/trajectory-compaction-definition.ts
+packages/client/ui-trajectory/src/client/trajectory-contract.ts
+packages/client/ui-trajectory/src/client/trajectory-event-projection.ts
+packages/client/ui-trajectory/src/client/trajectory-record.ts
+packages/client/ui-trajectory/src/client/trajectory-search-index.ts
+packages/client/ui-trajectory/src/client/trajectory-snapshot-builder.ts
+packages/client/ui-trajectory/src/client/trajectory-virtual-rows.ts
+packages/client/ui-trajectory/tests/layout.client.spec.tsx
+packages/client/ui-trajectory/tests/snapshot-builder.client.spec.ts
+packages/client/ui-trajectory/tests/table.client.spec.tsx
+packages/client/ui-trajectory/tests/virtual-rows.client.spec.ts
+packages/session/session-projection/README.md
+packages/session/session-projection/package.json
+packages/session/session-projection/src/index.ts
+packages/session/session-projection/src/types.ts
+packages/session/session-projection/tests/registry.spec.ts
+```
+
+### PR #318 native review corrections
+
+The Journal cut receipt, SQLite schema/index contract, loaded-record lifecycle
+refresh and cache epoch regressions are rustX-authored. No additional Harness
+implementation or dependencies were copied. The existing `trajectory.test.tsx`
+source record continues to identify its adapted upstream presentation contracts;
+the new historical-selection regression exercises rustX's native lifecycle DTO.
+
+The second review's semantic-publication receipts, contiguous history rebase,
+separately retained selection and canonical artifact merge are also rustX-authored.
+They add no Harness source files or dependencies. The existing source inventory
+and MIT notices remain the sole provenance mechanism.

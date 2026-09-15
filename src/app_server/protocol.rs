@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v2 envelope and method vocabulary.
+//! Rust authority for the App Server v3 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,8 +12,8 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
-/// One version identifies the complete mandatory method vocabulary. No v1 compatibility.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 2;
+/// One version identifies the complete mandatory method vocabulary. No compatibility mode.
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -100,6 +100,12 @@ pub enum Method {
     },
     #[serde(rename = "session/unload")]
     SessionUnload { target: AttachmentTarget },
+    #[serde(rename = "session/trace")]
+    Trace {
+        target: AttachmentTarget,
+        before: Option<crate::runtime_client::trace::TraceCursor>,
+        limit: usize,
+    },
     #[serde(rename = "session/transcript")]
     Transcript {
         target: AttachmentTarget,
@@ -215,7 +221,13 @@ pub enum Method {
     #[serde(rename = "session/detach")]
     SessionDetach { target: AttachmentTarget },
     #[serde(rename = "session/snapshot")]
-    SessionSnapshot { target: AttachmentTarget },
+    SessionSnapshot {
+        target: AttachmentTarget,
+        /// Bounded loaded Trace identities to repair at the same snapshot cut.
+        #[serde(default)]
+        #[schemars(length(max = 512))]
+        trace_records: Vec<crate::runtime_client::trace::TraceCursor>,
+    },
     #[serde(rename = "session/subscribe")]
     SessionSubscribe {
         target: AttachmentTarget,
@@ -364,6 +376,9 @@ pub enum MethodResult {
     },
     Context {
         context: crate::runtime_client::snapshot::RuntimeClientContextView,
+    },
+    Trace {
+        page: crate::runtime_client::trace::TracePage,
     },
     Transcript {
         page: crate::runtime_client::snapshot::RuntimeClientTranscriptPage,

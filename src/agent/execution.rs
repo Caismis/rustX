@@ -650,7 +650,7 @@ fn publish_model_turn_start_events(
     }
     for event in commit.events() {
         if let Some(observer) = observer {
-            observer.observe_event(attempt_id, &event.event);
+            observer.observe_event(attempt_id, &event.event, event.sequence);
         }
     }
 }
@@ -5613,7 +5613,7 @@ impl<'a> AgentExecution<'a> {
     fn record_persisted_event(&self, envelope: RuntimeEventEnvelope) {
         let event = envelope.event;
         if let Some(observer) = self.observer {
-            observer.observe_event(&self.request.attempt_id, &event);
+            observer.observe_event(&self.request.attempt_id, &event, envelope.sequence);
         }
     }
 
@@ -6782,7 +6782,12 @@ mod tests {
     }
 
     impl AgentExecutionObserver for RecordingObserver {
-        fn observe_event(&self, _attempt_id: &AttemptId, event: &RuntimeEvent) {
+        fn observe_event(
+            &self,
+            _attempt_id: &AttemptId,
+            event: &RuntimeEvent,
+            _journal_sequence: u64,
+        ) {
             self.events
                 .lock()
                 .expect("observer event lock")

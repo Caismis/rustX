@@ -170,7 +170,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":2,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":3,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -198,7 +198,7 @@ async fn app_server_websocket_real_process_shared_conformance_and_listener_survi
         replacement.send(INITIALIZE.into()).await.unwrap();
         assert_eq!(
             json_response(&mut replacement).await["result"]["protocol_version"],
-            2
+            3
         );
         kill(
             Pid::from_raw(i32::try_from(child.id().unwrap()).unwrap()),
@@ -224,12 +224,12 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
     bounded(async {
         let f = Fixture::new().await;
         let (mut child, url) = f.ws().await;
-        let old_offer = format!("rustx.app-server.v1, rustx-token.{}", driver::TOKEN);
+        let old_offer = format!("rustx.app-server.v2, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v2"),
+            Some("rustx.app-server.v3"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v2, rustx-token.wrong"),
+            Some("rustx.app-server.v3, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -763,6 +763,7 @@ async fn snapshot(
     let MethodResult::Snapshot { snapshot, .. } = result(
         client,
         Method::SessionSnapshot {
+            trace_records: vec![],
             target: target.clone(),
         },
     )

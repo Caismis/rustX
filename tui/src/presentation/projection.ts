@@ -301,6 +301,9 @@ export function reduce(
       }
       return next;
 
+    case "trace_changed":
+      return next; // Trace is a read capability; this client has no Trajectory UI.
+
     case "attempt_usage_updated":
       if (state.attempt?.attemptId === event.attempt_id) {
         next.attempt = { ...state.attempt, lastUsage: event.usage };

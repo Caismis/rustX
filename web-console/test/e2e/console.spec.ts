@@ -28,7 +28,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await page.getByLabel('Session cwd').fill(fixture.workspaceB); await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(page.locator('.session-toolbar small')).toHaveText(`${fixture.workspaceB} · attached`);
     const idB = await page.locator('.session-toolbar strong').innerText();
-    await expect(page.getByRole('tab')).toHaveCount(2);
+    await expect(page.getByRole('tab', { name: /^session-/ })).toHaveCount(2);
     await page.getByRole('tab', { name: idA.slice(0, 16), exact: true }).click();
     await send('Long action in A'); await fixture.gate('finish-a');
     await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
@@ -134,7 +134,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await page.getByRole('button', { name: 'Confirm delete', exact: true }).click();
     await expect(page.getByRole('alert')).toContainText('"status": "deleted"');
     await expect(page.getByRole('button', { name: 'Open session-2', exact: true })).toHaveCount(0);
-    await expect(page.getByRole('tab')).toHaveCount(1);
+    await expect(page.getByRole('tab', { name: /^session-/ })).toHaveCount(1);
     await expect(page.locator('.session-toolbar strong')).toHaveText(idA);
     expect(readFileSync(`${fixture.workspaceA}/console-effect`, 'utf8')).toBe('x');
     expect((await fixture.control('requests')).requests).toHaveLength(8);

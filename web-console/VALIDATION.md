@@ -570,3 +570,231 @@ No final validation command failed or was waived. Final-head GitHub Actions
 results are recorded in PR #317 after completion; local checks do not substitute
 for the macOS CI lane. App Server v2, generated files, Harness provenance,
 model-agnostic acceptance and existing Chat/history behavior remain unchanged.
+
+## WEB-03 native Trace / Trajectory — 2026-09-15
+
+Validated on Linux in the isolated `issue-306-native-trace-trajectory` worktree,
+based on `94dfa0ae77b49619e2c164428cce75b4bcf7267d` (including WEB-02).
+This section supersedes the earlier App Server v2 statements: the mandatory
+App Server contract is now v3; separate native Runtime Client envelopes are v35.
+
+### Final validation
+
+Repository-root commands:
+
+| Exact command | Result |
+| --- | --- |
+| `git diff --check` | Pass |
+| `cargo fmt --all -- --check` | Pass |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Pass |
+| `cargo build --bins` | Pass |
+| `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 2,821 passed, 1 pre-existing ignored process-writer helper; bins/examples passed with 0 tests |
+| `cargo test --test contracts --test provider --all-features` | Contracts 25 passed; provider 166 passed, 5 pre-existing opt-in live tests ignored |
+| `cargo test --lib --all-features -- boundary_suites::` | 226 passed |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance` | Conformance 23, durable 116, process 52, subagent 53, tools 157 passed (401 total) |
+
+Package commands (each executed in the directory shown):
+
+| Directory | Exact commands | Result |
+| --- | --- | --- |
+| `test-support/fake-provider` | `uv sync --frozen`; `uv run --frozen pytest` | Pass; 51 tests |
+| `protocol/app-server` | `corepack enable`; `corepack install`; `pnpm install --frozen-lockfile`; `pnpm check`; `pnpm typecheck` | Pass, including generated Schema/TypeScript/fixture drift |
+| `web-console` | `pnpm install --frozen-lockfile`; `pnpm typecheck`; `pnpm test`; `pnpm check:provenance`; `pnpm build`; `pnpm test:e2e` | Pass; 145 component/client tests in 14 files, 56 source records, 100 production dependency notices, 6 browser tests |
+| `tui` | `pnpm install --frozen-lockfile`; `pnpm typecheck`; `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test` | Pass; 810 tests, no skips |
+
+The production build reports the existing bundler's non-fatal chunk-size advisory
+for chunks over 500 kB. `.github/workflows/ci.yml` was re-read; the additional local
+CI commands are the emulator sync/pytest and mandatory-emulator TUI run above.
+The macOS platform lane cannot be claimed from this Linux run and remains CI
+coverage. No failing test was skipped.
+
+### Deterministic owner evidence
+
+`src/runtime_client/trace/tests.rs` covers exact request ordinals within one Step,
+transient/context-overflow/corrective failure classes, historical model metadata,
+request usage, reopen equality, read cuts during progress, finite pagination,
+unchanged native heads/transcript/frontiers, parallel Tool completion and exact
+call/Tool correlation, unknown/incomplete results, cancellation/timeout, deep
+historical compaction boundaries, live identity matching, encoded-byte bounds,
+and distinct Workflow run identity despite an identical definition/call name.
+Sensitive prompt/parameter/schema/Tool fixtures remain withheld; Unicode and
+JSON escaping exercise the actual public bounds.
+
+The direct App Server test
+`trace_reads_are_read_only_and_reconnect_repairs_the_same_native_facts` holds a
+real provider request at an explicit gate. It proves historical Trace reads leave
+the entire snapshot/live cursor unchanged, then proves attach/snapshot repair
+before and after controlled settlement. Trace introduces no recovery input.
+
+`trace-cache.test.ts` checks its independent bounded cache, overlap replacement,
+pending history with live updates, stale-response fences, reconnect, reattach and
+resync. `trajectory.test.tsx` uses measured layout to verify bounded virtualization,
+Attempt/Step folding, retries, search/filtering, supported inspector sections,
+unavailable/redacted/truncated presentation, stable selection/removal, follow at
+the tail, scroll-away suspension, stable prepend, and payload updates above/below
+the reader anchor. View switching remains on one native attachment.
+
+### Real App Server acceptance
+
+The existing `web_chat_history` provider-emulator flow now creates 34 historical
+turns and pages native Trace through the actual App Server. In Chromium it checks
+32→64 Trace records, stable prepend geometry, request/Step identity, redacted
+input inspection, tail position, live execution during disconnect/reconnect,
+scroll-away preservation through settlement, canonical Tool/artifact identity,
+record selection and reconnect deduplication. The original rich Chat, transcript,
+image decode/lightbox, upload refusal and draft-retention assertions still pass.
+There is no alternate fake product path or extra subscription.
+
+All six existing browser flows pass, including two-Session ownership and shell
+geometry at 390/900/1440 pixels. Browser evidence includes
+`test-results/trajectory-inspector.png` and `test-results/chat-history.png`;
+the Trajectory screenshot was visually inspected. The existing CI browser-evidence
+artifact collects these files. The Trace inspector assertions exclude the private
+fixture workspace path; raw internal request fields never enter its DTO.
+
+Fixture repairs reflect the new contract: Session-tab counts now exclude the
+Chat/Trajectory tabs; exact-u64 validation checks JSON number types instead of
+digit substrings inside opaque Trace cursors; version rejection checks reject the
+obsolete and next unsupported versions. The hot-journal fixture now dirties large
+**valid JSON** so expression indexes can evaluate it while retaining the same
+crash-before-commit/nonmutating-preflight recovery invariant.
+
+### Deliberate omissions
+
+See [Trace architecture](../docs/trace.md) for the complete policy. Arbitrary
+request/Tool payloads are withheld, not secret-scanned; unaccepted publication
+bodies remain in Chat's existing audit presentation. Harness-only semantic
+categories, server search, telemetry and TUI Trajectory are excluded. Interaction
+settlement remains in the existing Chat controls. The exact inspected paths and
+adaptation subset are in [PROVENANCE.md](PROVENANCE.md) and the existing inventory.
+
+
+## PR #318 architectural review corrections
+
+Validated on 2026-09-15 in `/home/caismis/Documents/codes/rustX-issue-306`,
+branch `issue-306-native-trace-trajectory`, against reviewed head
+`595f9b959631497e4989fa2504b5f9dc8e16bc5e`. Fetched `origin/main` remains
+`94dfa0ae77b49619e2c164428cce75b4bcf7267d`; no upstream integration was needed.
+The original main checkout remained at `6dd1ef144fdfedbd99cb0c9dd9856e1e8defbf51`.
+This section supersedes the preceding Trace cut/cache and SQLite version claims.
+
+### Deterministic regressions
+
+- `trace_snapshot_cut_excludes_commits_after_cursor_capture`: parks the worker,
+  captures snapshot/cursor/prefix, blocks Trace materialization with channels,
+  commits another Journal fact, and delays its fold. The returned Trace excludes
+  that fact at the old cursor. An independent historical read does not move the
+  live cursor; ordinary repair and reattachment converge with one stable record.
+- `journal_cut_observer_reports_commits_but_never_reads_or_rollbacks`: committed
+  prefixes publish, rejected duplicate inserts/read guards/rolled-back writes do
+  not. There is no Trace mutation or durable cache.
+- `old_background_and_workflow_records_are_repaired_and_settle_by_identity`:
+  pushes both native starts beyond the newest page with 68 later Step anchors,
+  pages back, repairs both to running by exact native IDs, then settles both.
+  The old fixed cut still shows running; new-cut patches update the same IDs to
+  terminal with authoritative durations, even against stale running overlays.
+- `trace_schema_indexes_are_required_and_queries_use_them`: every required
+  index is present; missing/redefined indexes fail structural validation. The
+  actual reader SQL uses the required index for all nine scopes, both ordering
+  directions, without a full scan or temporary sort. Schema 34 is rejected by
+  `schema_34_without_fixed_trace_index_contract_is_rejected`.
+- `loaded_lifecycle_refresh_is_bounded_and_never_repeats_internal_request_input`:
+  512 interests are finite, 513 are rejected; private prompt/schema/provider/MCP
+  fields never enter patches. Existing retry, Tool correlation, redaction,
+  missing-terminal and timestamp tests continue to pass.
+- Web tests cover contiguous-window rebasing without tail overlap, terminal patch
+  application, selected inspector stability, settlement while older paging is
+  pending, newly revealed prefix ordering, and restoration of paging in a fresh
+  resync epoch. Existing stale-response, reconnect, folding, virtualization and
+  scroll-anchor tests remain enabled. No race regression uses sleeps.
+
+### Commands and results
+
+All commands below passed after corrections; no failure was waived.
+
+| Directory | Exact command | Result |
+| --- | --- | --- |
+| root | `git diff --check` | Pass |
+| root | `cargo fmt --all -- --check` | Pass |
+| root | `cargo clippy --all-targets --all-features -- -D warnings` | Pass |
+| root | `cargo build --bins` | Pass |
+| root | `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 2,827 passed; one existing ignored process-writer helper; bins/examples passed |
+| root | `cargo test --test contracts --test provider --all-features` | 25 contracts + 166 provider passed; five existing opt-in live tests ignored |
+| root | `cargo test --lib --all-features -- boundary_suites::` | 226 passed |
+| root | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance` | 401 passed: durable 116, process 52, subagent 53, tools 157, conformance 23 |
+| test-support/fake-provider | `uv sync --frozen`; `uv run --frozen pytest` | Pass; 51 tests |
+| protocol/app-server | `corepack enable`; `corepack install`; `pnpm install --frozen-lockfile`; `pnpm check`; `pnpm typecheck` | Pass; generated v3 Rust Schema/TypeScript drift checked |
+| web-console | `pnpm install --frozen-lockfile`; `pnpm typecheck`; `pnpm test` | Pass; 150 tests in 14 files |
+| web-console | `pnpm check:provenance`; `pnpm build` | Pass; 56 source records, 100 production package notices |
+| web-console | `pnpm test:e2e` | Six real App Server/browser tests passed |
+| tui | `pnpm install --frozen-lockfile`; `pnpm typecheck`; `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test` | Pass; 810 tests, no skips |
+
+The existing real-server Chat/Trajectory acceptance includes model and Tool work,
+multiple Trace pages, exact native identity inspection, continued live work,
+scroll-away/follow, reconnect without duplicate records, and secret/path checks.
+The generated App Server contract remains v3; SQLite advances independently from
+34 to 35. No additional upstream Harness code or dependency was introduced.
+CI was re-read. This Linux run does not claim execution of the macOS-only lane.
+The production bundle retains its existing non-fatal chunk-size advisory.
+
+### Second-review corrections: final local validation
+
+Current regressions add a real Background COMMIT/native-publication barrier,
+real SQLite interaction publication barrier, cross-owner receipt ordering,
+Workflow revision-chain delivery, parked-reader storage-lifetime independence,
+non-overlap rebase with stale-page fencing and retained selected-record repair,
+and canonical Tool artifact-only/deduplication cases. The earlier command table
+records the previous reviewed head; final-head validation is recorded separately.
+
+
+The final corrected code passed the following commands (Linux). The unchanged
+original main checkout remained clean. App Server generated v3 DTOs did not drift;
+SQLite schema 35 and all required index/query-plan contracts remain covered.
+
+| Directory | Exact command | Result |
+| --- | --- | --- |
+| root | `cargo fmt --all -- --check` | Passed |
+| root | `git diff --check` | Passed |
+| root | `cargo clippy --all-targets --all-features -- -D warnings` | Passed |
+| root | `cargo build --bins` | Passed |
+| root | `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 2,833 passed; one existing fixture-generation test ignored |
+| root | `cargo test --test contracts --test provider --all-features` | 25 contracts + 166 provider passed; five opt-in live-provider tests ignored |
+| root | `cargo test --lib --all-features -- boundary_suites::` | 226 passed |
+| root | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance` | 401 passed: durable 116, process 52, Subagent 53, Tools 157, conformance 23 |
+| test-support/fake-provider | `uv sync --frozen` | Passed |
+| test-support/fake-provider | `uv run --frozen pytest` | 51 passed |
+| protocol/app-server | `pnpm install --frozen-lockfile` | Passed |
+| protocol/app-server | `pnpm check` | Passed Rust schema/TypeScript generation check |
+| protocol/app-server | `pnpm typecheck` | Passed |
+| web-console | `pnpm install --frozen-lockfile` | Passed |
+| web-console | `pnpm typecheck` | Passed |
+| web-console | `pnpm test` | 152 passed, 14 files |
+| web-console | `pnpm check:provenance` | 56 source records and 100 production package notices passed |
+| web-console | `pnpm build` | Passed; existing non-fatal bundle-size advisory |
+| web-console | `pnpm test:e2e` | Six passed against the real App Server |
+| tui | `pnpm install --frozen-lockfile` | Passed |
+| tui | `pnpm typecheck` | Passed |
+| tui | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test` | 810 passed, zero skipped |
+
+Earlier development runs exposed and corrected headless observation interference,
+Workflow revision delivery gaps, and runtime/projection-worker reference lifetimes.
+Two boundary retries also encountered PyPI network-unreachable errors; the full
+unchanged command passed after connectivity recovered, without offline mode,
+changed dependency settings, sleeps, weakened assertions or excluded tests.
+The table above records full successful runs after the code corrections.
+
+The macOS job budget is 40 minutes: the previous reviewed-head run spent about
+19 minutes in cold compilation and reached passing external targets before the
+old 25-minute job deadline cancelled it. Native test liveness limits are unchanged.
+Final-head GitHub Actions results are recorded on PR #318 after all seven jobs
+finish; this local record alone makes no claim about pending remote jobs.
+
+
+The first pushed correction (`83eeaa84`, Actions run 34966252256) exposed one
+remaining test synchronization error in the Linux deterministic lane:
+`detach_never_mutates_background_or_mailbox_state` observed durable request #2
+and immediately assumed its mailbox-drain observation had published. The test
+now awaits the existing native attempt-settlement signal before checking the
+projected drain. The detached-running/mailbox-preservation assertions are
+unchanged; no delay, retry or assertion weakening was added. This is the same
+COMMIT/publication distinction enforced by the production cut contract.

@@ -1732,6 +1732,23 @@ pub trait ConversationStore: Send + Sync + 'static {
         event: RuntimeEventEnvelope,
     ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError>;
 
+    /// Atomically install the leaf Journal observer and capture its initial prefix.
+    fn observe_journal(
+        &self,
+        observer: std::sync::Arc<dyn super::presentation::JournalObserver>,
+    ) -> Result<u64, ConversationStoreError>;
+
+    /// Latest committed Journal position, read without enumerating history.
+    fn presentation_frontier(&self) -> Result<u64, ConversationStoreError>;
+
+    /// Indexed, bounded execution-fact reads for presentation consumers.
+    /// `before` is exclusive; `through` fixes a durable read cut. This is an
+    /// internal Journal query, never a public cursor or a semantic authority.
+    fn read_presentation_events(
+        &self,
+        query: &super::presentation::FactQuery,
+    ) -> Result<Vec<RuntimeEventEnvelope>, ConversationStoreError>;
+
     /// Reads a bounded Event Journal page in stable sequence order.
     fn read_events(
         &self,

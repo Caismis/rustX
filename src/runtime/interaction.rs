@@ -2407,6 +2407,158 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use tokio::sync::oneshot;
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // Complete real-store staged publication and settlement regression.
+    async fn durable_interaction_request_waits_for_native_publication_in_the_snapshot_cut() {
+        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::runtime::observation::{ConversationObservation, PendingObservations};
+        struct Audit {
+            store: Arc<SqliteConversationStore>,
+            gate: Arc<crate::tools::background::test_sync::CommitBoundaryHook>,
+        }
+        impl ConversationInteractionAudit for Audit {
+            fn conversation_id(&self) -> &ConversationId {
+                ConversationStore::conversation_id(self.store.as_ref())
+            }
+            fn commit_interaction_requested(
+                &self,
+                event: RuntimeEventEnvelope,
+            ) -> Result<
+                (RuntimeEventEnvelope, TranscriptCursor),
+                crate::durable::ConversationStoreError,
+            > {
+                let result = self.store.commit_interaction_requested(event)?;
+                self.gate.enter(); // Real SQLite commit, before pending-map installation.
+                Ok(result)
+            }
+            fn commit_interaction_settled(
+                &self,
+                event: RuntimeEventEnvelope,
+            ) -> Result<
+                (RuntimeEventEnvelope, TranscriptCursor),
+                crate::durable::ConversationStoreError,
+            > {
+                self.store.commit_interaction_settled(event)
+            }
+        }
+        struct Observer(Arc<PendingObservations>);
+        impl InteractionObserver for Observer {
+            fn on_pending(
+                &self,
+                request: &InteractionRequest,
+                event: &RuntimeEventEnvelope,
+                cursor: TranscriptCursor,
+            ) {
+                self.0.push(ConversationObservation::InteractionPending {
+                    interaction: RoutedInteraction::primary(request.clone()),
+                    audit: Some((event.clone(), cursor)),
+                });
+            }
+            fn on_settled(
+                &self,
+                id: &InteractionId,
+                outcome: &InteractionOutcome,
+                audit: Option<&(RuntimeEventEnvelope, TranscriptCursor)>,
+            ) {
+                self.0.push(ConversationObservation::InteractionSettled {
+                    interaction: InteractionRef::new(
+                        ConversationId::new("interaction-cut"),
+                        id.clone(),
+                    ),
+                    outcome: outcome.clone(),
+                    audit: audit.cloned(),
+                });
+            }
+        }
+        let id = ConversationId::new("interaction-cut");
+        let store = Arc::new(SqliteConversationStore::in_memory(id.clone()).unwrap());
+        let queue = Arc::new(PendingObservations::new());
+        assert_eq!(store.observe_journal(queue.clone()).unwrap(), 0);
+        let gate = Arc::new(crate::tools::background::test_sync::CommitBoundaryHook::default());
+        let lifecycle = ConversationLifecycle::new();
+        assert!(lifecycle.activate());
+        let coordinator = Arc::new(InteractionCoordinator::new(
+            id.clone(),
+            lifecycle,
+            Arc::new(Audit {
+                store: store.clone(),
+                gate: gate.clone(),
+            }),
+        ));
+        coordinator.install_observer(Arc::new(Observer(queue.clone())));
+        coordinator.set_provider_available(true);
+        let mut projection = crate::runtime_client::projection::RuntimeClientProjection::new(
+            id,
+            vec![],
+            crate::runtime_client::snapshot::CapabilityView {
+                revision: crate::runtime::identity::CapabilityRevision::new(1),
+                tools: vec![],
+                available_tools: vec![],
+                skills: vec![],
+                sources: vec![],
+            },
+            None,
+            64,
+        );
+        let (_, before_cursor, before_through) = projection.snapshot_cut().unwrap();
+        let publisher = coordinator.clone();
+        let task = tokio::task::spawn_blocking(move || {
+            publish_questionnaire(&publisher, "interaction-attempt").unwrap()
+        });
+        gate.wait_entered();
+        assert!(queue.has_unpublished());
+        assert!(queue.drain().is_empty());
+        let (before, cursor, through) = projection.snapshot_cut().unwrap();
+        assert_eq!(cursor, before_cursor);
+        assert_eq!(through, before_through);
+        assert!(before.pending_interactions.is_empty());
+        assert!(
+            crate::runtime_client::trace::TraceProjection::through(store.as_ref(), through)
+                .page(None, 32)
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+        gate.proceed();
+        let ticket = task.await.unwrap();
+        for observation in queue.drain() {
+            projection.apply(observation);
+        }
+        let (after, cursor, through) = projection.snapshot_cut().unwrap();
+        assert!(cursor > before_cursor);
+        assert_eq!(after.pending_interactions[0].request.id, ticket.id);
+        let trace = crate::runtime_client::trace::TraceProjection::through(store.as_ref(), through)
+            .page(None, 32)
+            .unwrap();
+        assert_eq!(trace.entries.len(), 1);
+        assert_eq!(
+            trace.entries[0].native_id.as_deref(),
+            Some(ticket.id.as_str())
+        );
+        coordinator
+            .respond(
+                &ticket.id,
+                InteractionResponse::Questionnaire {
+                    response: QuestionnaireResponse::Declined,
+                },
+            )
+            .unwrap();
+        let cancellation =
+            AgentCancellation::new(CancellationReason::UserRequested).execution_cancellation();
+        coordinator.wait(ticket, cancellation).await;
+        for observation in queue.drain() {
+            projection.apply(observation);
+        }
+        assert!(
+            projection
+                .snapshot()
+                .unwrap()
+                .0
+                .pending_interactions
+                .is_empty()
+        );
+    }
+
     fn facts(call: &str) -> ApprovalFacts {
         ApprovalFacts {
             turn: 3,

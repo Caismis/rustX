@@ -353,7 +353,9 @@ pub enum RuntimeClientSessionRequest {
 /// successful snapshots expose only the Goal view folded at that cursor.
 /// Version 34 removes the obsolete global `SessionSummaryView.active` field.
 /// Strict negotiation rejects v33 clients before they can decode Session lists.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 34;
+/// Version 35 adds the bounded native Trace snapshot window and invalidation.
+/// Version 34 clients are rejected; Trace introduces no execution authority.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 35;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1080,6 +1082,8 @@ pub enum RuntimeClientResult {
         cursor: RuntimeClientCursor,
     },
     /// `transcript_page_get` succeeded.
+    /// Bounded read-only Trace page.
+    TracePage { page: super::trace::TracePage },
     TranscriptPage {
         /// The bounded durable transcript page.
         page: RuntimeClientTranscriptPage,
@@ -1415,7 +1419,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 34);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 35);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

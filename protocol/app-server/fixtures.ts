@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v2.js';
+import type {ProtocolMessage} from './v3.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -50,7 +50,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 2,
+      "protocol_version": 3,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -67,7 +67,7 @@ export const fixtures = [
     "id": 7,
     "result": {
       "type": "initialized",
-      "protocol_version": 2,
+      "protocol_version": 3,
       "capabilities": {
         "multi_session": true,
         "single_writable_controller": true,
@@ -216,6 +216,21 @@ export const fixtures = [
         "attachment_id": "attachment-fixture"
       },
       "after_cursor": "9007199254740993"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "session/trace",
+    "params": {
+      "target": {
+        "session_id": "session-fixture",
+        "conversation_id": "conversation-fixture",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "before": "trace:9007199254740993",
+      "limit": 32
     }
   },
   {

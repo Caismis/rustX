@@ -114,6 +114,7 @@ enum Decision {
     Accepted {
         started_at: DateTime<Utc>,
         deadline_at_millis: Option<u64>,
+        journal_sequence: u64,
     },
     RolledBack,
     Failed(SubagentStartError),
@@ -1147,6 +1148,10 @@ pub trait SubagentObserver: Send + Sync {
     /// Called under the registry lock with each new consistency snapshot;
     /// the implementation must be cheap and nonblocking.
     fn on_snapshot(&self, snapshot: &SubagentSnapshot);
+    /// Publishes installed native state together with its exact durable receipt.
+    fn on_committed(&self, snapshot: &SubagentSnapshot, _sequence: u64) {
+        self.on_snapshot(snapshot);
+    }
 
     /// Called under the registry lock for a retained-workspace resource
     /// transition. This is reliable but separate from lifecycle snapshots:
@@ -2364,7 +2369,7 @@ impl SubagentRegistry {
                             return Decision::RolledBack;
                         }
                         let started_at = clock.now();
-                        if let Err(error) = mailbox.commit_subagent_ownership(ownership_event(
+                        let committed = match mailbox.commit_subagent_ownership(ownership_event(
                             &config.conversation_id,
                             &subagent_id,
                             &child_agent_id,
@@ -2382,10 +2387,13 @@ impl SubagentRegistry {
                             &workspace,
                             started_at,
                         )) {
-                            return Decision::Failed(SubagentStartError::Durability {
-                                detail: error.to_string(),
-                            });
-                        }
+                            Ok(committed) => committed,
+                            Err(error) => {
+                                return Decision::Failed(SubagentStartError::Durability {
+                                    detail: error.to_string(),
+                                });
+                            }
+                        };
                         // The deadline starts only after the durable ownership
                         // event succeeds. Sampling the monotonic clock here
                         // keeps the whole owned lifecycle covered without
@@ -2398,12 +2406,18 @@ impl SubagentRegistry {
                         Decision::Accepted {
                             started_at,
                             deadline_at_millis,
+                            journal_sequence: committed.sequence,
                         }
                     }) {
                         Ok(decision) => decision,
                         Err(_) => Decision::Failed(SubagentStartError::ConversationInactive),
                     };
-                    if let Decision::Accepted { started_at, .. } = &decision {
+                    if let Decision::Accepted {
+                        started_at,
+                        journal_sequence,
+                        ..
+                    } = &decision
+                    {
                         let record = SubagentRecord {
                             subagent_id: subagent_id.clone(),
                             child_agent_id: child_agent_id.clone(),
@@ -2435,7 +2449,12 @@ impl SubagentRegistry {
                         let index = state.records.len();
                         state.index.insert(subagent_id.clone(), index);
                         state.records.push(record);
-                        publish_snapshot(&mut state, &self.state_version, index);
+                        publish_committed_snapshot(
+                            &mut state,
+                            &self.state_version,
+                            index,
+                            *journal_sequence,
+                        );
                     }
                     decision
                 }
@@ -4302,7 +4321,7 @@ impl SubagentRegistry {
                                     candidate.timestamp,
                                 ),
                             )
-                            .map(|_| ())
+                            .map(|(terminal, _)| terminal.sequence)
                             .map_err(|error| error.to_string()),
                         (None, _) => Err(
                             "a successful Workflow terminal candidate has no validated value"
@@ -4317,11 +4336,11 @@ impl SubagentRegistry {
                     self.config
                         .mailbox
                         .commit_subagent_terminal(event)
-                        .map(|_| ())
+                        .map(|event| event.sequence)
                         .map_err(|error| error.to_string())
                 };
                 match result {
-                    Ok(()) => {
+                    Ok(journal_sequence) => {
                         let record = &mut state.records[index];
                         record.lifecycle = match candidate.state {
                             TerminalState::Succeeded => SubagentLifecycle::Succeeded,
@@ -4336,7 +4355,12 @@ impl SubagentRegistry {
                         // ordinary `settled -> delivered` notification state
                         // is deliberately not entered.
                         record.notification = NotificationState::None;
-                        publish_snapshot(&mut state, &self.state_version, index);
+                        publish_committed_snapshot(
+                            &mut state,
+                            &self.state_version,
+                            index,
+                            journal_sequence,
+                        );
                         None
                     }
                     Err(error) => {
@@ -4369,7 +4393,8 @@ impl SubagentRegistry {
                     .accept_subagent_terminal(notice, draft, event);
                 let record = &mut state.records[index];
                 match result {
-                    Ok(_) => {
+                    Ok(committed) => {
+                        let journal_sequence = committed.sequence;
                         record.lifecycle = match candidate.state {
                             TerminalState::Succeeded => SubagentLifecycle::Succeeded,
                             TerminalState::Failed => SubagentLifecycle::Failed,
@@ -4378,7 +4403,12 @@ impl SubagentRegistry {
                         };
                         record.pending_terminal = None;
                         record.notification = NotificationState::Delivered;
-                        publish_snapshot(&mut state, &self.state_version, index);
+                        publish_committed_snapshot(
+                            &mut state,
+                            &self.state_version,
+                            index,
+                            journal_sequence,
+                        );
                         None
                     }
                     Err(error) => {
@@ -4480,7 +4510,7 @@ impl SubagentRegistry {
                                 candidate.timestamp,
                             ),
                         )
-                        .map(|_| ())
+                        .map(|(terminal, _)| terminal.sequence)
                         .map_err(|error| error.to_string()),
                     _ => {
                         return Err(
@@ -4493,7 +4523,7 @@ impl SubagentRegistry {
                 self.config
                     .mailbox
                     .commit_subagent_terminal(event)
-                    .map(|_| ())
+                    .map(|event| event.sequence)
                     .map_err(|error| error.to_string())
             }
         } else {
@@ -4510,11 +4540,11 @@ impl SubagentRegistry {
             self.config
                 .mailbox
                 .accept_subagent_terminal(notice, draft, event)
-                .map(|_| ())
+                .map(|event| event.sequence)
                 .map_err(|error| error.to_string())
         };
         match result {
-            Ok(()) => {
+            Ok(journal_sequence) => {
                 let record = &mut state.records[index];
                 record.lifecycle = match candidate.state {
                     TerminalState::Succeeded => SubagentLifecycle::Succeeded,
@@ -4532,7 +4562,12 @@ impl SubagentRegistry {
                 } else {
                     NotificationState::Delivered
                 };
-                publish_snapshot(&mut state, &self.state_version, index);
+                publish_committed_snapshot(
+                    &mut state,
+                    &self.state_version,
+                    index,
+                    journal_sequence,
+                );
                 Ok(true)
             }
             Err(error) => {
@@ -4868,6 +4903,18 @@ const fn reason_text(reason: CancellationReason) -> &'static str {
 
 /// Emits the record's snapshot to the observer and bumps the watch
 /// version. Called under the registry lock.
+fn publish_committed_snapshot(
+    state: &mut RegistryState,
+    version: &tokio::sync::watch::Sender<u64>,
+    index: usize,
+    sequence: u64,
+) {
+    if let Some(observer) = &state.observer {
+        observer.on_committed(&state.records[index].snapshot(), sequence);
+    }
+    version.send_modify(|v| *v += 1);
+}
+
 fn publish_snapshot(
     state: &mut RegistryState,
     version: &tokio::sync::watch::Sender<u64>,

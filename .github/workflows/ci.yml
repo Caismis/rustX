@@ -161,7 +161,11 @@ jobs:
   rust-platform-boundaries:
     name: Platform-sensitive boundaries (macOS)
     runs-on: macos-latest
-    timeout-minutes: 25
+    # Cold macOS compilation took 19 minutes at the reviewed Trace head;
+    # the complete suites were still progressing when the old 25-minute job
+    # deadline killed them. Keep test-level liveness guards and budget the
+    # cold build plus all mandatory boundary targets.
+    timeout-minutes: 40
 
     steps:
       - name: Checkout

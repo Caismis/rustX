@@ -70,7 +70,7 @@ async fn initialize(connection: &AppServerConnection) {
         connection,
         0,
         Method::Initialize(InitializeParams {
-            protocol_version: 2,
+            protocol_version: 3,
             client: ClientIdentity {
                 name: "scripted".into(),
                 version: "1".into(),
@@ -201,7 +201,15 @@ async fn stale_detach_cannot_remove_replacement_route() {
             ErrorData::StaleAttachment
         );
         assert_eq!(connection.attachment_counts(), (1, 0));
-        call(&connection, 2, Method::SessionSnapshot { target: new }).await;
+        call(
+            &connection,
+            2,
+            Method::SessionSnapshot {
+                trace_records: vec![],
+                target: new,
+            },
+        )
+        .await;
         f.close().await;
     })
     .await;
@@ -648,10 +656,10 @@ async fn initialize_and_malformed_wire_are_transactional() {
         let connection = AppServerConnection::new(f.host.clone());
         let before = connection.handle_json(r#"{"jsonrpc":"2.0","id":0,"method":"server/info","params":{}}"#).await.unwrap();
         assert!(matches!(before, Response::Failure(Failure { error: RpcError { data: Some(ErrorData::NotInitialized), .. }, .. })));
-        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":1,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
+        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":2,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 2, .. })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 3, .. })));
         initialize(&connection).await;
         for (json, expected_code) in [
             (r#"{"jsonrpc":"2.0","id":1,"method":"missing","params":{}}"#, -32601),
@@ -911,8 +919,15 @@ async fn one_connection_pipelines_sessions_without_cross_routing_and_detach_keep
         assert!(live_a.inspect_runtime().unwrap().has_current_attempt());
         let new_a = attach(&rival, &f, 0).await;
         assert_ne!(new_a.attachment_id, a.attachment_id);
-        let MethodResult::Snapshot { snapshot, .. } =
-            call(&rival, 32, Method::SessionSnapshot { target: new_a }).await
+        let MethodResult::Snapshot { snapshot, .. } = call(
+            &rival,
+            32,
+            Method::SessionSnapshot {
+                trace_records: vec![],
+                target: new_a,
+            },
+        )
+        .await
         else {
             panic!("snapshot")
         };
@@ -1018,6 +1033,7 @@ async fn headless_approval_and_questionnaire_survive_detach_and_settle_once() {
                     &connection,
                     62,
                     Method::SessionSnapshot {
+                        trace_records: vec![],
                         target: reattached.clone(),
                     },
                 )
@@ -1263,7 +1279,15 @@ async fn explicit_close_is_idempotent_and_revokes_claims_despite_retained_arc() 
             rejected(&retained, Method::SessionDetach { target: old }).await,
             ErrorData::StaleAttachment
         );
-        call(&replacement, 2, Method::SessionSnapshot { target: new }).await;
+        call(
+            &replacement,
+            2,
+            Method::SessionSnapshot {
+                trace_records: vec![],
+                target: new,
+            },
+        )
+        .await;
         replacement.close();
         f.close().await;
     })
@@ -1340,8 +1364,15 @@ async fn admitted_mutation_survives_close_before_native_dispatch() {
                 ..
             }
         ));
-        let MethodResult::Snapshot { snapshot, .. } =
-            call(&replacement, 11, Method::SessionSnapshot { target: new }).await
+        let MethodResult::Snapshot { snapshot, .. } = call(
+            &replacement,
+            11,
+            Method::SessionSnapshot {
+                trace_records: vec![],
+                target: new,
+            },
+        )
+        .await
         else {
             panic!("snapshot");
         };
@@ -1369,10 +1400,17 @@ async fn host_request_owner_outlives_dropped_protocol_waiter() {
         let probe = f.manager.probe(&target.conversation_id);
         probe.before_operation.arm();
         let worker = connection.clone();
-        let waiter =
-            tokio::spawn(
-                async move { call(&worker, 91, Method::SessionSnapshot { target }).await },
-            );
+        let waiter = tokio::spawn(async move {
+            call(
+                &worker,
+                91,
+                Method::SessionSnapshot {
+                    trace_records: vec![],
+                    target,
+                },
+            )
+            .await
+        });
         probe.before_operation.entered().await;
         waiter.abort();
         assert!(waiter.await.unwrap_err().is_cancelled());
@@ -1629,6 +1667,7 @@ async fn artifact_upload_capacity_is_shared_durable_and_path_safe() {
                 &connection,
                 923,
                 Method::SessionSnapshot {
+                    trace_records: vec![],
                     target: target.clone(),
                 },
             )
@@ -1686,4 +1725,44 @@ async fn artifact_upload_capacity_is_shared_durable_and_path_safe() {
         f.close().await;
     })
     .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn trace_reads_are_read_only_and_reconnect_repairs_the_same_native_facts() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        call(&connection, 900, Method::TurnStart { target: target.clone(), content: input("request-A") }).await;
+        f.gates[0].wait_entered().await;
+        let before = call(&connection, 901, Method::SessionSnapshot { trace_records: vec![], target: target.clone() }).await;
+        let read = call(&connection, 902, Method::Trace { target: target.clone(), before: None, limit: 32 }).await;
+        let MethodResult::Trace { page } = read else { panic!("Trace page"); };
+        assert!(page.entries.iter().any(|entry| entry.kind == crate::runtime_client::trace::TraceKind::Request));
+        assert!(matches!(rejected(&connection, Method::Trace { target: target.clone(), before: None, limit: 0 }).await, ErrorData::InvalidParams));
+        let after = call(&connection, 903, Method::SessionSnapshot { trace_records: vec![], target: target.clone() }).await;
+        assert_eq!(before, after, "Trace reads change no live cursor, inbound, interactions, attempt, surface or transcript");
+        connection.close();
+        let repaired = AppServerConnection::new(f.host.clone());
+        initialize(&repaired).await;
+        let repaired_target = attach(&repaired, &f, 0).await;
+        let MethodResult::Snapshot { snapshot: continuous, .. } = after else { panic!("snapshot"); };
+        let MethodResult::Snapshot { snapshot: reconnected, .. } = call(&repaired, 904, Method::SessionSnapshot { trace_records: vec![], target: repaired_target.clone() }).await else { panic!("snapshot"); };
+        assert_eq!(continuous.trace, reconnected.trace);
+        f.gates[0].release();
+        loop {
+            if let NotificationMethod::Event { event, .. } = repaired.next_notification().await.notification
+                && matches!(*event, RuntimeClientEvent::AttemptSettled { .. }) { break; }
+        }
+        let MethodResult::Snapshot { snapshot: settled, .. } = call(&repaired, 905, Method::SessionSnapshot { trace_records: vec![], target: repaired_target }).await else { panic!("snapshot"); };
+        repaired.close();
+        let final_connection = AppServerConnection::new(f.host.clone());
+        initialize(&final_connection).await;
+        let final_target = attach(&final_connection, &f, 0).await;
+        let MethodResult::Snapshot { snapshot: final_snapshot, .. } = call(&final_connection, 906, Method::SessionSnapshot { trace_records: vec![], target: final_target }).await else { panic!("snapshot"); };
+        assert_eq!(settled.trace, final_snapshot.trace);
+        final_connection.close();
+        f.close().await;
+    }).await;
 }

@@ -515,7 +515,7 @@ impl Recorder {
 }
 
 impl AgentExecutionObserver for Recorder {
-    fn observe_event(&self, _attempt_id: &AttemptId, event: &RuntimeEvent) {
+    fn observe_event(&self, _attempt_id: &AttemptId, event: &RuntimeEvent, _journal_sequence: u64) {
         self.events.lock().expect("events").push(event.clone());
     }
 
@@ -2951,6 +2951,7 @@ async fn goal84_runtime_client_projection_same_cursor_controls_activation_and_re
     assert_eq!(attach_cursor, cursor);
     assert_eq!(snapshot.goal, baseline.goal);
     let mut expected = created;
+    let mut previous_goal = baseline.goal.clone();
     let mut last_cursor = cursor;
     let mut first_revision = None;
     for mutation in [
@@ -2974,7 +2975,20 @@ async fn goal84_runtime_client_projection_same_cursor_controls_activation_and_re
             };
             expected = view;
         }
-        let (folded, next_cursor) = inner.fold_one_observation().expect("one Goal observation");
+        // A durable Journal-prefix receipt can publish Trace invalidation
+        // before the native Goal observation. Every intermediate cut must
+        // still carry the preceding Goal generation, never a partial one.
+        let (folded, next_cursor) = loop {
+            let (folded, cursor) = inner
+                .fold_one_observation()
+                .expect("queued Goal observation");
+            if folded.goal == Some(expected.clone()) {
+                break (folded, cursor);
+            }
+            assert_eq!(folded.goal, previous_goal);
+            assert!(cursor > last_cursor);
+        };
+        previous_goal = folded.goal.clone();
         assert_eq!(folded.goal, Some(expected.clone()));
         assert!(next_cursor > last_cursor);
         let (event_view, event_cursor) = goal_event(&subscription).await;
@@ -2997,7 +3011,13 @@ async fn goal84_runtime_client_projection_same_cursor_controls_activation_and_re
     let (frozen, frozen_cursor) = host.snapshot().unwrap();
     assert!(frozen.goal.unwrap().armed);
     assert_eq!(frozen_cursor, last_cursor);
-    let (disarmed, disarm_cursor) = inner.fold_one_observation().unwrap();
+    let (disarmed, disarm_cursor) = loop {
+        let (snapshot, cursor) = inner.fold_one_observation().expect("queued disarm");
+        assert_eq!(snapshot.goal.as_ref().unwrap().current, before_disarm);
+        if !snapshot.goal.as_ref().unwrap().armed {
+            break (snapshot, cursor);
+        }
+    };
     let view = disarmed.goal.unwrap();
     assert!(!view.armed);
     assert_eq!(

@@ -117,8 +117,8 @@ payloads are omitted from the finite protocol diagnostic log.
 
 ## WEB-02 review corrections
 
-The mandatory App Server vocabulary is v2 (`rustx.app-server.v2` and generated
-`protocol/app-server/v2.ts` / `v2.schema.json`). v1 initialization and v1-only
+The mandatory App Server vocabulary is v3 (`rustx.app-server.v3` and generated
+`protocol/app-server/v3.ts` / `v3.schema.json`). v1 initialization and v1-only
 WebSocket offers are rejected; there is no compatibility mode. Runtime Client
 retains its independently versioned contract.
 
@@ -136,3 +136,17 @@ Tool result/artifact pipeline; it proves actual decode, original-image dialog
 and a fresh load after reconnect. Current providers remain text-only, so the
 subsequent model continuation is refused natively rather than translating image
 input into an unsupported provider request.
+
+## Trajectory view boundary
+
+Chat and Trajectory share one App Server attachment and subscription. Their view
+selector is presentation state. Trace has its own bounded cache/cursor/epoch;
+Chat's transcript cursor is never used for Trace. Switching views leaves native
+execution untouched. The raw developer inspector remains a separate tool.
+
+Trajectory keeps one contiguous loaded history interval. A newest tail without
+shared records replaces that interval and its paging epoch; one selected record
+can remain separately inspector-visible and receive native lifecycle repairs.
+
+See [Native Trace](../docs/trace.md) for server projection ownership, request/retry
+grouping, current snapshot repair, redaction and deliberate inspector omissions.

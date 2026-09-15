@@ -2058,3 +2058,11 @@ scheduling, idle-conversation attempt scheduling, mailbox persistence, or
 background execution. Anthropic server-side fallback blocks remain
 unsupported at the adapter boundary and surface as a terminal `Unsupported`
 model failure.
+
+## Trace is downstream presentation
+
+The optional [native Trace projection](trace.md) reads the Ledger, immutable
+Request Snapshots and execution facts after their owners commit them. Logical
+Steps and actual request ordinals come from native `RequestIdentity`. Trace is
+never consulted by the Agent Loop, recovery, cancellation, Tool dispatch or
+settlement. Removing the Web Trajectory view removes only presentation.

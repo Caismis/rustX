@@ -23,7 +23,7 @@ it('switching and unmounting open Session views remains presentation-only', asyn
   fireEvent.click(screen.getByRole('tab', { name: 'Session B' }));
   expect(screen.getByText('/workspace/B · attached')).toBeTruthy();
   fireEvent.click(screen.getByRole('tab', { name: 'Session A' }));
-  expect(screen.getAllByRole('tab')).toHaveLength(2);
+  expect(screen.getAllByRole('tab', { name: /^Session / })).toHaveLength(2);
   ui.unmount();
   expect(server.requests).toHaveLength(baseline);
   expect(server.client.getSnapshot().views.A.attachment).toBe('attached');

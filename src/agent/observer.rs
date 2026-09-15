@@ -89,7 +89,7 @@ pub trait AgentExecutionObserver: Sync {
     /// callback observes the committed fact at the same publication
     /// linearization point, so live projections do not need an attempt-local
     /// duplicate journal.
-    fn observe_event(&self, attempt_id: &AttemptId, event: &RuntimeEvent);
+    fn observe_event(&self, attempt_id: &AttemptId, event: &RuntimeEvent, _journal_sequence: u64);
 
     /// Observes one canonical message commit at its commit point.
     ///

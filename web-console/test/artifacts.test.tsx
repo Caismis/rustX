@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ArtifactResources, ARTIFACT_MAX_BYTES } from '../src/client/artifacts';
 import { Artifact, ArtifactContext } from '../src/app/components/Artifact';
 import { InputBar } from '../src/app/components/InputBar';
-import type { SessionModelView } from '../../protocol/app-server/v2';
+import type { SessionModelView } from '../../protocol/app-server/v3';
 import { Server, snapshot } from './fixture';
 let server: Server;
 let sequence = 0;

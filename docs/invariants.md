@@ -148,7 +148,9 @@ Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses rollback journaling (`DELETE`), `synchronous=FULL`, foreign keys, and a busy timeout. Development
 schema `SQLITE_SCHEMA_VERSION` is the only accepted schema; incompatible
-development schemas fail explicitly at open and are not migrated. Version 34
+development schemas fail explicitly at open and are not migrated. Version 35
+requires the fixed Event Journal Trace presentation indexes; both absent and
+redefined current-schema indexes are rejected. Version 34
 adds native revisioned Goal state and atomic Goal/inbound accounting. Version 32
 freezes Issue #258’s effective child `profile_digest`; version 33 establishes
 Issue #254’s rollback-journal management and local storage contract. Version 31
@@ -8231,3 +8233,18 @@ composition, without filtering, shadowing or renaming either registration.
   mutate admitted attempt leases or frozen child execution specifications.
 
 See [Agent Profiles](agent-profiles.md) for the exact scope and ownership rules.
+
+## Native Trace semantic cut and history continuity (#306)
+
+- A SQLite commit receipt is staging, never Runtime Client publication. A
+  Trace-affecting receipt cannot advance the represented Journal frontier until
+  its native owner has installed state and published the exact receipt with its
+  semantic observation. An unpublished earlier receipt blocks later prefixes.
+- One host synchronization boundary folds each ready batch and captures native
+  state, cursor, durable Trace frontier and lifecycle repair evidence. No Trace
+  query samples a later durable maximum for that snapshot.
+- Trace's browser history is one contiguous server-proven interval. No-overlap
+  refresh rebases the interval and paging epoch. One separately retained selected
+  entry may receive native lifecycle repairs without becoming a history segment.
+- Trace is read-only. Removing Web Trajectory changes no execution, canonical
+  history, cancellation, settlement or recovery semantics.

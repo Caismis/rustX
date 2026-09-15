@@ -74,7 +74,7 @@ impl StatusRecorder {
 }
 
 impl AgentExecutionObserver for StatusRecorder {
-    fn observe_event(&self, _attempt_id: &AttemptId, event: &RuntimeEvent) {
+    fn observe_event(&self, _attempt_id: &AttemptId, event: &RuntimeEvent, _journal_sequence: u64) {
         self.events
             .lock()
             .expect("runtime event lock")

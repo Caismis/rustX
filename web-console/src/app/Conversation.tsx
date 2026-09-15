@@ -1,4 +1,4 @@
-import type { RuntimeClientSnapshot } from '../../../protocol/app-server/v2';
+import type { RuntimeClientSnapshot } from '../../../protocol/app-server/v3';
 import type { AppServerClient, ClientView, SessionView } from '../client/app-server';
 import { interactionKey } from '../client/app-server';
 import { conversation, json } from '../bindings/projection';

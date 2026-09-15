@@ -208,6 +208,7 @@ enum ForegroundSettlement {
 /// leaf queue; every acquisition of this lock drains that queue first, so
 /// the projection folds the coordinator's commits in order.
 pub(crate) struct RuntimeClientProjection {
+    journal_through: u64,
     /// The cursor of the last published event (0 = nothing published yet).
     cursor: RuntimeClientCursor,
     /// Set when the cursor space is exhausted: publishing stops and
@@ -241,6 +242,7 @@ impl RuntimeClientProjection {
         replay_limit: usize,
     ) -> Self {
         Self {
+            journal_through: 0,
             cursor: RuntimeClientCursor::new(0),
             exhausted: false,
             snapshot: RuntimeClientSnapshot {
@@ -261,6 +263,8 @@ impl RuntimeClientProjection {
                 durability_failure: None,
                 messages: initial_messages,
                 transcript: super::snapshot::RuntimeClientTranscriptPage::default(),
+                trace: super::trace::TracePage::default(),
+                trace_updates: Vec::new(),
                 attempt: None,
                 inbound: InboundDiagnostics {
                     pending: Vec::new(),
@@ -354,6 +358,7 @@ impl RuntimeClientProjection {
         &mut self,
         seed: &crate::runtime::conversation_runtime::RuntimeBootstrapSnapshot,
     ) {
+        self.journal_through = seed.journal_through;
         self.snapshot.transcript = super::snapshot::transcript_page_view(seed.transcript.clone())
             .expect("runtime bootstrap transcript is valid");
         self.snapshot.shutting_down = seed.shutting_down;
@@ -402,6 +407,7 @@ impl RuntimeClientProjection {
         if self.exhausted {
             return;
         }
+        self.journal_through = envelope.sequence;
         let event = &envelope.event;
         match event {
             RuntimeEvent::CompactionStarted
@@ -487,6 +493,25 @@ impl RuntimeClientProjection {
         if self.exhausted {
             return;
         }
+        if let ConversationObservation::JournalBatch {
+            through,
+            observations,
+        } = observation
+        {
+            let before = self.cursor;
+            for observation in observations {
+                self.apply(observation);
+            }
+            if let Some(through) = through {
+                self.journal_through = through;
+            } else {
+                self.exhausted = true;
+            }
+            if self.cursor == before {
+                self.publish(RuntimeClientEvent::TraceChanged);
+            }
+            return;
+        }
         let published = self.fold(observation);
         #[cfg(test)]
         self.probe_publish_enter();
@@ -500,6 +525,16 @@ impl RuntimeClientProjection {
     #[allow(clippy::too_many_lines)]
     fn fold(&mut self, observation: ConversationObservation) -> Vec<RuntimeClientEvent> {
         match observation {
+            ConversationObservation::JournalBatch { .. } => {
+                unreachable!("batches are applied at the synchronization boundary")
+            }
+            ConversationObservation::Published { observation, .. } => self.fold(*observation),
+            ConversationObservation::Workflow(cuts) => {
+                for cut in cuts {
+                    self.fold_workflows(cut);
+                }
+                Vec::new()
+            }
             ConversationObservation::GoalChanged(view) => {
                 if self.snapshot.goal.as_ref() == Some(&view) {
                     return Vec::new();
@@ -1035,8 +1070,8 @@ impl RuntimeClientProjection {
     ///   [`RuntimeClientProjection::fold_publication_frame`];
     /// - PROJECT: turn counting and final request usage, carrying the exact
     ///   values folded into the attempt view;
-    /// - INTERNAL: model request mechanics (`ModelRequestStarted`,
-    ///   `ModelRequestFailed`, `ModelRetryScheduled`);
+    /// - INVALIDATE: request boundaries and retries publish only `TraceChanged`;
+    ///   their payloads stay internal and the Trace owner resolves safe reads;
     /// - PROJECT: compaction start/failure and committed completion, carrying
     ///   attempt attribution when automatic and no attempt identity when
     ///   manual.
@@ -1113,13 +1148,13 @@ impl RuntimeClientProjection {
                 }
                 Vec::new()
             }
-            // INTERNAL: model request mechanics never produce client events —
-            // the attempt settlement carries the normalized failure.
+            // Request mechanics publish only a payloadless Trace invalidation.
+            // The native Trace owner resolves safe facts on snapshot repair.
             RuntimeEvent::TurnCompleted
             | RuntimeEvent::ModelRequestStarted { .. }
             | RuntimeEvent::ModelRequestFailed { .. }
-            | RuntimeEvent::ModelRetryScheduled { .. }
-            | RuntimeEvent::AgentStatusEmitted { .. } => Vec::new(),
+            | RuntimeEvent::ModelRetryScheduled { .. } => vec![RuntimeClientEvent::TraceChanged],
+            RuntimeEvent::AgentStatusEmitted { .. } => Vec::new(),
             RuntimeEvent::ModelRequestCompleted { usage, .. } => {
                 if let Some(usage) = usage
                     && let Some(attempt) = &mut self.snapshot.attempt
@@ -1131,7 +1166,7 @@ impl RuntimeClientProjection {
                         usage: usage.clone(),
                     }];
                 }
-                Vec::new()
+                vec![RuntimeClientEvent::TraceChanged]
             }
             // The durable Journal event carries identity only; the projection
             // already receives the canonical body from the commit
@@ -1676,6 +1711,14 @@ impl RuntimeClientProjection {
             return Err(RuntimeClientError::ProjectionExhausted);
         }
         Ok((self.snapshot.clone(), self.cursor))
+    }
+
+    /// Captured under the same host lock as the snapshot and subscription.
+    pub(crate) fn snapshot_cut(
+        &self,
+    ) -> Result<(RuntimeClientSnapshot, RuntimeClientCursor, u64), RuntimeClientError> {
+        let (snapshot, cursor) = self.snapshot()?;
+        Ok((snapshot, cursor, self.journal_through))
     }
 
     /// Replaces only the derived durable transcript page with a fresh
@@ -3021,7 +3064,12 @@ mod tests {
     }
 
     impl AgentExecutionObserver for StatusParkObserver {
-        fn observe_event(&self, attempt_id: &AttemptId, event: &RuntimeEvent) {
+        fn observe_event(
+            &self,
+            attempt_id: &AttemptId,
+            event: &RuntimeEvent,
+            _journal_sequence: u64,
+        ) {
             self.apply(ConversationObservation::Event {
                 attempt_id: attempt_id.clone(),
                 event: event.clone(),
@@ -3574,7 +3622,12 @@ mod tests {
     }
 
     impl AgentExecutionObserver for EventPathObserver {
-        fn observe_event(&self, attempt_id: &AttemptId, event: &RuntimeEvent) {
+        fn observe_event(
+            &self,
+            attempt_id: &AttemptId,
+            event: &RuntimeEvent,
+            _journal_sequence: u64,
+        ) {
             if matches!(event, RuntimeEvent::CompactionCompleted { .. }) {
                 self.facts
                     .lock()
@@ -4123,10 +4176,10 @@ mod tests {
         assert_eq!(first_cursor, second_cursor);
     }
 
-    /// Model-request mechanics stay internal; compaction start/failure and
+    /// Request payloads stay internal; invalidation and compaction lifecycle and
     /// committed completion are projected as runtime-owned lifecycle facts.
     #[test]
-    fn model_request_events_stay_internal_and_compaction_lifecycle_is_projected() {
+    fn request_payloads_stay_internal_and_trace_invalidation_is_projected() {
         let mut projection = projection();
         for event in [
             RuntimeEvent::ModelRequestStarted {
@@ -4172,22 +4225,28 @@ mod tests {
             apply_event(&mut projection, event);
         }
         let events = collect(&mut projection, RuntimeClientCursor::new(0));
-        assert_eq!(events.len(), 3);
+        assert_eq!(events.len(), 7);
+        assert!(
+            events[..3]
+                .iter()
+                .all(|event| matches!(event.event, RuntimeClientEvent::TraceChanged))
+        );
+        assert!(matches!(events[6].event, RuntimeClientEvent::TraceChanged));
         assert!(matches!(
-            &events[0].event,
+            &events[3].event,
             RuntimeClientEvent::ContextCompactionStarted { .. }
         ));
         assert!(matches!(
-            &events[1].event,
+            &events[4].event,
             RuntimeClientEvent::ContextCompacted { context, .. }
                 if context.compaction_count == 1
         ));
         assert!(matches!(
-            &events[2].event,
+            &events[5].event,
             RuntimeClientEvent::ContextCompactionFailed { error, .. } if error == "boom"
         ));
         let (snapshot, cursor) = projection.snapshot().expect("snapshot");
-        assert_eq!(cursor, RuntimeClientCursor::new(3));
+        assert_eq!(cursor, RuntimeClientCursor::new(7));
         assert!(!snapshot.context.compaction_in_progress);
         assert_eq!(snapshot.context.compaction_count, 1);
         assert!(snapshot.attempt.is_none());
@@ -4254,7 +4313,8 @@ mod tests {
             },
         );
         let events = collect(&mut projection, RuntimeClientCursor::new(1));
-        assert_eq!(events.len(), 2);
+        assert_eq!(events.len(), 3);
+        assert!(matches!(events[1].event, RuntimeClientEvent::TraceChanged));
         assert_eq!(
             events[0].event,
             RuntimeClientEvent::AttemptTurnUpdated {
@@ -4263,7 +4323,7 @@ mod tests {
             }
         );
         assert_eq!(
-            events[1].event,
+            events[2].event,
             RuntimeClientEvent::AttemptUsageUpdated {
                 attempt_id: attempt(),
                 usage: ModelUsage {
