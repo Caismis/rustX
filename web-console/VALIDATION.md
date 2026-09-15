@@ -339,7 +339,7 @@ transcript paging and artifacts. Baseline: `8b8e99e87df61b1fe8a91134f818fddc5496
 The original `rustX` checkout remains clean at `6dd1ef144fdfedbd99cb0c9dd9856e1e8defbf51`;
 implementation lives in the retained `rustX-issue-305` worktree.
 
-Final validation commands (Linux, Node 24-compatible pinned pnpm 11.13.1):
+Final validation commands (Linux, Node 24.20.0, pinned pnpm 11.13.1):
 
 | Location | Exact command | Result |
 | --- | --- | --- |
@@ -355,11 +355,12 @@ Final validation commands (Linux, Node 24-compatible pinned pnpm 11.13.1):
 | test-support/fake-provider | `uv run --frozen pytest` | 51 passed |
 | web-console, protocol/app-server, tui | `corepack install` and `pnpm install --frozen-lockfile` | Passed; `corepack enable` also run |
 | web-console | `pnpm typecheck` | Passed |
-| web-console | `pnpm test` | Final result recorded below |
+| web-console | `pnpm test` | 127 tests passed across 12 files |
 | web-console | `pnpm check:provenance` | 53 source records, 98 production dependency notices passed |
 | web-console | `pnpm build` | Passed; existing large-chunk advisory remains |
 | web-console | `pnpm exec playwright install chromium` | Passed |
 | web-console | `pnpm test:e2e` | 6 passed against real App Server and mandatory provider emulator |
+| protocol/app-server | `pnpm check` and `pnpm typecheck` | Passed; regeneration left all four generated artifacts unchanged |
 | tui | `pnpm typecheck` and `pnpm test` | Passed; 810 tests |
 
 The new native owner regression also passed independently with
