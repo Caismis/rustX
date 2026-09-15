@@ -154,7 +154,13 @@ export class Server {
         if (mutation.action === 'pause') { current.phase = 'paused'; next.goal.armed = false; }
         else if (mutation.action === 'resume') { current.phase = 'active'; current.blocked_reason = null; next.goal.armed = true; }
         else if (mutation.action === 'edit') current.objective = mutation.objective;
-        else if (mutation.action === 'budget') current.autonomous_round_budget = mutation.rounds;
+        else if (mutation.action === 'budget') {
+          // GoalDomain, not the browser, owns the 1..=100 range and consumption floor.
+          if (mutation.rounds < 1 || mutation.rounds > 100 || mutation.rounds < current.autonomous_rounds_consumed) {
+            throw new RpcFailure({ code: -32602, message: JSON.stringify({ reason: 'Invalid Goal transition or value', current }), data: { kind: 'invalid_params' } });
+          }
+          current.autonomous_round_budget = mutation.rounds;
+        }
         else throw new Error(`Fixture Goal mutation ${mutation.action} is a model declaration, not a Web control`);
         current.reference = { ...current.reference, revision: String(BigInt(current.reference.revision) + 1n) };
         this.snapshots.set(id, next); this.cursor++;

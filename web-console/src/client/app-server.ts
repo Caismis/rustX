@@ -21,20 +21,25 @@ export interface SessionView {
   cursor?: RuntimeClientCursor;
   history?: TranscriptCache;
   settings?: SessionPersistentState;
-  /** Provisional presentation of this connection's own submissions. Never state. */
+  /** Accepted, not yet projected submissions of this connection. Presentation only. */
   submissions?: readonly Submission[];
   error?: string;
 }
-/** A submission is provisional until its own acknowledgement names a MessageId
- * and an authoritative snapshot contains exactly that MessageId. */
+/** Exists only after `inbound_accepted` names the server MessageId, which is its
+ * sole identity; settles when an authoritative snapshot contains that MessageId. */
 export interface Submission {
-  key: string;
+  messageId: string;
   content: readonly UserContentBlock[];
-  messageId?: string;
 }
-/** Settled local outcome of one CAS-bound native Goal control. `obsolete` means the
- * connection or attachment changed and the result must not touch current state. */
-export type GoalControlOutcome = { status: 'applied' } | { status: 'rejected'; reason: string } | { status: 'uncertain' } | { status: 'obsolete' };
+/** Settled local outcome of one CAS-bound native Goal control. A known outcome is
+ * not projection convergence: `observed` reports whether an authoritative snapshot
+ * read after the outcome succeeded. `uncertain` means the response was lost;
+ * `obsolete` means the connection or attachment changed and nothing may apply. */
+export type GoalControlOutcome =
+  | { status: 'applied'; observed: boolean }
+  | { status: 'rejected'; reason: string; observed: boolean }
+  | { status: 'uncertain' }
+  | { status: 'obsolete' };
 export interface UncertainOperation {
   id: string;
   method: Request1['method'];
@@ -113,7 +118,6 @@ export class AppServerClient {
   private attachmentChanges = new Map<string, { kind: 'attach' | 'detach' | 'unload'; work: Promise<void> }>();
   private attachmentChangeCount = 0;
   private attachmentEpochs = new Map<string, number>();
-  private submissionSequence = 0;
   private state: ClientView = {
     connection: 'disconnected', generation: 0, sessions: [], views: {}, uncertain: [], interactionOperations: {},
   };
@@ -520,25 +524,18 @@ export class AppServerClient {
     }
     // `turn/start` and `turn/steer` share one native inbound owner: an idle runtime
     // admits a fresh attempt, a running one drains the mailbox at a safe boundary.
-    const key = `${generation}:${++this.submissionSequence}`;
-    this.setSession(id, { submissions: [...(this.state.views[id].submissions ?? []), { key, content }] });
-    try {
-      const accepted = await this.request({ method: 'turn/start', params: { target, content } }, 'inbound_accepted');
-      if (current()) {
-        this.setSession(id, { submissions: this.state.views[id].submissions?.map(item => item.key === key ? { ...item, messageId: accepted.message_id } : item) });
-        this.settleSubmissions(id);
-      }
-      return accepted;
-    } catch (error) {
-      // Failure or loss removes only the local echo; an uncertain mutation keeps its diagnostic.
-      const view = this.state.views[id];
-      if (view?.submissions?.some(item => item.key === key)) this.setSession(id, { submissions: view.submissions.filter(item => item.key !== key) });
-      throw error;
+    // Until acknowledged, the request is composer transport state only (and a lost
+    // response stays an uncertain diagnostic): it has no identity to queue under.
+    const accepted = await this.request({ method: 'turn/start', params: { target, content } }, 'inbound_accepted');
+    if (current() && !this.state.views[id].submissions?.some(item => item.messageId === accepted.message_id)) {
+      this.setSession(id, { submissions: [...(this.state.views[id].submissions ?? []), { messageId: accepted.message_id, content }] });
+      this.settleSubmissions(id);
     }
+    return accepted;
   }
-  /** An acknowledged submission settles only when an authoritative snapshot
-   * names its exact MessageId: pending in the mailbox (the native row replaces
-   * it) or adopted into canonical messages. No text or order matching. */
+  /** An accepted submission settles only when an authoritative snapshot names its
+   * exact MessageId: pending in the mailbox (the native row replaces it) or adopted
+   * into canonical messages. No text, order or queue-length matching. */
   private settleSubmissions(id: string) {
     const view = this.state.views[id];
     if (!view?.submissions?.length || !view.snapshot) return;
@@ -547,28 +544,34 @@ export class AppServerClient {
       ...view.snapshot.messages.map(message => message.id),
       ...(view.snapshot.transcript.entries ?? []).flatMap(entry => entry.item.type === 'message' ? [entry.item.message.id] : []),
     ]);
-    const remaining = view.submissions.filter(item => !item.messageId || !observed.has(item.messageId));
+    const remaining = view.submissions.filter(item => !observed.has(item.messageId));
     if (remaining.length !== view.submissions.length) this.setSession(id, { submissions: remaining });
   }
   /** One CAS-bound Goal control. `expected` is the authoritative GoalRef the caller
-   * rendered. A refusal rereads the snapshot; a lost response stays uncertain.
-   * Nothing is retried and no newer revision is ever substituted. */
+   * rendered. A known outcome (applied or refused) is not projection convergence:
+   * `observed` is true only when a snapshot read requested after the outcome
+   * succeeded for this attachment. A lost response stays uncertain. Nothing is
+   * retried and no newer revision is ever substituted. */
   async controlGoal(id: string, expected: GoalRef, mutation: GoalMutation): Promise<GoalControlOutcome> {
     const generation = this.state.generation;
     let target: AttachmentTarget;
-    try { target = this.target(id); } catch (error) { return { status: 'rejected', reason: error instanceof Error ? error.message : String(error) }; }
+    try { target = this.target(id); } catch (error) { return { status: 'rejected', reason: error instanceof Error ? error.message : String(error), observed: false }; }
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
     try {
       await this.request({ method: 'goal/control', params: { target, control: { action: 'mutate', expected, mutation } } }, 'goal');
     } catch (error) {
       if (error instanceof OutcomeUncertain) return { status: 'uncertain' };
       if (!current()) return { status: 'obsolete' };
-      if (error instanceof RpcFailure) await this.refresh(id).catch(() => {});
-      return { status: 'rejected', reason: goalRefusal(error) };
+      return { status: 'rejected', reason: goalRefusal(error), observed: await this.reread(id, current) };
     }
     if (!current()) return { status: 'obsolete' };
-    await this.refresh(id).catch(() => {});
-    return { status: 'applied' };
+    return { status: 'applied', observed: await this.reread(id, current) };
+  }
+  /** `refresh` re-marks the view dirty, so even a coalesced in-flight refresh
+   * completes a snapshot request issued after this call before resolving. */
+  private async reread(id: string, current: () => boolean) {
+    try { await this.refresh(id); } catch { return false; }
+    return current() && this.state.views[id]?.attachment === 'attached';
   }
   async cancelTurn(id: string) { return this.request({ method: 'turn/cancel', params: { target: this.target(id) } }, 'cancellation_accepted'); }
   async answer(id: string, interaction: InteractionRef, response?: InteractionResponse) {

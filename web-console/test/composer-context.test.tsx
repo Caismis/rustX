@@ -43,8 +43,20 @@ const region = (name: 'To-dos' | 'Goal' | 'Queue') => screen.queryByRole('region
 const dock = (name: 'To-dos' | 'Goal' | 'Queue') => screen.getByRole('region', { name });
 const methods = () => server.requests.map(item => item.request.method);
 const goalControls = () => server.requests.flatMap(item => item.request.method === 'goal/control' ? [item.request.params.control] : []);
+const snapshotReads = () => methods().filter(method => method === 'session/snapshot').length;
+const goalButton = (name: string) => within(dock('Goal')).getByRole('button', { name });
 const CONFIGURATION_WRITES = ['settings/replace', 'settings/saveDefault', 'settings/setModel', 'settings/setApprovalMode', 'session/create'];
 const update = (next: RuntimeClientSnapshot) => act(() => server.update('A', next));
+/** Answer a held authoritative read with a transport-level failure. */
+const failRead = (request: { id: string | number }) => act(async () => {
+  server.socket.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'Snapshot unavailable' } });
+});
+/** A later native event whose successful snapshot read is the next authoritative observation. */
+const recoverAuthority = async () => { server.held.delete('session/snapshot'); await update(server.snapshots.get('A')!); };
+const sendQueued = async (text: string) => {
+  fireEvent.change(screen.getByLabelText('Message'), { target: { value: text } });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Queue' })); });
+};
 
 describe('Todo dock binds only the composed native Todo projection', () => {
   it('distinguishes extension absent, composed empty and composed tasks', async () => {
@@ -100,28 +112,29 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
     expect(dock('Goal').textContent).toContain('Ongoing Goal');
     expect(dock('Goal').textContent).toContain('Ship the docks');
     expect(dock('Goal').textContent).toContain('1/4 rounds · r3');
-    expect(within(dock('Goal')).getByRole('button', { name: 'Pause goal' })).toBeTruthy();
+    expect(goalButton('Pause goal')).toBeTruthy();
     expect(within(dock('Goal')).queryByRole('button', { name: 'Resume goal' })).toBeNull();
     // Only controls GoalDomain assigns to users: no create, clear, complete or block.
     expect(within(dock('Goal')).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual(['Pause goal', 'Edit goal objective', 'Edit round budget']);
     await update(withGoal(goal({ phase: 'paused', reference: { id: 'goal-1', revision: '4' } }), false));
     expect(dock('Goal').textContent).toContain('Paused Goal');
-    expect(within(dock('Goal')).getByRole('button', { name: 'Resume goal' })).toBeTruthy();
+    expect(goalButton('Resume goal')).toBeTruthy();
     await update(withGoal(goal({ phase: 'blocked', blocked_reason: 'Need repository access', reference: { id: 'goal-1', revision: '5' } }), false));
     expect(dock('Goal').textContent).toContain('Blocked Goal');
     expect(dock('Goal').textContent).toContain('Blocked: Need repository access');
-    expect(within(dock('Goal')).getByRole('button', { name: 'Resume goal' })).toBeTruthy();
+    expect(goalButton('Resume goal')).toBeTruthy();
     await update(withGoal(goal({ phase: 'complete', reference: { id: 'goal-1', revision: '6' } }), false));
     expect(region('Goal')).toBeNull();
     await update(snapshot());
     expect(region('Goal')).toBeNull();
   });
-  it('pause and resume use native goal/control with the rendered GoalRef, never configuration', async () => {
+  it('pause and resume use native goal/control with the rendered GoalRef and unlock after the reread', async () => {
     await mount(withGoal(goal()));
-    fireEvent.click(within(dock('Goal')).getByRole('button', { name: 'Pause goal' }));
+    fireEvent.click(goalButton('Pause goal'));
     await waitFor(() => expect(dock('Goal').textContent).toContain('Paused Goal'));
     expect(dock('Goal').textContent).toContain('r4');
-    fireEvent.click(within(dock('Goal')).getByRole('button', { name: 'Resume goal' }));
+    expect(goalButton('Resume goal')).toHaveProperty('disabled', false);
+    fireEvent.click(goalButton('Resume goal'));
     await waitFor(() => expect(dock('Goal').textContent).toContain('Ongoing Goal'));
     expect(goalControls()).toEqual([
       { action: 'mutate', expected: { id: 'goal-1', revision: '3' }, mutation: { action: 'pause' } },
@@ -131,9 +144,29 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
     expect(JSON.stringify(server.client.getSnapshot().views.A.settings)).not.toMatch(/goal|Ship the docks/);
     expect(JSON.stringify(localStorage)).not.toContain('Ship the docks');
   });
+  it('an applied control whose reread fails stays locked on the old GoalRef until a later authoritative read', async () => {
+    await mount(withGoal(goal()));
+    const reads = snapshotReads();
+    server.held.add('session/snapshot');
+    fireEvent.click(goalButton('Pause goal'));
+    await failRead(await server.waitFor('session/snapshot', reads + 1));
+    expect((await within(dock('Goal')).findByRole('status')).textContent).toContain('applied');
+    // GoalDomain is at r4; the browser still renders its last authoritative observation.
+    expect(dock('Goal').textContent).toContain('Ongoing Goal');
+    expect(dock('Goal').textContent).toContain('r3');
+    for (const name of ['Pause goal', 'Edit goal objective', 'Edit round budget']) expect(goalButton(name)).toHaveProperty('disabled', true);
+    fireEvent.click(goalButton('Pause goal'));
+    expect(goalControls()).toHaveLength(1);
+    await recoverAuthority();
+    await waitFor(() => expect(dock('Goal').textContent).toContain('Paused Goal'));
+    expect(dock('Goal').textContent).toContain('r4');
+    expect(goalButton('Resume goal')).toHaveProperty('disabled', false);
+    expect(within(dock('Goal')).queryByRole('status')).toBeNull();
+    expect(goalControls()).toHaveLength(1);
+  });
   it('objective edit keeps its draft across revision-only change and sends the current revision', async () => {
     await mount(withGoal(goal()));
-    fireEvent.click(within(dock('Goal')).getByRole('button', { name: 'Edit goal objective' }));
+    fireEvent.click(goalButton('Edit goal objective'));
     const box = within(dock('Goal')).getByRole('textbox', { name: 'Goal objective' });
     expect(document.activeElement).toBe(box);
     fireEvent.change(box, { target: { value: 'Ship the docks today' } });
@@ -143,46 +176,101 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
     fireEvent.keyDown(within(dock('Goal')).getByRole('textbox', { name: 'Goal objective' }), { key: 'Enter' });
     await waitFor(() => expect(dock('Goal').textContent).toContain('Ship the docks today'));
     expect(goalControls()).toEqual([{ action: 'mutate', expected: { id: 'goal-1', revision: '5' }, mutation: { action: 'edit', objective: 'Ship the docks today' } }]);
-    await waitFor(() => expect(document.activeElement).toBe(within(dock('Goal')).getByRole('button', { name: 'Edit goal objective' })));
+    await waitFor(() => expect(document.activeElement).toBe(goalButton('Edit goal objective')));
   });
   it('an authoritative objective change drops an open draft instead of writing over unseen content', async () => {
     await mount(withGoal(goal()));
-    fireEvent.click(within(dock('Goal')).getByRole('button', { name: 'Edit goal objective' }));
+    fireEvent.click(goalButton('Edit goal objective'));
     fireEvent.change(within(dock('Goal')).getByRole('textbox'), { target: { value: 'My draft' } });
     await update(withGoal(goal({ objective: 'Edited elsewhere', reference: { id: 'goal-1', revision: '4' } })));
     expect(within(dock('Goal')).queryByRole('textbox')).toBeNull();
     expect(dock('Goal').textContent).toContain('Edited elsewhere');
     expect(goalControls()).toEqual([]);
   });
-  it('budget edit is bounded by native consumption and uses the current revision', async () => {
+  it('budget form checks only integer grammar; GoalDomain refuses out-of-domain values', async () => {
+    expect(readFileSync(resolve(process.cwd(), 'src/app/composer/GoalDock.tsx'), 'utf8')).not.toMatch(/MAX_ROUND_BUDGET|autonomous_rounds_consumed\)/);
     await mount(withGoal(goal({ autonomous_rounds_consumed: 2 })));
-    fireEvent.click(within(dock('Goal')).getByRole('button', { name: 'Edit round budget' }));
-    const box = within(dock('Goal')).getByRole('spinbutton', { name: 'Autonomous round budget' });
-    expect(box).toHaveProperty('value', '4');
-    fireEvent.change(box, { target: { value: '1' } });
-    expect(within(dock('Goal')).getByRole('button', { name: 'Save round budget' })).toHaveProperty('disabled', true);
-    fireEvent.change(box, { target: { value: '6' } });
-    fireEvent.keyDown(box, { key: 'Enter' });
+    fireEvent.click(goalButton('Edit round budget'));
+    const box = () => within(dock('Goal')).getByRole('spinbutton', { name: 'Autonomous round budget' });
+    const save = () => goalButton('Save round budget');
+    expect(box()).toHaveProperty('value', '4');
+    for (const value of ['', '0', '2.5']) {
+      fireEvent.change(box(), { target: { value } });
+      expect(save()).toHaveProperty('disabled', true);
+    }
+    // Syntactically valid values beyond the native ceiling or below consumption reach the owner.
+    for (const [value, attempt] of [['150', 1], ['1', 2]] as const) {
+      fireEvent.change(box(), { target: { value } });
+      expect(save()).toHaveProperty('disabled', false);
+      fireEvent.keyDown(box(), { key: 'Enter' });
+      expect((await within(dock('Goal')).findByRole('alert')).textContent).toBe('Invalid Goal transition or value');
+      await waitFor(() => expect(save()).toHaveProperty('disabled', false));
+      expect(goalControls()).toHaveLength(attempt);
+    }
+    fireEvent.change(box(), { target: { value: '6' } });
+    fireEvent.keyDown(box(), { key: 'Enter' });
     await waitFor(() => expect(dock('Goal').textContent).toContain('2/6 rounds'));
-    expect(goalControls()).toEqual([{ action: 'mutate', expected: { id: 'goal-1', revision: '3' }, mutation: { action: 'budget', rounds: 6 } }]);
+    expect(goalControls().map(control => control.action === 'mutate' && [control.expected.revision, control.mutation])).toEqual([
+      ['3', { action: 'budget', rounds: 150 }], ['3', { action: 'budget', rounds: 1 }], ['3', { action: 'budget', rounds: 6 }],
+    ]);
     expect(methods().filter(method => CONFIGURATION_WRITES.includes(method))).toEqual([]);
   });
-  it('a stale CAS refusal rereads authority and is never retried against the newer revision', async () => {
+  it('a stale CAS refusal rereads authority, unlocks on the new observation and is never retried', async () => {
     await mount(withGoal(goal()));
     // A committed native write this client has not observed yet.
     server.snapshots.set('A', withGoal(goal({ reference: { id: 'goal-1', revision: '4' }, objective: 'Changed elsewhere' })));
-    const reads = methods().filter(method => method === 'session/snapshot').length;
-    fireEvent.click(within(dock('Goal')).getByRole('button', { name: 'Pause goal' }));
+    const reads = snapshotReads();
+    fireEvent.click(goalButton('Pause goal'));
     expect((await within(dock('Goal')).findByRole('alert')).textContent).toBe('Stale GoalRef; observe current state before trying again');
     expect(dock('Goal').textContent).toContain('Changed elsewhere');
     expect(dock('Goal').textContent).toContain('Ongoing Goal');
     expect(dock('Goal').textContent).toContain('r4');
-    expect(methods().filter(method => method === 'session/snapshot').length).toBe(reads + 1);
-    // controlGoal settled after its reread; nothing remains that could replay the write.
+    expect(goalButton('Pause goal')).toHaveProperty('disabled', false);
+    expect(snapshotReads()).toBe(reads + 1);
     expect(goalControls()).toEqual([{ action: 'mutate', expected: { id: 'goal-1', revision: '3' }, mutation: { action: 'pause' } }]);
   });
+  it('a stale CAS refusal whose reread fails keeps the old GoalRef unusable until a later authoritative read', async () => {
+    await mount(withGoal(goal()));
+    server.snapshots.set('A', withGoal(goal({ reference: { id: 'goal-1', revision: '4' }, objective: 'Changed elsewhere' })));
+    const reads = snapshotReads();
+    server.held.add('session/snapshot');
+    fireEvent.click(goalButton('Pause goal'));
+    await failRead(await server.waitFor('session/snapshot', reads + 1));
+    expect((await within(dock('Goal')).findByRole('alert')).textContent).toBe('Stale GoalRef; observe current state before trying again');
+    expect(within(dock('Goal')).getByRole('status').textContent).toContain('locked');
+    expect(dock('Goal').textContent).toContain('Ship the docks');
+    expect(dock('Goal').textContent).toContain('r3');
+    expect(goalButton('Pause goal')).toHaveProperty('disabled', true);
+    fireEvent.click(goalButton('Pause goal'));
+    expect(goalControls()).toHaveLength(1);
+    await recoverAuthority();
+    await waitFor(() => expect(dock('Goal').textContent).toContain('Changed elsewhere'));
+    expect(dock('Goal').textContent).toContain('r4');
+    expect(goalButton('Pause goal')).toHaveProperty('disabled', false);
+    expect(goalControls()).toEqual([{ action: 'mutate', expected: { id: 'goal-1', revision: '3' }, mutation: { action: 'pause' } }]);
+  });
+  it('the dock itself locks after a known outcome without a reread until a newer observation arrives', async () => {
+    const outcomes: GoalControlOutcome[] = [{ status: 'applied', observed: false }, { status: 'rejected', reason: 'Refused by GoalDomain', observed: false }];
+    for (const outcome of outcomes) {
+      const mutate = vi.fn(async () => outcome);
+      const first = {};
+      const props = { disabled: false, mutate };
+      const ui = render(<GoalDock state={{ goal: goal(), armed: true }} observation={first} {...props} />);
+      await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Pause goal' })); });
+      expect(ui.getByRole('button', { name: 'Pause goal' })).toHaveProperty('disabled', true);
+      if (outcome.status === 'rejected') expect(ui.getByRole('alert').textContent).toBe('Refused by GoalDomain');
+      fireEvent.click(ui.getByRole('button', { name: 'Pause goal' }));
+      ui.rerender(<GoalDock state={{ goal: goal(), armed: true }} observation={first} {...props} />);
+      expect(ui.getByRole('button', { name: 'Pause goal' })).toHaveProperty('disabled', true);
+      ui.rerender(<GoalDock state={{ goal: goal({ reference: { id: 'goal-1', revision: '4' } }), armed: true }} observation={{}} {...props} />);
+      expect(ui.getByRole('button', { name: 'Pause goal' })).toHaveProperty('disabled', false);
+      expect(ui.queryByRole('status')).toBeNull();
+      expect(mutate).toHaveBeenCalledOnce();
+      cleanup();
+    }
+  });
   it('activation-only change keeps the durable revision and an open draft', () => {
-    const mutate = vi.fn(async (): Promise<GoalControlOutcome> => ({ status: 'applied' }));
+    const mutate = vi.fn(async (): Promise<GoalControlOutcome> => ({ status: 'applied', observed: true }));
     const current = goal();
     const ui = render(<GoalDock state={{ goal: current, armed: true }} observation={{}} disabled={false} mutate={mutate} />);
     fireEvent.click(ui.getByRole('button', { name: 'Edit goal objective' }));
@@ -200,14 +288,14 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
   it('a lost response stays uncertain until an authoritative reread and is not replayed', async () => {
     await mount(withGoal(goal()));
     server.held.add('goal/control');
-    fireEvent.click(within(dock('Goal')).getByRole('button', { name: 'Pause goal' }));
+    fireEvent.click(goalButton('Pause goal'));
     await act(async () => { await server.waitFor('goal/control', 1); });
     act(() => server.socket.close());
     expect((await within(dock('Goal')).findByRole('status')).textContent).toContain('uncertain');
-    expect(within(dock('Goal')).getByRole('button', { name: 'Pause goal' })).toHaveProperty('disabled', true);
+    expect(goalButton('Pause goal')).toHaveProperty('disabled', true);
     await act(() => server.connect());
     await waitFor(() => expect(within(dock('Goal')).queryByRole('status')).toBeNull());
-    expect(within(dock('Goal')).getByRole('button', { name: 'Pause goal' })).toHaveProperty('disabled', false);
+    expect(goalButton('Pause goal')).toHaveProperty('disabled', false);
     expect(dock('Goal').textContent).toContain('Ongoing Goal');
     expect(goalControls()).toHaveLength(1);
     expect(server.client.getSnapshot().uncertain.map(item => item.method)).toEqual(['goal/control']);
@@ -226,6 +314,7 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
     const ui = render(<GoalDock state={{ goal: goal(), armed: true }} observation={{}} disabled={false} mutate={mutate} />);
     await act(async () => { fireEvent.click(ui.getByRole('button', { name: 'Pause goal' })); });
     expect(ui.queryByRole('alert')).toBeNull(); expect(ui.queryByRole('status')).toBeNull();
+    expect(ui.getByRole('button', { name: 'Pause goal' })).toHaveProperty('disabled', false);
   });
 });
 
@@ -257,31 +346,63 @@ describe('Queue dock binds the native inbound mailbox', () => {
     await update(running());
     expect(screen.getByRole('button', { name: 'Queue' })).toBeTruthy();
     expect(screen.getByText('Attempt running · Enter queues for its next safe boundary')).toBeTruthy();
-    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'While running' } });
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Queue' })); await server.waitFor('turn/start', 1); });
+    await sendQueued('While running');
+    await server.waitFor('turn/start', 1);
     expect(methods()).not.toContain('turn/steer');
     await update(snapshot());
     expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy();
   });
-  it('a provisional echo settles only by its exact accepted MessageId', async () => {
-    await mount(running());
+  it('an unacknowledged request is composer transport state, never a queue row', async () => {
+    await mount(running(withQueue([inbound('1', 'Native row')])));
     server.held.add('turn/start');
-    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Queued draft' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Queue' }));
+    await sendQueued('Queued draft');
     const turn = await server.waitFor('turn/start', 1);
-    expect(within(dock('Queue')).getByRole('status').textContent).toBe('Sending…');
+    expect(screen.getByRole('button', { name: 'Awaiting acknowledgement…' })).toBeTruthy();
+    // No count header: the in-flight request is not counted as queued.
+    expect(within(dock('Queue')).queryByRole('button')).toBeNull();
+    expect(dock('Queue').querySelectorAll('li')).toHaveLength(1);
+    expect(dock('Queue').querySelector('[data-submission-echo]')).toBeNull();
+    expect(dock('Queue').textContent).not.toContain('Queued draft');
+    expect(server.client.getSnapshot().views.A.submissions ?? []).toEqual([]);
     await act(async () => { server.reply(turn); });
-    await waitFor(() => expect(within(dock('Queue')).getByRole('status').textContent).toBe('Accepted · awaiting projection'));
+    // Acceptance names the server MessageId; only now may provisional presentation exist.
+    const header = await within(dock('Queue')).findByRole('button', { expanded: false });
+    expect(header.textContent).toContain('2 queued');
+    expect(within(header).getByRole('status').textContent).toBe('1 accepted · awaiting projection');
+    fireEvent.click(header);
+    const echo = dock('Queue').querySelector('[data-submission-echo]')!;
+    expect(echo.getAttribute('data-accepted-message-id')).toBe('accepted-user');
+    expect(echo.textContent).toContain('Accepted · awaiting projection');
+    expect(server.client.getSnapshot().views.A.submissions?.map(item => item.messageId)).toEqual(['accepted-user']);
+  });
+  it('an accepted echo settles only by its exact MessageId', async () => {
+    await mount(running());
+    await sendQueued('Queued draft');
+    await waitFor(() => expect(dock('Queue').querySelector('[data-accepted-message-id="accepted-user"]')).toBeTruthy());
     // Identical text under another identity is not this submission.
     await update(running(withQueue([inbound('2', 'Queued draft', { id: 'someone-else' })])));
-    // Two rows collapse behind a header that keeps the provisional status visible.
-    const header = within(dock('Queue')).getByRole('button', { expanded: false });
-    expect(within(header).getByRole('status').textContent).toBe('Accepted · awaiting projection');
-    fireEvent.click(header);
+    fireEvent.click(within(dock('Queue')).getByRole('button', { expanded: false }));
     expect(dock('Queue').querySelectorAll('[data-submission-echo]')).toHaveLength(1);
     await update(running(withQueue([inbound('2', 'Queued draft', { id: 'someone-else' }), inbound('3', 'Queued draft', { id: 'accepted-user' })])));
     expect(dock('Queue').querySelectorAll('[data-submission-echo]')).toHaveLength(0);
     expect([...dock('Queue').querySelectorAll('[data-message-id]')].map(row => row.getAttribute('data-message-id'))).toEqual(['someone-else', 'accepted-user']);
+  });
+  it('a lost acknowledgement leaves only the uncertain diagnostic; reconnect repairs from authority without replay', async () => {
+    await mount(running());
+    server.held.add('turn/start');
+    await sendQueued('Lost acknowledgement');
+    await server.waitFor('turn/start', 1);
+    act(() => server.socket.close());
+    expect(region('Queue')).toBeNull();
+    expect(server.client.getSnapshot().uncertain.map(item => item.method)).toEqual(['turn/start']);
+    expect(screen.getByText('Outcome uncertain: turn/start')).toBeTruthy();
+    server.held.delete('turn/start');
+    // The runtime did commit it; only an authoritative read may say so.
+    server.snapshots.set('A', running(withQueue([inbound('5', 'Lost acknowledgement', { id: 'accepted-user' })])));
+    await act(() => server.connect());
+    await waitFor(() => expect(dock('Queue').querySelector('[data-message-id="accepted-user"]')).toBeTruthy());
+    expect(dock('Queue').querySelector('[data-submission-echo]')).toBeNull();
+    expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
   });
 });
 
@@ -292,7 +413,7 @@ describe('Composer context stack lifecycle', () => {
     const order = () => [...ui.container.querySelector('[data-composer-context-stack]')!.children].map(node => node.getAttribute('aria-label') ?? (node.querySelector('[data-composer-card]') ? 'Composer' : 'unknown'));
     expect(order()).toEqual(['To-dos', 'Goal', 'Queue', 'Composer']);
     fireEvent.click(within(dock('To-dos')).getByRole('button', { expanded: false }));
-    fireEvent.click(within(dock('Goal')).getByRole('button', { name: 'Edit goal objective' }));
+    fireEvent.click(goalButton('Edit goal objective'));
     fireEvent.change(within(dock('Goal')).getByRole('textbox'), { target: { value: 'Kept draft' } });
     // Queue disappears: Todo disclosure and Goal draft are unaffected.
     await update(running(withGoal(goal(), true, withTodos([task('1', 'pending')]))));
@@ -320,13 +441,11 @@ describe('Composer context stack lifecycle', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Session B' }));
     expect(within(dock('To-dos')).getByRole('button', { expanded: false })).toBeTruthy();
   });
-  it('disconnect clears only transient echoes; reconnect rebuilds docks from the new authoritative snapshot', async () => {
+  it('disconnect clears only accepted presentation echoes; reconnect rebuilds docks from the new authoritative snapshot', async () => {
     await mount(running(withQueue([inbound('1', 'Pending before loss')], withGoal(goal(), true, withTodos([task('1', 'in_progress')])))));
-    server.held.add('turn/start');
-    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Echo only' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Queue' }));
-    await act(async () => { await server.waitFor('turn/start', 1); });
-    fireEvent.click(within(dock('Queue')).getByRole('button', { expanded: false }));
+    await sendQueued('Echo only');
+    const header = await within(dock('Queue')).findByRole('button', { expanded: false });
+    fireEvent.click(header);
     expect(dock('Queue').querySelectorAll('[data-submission-echo]')).toHaveLength(1);
     const before = methods().length;
     act(() => server.socket.close());
@@ -334,9 +453,8 @@ describe('Composer context stack lifecycle', () => {
     expect(dock('Queue').querySelectorAll('[data-submission-echo]')).toHaveLength(0);
     expect(dock('Queue').textContent).toContain('Pending before loss');
     expect(dock('To-dos').textContent).toContain('1 in progress');
-    expect(within(dock('Goal')).getByRole('button', { name: 'Pause goal' })).toHaveProperty('disabled', true);
+    expect(goalButton('Pause goal')).toHaveProperty('disabled', true);
     expect(methods().slice(before)).toEqual([]);
-    server.held.delete('turn/start');
     // Native state moved on while this browser was away.
     server.snapshots.set('A', withGoal(goal({ phase: 'paused', reference: { id: 'goal-1', revision: '9' } }), false, withTodos([task('1', 'completed')])));
     await act(() => server.connect());

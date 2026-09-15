@@ -11,11 +11,11 @@ Composer
 
 `ComposerContextStack` owns that order, the shared column width and the vertical
 rhythm. Each dock owns only its own presentation state (Todo/Queue disclosure,
-the Goal draft and action feedback). A dock appearing or disappearing transfers
-nothing to another dock, and the whole stack is keyed by Session, so no dock state
-crosses Session views. Presentation is adapted from the pinned DeepSeek Harness
-`TodoPanel`, `GoalBar`, `QueueDock` and composer-stack geometry; see
-[PROVENANCE.md](PROVENANCE.md).
+the Goal draft, action feedback and a control lock pending authority). A dock
+appearing or disappearing transfers nothing to another dock, and the whole stack is
+keyed by Session, so no dock state crosses Session views. Presentation is adapted
+from the pinned DeepSeek Harness `TodoPanel`, `GoalBar`, `QueueDock` and
+composer-stack geometry; see [PROVENANCE.md](PROVENANCE.md).
 
 ## Authority
 
@@ -66,21 +66,43 @@ Controls are exactly the ones GoalDomain assigns to users: pause, resume
 and model declarations; there is no clear.
 
 Every mutation is `goal/control` `mutate` with the rendered authoritative
-`GoalRef` as its CAS token. `AppServerClient.controlGoal` returns one of:
+`GoalRef` as its CAS token. Nothing is ever retried, and no newer revision is ever
+substituted into a sent mutation.
 
-- `applied`: the snapshot is reread;
-- `rejected`: a refusal (including stale CAS) shows GoalDomain's reason and the
-  snapshot is reread. The write is **never** retried, and no newer revision is
-  substituted. A new attempt requires a new user gesture against the reread state;
-- `uncertain`: the response was lost after transmission. The existing uncertain
-  diagnostic is kept, controls stay disabled until a newer authoritative snapshot
-  arrives, and nothing is replayed;
-- `obsolete`: the connection or attachment changed; nothing touches current state.
+**Mutation outcome is not projection convergence.**
+
+```text
+goal/control applied or refused   -> outcome known
+successful session/snapshot after -> authoritative Goal observed
+```
+
+`AppServerClient.controlGoal` reports both:
+
+| Outcome | Meaning | Dock |
+| --- | --- | --- |
+| `applied`, `observed: true` | mutation committed and a later snapshot read succeeded | unlocked on the new observation |
+| `applied`, `observed: false` | mutation committed, reread failed | old GoalRef stays rendered; controls locked |
+| `rejected`, `observed: true` | native refusal (e.g. stale CAS), reread succeeded | reason shown; unlocked on the reread Goal |
+| `rejected`, `observed: false` | native refusal, reread failed | reason shown; controls locked |
+| `uncertain` | response lost after transmission | uncertain notice; controls locked; the global diagnostic remains |
+| `obsolete` | connection or attachment changed | nothing applies to the current view |
+
+`observed` is true only when a snapshot request issued after the outcome succeeds
+for the same attachment; a coalesced in-flight refresh is re-marked dirty so it
+cannot count. A locked dock unlocks only when the client replaces the snapshot,
+which happens only after a successful authoritative read (a later event refresh,
+resync or reconnect) — never on request completion, a timer or a rerender. The
+embedded `current` of a native `GoalRejection` is never adopted.
 
 Revision-only changes (autonomous round admission) keep an open draft; a change to
 the authoritative objective or budget drops the matching draft so it can never be
-written over content its author did not see. Goal controls never write extension
-enablement, and disabling the extension deletes no Goal state.
+written over content its author did not see.
+
+The browser validates only input grammar: a non-empty objective and a positive
+integer budget. The round-budget range, the consumption floor and transition
+legality belong to GoalDomain; a syntactically valid out-of-domain value is sent
+and its typed refusal is shown. Goal controls never write extension enablement,
+and disabling the extension deletes no Goal state.
 
 ### Queue and composer delivery
 
@@ -88,27 +110,39 @@ Queue rows are the native pending inbound items, in inbound sequence order, with
 their provenance (for example a Goal continuation). The dock is read-only: queue
 edit/remove and per-row steer belong to WEB-06.
 
-`turn/start` and `turn/steer` dispatch to the same native inbound owner. The
-composer therefore has one delivery action, labelled from the authoritative attempt:
-**Send** while idle and **Queue** while an attempt is running, when input waits for
-the next safe-boundary drain. The former separate Steer button implied a second
-mode rustX does not have and was removed.
+`turn/start` and `turn/steer` dispatch to the same native `submit_inbound`
+(`src/app_server/connection.rs`). The composer therefore has one delivery action,
+labelled from the authoritative attempt: **Send** while idle and **Queue** while an
+attempt is running, when input waits for the next safe-boundary drain. The former
+separate Steer button implied a second mode rustX does not have and was removed.
 
-A provisional echo exists only for this connection's own `turn/start`: *Sending…*
-until the acknowledgement, then *Accepted · awaiting projection* until an
-authoritative snapshot contains that exact accepted `MessageId` (pending or
-adopted). Text is never matched. Failure removes the echo; loss keeps the
-uncertain diagnostic. Echoes are shown only while an attempt runs, because an idle
-send is admitted directly rather than queued.
+A submission passes three presentation stages:
+
+```text
+turn/start in flight
+    -> composer transport only ("Awaiting acknowledgement…"); not a Queue row,
+       not counted as queued
+inbound_accepted { message_id }
+    -> may appear as an accepted provisional Queue row keyed by that MessageId
+authoritative snapshot contains that MessageId (pending, messages or transcript)
+    -> the native projection owns presentation; the provisional row is removed
+```
+
+Text, order and queue length never settle a provisional row. A lost `turn/start`
+response has no MessageId: it creates no Queue row, keeps the `OutcomeUncertain`
+diagnostic and is never replayed; a later authoritative snapshot shows whatever the
+runtime committed. Accepted rows are shown only while an attempt runs, because an
+idle send is admitted directly rather than queued.
 
 ## Lifecycle
 
 Disconnect, remount, route change and unmount send nothing: they do not cancel
 queued work, disarm or mutate Goal, modify Todo, settle a mutation or invent a
-terminal state. Connection loss clears only provisional echoes; the last
-observation stays visible but inert. Reconnect and reload rebuild every dock from
-the attach snapshot; disclosure state may reset. Old-generation and old-attachment
-results are fenced by the existing client generation/target checks.
+terminal state. Connection loss clears only accepted provisional rows (presentation,
+never a claim about server work); the last observation stays visible but inert.
+Reconnect and reload rebuild every dock from the attach snapshot; disclosure state
+may reset. Old-generation and old-attachment results are fenced by the existing
+client generation/target checks.
 
 ## Layout
 
@@ -117,7 +151,12 @@ same axis, in normal flow (no fixed or sticky positioning). Todo and Queue lists
 bounded at 180px; Goal text ellipsizes and wraps below its actions on narrow
 viewports. The real-server browser test measures the alignment at 1440px and 390px.
 
-## Relationship to #319
+## Relationship to #319 / PR #320
 
-The stack wraps the existing `InputBar` without touching its attachment or upload
-behaviour. The only `InputBar` change is the single delivery label.
+PR #320 (#319) replaces the ArtifactId user-upload path with Session-owned
+workspace uploads and moves the App Server protocol to v4. This slice wraps the
+existing `InputBar` without touching upload behaviour; its only composer changes
+are the single delivery action and removal of the `steer` send flag. It is built on
+`main` before #320 and must be rebased onto `main` after #320 merges, keeping v4
+`session/upload` receipts and this single delivery action, then revalidated. No
+v3/v4 or old/new upload compatibility path is added.
