@@ -67,7 +67,7 @@ import {
 import { correlateTools } from "../presentation/tools.ts";
 import { selectTodos } from "../presentation/todos.ts";
 import type { PresentationState } from "../presentation/state.ts";
-import { editorText, editorSubmission } from "../app-server/editor.ts";
+import { editorText, editorSubmission, RestoredEditorOrderingError } from "../app-server/editor.ts";
 import { AppServerRequestError } from "../app-server/client.ts";
 import type { AppServerHost } from "../app-server/host.ts";
 import type { AppServerSession } from "../app-server/session.ts";
@@ -260,8 +260,16 @@ export class RustxTuiApp {
     this.#tui = new TUI(new ProcessTerminal());
     this.#editor = new Editor(this.#tui, editorTheme, { paddingX: 1 });
     this.#editor.setAutocompleteProvider(new SlashCommandAutocompleteProvider());
+    // Pi clears and trims input before onSubmit. Restored drafts need the
+    // exact pre-submit text for ordered round trips and refused-edit recovery.
+    let editorInput = "";
+    const handleEditorInput = this.#editor.handleInput.bind(this.#editor);
+    this.#editor.handleInput = (data) => {
+      editorInput = this.#editor.getExpandedText();
+      handleEditorInput(data);
+    };
     this.#editor.onSubmit = (text) => {
-      void this.#onSubmit(text);
+      void this.#onSubmit(this.#restoredEditor !== undefined ? editorInput : text);
     };
     this.#loader = new Loader(this.#tui, style.cyan, style.dim, "");
 
@@ -662,7 +670,10 @@ export class RustxTuiApp {
           this.#editor.setText("");
         }
       } catch (error) {
-        if (this.#isCurrentPresentationLease(lease)) this.#showTransient("error", `draft admission failed: ${compactDiagnostic(error)}`);
+        if (this.#isCurrentPresentationLease(lease)) {
+          if (error instanceof RestoredEditorOrderingError) this.#editor.setText(text);
+          this.#showTransient("error", `draft admission failed: ${compactDiagnostic(error)}`);
+        }
       }
       return;
     }
