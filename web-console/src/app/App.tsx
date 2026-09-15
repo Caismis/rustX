@@ -3,6 +3,11 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { AppServerClient } from '../client/app-server';
 import type { RuntimeClientSessionDeletePreview } from '../../../protocol/app-server/v3';
 import { activeAttempt, json } from '../bindings/projection';
+import { goalDock, queueRows, todoDock } from '../bindings/composer-context';
+import { ComposerContextStack } from './composer/ComposerContextStack';
+import { GoalDock } from './composer/GoalDock';
+import { QueueDock } from './composer/QueueDock';
+import { TodoDock } from './composer/TodoDock';
 import { ArtifactResources } from '../client/artifacts';
 import { ArtifactContext } from './components/Artifact';
 import { ChatViewport } from '../presentation/layout/ChatViewport';
@@ -52,6 +57,7 @@ export function App({ client }: { client: AppServerClient }) {
   useEffect(() => () => artifacts?.dispose(), [artifacts]);
   const connected = state.connection === 'connected';
   const attached = connected && view?.attachmentIntent === 'wanted' && view.attachment === 'attached';
+  const composerDisabled = !attached || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
   const run = (action: () => Promise<unknown>) => {
     const generation = client.getSnapshot().generation; setError('');
     void action().catch(cause => { if (generation === client.getSnapshot().generation) setError(String(cause)); });
@@ -154,13 +160,19 @@ export function App({ client }: { client: AppServerClient }) {
           <Interactions client={client} state={state} view={view} run={run} />
         </>}
       </ChatViewport>}</ArtifactContext.Provider>
-      <InputBar key={view.id} disabled={!attached || !!view.snapshot?.shutting_down || !!view.snapshot?.durability_failure} busy={sending[view.id] === state.generation} active={activeAttempt(view.snapshot)}
-        onCancel={() => run(() => client.cancelTurn(view.id))} onSend={async (text, steer, files) => {
-          const generation = state.generation; setSending(current => ({ ...current, [view.id]: generation })); setError('');
-          try { await client.send(view.id, text, steer, files); return generation === client.getSnapshot().generation; }
-          catch (cause) { if (generation === client.getSnapshot().generation) setError(String(cause)); return false; }
-          finally { if (generation === client.getSnapshot().generation) setSending(current => { const next = { ...current }; delete next[view.id]; return next; }); }
-        }} />
+      {/* Keyed by Session: no dock or draft state crosses Session views. */}
+      <ComposerContextStack key={view.id}
+        todo={<TodoDock state={todoDock(view.snapshot)} />}
+        goal={<GoalDock state={goalDock(view.snapshot)} observation={view.snapshot} disabled={composerDisabled}
+          mutate={(expected, mutation) => client.controlGoal(view.id, expected, mutation)} />}
+        queue={<QueueDock rows={queueRows(view.snapshot)} submissions={view.submissions ?? []} running={activeAttempt(view.snapshot)} />}
+        composer={<InputBar disabled={composerDisabled} busy={sending[view.id] === state.generation} active={activeAttempt(view.snapshot)}
+          onCancel={() => run(() => client.cancelTurn(view.id))} onSend={async (text, files) => {
+            const generation = state.generation; setSending(current => ({ ...current, [view.id]: generation })); setError('');
+            try { await client.send(view.id, text, files); return generation === client.getSnapshot().generation; }
+            catch (cause) { if (generation === client.getSnapshot().generation) setError(String(cause)); return false; }
+            finally { if (generation === client.getSnapshot().generation) setSending(current => { const next = { ...current }; delete next[view.id]; return next; }); }
+          }} />} />
     </> : <div className="empty"><h2>One runtime. Many Sessions.</h2><p>Connect to rustX, then open or create a Session with an explicit cwd.</p><p>Switching or closing views never cancels work.</p></div>}
   </AppFrame>;
 }

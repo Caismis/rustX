@@ -1,0 +1,113 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
+/* Adapted from DeepSeek Harness ui-conversation TodoPanel.module.css: the dock
+   column is the input card minus four insets, shared with Goal and Queue. */
+.root {
+  box-sizing: border-box;
+  flex: none;
+  overflow: hidden;
+  margin: 0 auto;
+  width: calc(100% - 2 * var(--dsh-composer-side-clearance) - 4 * var(--dsh-composer-dock-inset));
+  max-width: calc(var(--dsh-composer-card-max-width) - 4 * var(--dsh-composer-dock-inset));
+  border: 0.5px solid var(--dsw-alias-border-l1);
+  border-radius: 12px;
+  background: var(--dsw-specific-tip);
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+}
+
+.header {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+button.header { cursor: pointer; }
+button.header:focus-visible { outline: 2px solid var(--dsw-alias-label-tertiary); outline-offset: -2px; border-radius: 12px; }
+
+.lead, .chevron, .glyph {
+  display: grid;
+  flex: none;
+  place-items: center;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.chevron[data-collapsed='true'] { transform: rotate(180deg); }
+
+.title {
+  flex: none;
+  font-size: 13px;
+  line-height: 24px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+.progress {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-tertiary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 180px;
+  margin: 0;
+  padding: 0 12px 8px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.glyph { width: 16px; height: 16px; }
+.completed { color: var(--dsw-alias-state-success-primary); }
+.pending { color: var(--dsw-alias-label-caption); }
+.progressGlyph { color: var(--dsw-alias-state-business-primary); animation: todo-progress-spin 1s linear infinite; }
+
+@keyframes todo-progress-spin { to { transform: rotate(360deg); } }
+
+.content {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dependency {
+  flex: none;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+}
+
+.hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

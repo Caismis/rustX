@@ -52,7 +52,7 @@ The composer retains at most eight File drafts, each at most 256 KiB (2 MiB tota
 Pick/drop order is preserved. Preflight reads an authoritative `session/snapshot`: an active Attempt uses `attempt.model.primary`, otherwise `model.effective`;
 unsupported image/file input refuses before upload or turn admission, retaining
 text and files. Supported drafts upload sequentially and enter one typed
-`turn/start` (or native steer) content sequence with opaque artifact references.
+`turn/start` content sequence with opaque artifact references.
 There is no optimistic canonical user message. Currently installed provider
 adapters support text input only: no provider multimodal translation is added.
 

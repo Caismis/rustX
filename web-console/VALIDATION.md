@@ -798,3 +798,76 @@ now awaits the existing native attempt-settlement signal before checking the
 projected drain. The detached-running/mailbox-preservation assertions are
 unchanged; no delay, retry or assertion weakening was added. This is the same
 COMMIT/publication distinction enforced by the production cut contract.
+
+## WEB-04 composer context docks (#307) — 2026-09-15
+
+Base: `origin/main` `e256998f` (WEB-03 merged). The Harness checkout was reverified
+at `c291e7961a515f6d7af9304e7fd1d257929aef26`. Ownership is recorded in
+[COMPOSER.md](COMPOSER.md) and provenance in [PROVENANCE.md](PROVENANCE.md).
+
+### Owner audit
+
+- Todo: `snapshot.todos` (`Option<TodoSnapshot>`) is present exactly when Todo is
+  composed; `effective_extensions.todo` agrees. No Todo mutation exists.
+- Goal: `snapshot.goal` (`Option<GoalView>`), `goal_changed` invalidation and
+  `goal/control`. Stale CAS is `InvalidParams` with a serialized `GoalRejection`.
+  GoalDomain names pause, resume, objective and budget as user controls.
+- Queue: `snapshot.inbound.pending` and `snapshot.attempt`. `turn/start` and
+  `turn/steer` dispatch to the same native `submit_inbound`.
+- No App Server protocol, Rust owner or schema change. Generated v3 DTOs did not drift.
+
+### Deterministic evidence (`test/composer-context.test.tsx`, 20 tests)
+
+Todo absent/empty/tasks and native order, deleted tombstones hidden, projection-only
+updates with historical `todo` Tool facts present, no Todo mutation or configuration
+and storage writes; Goal active/paused/blocked/complete/absent, exact user controls,
+pause/resume/objective/budget `goal/control` requests with the rendered GoalRef, no
+configuration writes, open draft kept across revision-only change and dropped on
+authoritative objective change, stale CAS reread with exactly one request,
+activation-only change without revision change, lost response uncertain until reread
+with no replay, obsolete attachment result; Queue rows from pending inbound in
+sequence order, Send/Queue label from the attempt with only `turn/start`, echo settled
+by exact MessageId and not by identical text; stack order and independent
+appear/disappear without disclosure or draft leakage, per-Session isolation,
+disconnect clearing only echoes with no outbound request, reconnect rebuilding from a
+changed server snapshot, shared column CSS. Race and loss cases use held fixture
+responses and socket close, never sleeps.
+
+### Real App Server acceptance (`test/e2e/composer.spec.ts`)
+
+Scenario `web_composer_context` enables `agent.extensions.todo` and
+`agent.extensions.goal`. The browser observes a composed-empty Todo strip; the model
+creates native tasks and a Goal (budget 1). While the native continuation round is
+gated, the browser sees Ongoing Goal at 1/1 rounds, the **Queue** label, and a pending
+inbound row with no echo; order is Todo, Goal, Queue, Composer and all docks align
+with the composer card. After release, pause, resume, pause, budget 3 and objective
+edit each advance the durable revision by one through `goal/control`; focus returns
+to the edit control. Settings and localStorage contain no Todo, Goal or queue text;
+the Goal extension flag is unchanged. Disconnect disables controls; reconnect and
+reload rebuild the same revision, Todo list and empty queue; alignment holds at
+1440px and 390px with no horizontal overflow. The provider scenario must be fully
+consumed, so no unexpected continuation round was admitted.
+
+### Commands (Linux, feature worktree)
+
+| Directory | Exact command | Result |
+| --- | --- | --- |
+| root | `cargo fmt --all -- --check` | Passed |
+| root | `git diff --check` | Passed |
+| root | `cargo build --bins` | Passed |
+| test-support/fake-provider | `uv run --frozen pytest` | 51 passed |
+| protocol/app-server | `pnpm install --frozen-lockfile` | Passed |
+| protocol/app-server | `pnpm check` | Passed; no generated schema/TypeScript drift |
+| protocol/app-server | `pnpm typecheck` | Passed |
+| web-console | `pnpm install --frozen-lockfile` | Passed |
+| web-console | `pnpm typecheck` | Passed |
+| web-console | `pnpm test` | 172 passed, 15 files |
+| web-console | `pnpm check:provenance` | 64 source records and 100 production package notices passed |
+| web-console | `pnpm build` (via `pnpm test:e2e`) | Passed; existing non-fatal bundle-size advisory |
+| web-console | `RUSTX_BINARY=../target/debug/rustx pnpm test:e2e` | 7 passed against the real App Server, including `composer.spec.ts` |
+| tui | `pnpm install --frozen-lockfile` | Passed (required by web-console typecheck) |
+| tui | `pnpm typecheck` | Passed |
+
+No Rust source changed, so the Rust contract/boundary suites and TUI integration
+suite were not rerun for this slice. `main`'s own latest macOS run (34975160232)
+fails in `runtime_client::python_capability`, independent of this diff.

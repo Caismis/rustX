@@ -1,0 +1,118 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
+/* Adapted from DeepSeek Harness ui-goal GoalBar.module.css: the second card of
+   the composer context stack, sharing the Todo/Queue dock column. */
+.dock {
+  box-sizing: border-box;
+  flex: none;
+  margin: 0 auto;
+  width: calc(100% - 2 * var(--dsh-composer-side-clearance) - 4 * var(--dsh-composer-dock-inset));
+  max-width: calc(var(--dsh-composer-card-max-width) - 4 * var(--dsh-composer-dock-inset));
+  border: 0.5px solid var(--dsw-alias-border-l1);
+  border-radius: 12px;
+  background: var(--dsw-specific-tip);
+}
+
+.bar {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 36px;
+  padding: 4px 5px 4px 12px;
+}
+
+.glyph {
+  display: inline-flex;
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.label {
+  flex: none;
+  font-size: 13px;
+  line-height: 24px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+.objective {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary-dimmed);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta {
+  flex: none;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-base);
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
+  outline: none;
+}
+
+.input:focus { border-color: var(--dsw-alias-state-business-primary); }
+
+.actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+
+.iconButton:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.iconButton:focus-visible { outline: 2px solid var(--dsw-alias-label-tertiary); outline-offset: -2px; }
+.iconButton:disabled { opacity: 0.4; cursor: default; }
+
+.note, .error {
+  margin: 0;
+  padding: 0 12px 6px;
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.error { color: var(--dsw-alias-state-error-primary); }
+
+@media (max-width: 520px) {
+  .bar { flex-wrap: wrap; }
+  .objective { flex-basis: 100%; order: 3; white-space: normal; }
+  .actions { margin-left: auto; }
+}

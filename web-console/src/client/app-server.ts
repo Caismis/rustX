@@ -1,6 +1,6 @@
 import { TRACE_LIMIT, TRACE_PAGE_SIZE, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterests, type TraceCache } from './trace';
 import type {
-  AttachmentTarget, InteractionRef, InteractionResponse, MethodResult, Notification,
+  AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserContentBlock,
 } from '../../../protocol/app-server/v3';
@@ -21,8 +21,20 @@ export interface SessionView {
   cursor?: RuntimeClientCursor;
   history?: TranscriptCache;
   settings?: SessionPersistentState;
+  /** Provisional presentation of this connection's own submissions. Never state. */
+  submissions?: readonly Submission[];
   error?: string;
 }
+/** A submission is provisional until its own acknowledgement names a MessageId
+ * and an authoritative snapshot contains exactly that MessageId. */
+export interface Submission {
+  key: string;
+  content: readonly UserContentBlock[];
+  messageId?: string;
+}
+/** Settled local outcome of one CAS-bound native Goal control. `obsolete` means the
+ * connection or attachment changed and the result must not touch current state. */
+export type GoalControlOutcome = { status: 'applied' } | { status: 'rejected'; reason: string } | { status: 'uncertain' } | { status: 'obsolete' };
 export interface UncertainOperation {
   id: string;
   method: Request1['method'];
@@ -66,6 +78,16 @@ export class OutcomeUncertain extends Error {
 export class RpcFailure extends Error {
   constructor(readonly error: Extract<Response, { error: unknown }>['error']) { super(`${error.message} (${error.code})${error.data ? `: ${JSON.stringify(error.data)}` : ''}`); }
 }
+/** GoalDomain serializes its bounded rejection into the error message. Only the
+ * reason is displayed; its embedded `current` is never adopted as authority. */
+function goalRefusal(error: unknown) {
+  if (!(error instanceof RpcFailure)) return error instanceof Error ? error.message : String(error);
+  try {
+    const rejection: unknown = JSON.parse(error.error.message);
+    if (rejection && typeof rejection === 'object' && 'reason' in rejection && typeof rejection.reason === 'string') return rejection.reason;
+  } catch { /* Non-Goal refusal: show the transport message. */ }
+  return error.message;
+}
 const READS = new Set<Request1['method']>([
   'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/tree', 'session/deletePreview',
   'session/snapshot', 'session/transcript', 'session/trace', 'settings/read', 'settings/model', 'settings/models',
@@ -91,6 +113,7 @@ export class AppServerClient {
   private attachmentChanges = new Map<string, { kind: 'attach' | 'detach' | 'unload'; work: Promise<void> }>();
   private attachmentChangeCount = 0;
   private attachmentEpochs = new Map<string, number>();
+  private submissionSequence = 0;
   private state: ClientView = {
     connection: 'disconnected', generation: 0, sessions: [], views: {}, uncertain: [], interactionOperations: {},
   };
@@ -190,7 +213,7 @@ export class AppServerClient {
     for (const item of uncertain) if (item.interactionKey) operations[item.interactionKey] = { sessionId: item.sessionId!, status: 'uncertain' };
     this.publish({ connection, generation: this.state.generation + 1, uncertain, interactionOperations: operations,
       views: Object.fromEntries(Object.entries(this.state.views).map(([id, view]) => [id, {
-        ...view, history: undefined, target: undefined, attachment: view.target || ['attaching', 'attached', 'resynchronizing'].includes(view.attachment) ? 'stale' : view.attachment,
+        ...view, history: undefined, target: undefined, submissions: undefined, attachment: view.target || ['attaching', 'attached', 'resynchronizing'].includes(view.attachment) ? 'stale' : view.attachment,
       }])),
     });
     oldSocket?.close();
@@ -348,7 +371,7 @@ export class AppServerClient {
       target = result.target;
       if (result.target.session_id !== id || result.target.conversation_id !== result.snapshot.conversation_id) throw new Error('Mismatched attachment identity.');
       this.setSession(id, { target: result.target, snapshot: result.snapshot, cursor: result.cursor, history: replaceTranscript(result.snapshot.transcript, this.state.views[id]?.history), trace: replaceTrace(result.snapshot.trace, this.state.views[id]?.trace), attachment: 'attached' });
-      this.reconcileInteractions(id);
+      this.reconcileInteractions(id); this.settleSubmissions(id);
       const settings = await this.request({ method: 'settings/read', params: { session_id: id } }, 'settings');
       if (!current() || !sameTarget(this.state.views[id]?.target, result.target)) return;
       this.setSession(id, { settings: settings.settings });
@@ -383,7 +406,7 @@ export class AppServerClient {
         if (result.snapshot.conversation_id !== target.conversation_id) throw new Error('Mismatched snapshot conversation.');
         if (BigInt(result.cursor) >= BigInt(this.state.views[id].cursor ?? '0')) {
           this.setSession(id, { snapshot: result.snapshot, cursor: result.cursor, history: refreshTranscript(this.state.views[id]?.history, result.snapshot.transcript), trace: refreshTrace(this.state.views[id]?.trace, result.snapshot.trace, result.snapshot.trace_updates), error: undefined });
-          this.reconcileInteractions(id);
+          this.reconcileInteractions(id); this.settleSubmissions(id);
         }
         if (resync) await this.request({ method: 'session/subscribe', params: { target, after_cursor: result.cursor } }, 'subscribed');
         if (current()) this.setSession(id, { attachment: 'attached' });
@@ -467,7 +490,7 @@ export class AppServerClient {
     if (!this.initialized || view?.attachment !== 'attached' || !view.target) throw new Error('Session is not authoritatively attached. Refresh or reconnect.');
     return view.target;
   }
-  async send(id: string, text: string, steer = false, files: readonly File[] = []) {
+  async send(id: string, text: string, files: readonly File[] = []) {
     const target = this.target(id);
     const generation = this.state.generation;
     const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
@@ -495,7 +518,57 @@ export class AppServerClient {
           : { type: 'file', artifact_id: uploaded.artifact_id, name: file.name, mime_type: file.type });
       }
     }
-    return this.request({ method: steer ? 'turn/steer' : 'turn/start', params: { target, content } }, 'inbound_accepted');
+    // `turn/start` and `turn/steer` share one native inbound owner: an idle runtime
+    // admits a fresh attempt, a running one drains the mailbox at a safe boundary.
+    const key = `${generation}:${++this.submissionSequence}`;
+    this.setSession(id, { submissions: [...(this.state.views[id].submissions ?? []), { key, content }] });
+    try {
+      const accepted = await this.request({ method: 'turn/start', params: { target, content } }, 'inbound_accepted');
+      if (current()) {
+        this.setSession(id, { submissions: this.state.views[id].submissions?.map(item => item.key === key ? { ...item, messageId: accepted.message_id } : item) });
+        this.settleSubmissions(id);
+      }
+      return accepted;
+    } catch (error) {
+      // Failure or loss removes only the local echo; an uncertain mutation keeps its diagnostic.
+      const view = this.state.views[id];
+      if (view?.submissions?.some(item => item.key === key)) this.setSession(id, { submissions: view.submissions.filter(item => item.key !== key) });
+      throw error;
+    }
+  }
+  /** An acknowledged submission settles only when an authoritative snapshot
+   * names its exact MessageId: pending in the mailbox (the native row replaces
+   * it) or adopted into canonical messages. No text or order matching. */
+  private settleSubmissions(id: string) {
+    const view = this.state.views[id];
+    if (!view?.submissions?.length || !view.snapshot) return;
+    const observed = new Set([
+      ...(view.snapshot.inbound.pending ?? []).map(item => item.message.id),
+      ...view.snapshot.messages.map(message => message.id),
+      ...(view.snapshot.transcript.entries ?? []).flatMap(entry => entry.item.type === 'message' ? [entry.item.message.id] : []),
+    ]);
+    const remaining = view.submissions.filter(item => !item.messageId || !observed.has(item.messageId));
+    if (remaining.length !== view.submissions.length) this.setSession(id, { submissions: remaining });
+  }
+  /** One CAS-bound Goal control. `expected` is the authoritative GoalRef the caller
+   * rendered. A refusal rereads the snapshot; a lost response stays uncertain.
+   * Nothing is retried and no newer revision is ever substituted. */
+  async controlGoal(id: string, expected: GoalRef, mutation: GoalMutation): Promise<GoalControlOutcome> {
+    const generation = this.state.generation;
+    let target: AttachmentTarget;
+    try { target = this.target(id); } catch (error) { return { status: 'rejected', reason: error instanceof Error ? error.message : String(error) }; }
+    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
+    try {
+      await this.request({ method: 'goal/control', params: { target, control: { action: 'mutate', expected, mutation } } }, 'goal');
+    } catch (error) {
+      if (error instanceof OutcomeUncertain) return { status: 'uncertain' };
+      if (!current()) return { status: 'obsolete' };
+      if (error instanceof RpcFailure) await this.refresh(id).catch(() => {});
+      return { status: 'rejected', reason: goalRefusal(error) };
+    }
+    if (!current()) return { status: 'obsolete' };
+    await this.refresh(id).catch(() => {});
+    return { status: 'applied' };
   }
   async cancelTurn(id: string) { return this.request({ method: 'turn/cancel', params: { target: this.target(id) } }, 'cancellation_accepted'); }
   async answer(id: string, interaction: InteractionRef, response?: InteractionResponse) {
@@ -554,7 +627,7 @@ export class AppServerClient {
   }
   private retireAttachmentWork(id: string) {
     this.refreshes.delete(id); this.dirty.delete(id); this.resubscribe.delete(id);
-    this.setSession(id, { history: undefined });
+    this.setSession(id, { history: undefined, submissions: undefined });
   }
   clearError() { this.publish({ error: undefined }); }
   acknowledgeDiagnostic(id: string) {

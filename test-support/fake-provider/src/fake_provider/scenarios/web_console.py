@@ -50,3 +50,35 @@ def web_chat_history() -> Scenario:
 
 
 SCENARIOS["web_chat_history"] = web_chat_history
+
+
+def web_composer_context() -> Scenario:
+    """Native Todo and Goal owners feed the composer docks; one Human input waits in the mailbox.
+
+    The provider only emits model calls. The Todo list, Goal state, continuation
+    round admission and the pending inbound row all belong to rustX.
+    """
+    def expected(text: str) -> Expect:
+        return Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=(text,))
+
+    def todo(call: str, arguments: dict[str, object]) -> ToolCall:
+        return ToolCall(call, "todo", json.dumps(arguments))
+
+    return Scenario(
+        "web_composer_context",
+        Step(expected("Plan the composer docks"), Stream(
+            todo("todo-bind", {"action": "create", "subject": "Bind native Todo"}),
+            todo("todo-goal", {"action": "create", "subject": "Render the Goal dock", "blocked_by": [1]}),
+            todo("todo-start", {"action": "update", "id": 1, "status": "in_progress", "active_form": "Binding native Todo"}),
+            Finish("tool_calls"))),
+        Step(expected("Binding native Todo"), Stream(Text("Plan recorded."), Finish())),
+        Step(expected("Keep working until the docks are verified"), Stream(ToolCall("goal-create", "create_goal", json.dumps(
+            {"objective": "Verify the composer docks", "autonomous_round_budget": 1})), Finish("tool_calls"))),
+        Step(expected("Verify the composer docks"), Stream(Text("Goal recorded."), Finish())),
+        Step(expected("Continue pursuing the current Goal"), Stream(
+            Text("Continuing the Goal."), Gate("goal-round"), Text(" Round finished."), Finish())),
+        Step(expected("Queued during the Goal round"), Stream(Text("Queued input handled."), Finish())),
+    )
+
+
+SCENARIOS["web_composer_context"] = web_composer_context
