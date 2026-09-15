@@ -148,7 +148,7 @@ JSON and physical paths remain withheld. The existing artifact carrier is reused
 
 ## Durable schema contract
 
-SQLite schema **35** replaces development schema 34. Native Trace historical
+SQLite schema **36** retains the Trace index contract introduced in schema 35. Native Trace historical
 projection requires the fixed Event Journal presentation indexes. Older stores
 are rejected, with no migration, lazy index installation or compatible reader.
 Current-version stores missing or redefining any required index are also rejected.
@@ -157,7 +157,7 @@ ID, Subagent ID, Workflow run ID and interaction ID, each ending in kind/sequenc
 where applicable. The finite query seam explicitly selects the appropriate index
 and performs one bounded equality/range seek per allowlisted event kind; tests
 inspect `EXPLAIN QUERY PLAN` for the actual reader SQL in both directions.
-SQLite schema 35, native Runtime Client version 35 and App Server version 3 are
+SQLite schema 36, native Runtime Client version 36 and App Server version 4 are
 independent version domains, despite the first two currently sharing a number.
 
 ## Truthful timing and bounds
@@ -203,3 +203,5 @@ no TUI Trajectory, server search, telemetry platform, new recovery behavior or
 compatibility mode. This view deliberately omits unaccepted publication bodies,
 raw request/Tool payload inspection and Harness-only semantics lacking native
 facts. Interaction settlement remains in the existing Chat controls.
+
+See [Session-owned workspace uploads](session-uploads.md) for receipt admission, model paths, fork copies and durable cleanup.

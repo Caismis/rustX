@@ -264,10 +264,12 @@
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
       "destination": "web-console/src/app/components/InputBar.tsx",
-      "treatment": "substantially refactored: presentation extracted; native rustX bindings",
+      "treatment": "substantially refactored: presentation extracted; native rustX bindings Session upload receipts replace the obsolete artifact carrier; draft states remain presentation-only.",
       "upstream_sha256": "98fd669d20af309e31bf2cf0cc591b247905acf9ae02c98a3248c02429742477",
       "retained_dependencies": [
-        "../../client/artifacts",
+        "../../../../protocol/app-server/v4",
+        "../../client/app-server",
+        "../../client/uploads",
         "../../presentation/attachments/AttachmentCard",
         "../../presentation/primitives/Button",
         "./InputBar.module.css",
@@ -363,7 +365,7 @@
       "treatment": "substantially refactored: presentation extracted; native rustX bindings",
       "upstream_sha256": "9a3f529576191c8424544273c562e6f84741bd667b2a8efefac9c26dbaf82a02",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v3",
+        "../../../../protocol/app-server/v4",
         "../../bindings/questionnaire",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/icons",
@@ -792,7 +794,7 @@
       "upstream_sha256": "8761d0bbd471440ce331db1e4537e42cc630969244290f8b66cab090457ac70f",
       "destination": "web-console/src/app/Trajectory.tsx",
       "retained_dependencies": [
-        "../../../protocol/app-server/v3",
+        "../../../protocol/app-server/v4",
         "../client/trace",
         "../presentation/primitives/Button",
         "../presentation/primitives/Input",

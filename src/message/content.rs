@@ -16,7 +16,7 @@ pub struct TextBlock {
     pub text: String,
 }
 
-/// A reference to an image artifact.
+/// A reference to a Tool-generated managed image artifact; never a user upload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ImageReference {
@@ -27,7 +27,7 @@ pub struct ImageReference {
     pub alt: Option<String>,
 }
 
-/// A reference to a file artifact.
+/// A reference to a Tool-generated managed file artifact; never a user upload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FileReference {
@@ -78,4 +78,15 @@ mod tests {
             r#"{"artifact_id":"artifact-10","name":"report.txt","mime_type":"text/plain"}"#
         );
     }
+}
+
+/// Runtime-authored identity of a Session-owned mutable workspace file.
+/// The owning Session supplies allocation roots; history never stores host paths.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct UploadedFileRef {
+    pub batch_id: String,
+    pub name: String,
 }

@@ -3,8 +3,7 @@ import { sameTarget } from './app-server';
 export const ARTIFACT_MAX_BYTES = 256 * 1024;
 export const ARTIFACT_MAX_TRANSFERS = 2;
 export const ARTIFACT_MAX_URLS = 16;
-export const DRAFT_MAX_FILES = 8;
-/** Per-view, disposable URL owner. No binaries enter conversation JSON or storage. */
+/** Tool managed artifacts only. Per-view, disposable URL owner. No binaries enter conversation JSON or storage. */
 export class ArtifactResources {
   private urls = new Set<string>();
   private active = 0;

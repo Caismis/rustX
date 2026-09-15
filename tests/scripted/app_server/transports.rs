@@ -62,7 +62,7 @@ async fn initialize(client: &impl AppServerConformanceDriver) {
         client,
         0,
         Method::Initialize(InitializeParams {
-            protocol_version: 3,
+            protocol_version: 4,
             client: ClientIdentity {
                 name: "transport".into(),
                 version: "1".into(),
@@ -101,7 +101,15 @@ async fn adapter_disconnect_preserves_active_execution_and_replacement_authority
                 2,
                 Method::TurnStart {
                     target: old.clone(),
-                    content: input("request-A"),
+                    content: (input("request-A"))
+                        .into_iter()
+                        .map(|block| match block {
+                            crate::message::types::UserContentBlock::Text(text) => {
+                                crate::app_server::protocol::UserInputBlock::Text(text)
+                            }
+                            _ => panic!("client fixtures must use text or issued receipts"),
+                        })
+                        .collect(),
                 },
             )
             .await;
@@ -166,7 +174,15 @@ async fn adapter_disconnect_cannot_settle_approval_or_questionnaire() {
                     2,
                     Method::TurnStart {
                         target,
-                        content: input("request-A"),
+                        content: (input("request-A"))
+                            .into_iter()
+                            .map(|block| match block {
+                                crate::message::types::UserContentBlock::Text(text) => {
+                                    crate::app_server::protocol::UserInputBlock::Text(text)
+                                }
+                                _ => panic!("client fixtures must use text or issued receipts"),
+                            })
+                            .collect(),
                     },
                 )
                 .await;
@@ -223,7 +239,15 @@ async fn blocked_pipe_overflows_and_drops_writer_while_runtime_progresses() {
             2,
             Method::TurnStart {
                 target: target.clone(),
-                content: input("request-A"),
+                content: (input("request-A"))
+                    .into_iter()
+                    .map(|block| match block {
+                        crate::message::types::UserContentBlock::Text(text) => {
+                            crate::app_server::protocol::UserInputBlock::Text(text)
+                        }
+                        _ => panic!("client fixtures must use text or issued receipts"),
+                    })
+                    .collect(),
             },
         )
         .await;
@@ -268,7 +292,7 @@ async fn blocked_websocket_overflows_with_controlled_duplex_capacity() {
         let mut request = "ws://localhost/".into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.app-server.v3, rustx-token.{}", driver::TOKEN)
+            format!("rustx.app-server.v4, rustx-token.{}", driver::TOKEN)
                 .parse()
                 .unwrap(),
         );
@@ -616,7 +640,7 @@ async fn authenticated_websocket_capacity_is_released_after_client_reaping() {
         let mut request = url.as_str().into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.app-server.v3, rustx-token.{}", driver::TOKEN)
+            format!("rustx.app-server.v4, rustx-token.{}", driver::TOKEN)
                 .parse()
                 .unwrap(),
         );

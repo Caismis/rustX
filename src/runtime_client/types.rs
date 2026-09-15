@@ -355,7 +355,8 @@ pub enum RuntimeClientSessionRequest {
 /// Strict negotiation rejects v33 clients before they can decode Session lists.
 /// Version 35 adds the bounded native Trace snapshot window and invalidation.
 /// Version 34 clients are rejected; Trace introduces no execution authority.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 35;
+/// Version 36 adds typed Session workspace uploads to canonical presentation.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 36;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1145,7 +1146,7 @@ pub enum RuntimeClientResult {
         session: SessionView,
         /// Optional uncommitted editor content restored by fork/tree branch.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        editor_content: Option<Vec<UserContentBlock>>,
+        editor_content: Option<Vec<crate::local_runtime::session::uploads::UserInputBlock>>,
         /// Whether the client must reattach to compose the selected lineage.
         restart_required: bool,
     },
@@ -1160,7 +1161,7 @@ pub enum RuntimeClientResult {
         session: SessionView,
         /// Optional uncommitted editor content restored by fork/tree branch.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        editor_content: Option<Vec<UserContentBlock>>,
+        editor_content: Option<Vec<crate::local_runtime::session::uploads::UserInputBlock>>,
         /// Bounded diagnostic for the replacement path.
         diagnostic: String,
     },
@@ -1419,7 +1420,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 35);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 36);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1596,9 +1597,11 @@ mod tests {
                 active_conversation_id: ConversationId::new("conversation-2"),
                 node_count: 1,
             },
-            editor_content: Some(vec![UserContentBlock::Text(TextBlock {
-                text: "fork-draft-exact-7f3b".to_owned(),
-            })]),
+            editor_content: Some(vec![
+                crate::local_runtime::session::uploads::UserInputBlock::Text(TextBlock {
+                    text: "fork-draft-exact-7f3b".to_owned(),
+                }),
+            ]),
             diagnostic: "catalog visibility committed; durability uncertain".to_owned(),
         };
         let value = serde_json::to_value(&result).expect("serialize transition result");

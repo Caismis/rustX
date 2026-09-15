@@ -116,15 +116,19 @@ record. Recovery never rediscovers a new deletion workset.
 Deletion preview, execution, and recovery on `SessionController` remain
 crate-private. `DeletionScope`, `DeletionRecord`, previews, blockers, and internal
 results are not public native DTOs: their frozen scopes are cleanup authority.
-App Server v3 exposes bounded public control-plane projections. Compile-fail API
+App Server v4 exposes bounded public control-plane projections. Compile-fail API
 regressions enforce this boundary.
 
 ## Schema
 
-Schema 8 removes the product-global `active_session`, permits an empty catalog,
-and stores explicit Session settings with a settings revision. The reader checks
+Schema 9 adds the Session-owned upload registry, frozen historical workspace roots
+and private copy-preparation cleanup claims. It retains the schema 8 rules:
+no product-global `active_session`, an allowed empty catalog, and explicit Session
+settings with a settings revision. The reader checks
 the schema before decoding its changed layout. All older development schemas are
 explicitly refused; there is no migration. In particular, schema 7 materialized
 model defaults cannot be distinguished from intentional overrides. Silently
 retaining those defaults would invent Session-owned intent. Reopen reconstructs
 all Sessions without inventing client focus or runtime residency.
+
+See [Session-owned workspace uploads](session-uploads.md) for receipt admission, model paths, fork copies and durable cleanup.

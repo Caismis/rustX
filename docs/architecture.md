@@ -1492,7 +1492,7 @@ a root host and a subagent-child host alike; there is no later mutation seam.
 
 The wire vocabulary is closed and typed — `EffectiveNativeAgentExtensions` with
 one named member per native extension, generated in
-`protocol/app-server/v3.ts` — never `serde_json::Value`, a
+`protocol/app-server/v4.ts` — never `serde_json::Value`, a
 `HashMap<String, Value>`, generic extension metadata, a plugin descriptor, or a
 dynamic registry view. It grows only when a native extension is deliberately
 added to it. The projection reports what was *already* successfully composed
@@ -5252,7 +5252,7 @@ The outermost layer exposes the runtime to humans and other systems:
 - Runtime command interface
 - Runtime projection/event streaming
 
-See [App Server protocol v3](app-server-protocol.md) for the method vocabulary,
+See [App Server protocol v4](app-server-protocol.md) for the method vocabulary,
 generated client schemas, connection multiplexing, weak attachment lifetime and
 headless interaction ownership. #36 binds the same endpoint to stdio JSONL for a
 local TUI-owned child and WebSocket for browser/remote/existing-server clients;
@@ -5277,7 +5277,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v3
+       App Server protocol v4
 ```
 
 The governing invariant is that all authoritative execution and
@@ -5294,7 +5294,7 @@ point. Neither binding owns domain semantics. The existing `src/protocol` bounda
 `RuntimeManifest` protocol; it is not a frontend protocol.
 
 The following version history describes the local Runtime Client stdio contract,
-which after #290 has no external client: `rustx-tui` speaks App Server v3, and
+which after #290 has no external client: `rustx-tui` speaks App Server v4, and
 `src/runtime_client` is an internal projection foundation the App Server reuses.
 App Server clients never negotiate or nest it. Its local version is
 `RUNTIME_CLIENT_PROTOCOL_VERSION`.
@@ -6437,7 +6437,7 @@ allocation guards through each live composition. In v1 each Session has at most
 one resident Conversation/node; different Sessions remain concurrent. Its public
 client handles are non-owning and cannot retain allocation after unload. See [runtime residency](runtime-residency.md)
 for single-flight, unload, replacement and client lifetime boundaries, and
-[durable Sessions](durable-sessions.md) for catalog commit points and schema 8.
+[durable Sessions](durable-sessions.md) for catalog commit points and schema 9.
 
 #### Issue #96 ownership and activation boundary
 
@@ -9483,3 +9483,5 @@ client presentation. It owns no durable data and is never read by execution,
 settlement, cancellation or recovery. Its dedicated Trace cursor and newest
 snapshot window remain separate from canonical messages, transcript paging and
 live observation cursors.
+
+See [Session-owned workspace uploads](session-uploads.md) for receipt admission, model paths, fork copies and durable cleanup.

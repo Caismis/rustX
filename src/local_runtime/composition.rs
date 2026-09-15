@@ -1123,11 +1123,18 @@ impl LocalConversationCore {
             .with_extensions(extensions.clone());
             tool_runtime_config.lifecycle = Some(conversation_access.clone());
             tool_runtime_config.environment = Some(base_environment.clone());
-            let tool_runtime =
+            let mut tool_runtime =
                 ConversationToolRuntime::from_config(conversation_id.clone(), tool_runtime_config)
                     .map_err(|error| LocalRuntimeError::ToolRuntime {
                         detail: format!("{error:?}"),
                     })?;
+
+            tool_runtime.uploads = Some(Arc::new(
+                super::session::uploads::SessionUploadResolver::new(
+                    &product_root,
+                    conversation_id.clone(),
+                ),
+            ));
 
             // 7-8. The base tool registry with the explicit native composition,
             // using *this* conversation's background registry for the
@@ -1975,6 +1982,7 @@ impl LocalSessionClient {
             None => SessionCatalog::create_unpublished(lifecycle.root(), &state)?,
         };
         catalog.retain_lifecycle(lifecycle.clone());
+        catalog.recover_upload_preparations()?;
         for id in catalog.pending_deletion_ids() {
             let result = match catalog.recover_delete(&id) {
                 Ok(work) => {

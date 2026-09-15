@@ -170,7 +170,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":3,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":4,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -198,7 +198,7 @@ async fn app_server_websocket_real_process_shared_conformance_and_listener_survi
         replacement.send(INITIALIZE.into()).await.unwrap();
         assert_eq!(
             json_response(&mut replacement).await["result"]["protocol_version"],
-            3
+            4
         );
         kill(
             Pid::from_raw(i32::try_from(child.id().unwrap()).unwrap()),
@@ -227,9 +227,9 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
         let old_offer = format!("rustx.app-server.v2, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v3"),
+            Some("rustx.app-server.v4"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v3, rustx-token.wrong"),
+            Some("rustx.app-server.v4, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -670,7 +670,7 @@ async fn app_server_websocket_drain_supervises_active_root_and_cold_resume() {
             initialize_client(&client).await;
             let a = attach(&client, f.sessions[0].clone(), 2).await;
             attach(&client, f.sessions[1].clone(), 3).await;
-            let content = vec![rustx::message::types::UserContentBlock::Text(
+            let content = vec![rustx::app_server::protocol::UserInputBlock::Text(
                 rustx::message::content::TextBlock {
                     text: "owned root".into(),
                 },
@@ -807,9 +807,17 @@ async fn start_turn(
         client,
         Method::TurnStart {
             target: target.clone(),
-            content: vec![rustx::message::types::UserContentBlock::Text(
+            content: (vec![rustx::message::types::UserContentBlock::Text(
                 rustx::message::content::TextBlock { text: text.into() },
-            )],
+            )])
+            .into_iter()
+            .map(|block| match block {
+                rustx::message::types::UserContentBlock::Text(text) => {
+                    rustx::app_server::protocol::UserInputBlock::Text(text)
+                }
+                _ => panic!("client fixtures must use text or issued receipts"),
+            })
+            .collect(),
         },
     )
     .await;

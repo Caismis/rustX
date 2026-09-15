@@ -535,3 +535,17 @@ describe("durable transcript audits", () => {
     assert.doesNotMatch(rendered, /cancelled|user requested/i);
   });
 });
+
+// Canonical metadata renders without parsing the model-only XML projection.
+it("renders typed workspace upload names in canonical order", () => {
+  const message = userMessage("upload", "Analyze these files.");
+  message.content.unshift(
+    { type: "uploaded_file", batch_id: "one", name: "report.pdf" },
+    { type: "uploaded_file", batch_id: "two", name: "data.csv" },
+  );
+  const rendered = transcriptString(stateOf({ messages: [message] }));
+  assert.ok(rendered.includes("Uploaded file: report.pdf"));
+  assert.ok(rendered.indexOf("report.pdf") < rendered.indexOf("data.csv"));
+  assert.ok(rendered.includes("Analyze these files."));
+  assert.ok(!rendered.includes("user_uploaded_files"));
+});

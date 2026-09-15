@@ -1,10 +1,9 @@
 //! The conversation-owned development artifact store.
 //!
 //! M5 implements the smallest conversation/runtime-owned artifact store
-//! shared by the tool plane and bounded App Server carrier: opaque monotonic [`ArtifactId`] allocation,
-//! local filesystem storage outside the model workspace, and streaming
-//! spooling so large subprocess output never has to be held entirely in
-//! memory. The mapping from `ArtifactId` to physical path stays internal;
+//! used by Tool-generated semantic artifacts and their bounded App Server read
+//! presentation: opaque monotonic [`ArtifactId`] allocation and local filesystem
+//! storage outside the model workspace. Managed text spill has its separate owner. The mapping from `ArtifactId` to physical path stays internal;
 //! [`FileReference`](crate::message::content::FileReference) remains the
 //! model/runtime reference. Session-owned roots survive cold reopen and are
 //! removed by Session deletion. Existing artifact files are never truncated.
@@ -250,10 +249,11 @@ impl ArtifactStore {
     /// Publish one bounded byte payload. Never replaces an existing artifact.
     /// # Errors
     /// Oversized content, allocation and durable write failures are returned.
-    pub fn put_bounded(&self, bytes: &[u8]) -> Result<ArtifactId, ArtifactError> {
+    #[cfg(test)]
+    pub(crate) fn put_bounded(&self, bytes: &[u8]) -> Result<ArtifactId, ArtifactError> {
         if bytes.len() > ARTIFACT_TRANSFER_MAX {
             return Err(ArtifactError::WriteFailed(
-                "artifact exceeds upload limit".into(),
+                "artifact exceeds fixture write limit".into(),
             ));
         }
         let id = self.create_artifact()?;
@@ -277,10 +277,9 @@ impl ArtifactStore {
 /// One-shot carrier bound: base64 is at most 349,528 bytes, below 1 MiB ingress.
 pub const ARTIFACT_TRANSFER_MAX: usize = 256 * 1024;
 
-/// Lifetime capacity shared by uploads and native Tool/MCP artifacts. The
-/// monotonic reserved/written ordinal is the durable frontier, not a live-file
-/// count. Session deletion is the reclamation boundary. At 256 KiB per upload,
-/// public uploads can contribute at most 64 MiB of retained bytes per store.
+/// Lifetime capacity for native Tool/MCP artifacts. The monotonic reserved/
+/// written ordinal is the durable frontier, not a live-file count. Session
+/// deletion is the reclamation boundary. Workspace uploads use another owner.
 pub const MAX_ARTIFACTS_PER_STORE: u64 = 256;
 
 fn validate_id(id: &ArtifactId) -> Result<(), ArtifactError> {

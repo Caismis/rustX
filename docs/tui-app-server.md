@@ -34,7 +34,7 @@ Local mode spawns exactly one `rustx app-server --listen stdio` child and speaks
 the App Server protocol over JSONL on its pipes. Remote mode opens one WebSocket
 and speaks the same protocol over text messages, using the transport's
 [dedicated credential](app-server-protocol.md#dedicated-websocket-credential):
-the client offers `rustx.app-server.v3` and `rustx-token.<token>` as
+the client offers `rustx.app-server.v4` and `rustx-token.<token>` as
 subprotocols, and refuses to proceed unless the server selects the former.
 
 There is no loopback WebSocket for ordinary local use. Unification is a property
@@ -79,7 +79,7 @@ tui/src/app-server/host.ts       the connection, the durable Session catalog,
 tui/src/app-server/transport.ts  complete messages in, complete messages out
 ```
 
-Every wire type comes from `protocol/app-server/v3.ts`, generated from the Rust
+Every wire type comes from `protocol/app-server/v4.ts`, generated from the Rust
 DTOs in `src/app_server/protocol.rs`. `tui/src/protocol/app-server.ts` re-exports
 those types and derives the ones the generator inlines; it transcribes nothing.
 A Rust DTO change regenerates the TypeScript and fails `pnpm typecheck` at every
@@ -91,7 +91,7 @@ neither knows what a Session, a Turn, an approval or a retry is.
 
 Transport framing and JSON parsing produce untrusted values. Before correlation
 or notification delivery, the single App Server client validates each value
-against the Rust-generated `v3.schema.json`, compiled once by its protocol
+against the Rust-generated `v4.schema.json`, compiled once by its protocol
 decoder. Invalid envelopes or nested DTOs terminate the connection as
 `protocol_error`; no partial message reaches host, Session, or UI code.
 

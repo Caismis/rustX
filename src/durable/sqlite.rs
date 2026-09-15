@@ -244,9 +244,10 @@ use super::inbox::{
 /// Version 33 requires rollback journaling for non-creating management reads
 /// and the separated local product workspace allocation contract.
 /// Version 34 adds native revisioned Goal state and atomic Goal/inbound accounting.
+/// Version 36 records Session upload facts and request-time path projection.
 /// Version 35 requires the fixed Journal presentation indexes for bounded Trace
 /// seeks. Older development stores are rejected, never lazily repaired.
-pub const SQLITE_SCHEMA_VERSION: i64 = 35;
+pub const SQLITE_SCHEMA_VERSION: i64 = 36;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -10387,7 +10388,7 @@ mod tests {
                 result,
                 Err(ConversationStoreError::SchemaVersionMismatch {
                     stored: 32,
-                    expected: 35
+                    expected: 36
                 })
             ));
         }
@@ -12861,7 +12862,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 35);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 36);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -12930,7 +12931,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 35);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 36);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -13106,7 +13107,7 @@ mod tests {
             SqliteConversationStore::open(id, &path),
             Err(ConversationStoreError::SchemaVersionMismatch {
                 stored: 34,
-                expected: 35
+                expected: 36
             })
         ));
     }
@@ -13129,7 +13130,7 @@ mod tests {
                 )
                 .unwrap()
         };
-        assert_eq!(stored, 35);
+        assert_eq!(stored, 36);
         assert_eq!(stored, SQLITE_SCHEMA_VERSION);
         SqliteConversationStore::open(conversation_id, &path).expect("a current store reopens");
     }

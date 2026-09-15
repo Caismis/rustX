@@ -93,6 +93,13 @@ impl LocalSessionAttachment {
         self.controller.catalog.lock().await.commit_planned(planned)
     }
     #[cfg(test)]
+    pub(crate) fn install_copy_publication_gate(
+        &self,
+        gate: Arc<crate::runtime::conversation_runtime::Gate>,
+    ) {
+        *self.controller.copy_publication_gate.lock().unwrap() = Some(gate);
+    }
+    #[cfg(test)]
     pub(crate) async fn arm_catalog_write_fault_before_rename(&self) {
         self.controller
             .catalog
@@ -295,64 +302,23 @@ impl LocalSessionAttachment {
     ) -> Result<SessionTransitionResult, SessionAttachmentError> {
         let _preparation = self.controller.preparation.lock().await;
         let source = self.source(revision)?;
-        let snapshot = self.controller.catalog.lock().await.clone();
-        let (node, template) =
-            snapshot.conversation_lineage(&self.session_id, &source.conversation_id)?;
-        let (prepared, editor, origin) = if let Some(message) = message {
-            let (prepared, editor) = if tree {
-                snapshot.prepare_tree_node_at_user_message(
-                    &self.session_id,
-                    &template,
-                    &source,
-                    &message,
-                )?
-            } else {
-                snapshot.prepare_fork_session(&template, &source, &message)?
-            };
-            (
-                prepared,
-                Some(editor),
-                super::session::SessionNodeOrigin::Fork {
-                    source_session: self.session_id.clone(),
-                    source_node: node.id.clone(),
-                    source_surface_revision: source.surface_revision,
-                    source_user_message: message,
-                },
+        let (node, settings) = self
+            .controller
+            .catalog
+            .lock()
+            .await
+            .conversation_lineage(&self.session_id, &source.conversation_id)?;
+        Ok(self
+            .controller
+            .copy_admitted_lineage(
+                &self.session_id,
+                &node,
+                &settings,
+                &source,
+                message.as_ref(),
+                tree,
             )
-        } else {
-            (
-                snapshot.prepare_clone_session(&template, &source)?,
-                None,
-                super::session::SessionNodeOrigin::Clone {
-                    source_session: self.session_id.clone(),
-                    source_node: node.id.clone(),
-                    source_surface_revision: source.surface_revision,
-                },
-            )
-        };
-        let mut catalog = self.controller.catalog.lock().await;
-        let result = if tree {
-            catalog.publish_node(&self.session_id, &prepared, node.id, origin)
-        } else {
-            catalog.publish_session(&prepared, origin)
-        };
-        let (session, durability_diagnostic) = match result {
-            Ok(session) => (session, None),
-            Err(error) if error.committed() => (
-                catalog.snapshot(if tree {
-                    &self.session_id
-                } else {
-                    &prepared.session_id
-                })?,
-                Some(error.to_string()),
-            ),
-            Err(error) => return Err(error.into()),
-        };
-        Ok(SessionTransitionResult {
-            session,
-            editor_content: editor,
-            durability_diagnostic,
-        })
+            .await?)
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]

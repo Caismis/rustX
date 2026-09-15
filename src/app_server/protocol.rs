@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v3 envelope and method vocabulary.
+//! Rust authority for the App Server v4 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -6,14 +6,13 @@
 use serde::{Deserialize, Serialize};
 
 use crate::local_runtime::session::{SessionId, SessionNodeId, SessionPersistentState};
-use crate::message::types::UserContentBlock;
 use crate::runtime::identity::{ConversationId, MessageId};
 use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 3;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -72,6 +71,15 @@ pub struct Request {
     pub call: Method,
 }
 
+/// Bounded JSON carrier. The Session domain accepts decoded bytes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UploadBytes {
+    pub name: String,
+    pub data: String,
+}
+pub use crate::local_runtime::session::uploads::UserInputBlock;
+
 /// A single public method space, with no nested Runtime Client envelope.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "method", content = "params", deny_unknown_fields)]
@@ -81,10 +89,10 @@ pub enum Method {
         target: AttachmentTarget,
         artifact_id: crate::runtime::identity::ArtifactId,
     },
-    #[serde(rename = "artifact/upload")]
-    ArtifactUpload {
+    #[serde(rename = "session/upload")]
+    SessionUpload {
         target: AttachmentTarget,
-        data: String,
+        files: Vec<UploadBytes>,
     },
     #[serde(rename = "settings/defaults")]
     DefaultsRead {
@@ -236,12 +244,12 @@ pub enum Method {
     #[serde(rename = "turn/start")]
     TurnStart {
         target: AttachmentTarget,
-        content: Vec<UserContentBlock>,
+        content: Vec<UserInputBlock>,
     },
     #[serde(rename = "turn/steer")]
     TurnSteer {
         target: AttachmentTarget,
-        content: Vec<UserContentBlock>,
+        content: Vec<UserInputBlock>,
     },
     #[serde(rename = "turn/cancel")]
     TurnCancel { target: AttachmentTarget },
@@ -347,8 +355,8 @@ pub enum MethodResult {
     ArtifactBytes {
         data: String,
     },
-    ArtifactUploaded {
-        artifact_id: crate::runtime::identity::ArtifactId,
+    SessionUploaded {
+        files: Vec<crate::local_runtime::session::uploads::UploadedFile>,
     },
     Diagnostics {
         snapshot: crate::app_server::host::ServerDiagnostics,
@@ -408,7 +416,7 @@ pub enum MethodResult {
     },
     SessionTransition {
         session: crate::local_runtime::session::SessionSnapshot,
-        editor_content: Option<Vec<UserContentBlock>>,
+        editor_content: Option<Vec<crate::local_runtime::session::uploads::UserInputBlock>>,
         durability_diagnostic: Option<String>,
     },
     Sessions {

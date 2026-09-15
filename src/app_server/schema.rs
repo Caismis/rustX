@@ -154,9 +154,12 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             target: target.clone(),
             artifact_id: crate::runtime::identity::ArtifactId::new("artifact_1"),
         },
-        Method::ArtifactUpload {
+        Method::SessionUpload {
             target: target.clone(),
-            data: "aGk=".into(),
+            files: vec![super::protocol::UploadBytes {
+                name: "hello.txt".into(),
+                data: "aGk=".into(),
+            }],
         },
         Method::SessionSubscribe {
             target: target.clone(),
@@ -451,7 +454,7 @@ mod tests {
     fn committed_rust_artifacts_are_current() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server");
         assert_eq!(
-            std::fs::read_to_string(root.join("v3.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v4.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

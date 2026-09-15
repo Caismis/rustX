@@ -56,7 +56,7 @@ import type {
   SessionView,
   ToolCallId,
   ToolExecutionId,
-  UserContentBlock,
+  UserInputBlock,
 } from "../protocol/app-server.ts";
 
 /** What the dispatcher wants the UI to do next. */
@@ -96,7 +96,7 @@ export type CommandOutcome =
       sessionId: string;
       nodeId?: string;
       /** Fork/tree content selected before publication; never history. */
-      editorContent?: UserContentBlock[];
+      editorContent?: UserInputBlock[];
       /** A bounded note about how this Session came to exist. */
       notice?: string;
     }

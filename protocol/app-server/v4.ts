@@ -25,10 +25,10 @@ export type Request1 =
       };
     }
   | {
-      method: 'artifact/upload';
+      method: 'session/upload';
       params: {
         target: AttachmentTarget;
-        data: string;
+        files: UploadBytes[];
       };
     }
   | {
@@ -277,14 +277,14 @@ export type Request1 =
       method: 'turn/start';
       params: {
         target: AttachmentTarget;
-        content: UserContentBlock[];
+        content: UserInputBlock[];
       };
     }
   | {
       method: 'turn/steer';
       params: {
         target: AttachmentTarget;
-        content: UserContentBlock[];
+        content: UserInputBlock[];
       };
     }
   | {
@@ -497,9 +497,9 @@ export type MessageId = string;
  */
 export type RuntimeClientCursor = string;
 /**
- * A content block inside a `UserMessageBlock`.
+ * Clients author text and reference completed server receipts only.
  */
-export type UserContentBlock =
+export type UserInputBlock =
   | {
       /**
        * The text content.
@@ -508,42 +508,10 @@ export type UserContentBlock =
       type: 'text';
     }
   | {
-      /**
-       * Identifies a durable artifact produced or referenced by the runtime.
-       *
-       * An artifact is identified by an opaque runtime-owned id, never by a
-       * local filesystem path: paths are executor concerns and are not a
-       * universal durable artifact identity.
-       */
-      artifact_id: string;
-      /**
-       * Optional short description or alt text.
-       */
-      alt?: string | null;
-      type: 'image';
-    }
-  | {
-      /**
-       * Identifies a durable artifact produced or referenced by the runtime.
-       *
-       * An artifact is identified by an opaque runtime-owned id, never by a
-       * local filesystem path: paths are executor concerns and are not a
-       * universal durable artifact identity.
-       */
-      artifact_id: string;
-      /**
-       * Optional display name.
-       */
-      name?: string | null;
-      /**
-       * Optional MIME type.
-       */
-      mime_type?: string | null;
-      /**
-       * Optional human-readable description.
-       */
-      description?: string | null;
-      type: 'file';
+      session_id: SessionId;
+      batch_id: string;
+      token: string;
+      type: 'upload';
     };
 /**
  * A typed response to one native interaction.
@@ -609,8 +577,8 @@ export type MethodResult =
       type: 'artifact_bytes';
     }
   | {
-      artifact_id: ArtifactId;
-      type: 'artifact_uploaded';
+      files: UploadedFile[];
+      type: 'session_uploaded';
     }
   | {
       snapshot: ServerDiagnostics;
@@ -689,7 +657,7 @@ export type MethodResult =
     }
   | {
       session: SessionSnapshot;
-      editor_content?: UserContentBlock[] | null;
+      editor_content?: UserInputBlock[] | null;
       durability_diagnostic?: string | null;
       type: 'session_transition';
     }
@@ -886,6 +854,60 @@ export type ToolCallId = string;
  * Identifies a tool definition in the capability set.
  */
 export type ToolId = string;
+/**
+ * A content block inside a `UserMessageBlock`.
+ */
+export type UserContentBlock =
+  | {
+      batch_id: string;
+      name: string;
+      type: 'uploaded_file';
+    }
+  | {
+      /**
+       * The text content.
+       */
+      text: string;
+      type: 'text';
+    }
+  | {
+      /**
+       * Identifies a durable artifact produced or referenced by the runtime.
+       *
+       * An artifact is identified by an opaque runtime-owned id, never by a
+       * local filesystem path: paths are executor concerns and are not a
+       * universal durable artifact identity.
+       */
+      artifact_id: string;
+      /**
+       * Optional short description or alt text.
+       */
+      alt?: string | null;
+      type: 'image';
+    }
+  | {
+      /**
+       * Identifies a durable artifact produced or referenced by the runtime.
+       *
+       * An artifact is identified by an opaque runtime-owned id, never by a
+       * local filesystem path: paths are executor concerns and are not a
+       * universal durable artifact identity.
+       */
+      artifact_id: string;
+      /**
+       * Optional display name.
+       */
+      name?: string | null;
+      /**
+       * Optional MIME type.
+       */
+      mime_type?: string | null;
+      /**
+       * Optional human-readable description.
+       */
+      description?: string | null;
+      type: 'file';
+    };
 /**
  * The semantic family of one admitted model-visible context fact.
  */
@@ -2693,6 +2715,13 @@ export interface AttachmentTarget {
   attachment_id: AttachmentId;
 }
 /**
+ * Bounded JSON carrier. The Session domain accepts decoded bytes.
+ */
+export interface UploadBytes {
+  name: string;
+  data: string;
+}
+/**
  * The authoritative mutable model configuration of one conversation
  * session.
  *
@@ -2986,6 +3015,31 @@ export interface Success {
   jsonrpc: JsonRpcVersion;
   id: RequestId;
   result: MethodResult;
+}
+/**
+ * A successful ordered file allocation. Paths are a presentation of ownership,
+ * never input authority or canonical message identity.
+ */
+export interface UploadedFile {
+  receipt: UploadReceipt;
+  file: UploadedFileRef;
+  path: string;
+}
+/**
+ * A server-issued capability, scoped to exactly one Session.
+ */
+export interface UploadReceipt {
+  session_id: SessionId;
+  batch_id: string;
+  token: string;
+}
+/**
+ * Runtime-authored identity of a Session-owned mutable workspace file.
+ * The owning Session supplies allocation roots; history never stores host paths.
+ */
+export interface UploadedFileRef {
+  batch_id: string;
+  name: string;
 }
 export interface ServerDiagnostics {
   lifecycle: ServerLifecycle;
@@ -4339,7 +4393,7 @@ export interface WorkflowToolIdentity {
   program_digest: string;
 }
 /**
- * A reference to a file artifact.
+ * A reference to a Tool-generated managed file artifact; never a user upload.
  */
 export interface FileReference {
   /**

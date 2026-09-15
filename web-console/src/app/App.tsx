@@ -1,7 +1,7 @@
 import { Trajectory } from './Trajectory';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { AppServerClient } from '../client/app-server';
-import type { RuntimeClientSessionDeletePreview } from '../../../protocol/app-server/v3';
+import type { RuntimeClientSessionDeletePreview } from '../../../protocol/app-server/v4';
 import { activeAttempt, json } from '../bindings/projection';
 import { ArtifactResources } from '../client/artifacts';
 import { ArtifactContext } from './components/Artifact';
@@ -84,7 +84,7 @@ export function App({ client }: { client: AppServerClient }) {
     else setError(`Delete preview: ${json(result.result)}`);
   });
   return <AppFrame navigation={<Sidebar footer={<>
-    <p className="muted">Native App Server · protocol v3</p><a href="https://github.com/Caismis/rustX" target="_blank" rel="noreferrer">rustX source</a>
+    <p className="muted">Native App Server · protocol v4</p><a href="https://github.com/Caismis/rustX" target="_blank" rel="noreferrer">rustX source</a>
     <p className="muted">UI source adapted from DeepSeek Harness. <a href="/LICENSE-DeepSeek-Harness.txt" target="_blank" rel="noreferrer">MIT notice</a></p>
   </>}>
     <section className="connection-form" aria-label="Connection">
@@ -155,7 +155,7 @@ export function App({ client }: { client: AppServerClient }) {
         </>}
       </ChatViewport>}</ArtifactContext.Provider>
       <InputBar key={view.id} disabled={!attached || !!view.snapshot?.shutting_down || !!view.snapshot?.durability_failure} busy={sending[view.id] === state.generation} active={activeAttempt(view.snapshot)}
-        onCancel={() => run(() => client.cancelTurn(view.id))} onSend={async (text, steer, files) => {
+        onCancel={() => run(() => client.cancelTurn(view.id))} onUpload={files => client.upload(view.id, files)} onSend={async (text, steer, files) => {
           const generation = state.generation; setSending(current => ({ ...current, [view.id]: generation })); setError('');
           try { await client.send(view.id, text, steer, files); return generation === client.getSnapshot().generation; }
           catch (cause) { if (generation === client.getSnapshot().generation) setError(String(cause)); return false; }

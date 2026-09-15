@@ -180,6 +180,9 @@ fn render_user(user: &UserMessageBlock, parts: &mut Vec<String>) {
         }
         match block {
             UserContentBlock::Text(text) => rendered.push_str(&text.text),
+            UserContentBlock::UploadedFile(file) => {
+                let _ = write!(rendered, "[uploaded file {}]", file.name);
+            }
             UserContentBlock::Image(image) => {
                 let _ = write!(rendered, "[image {}]", image.artifact_id);
             }

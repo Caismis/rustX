@@ -1,4 +1,4 @@
-import type { Request1 } from '../../../protocol/app-server/v3';
+import type { Request1 } from '../../../protocol/app-server/v4';
 
 export interface WireContext { method?: Request1['method']; sessionId?: string }
 export interface WireEntry {
@@ -35,9 +35,9 @@ export class ProtocolLog {
       if (typeof envelope === 'object' && envelope !== null) {
         kind = 'id' in envelope ? ('method' in envelope ? 'request' : 'response') : 'notification';
         method = envelope.method ?? method;
-        if (method === 'artifact/upload' && envelope.params?.data) envelope.params.data = '[artifact bytes omitted]';
+        if (method === 'session/upload' && Array.isArray(envelope.params?.files)) for (const file of envelope.params.files) file.data = '[upload bytes omitted]';
         if (method === 'artifact/read' && envelope.result?.data) envelope.result.data = '[artifact bytes omitted]';
-        if (method?.startsWith('artifact/')) raw = JSON.stringify(envelope);
+        if (method === 'session/upload' || method?.startsWith('artifact/')) raw = JSON.stringify(envelope);
         sessionId = envelope.params?.target?.session_id ?? envelope.params?.session_id ?? sessionId
           ?? envelope.result?.target?.session_id ?? envelope.result?.session?.id ?? envelope.result?.result?.session_id;
       }
