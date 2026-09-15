@@ -1,10 +1,6 @@
-:root { font-family: var(--dsw-font-family); color-scheme: light; }
-body { margin: 0; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base);
+body {
   --dsh-composer-side-clearance: 18px; --dsh-chat-content-width: 820px; --dsh-composer-card-max-width: 852px;
   --dsh-composer-text-max-height: 280px; --dsw-alias-state-business-primary: #27685f; --dsw-specific-bubble: #eaf1ee; }
-* { box-sizing: border-box; }
-button, input, textarea, select { font: inherit; }
-button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid #27685f; outline-offset: 3px; }
 a { color: #27685f; }
 h1, h2, h3, p { margin: 0; }
 h1 { font-size: 25px; font-weight: 550; letter-spacing: -.8px; margin-top: 5px; }

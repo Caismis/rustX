@@ -6,175 +6,766 @@
       "upstream": "packages/client/ui-primitives/src/Button.tsx",
       "destination": "web-console/src/presentation/primitives/Button.tsx",
       "treatment": "retained mostly intact",
-      "upstream_sha256": "5f1db06042fa372c45d777feffaab3b1d0c9395a89fa00b735bd9cbc8a389371"
+      "upstream_sha256": "5f1db06042fa372c45d777feffaab3b1d0c9395a89fa00b735bd9cbc8a389371",
+      "retained_dependencies": [
+        "./Button.module.css",
+        "clsx",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": []
     },
     {
       "upstream": "packages/client/ui-primitives/src/Button.module.css",
       "destination": "web-console/src/presentation/primitives/Button.module.css",
       "treatment": "retained mostly intact",
-      "upstream_sha256": "a32017eff252569cef883d7d3308b2ca01fc41b167b568ad00b923603a902f99"
+      "upstream_sha256": "a32017eff252569cef883d7d3308b2ca01fc41b167b568ad00b923603a902f99",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": []
     },
     {
       "upstream": "packages/client/ui-primitives/src/Input.tsx",
       "destination": "web-console/src/presentation/primitives/Input.tsx",
       "treatment": "retained mostly intact",
-      "upstream_sha256": "dcb73dad681f3f37975c08ed3aa97922a1f5337548b406806324877a5d398c51"
+      "upstream_sha256": "dcb73dad681f3f37975c08ed3aa97922a1f5337548b406806324877a5d398c51",
+      "retained_dependencies": [
+        "./Input.module.css",
+        "clsx",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": []
     },
     {
       "upstream": "packages/client/ui-primitives/src/Input.module.css",
       "destination": "web-console/src/presentation/primitives/Input.module.css",
       "treatment": "retained mostly intact",
-      "upstream_sha256": "f13333abf03b98d52bd65702ac34fbbf00b3c4fc3d8985b793d5e912a3e22b2e"
+      "upstream_sha256": "f13333abf03b98d52bd65702ac34fbbf00b3c4fc3d8985b793d5e912a3e22b2e",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": []
     },
     {
       "upstream": "packages/client/ui-primitives/src/Pill.tsx",
       "destination": "web-console/src/presentation/primitives/Pill.tsx",
       "treatment": "retained mostly intact",
-      "upstream_sha256": "851727b4f745755f8553a92bc5881e54d0479ea680d1686533ba210cb943ca2f"
+      "upstream_sha256": "851727b4f745755f8553a92bc5881e54d0479ea680d1686533ba210cb943ca2f",
+      "retained_dependencies": [
+        "./Pill.module.css",
+        "clsx",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": []
     },
     {
       "upstream": "packages/client/ui-primitives/src/Pill.module.css",
       "destination": "web-console/src/presentation/primitives/Pill.module.css",
       "treatment": "retained mostly intact",
-      "upstream_sha256": "c1c39eb6adc0e40326f7a33598a32195b388cb9db2627a9c723c009b44a94dab"
+      "upstream_sha256": "c1c39eb6adc0e40326f7a33598a32195b388cb9db2627a9c723c009b44a94dab",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": []
     },
     {
       "upstream": "packages/client/ui-primitives/src/StateDot.tsx",
       "destination": "web-console/src/presentation/primitives/StateDot.tsx",
       "treatment": "retained mostly intact",
-      "upstream_sha256": "94e287b278d5481d6812dae820a95afee6856d34b4056bfd84017f43a5b43ad2"
+      "upstream_sha256": "94e287b278d5481d6812dae820a95afee6856d34b4056bfd84017f43a5b43ad2",
+      "retained_dependencies": [
+        "./StateDot.module.css",
+        "clsx"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": []
     },
     {
       "upstream": "packages/client/ui-primitives/src/StateDot.module.css",
       "destination": "web-console/src/presentation/primitives/StateDot.module.css",
       "treatment": "retained mostly intact",
-      "upstream_sha256": "21c9dca85dffbae6e31da3bfd4c4578739282f9ed3b9a3bbf68b6b12338879de"
+      "upstream_sha256": "21c9dca85dffbae6e31da3bfd4c4578739282f9ed3b9a3bbf68b6b12338879de",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": []
     },
     {
       "upstream": "packages/client/ui-primitives/src/DisclosureRow.tsx",
       "destination": "web-console/src/presentation/primitives/DisclosureRow.tsx",
       "treatment": "retained mostly intact",
-      "upstream_sha256": "0c65c0f0f14f9fdaf4dda6aeea6c73bf803c4591d64f53784928aaa559cc9b96"
+      "upstream_sha256": "0c65c0f0f14f9fdaf4dda6aeea6c73bf803c4591d64f53784928aaa559cc9b96",
+      "retained_dependencies": [
+        "./DisclosureRow.module.css",
+        "./icons/index.tsx",
+        "clsx",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": []
     },
     {
       "upstream": "packages/client/ui-primitives/src/DisclosureRow.module.css",
       "destination": "web-console/src/presentation/primitives/DisclosureRow.module.css",
       "treatment": "retained mostly intact",
-      "upstream_sha256": "40cdcab1f8821760ba2a59ff859b4c4fb894ea373b27083076c0e4f995373712"
+      "upstream_sha256": "40cdcab1f8821760ba2a59ff859b4c4fb894ea373b27083076c0e4f995373712",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": []
     },
     {
       "upstream": "packages/client/ui-primitives/src/icons/props.ts",
       "destination": "web-console/src/presentation/primitives/icons/props.ts",
       "treatment": "retained mostly intact",
-      "upstream_sha256": "98d350861746bca58f07d5301a0caff7270035c9331ed5b605e702d7f590f1fb"
+      "upstream_sha256": "98d350861746bca58f07d5301a0caff7270035c9331ed5b605e702d7f590f1fb",
+      "retained_dependencies": [],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": []
     },
     {
       "upstream": "packages/client/ui-primitives/src/icons/index.tsx",
       "destination": "web-console/src/presentation/primitives/icons/index.tsx",
       "treatment": "adapted: four generic glyphs only",
-      "upstream_sha256": "c0035537e5c3ffe75614daeca9d3b163d70048023e897a670cfa6fb70238df80"
+      "upstream_sha256": "c0035537e5c3ffe75614daeca9d3b163d70048023e897a670cfa6fb70238df80",
+      "retained_dependencies": [
+        "./props.ts"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": []
     },
     {
       "upstream": "packages/client/ui-theme/src/styles/base.css",
       "destination": "web-console/src/presentation/theme/base.css",
       "treatment": "retained mostly intact",
-      "upstream_sha256": "85f8970d2650108ad47d66da1db3ba00ebbe3f26aaec00551cfa69dd029347a3"
+      "upstream_sha256": "85f8970d2650108ad47d66da1db3ba00ebbe3f26aaec00551cfa69dd029347a3",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": []
     },
     {
       "upstream": "packages/client/ui-theme/src/styles/design-platform.css",
       "destination": "web-console/src/presentation/theme/tokens.css",
       "treatment": "adapted: generic tokens; brand token renamed accent",
-      "upstream_sha256": "ba4f1ec7f164756c67f33101c6851ec5e8fa26d61cff7e0be61e30c4f58db28c"
+      "upstream_sha256": "ba4f1ec7f164756c67f33101c6851ec5e8fa26d61cff7e0be61e30c4f58db28c",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": []
     },
     {
       "upstream": "packages/client/ui-layout/src/client/AppFrame.tsx",
-      "destination": "web-console/src/presentation/AppFrame.tsx",
+      "destination": "web-console/src/presentation/layout/AppFrame.tsx",
       "treatment": "substantially refactored: presentation extracted; native rustX bindings",
-      "upstream_sha256": "69f66f2c725120000014c7fc25b66f79632b3b4bb6899b1b81b0678819158841"
+      "upstream_sha256": "69f66f2c725120000014c7fc25b66f79632b3b4bb6899b1b81b0678819158841",
+      "retained_dependencies": [
+        "./AppFrame.module.css",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ]
     },
     {
       "upstream": "packages/client/ui-layout/src/client/AppFrame.module.css",
-      "destination": "web-console/src/presentation/AppFrame.module.css",
+      "destination": "web-console/src/presentation/layout/AppFrame.module.css",
       "treatment": "substantially refactored: presentation extracted; native rustX bindings",
-      "upstream_sha256": "3ea2d3c3035a26484ee5e7760f5f6d53719b5a665cac1e09dca96bf88e8e44ec"
+      "upstream_sha256": "3ea2d3c3035a26484ee5e7760f5f6d53719b5a665cac1e09dca96bf88e8e44ec",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ]
     },
     {
       "upstream": "packages/client/ui-sidebar/src/client/SidebarRoot.tsx",
-      "destination": "web-console/src/presentation/Sidebar.tsx",
+      "destination": "web-console/src/app/components/Sidebar.tsx",
       "treatment": "substantially refactored: presentation extracted; native rustX bindings",
-      "upstream_sha256": "9b9df86191667670fcbe81d9d8d23f654e01e83cec8571b36edcd55842a96f2b"
+      "upstream_sha256": "9b9df86191667670fcbe81d9d8d23f654e01e83cec8571b36edcd55842a96f2b",
+      "retained_dependencies": [
+        "./Sidebar.module.css",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ]
     },
     {
       "upstream": "packages/client/ui-sidebar/src/client/SidebarRoot.module.css",
-      "destination": "web-console/src/presentation/Sidebar.module.css",
+      "destination": "web-console/src/app/components/Sidebar.module.css",
       "treatment": "substantially refactored: presentation extracted; native rustX bindings",
-      "upstream_sha256": "aa6b29bceab34a49e00c7c10c0448eaab288acedc1adedf27b96235db4e6265e"
+      "upstream_sha256": "aa6b29bceab34a49e00c7c10c0448eaab288acedc1adedf27b96235db4e6265e",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ]
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageItem.tsx",
-      "destination": "web-console/src/presentation/MessageItem.tsx",
+      "destination": "web-console/src/app/components/MessageItem.tsx",
       "treatment": "substantially refactored: presentation extracted; native rustX bindings",
-      "upstream_sha256": "634797fd0b3145ada0e6206fdafc323605d901aabfaa2391a0074601d1dbd0dc"
+      "upstream_sha256": "634797fd0b3145ada0e6206fdafc323605d901aabfaa2391a0074601d1dbd0dc",
+      "retained_dependencies": [
+        "./MessageItem.module.css",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ]
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageItem.module.css",
-      "destination": "web-console/src/presentation/MessageItem.module.css",
+      "destination": "web-console/src/app/components/MessageItem.module.css",
       "treatment": "substantially refactored: presentation extracted; native rustX bindings",
-      "upstream_sha256": "ed4aea46312d0161c98305514b111158f688219f952860a12bc270e2bae62de5"
+      "upstream_sha256": "ed4aea46312d0161c98305514b111158f688219f952860a12bc270e2bae62de5",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ]
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
-      "destination": "web-console/src/presentation/InputBar.tsx",
+      "destination": "web-console/src/app/components/InputBar.tsx",
       "treatment": "substantially refactored: presentation extracted; native rustX bindings",
-      "upstream_sha256": "98fd669d20af309e31bf2cf0cc591b247905acf9ae02c98a3248c02429742477"
+      "upstream_sha256": "98fd669d20af309e31bf2cf0cc591b247905acf9ae02c98a3248c02429742477",
+      "retained_dependencies": [
+        "../../presentation/primitives/Button",
+        "./InputBar.module.css",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ]
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.module.css",
-      "destination": "web-console/src/presentation/InputBar.module.css",
+      "destination": "web-console/src/app/components/InputBar.module.css",
       "treatment": "substantially refactored: presentation extracted; native rustX bindings",
-      "upstream_sha256": "f7483b4349fe46089ae368d5b785d3576d16c284077c64ec039d19bd50dae2ae"
+      "upstream_sha256": "f7483b4349fe46089ae368d5b785d3576d16c284077c64ec039d19bd50dae2ae",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ]
     },
     {
       "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.tsx",
-      "destination": "web-console/src/presentation/ToolRow.tsx",
+      "destination": "web-console/src/app/components/ToolRow.tsx",
       "treatment": "substantially refactored: presentation extracted; native rustX bindings",
-      "upstream_sha256": "895df84f71e8efd25256843ee16afaa53d609e93e12c973f02c478d615d33137"
+      "upstream_sha256": "895df84f71e8efd25256843ee16afaa53d609e93e12c973f02c478d615d33137",
+      "retained_dependencies": [
+        "../../presentation/primitives/DisclosureRow",
+        "../../presentation/primitives/StateDot",
+        "./ToolRow.module.css",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ]
     },
     {
       "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.module.css",
-      "destination": "web-console/src/presentation/ToolRow.module.css",
+      "destination": "web-console/src/app/components/ToolRow.module.css",
       "treatment": "substantially refactored: presentation extracted; native rustX bindings",
-      "upstream_sha256": "84b5078051034c194b743b4fd3b607acaa847fff3b1adad717342ff40acac439"
+      "upstream_sha256": "84b5078051034c194b743b4fd3b607acaa847fff3b1adad717342ff40acac439",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ]
     },
     {
       "upstream": "packages/client/ui-approval/src/client/ApprovalPanel.tsx",
-      "destination": "web-console/src/presentation/ApprovalPanel.tsx",
+      "destination": "web-console/src/app/components/ApprovalPanel.tsx",
       "treatment": "substantially refactored: presentation extracted; native rustX bindings",
-      "upstream_sha256": "e108d9a196672dc99613d5789569c6bd3f49ef689aa1e33817bc6cecfa03e6aa"
+      "upstream_sha256": "e108d9a196672dc99613d5789569c6bd3f49ef689aa1e33817bc6cecfa03e6aa",
+      "retained_dependencies": [
+        "../../presentation/primitives/Button",
+        "./ApprovalPanel.module.css",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ]
     },
     {
       "upstream": "packages/client/ui-approval/src/client/ApprovalPanel.module.css",
-      "destination": "web-console/src/presentation/ApprovalPanel.module.css",
+      "destination": "web-console/src/app/components/ApprovalPanel.module.css",
       "treatment": "substantially refactored: presentation extracted; native rustX bindings",
-      "upstream_sha256": "d2baf40fcc375fa4189322bf1b91b84e2d3335704a06fe0d294a9803817bdd64"
+      "upstream_sha256": "d2baf40fcc375fa4189322bf1b91b84e2d3335704a06fe0d294a9803817bdd64",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ]
     },
     {
       "upstream": "packages/client/ui-user-questions/src/client/QuestionComposer.tsx",
-      "destination": "web-console/src/presentation/QuestionComposer.tsx",
+      "destination": "web-console/src/app/components/QuestionComposer.tsx",
       "treatment": "substantially refactored: presentation extracted; native rustX bindings",
-      "upstream_sha256": "9a3f529576191c8424544273c562e6f84741bd667b2a8efefac9c26dbaf82a02"
+      "upstream_sha256": "9a3f529576191c8424544273c562e6f84741bd667b2a8efefac9c26dbaf82a02",
+      "retained_dependencies": [
+        "../../../../protocol/app-server/v1",
+        "../../bindings/questionnaire",
+        "../../presentation/primitives/Button",
+        "../../presentation/primitives/icons",
+        "./QuestionComposer.module.css",
+        "clsx",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ]
     },
     {
       "upstream": "packages/client/ui-user-questions/src/client/QuestionComposer.module.css",
-      "destination": "web-console/src/presentation/QuestionComposer.module.css",
+      "destination": "web-console/src/app/components/QuestionComposer.module.css",
       "treatment": "substantially refactored: presentation extracted; native rustX bindings",
-      "upstream_sha256": "2f1f5a9b40b7df4645f9cd2f858806333400cf1ac8c0a8d45029b0bb6799b50c"
+      "upstream_sha256": "2f1f5a9b40b7df4645f9cd2f858806333400cf1ac8c0a8d45029b0bb6799b50c",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ]
     },
     {
       "upstream": "LICENSE",
       "destination": "web-console/public/LICENSE-DeepSeek-Harness.txt",
       "treatment": "retained mostly intact",
-      "upstream_sha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be"
+      "upstream_sha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be",
+      "retained_dependencies": [],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": []
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/markdown/MarkdownText.tsx",
+      "destination": "web-console/src/presentation/markdown/MarkdownText.tsx",
+      "treatment": "adapted",
+      "upstream_sha256": "d8c6aa23232aa4a76339c49c02df5888f5530a7a1bbb417ef14a42a1e41d5d94",
+      "retained_dependencies": [
+        "./MarkdownText.module.css",
+        "./incremental.ts",
+        "./parse.ts",
+        "./render.tsx",
+        "katex/dist/katex.min.css",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/markdown/MarkdownText.module.css",
+      "destination": "web-console/src/presentation/markdown/MarkdownText.module.css",
+      "treatment": "adapted",
+      "upstream_sha256": "7a6a54cfd2870405f45ea7ed3725bed4f858e410c32c4b5db097cc7e15872465",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/markdown/parse.ts",
+      "destination": "web-console/src/presentation/markdown/parse.ts",
+      "treatment": "adapted",
+      "upstream_sha256": "6be57559995c4e717d6d704207eb2fec86db9714c2a4bcc5b0c3f6648c8990f0",
+      "retained_dependencies": [
+        "./cjkFriendlyStrong.ts",
+        "./mathCompatibility.ts",
+        "mdast",
+        "mdast-util-from-markdown",
+        "mdast-util-gfm",
+        "mdast-util-math",
+        "micromark-extension-gfm",
+        "micromark-extension-math"
+      ],
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/markdown/incremental.ts",
+      "destination": "web-console/src/presentation/markdown/incremental.ts",
+      "treatment": "adapted",
+      "upstream_sha256": "eaa266bb77dfb646738d0fdd79be4f1c4bc5490f7bf3f4127f9ffb72ef741ff8",
+      "retained_dependencies": [
+        "mdast"
+      ],
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/markdown/render.tsx",
+      "destination": "web-console/src/presentation/markdown/render.tsx",
+      "treatment": "adapted",
+      "upstream_sha256": "3576c16a37846a55f215562d15df9394cf5761fc46eae8f89fdcea8420f09d3d",
+      "retained_dependencies": [
+        "./CodeBlock.tsx",
+        "./MarkdownText.module.css",
+        "./incremental.ts",
+        "./katex.tsx",
+        "clsx",
+        "mdast",
+        "mdast-util-math",
+        "micromark-util-sanitize-uri",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/markdown/mathCompatibility.ts",
+      "destination": "web-console/src/presentation/markdown/mathCompatibility.ts",
+      "treatment": "adapted",
+      "upstream_sha256": "5f8cec86fd613fd2f67510e22b0a9d661f4173b3d49fb13fef71b25f4abb652b",
+      "retained_dependencies": [
+        "micromark-extension-math",
+        "micromark-factory-space",
+        "micromark-util-character",
+        "micromark-util-symbol",
+        "micromark-util-types"
+      ],
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/markdown/cjkFriendlyStrong.ts",
+      "destination": "web-console/src/presentation/markdown/cjkFriendlyStrong.ts",
+      "treatment": "adapted",
+      "upstream_sha256": "bc4adf3183f7d0feea17e3a176e7c4b1db5bdddc29e7fc87261f627ff8a39b53",
+      "retained_dependencies": [
+        "micromark-core-commonmark",
+        "micromark-util-character",
+        "micromark-util-classify-character",
+        "micromark-util-symbol",
+        "micromark-util-types"
+      ],
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/markdown/katex.tsx",
+      "destination": "web-console/src/presentation/markdown/katex.tsx",
+      "treatment": "adapted",
+      "upstream_sha256": "8227e04d29333d2568021ed012143237b457852bce25d82cf394d72b941e74a5",
+      "retained_dependencies": [
+        "katex",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/markdown/CodeBlock.tsx",
+      "destination": "web-console/src/presentation/markdown/CodeBlock.tsx",
+      "treatment": "adapted",
+      "upstream_sha256": "bb7d7f9d71aaaa8f4a8bedc7b8167b0d8ed00c6d302cd16534d5acff776b4502",
+      "retained_dependencies": [
+        "../primitives/clipboard.ts",
+        "./CodeBlock.module.css",
+        "./highlight.ts",
+        "./useViewportHighlighting.ts",
+        "clsx",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/markdown/CodeBlock.module.css",
+      "destination": "web-console/src/presentation/markdown/CodeBlock.module.css",
+      "treatment": "adapted",
+      "upstream_sha256": "5a7ed14f12cb63ebf3f77d57e67340f7e9a399b0b07a90bec773fad3ddfa312f",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/markdown/highlight.ts",
+      "destination": "web-console/src/presentation/markdown/highlight.ts",
+      "treatment": "adapted",
+      "upstream_sha256": "032e3df32a77522b3ba7b2d5efe4734999e6c547ee2418a48817cfe5be93b84b",
+      "retained_dependencies": [
+        "@shikijs/langs/json",
+        "@shikijs/langs/python",
+        "@shikijs/langs/rust",
+        "@shikijs/langs/shellscript",
+        "@shikijs/langs/typescript",
+        "react",
+        "shiki/core",
+        "shiki/engine/javascript"
+      ],
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/markdown/useViewportHighlighting.ts",
+      "destination": "web-console/src/presentation/markdown/useViewportHighlighting.ts",
+      "treatment": "adapted",
+      "upstream_sha256": "29fb78ac857415989b70bf0cf73a8eef3b25843df227441838be2e08ba1f8d36",
+      "retained_dependencies": [
+        "./highlight.ts",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Harness Host/Cordis/Remote/Session authority",
+        "workspace/file mutation"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek"
+    },
+    {
+      "upstream": "packages/client/ui-theme/src/styles/shiki.css",
+      "destination": "web-console/src/presentation/theme/shiki.css",
+      "treatment": "adapted",
+      "upstream_sha256": "14f2b00083b035d8f92e26243a669d1b04a8d564c20d91856b20706cc79b8828",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "excluded_dependencies": [],
+      "license": "MIT; Copyright (c) 2026 DeepSeek"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/Menu.module.css",
+      "destination": "web-console/src/presentation/primitives/Menu.module.css",
+      "treatment": "adapted",
+      "upstream_sha256": "281d01fd38a35f72bb2f6827873512d5ee3511a0f04553f1d532d886dfd78b91",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "excluded_dependencies": [],
+      "license": "MIT; Copyright (c) 2026 DeepSeek"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/Modal.module.css",
+      "destination": "web-console/src/presentation/primitives/Modal.module.css",
+      "treatment": "adapted",
+      "upstream_sha256": "0e1de6a6cfcd5333e6b02c8b2583c09ad90f98a618f3b80ec60acfc5c59ee68c",
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "excluded_dependencies": [],
+      "license": "MIT; Copyright (c) 2026 DeepSeek"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
+      "destination": "web-console/test/markdown-incremental.test.tsx",
+      "treatment": "adapted: native Vitest imports and local presentation entry",
+      "upstream_sha256": "e837f099eb162d2e03dc05b57765aaa179fa637468e5b3ecc79098eb3ddf0439",
+      "retained_dependencies": [
+        "../src/presentation/markdown/incremental.ts",
+        "../src/presentation/markdown/parse.ts",
+        "./markdown-test-components.tsx",
+        "@testing-library/react",
+        "mdast",
+        "vitest"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": []
+    },
+    {
+      "upstream": "packages/client/ui-primitives/tests/streaming-code-block.client.spec.tsx",
+      "destination": "web-console/test/streaming-code-block.test.tsx",
+      "treatment": "adapted: native Vitest imports and local presentation entry",
+      "upstream_sha256": "523df11c0d14992289961e8d0bc1db25147d422c69d216172314e7886fd18a8b",
+      "retained_dependencies": [
+        "../src/presentation/markdown/CodeBlock.tsx",
+        "../src/presentation/markdown/highlight.ts",
+        "@testing-library/react",
+        "vitest"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": []
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/Menu.tsx",
+      "destination": "web-console/src/presentation/primitives/Menu.tsx",
+      "treatment": "rewritten from: flat action menu, native buttons, focus navigation; no submenu/grace/portal modes",
+      "upstream_sha256": "905ce9ef6ff3e2ee3fef051ddea8383cd9988be0a81cf68c34e83d3ff5149094",
+      "retained_dependencies": [
+        "./Button",
+        "./Menu.module.css",
+        "./useAnchoredSurface",
+        "react",
+        "react-dom"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": []
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/HoverCard.tsx",
+      "destination": "web-console/src/presentation/primitives/Popover.tsx",
+      "treatment": "rewritten from: anchored surface and outside dismissal; explicit activation and keyboard focus replaces hover-only behavior",
+      "upstream_sha256": "e4fcb43d12de00d011717b033b496f5f57fb00c297f34e0a2f03206befd03e13",
+      "retained_dependencies": [
+        "./Button",
+        "./Menu.module.css",
+        "./useAnchoredSurface",
+        "react",
+        "react-dom"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": []
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/Modal.tsx",
+      "destination": "web-console/src/presentation/primitives/Dialog.tsx",
+      "treatment": "rewritten from: modal chrome and controlled close; native dialog replaces manual portal/mask for browser focus isolation",
+      "upstream_sha256": "1c2ed7f8b9ef84b892b4f0a69570db2379ecaa07fb46fe71008443e2388a4a53",
+      "retained_dependencies": [
+        "./Button",
+        "./Modal.module.css",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": []
+    },
+    {
+      "upstream": "packages/client/ui-primitives/src/Menu.tsx",
+      "destination": "web-console/src/presentation/primitives/useAnchoredSurface.ts",
+      "treatment": "adapted: shared viewport clamping and scroll/resize placement; no stores or portal modes",
+      "upstream_sha256": "905ce9ef6ff3e2ee3fef051ddea8383cd9988be0a81cf68c34e83d3ff5149094",
+      "retained_dependencies": [
+        "react"
+      ],
+      "excluded_dependencies": [],
+      "license": "MIT; Copyright (c) 2026 DeepSeek"
     }
+  ],
+  "inspected": [
+    "packages/client/README.md",
+    "packages/client/ui-chat/package.json",
+    "packages/client/ui-chat/src/client/chat/AssistantMarkdown.tsx",
+    "packages/client/ui-chat/src/client/chat/MessageItem.tsx",
+    "packages/client/ui-commands/package.json",
+    "packages/client/ui-commands/src/client/PopupSelectView.tsx",
+    "packages/client/ui-conversation/package.json",
+    "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
+    "packages/client/ui-layout/package.json",
+    "packages/client/ui-layout/src/client/AppFrame.tsx",
+    "packages/client/ui-primitives/package.json",
+    "packages/client/ui-primitives/src/HoverCard.tsx",
+    "packages/client/ui-primitives/src/Menu.module.css",
+    "packages/client/ui-primitives/src/Menu.tsx",
+    "packages/client/ui-primitives/src/Modal.module.css",
+    "packages/client/ui-primitives/src/Modal.tsx",
+    "packages/client/ui-primitives/src/clipboard.ts",
+    "packages/client/ui-primitives/src/markdown/CodeBlock.module.css",
+    "packages/client/ui-primitives/src/markdown/CodeBlock.tsx",
+    "packages/client/ui-primitives/src/markdown/MarkdownText.module.css",
+    "packages/client/ui-primitives/src/markdown/MarkdownText.tsx",
+    "packages/client/ui-primitives/src/markdown/cjkFriendlyStrong.ts",
+    "packages/client/ui-primitives/src/markdown/highlight.ts",
+    "packages/client/ui-primitives/src/markdown/incremental.ts",
+    "packages/client/ui-primitives/src/markdown/katex.tsx",
+    "packages/client/ui-primitives/src/markdown/mathCompatibility.ts",
+    "packages/client/ui-primitives/src/markdown/parse.ts",
+    "packages/client/ui-primitives/src/markdown/render.tsx",
+    "packages/client/ui-primitives/src/markdown/useViewportHighlighting.ts",
+    "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
+    "packages/client/ui-primitives/tests/markdown.client.spec.tsx",
+    "packages/client/ui-primitives/tests/streaming-code-block.client.spec.tsx",
+    "packages/client/ui-theme/package.json",
+    "packages/client/ui-theme/src/styles/shiki.css"
   ]
 }

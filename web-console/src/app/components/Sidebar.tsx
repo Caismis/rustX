@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 // Extracted from DeepSeek Harness ui-sidebar/SidebarRoot; see PROVENANCE.md.
 import type { ReactNode } from 'react';
 import css from './Sidebar.module.css';

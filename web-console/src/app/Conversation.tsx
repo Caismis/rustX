@@ -2,16 +2,18 @@ import type { MessageBlock, RuntimeClientSnapshot, UserContentBlock, AssistantCo
 import type { AppServerClient, ClientView, SessionView } from '../client/app-server';
 import { interactionKey } from '../client/app-server';
 import { conversation, json } from '../bindings/projection';
-import { MessageItem } from '../presentation/MessageItem';
-import { ToolRow } from '../presentation/ToolRow';
-import { ApprovalPanel } from '../presentation/ApprovalPanel';
-import { QuestionComposer } from '../presentation/QuestionComposer';
+import { MessageItem } from './components/MessageItem';
+import { ToolRow } from './components/ToolRow';
+import { ApprovalPanel } from './components/ApprovalPanel';
+import { QuestionComposer } from './components/QuestionComposer';
 import { Button } from '../presentation/primitives/Button';
+import { Feedback } from '../presentation/primitives/Surface';
+import { MarkdownText } from '../presentation/markdown/MarkdownText';
 import { useState } from 'react';
 
-function Content({ blocks }: { blocks: (UserContentBlock | AssistantContentBlock | InFlightBlock)[] }) {
+function Content({ blocks, markdown = false, streaming = false }: { markdown?: boolean; streaming?: boolean; blocks: (UserContentBlock | AssistantContentBlock | InFlightBlock)[] }) {
   return blocks.map((block, index) => {
-    if (block.type === 'text') return <span key={index}>{block.text}</span>;
+    if (block.type === 'text') return markdown ? <MarkdownText key={index} text={block.text} streaming={streaming} /> : <span key={index}>{block.text}</span>;
     if (block.type === 'reasoning') return <details key={index}><summary>Reasoning</summary>{block.text}</details>;
     if (block.type === 'refusal') return <p key={index}>{block.text}</p>;
     if (block.type === 'tool_call') return <ToolRow key={index} title={block.name} summary="Tool call" input={typeof block.arguments === 'string' ? block.arguments : json(block.arguments)} />;
@@ -20,15 +22,15 @@ function Content({ blocks }: { blocks: (UserContentBlock | AssistantContentBlock
 }
 function Message({ message }: { message: MessageBlock }) {
   return <MessageItem user={message.role === 'user'} label={`${message.role} · ${message.id}`}>
-    {message.role === 'tool' ? <ToolRow title={message.tool_id} summary={message.result.status.type} output={json(message.result)} /> : <Content blocks={message.content} />}
+    {message.role === 'tool' ? <ToolRow title={message.tool_id} summary={message.result.status.type} output={json(message.result)} /> : <Content blocks={message.content} markdown={message.role === 'assistant'} />}
   </MessageItem>;
 }
 export function Conversation({ snapshot }: { snapshot: RuntimeClientSnapshot }) {
   const { messages, streaming } = conversation(snapshot);
   return <div className="messages" aria-label="Canonical conversation">
-    {!messages.length && <div className="empty"><h2>Ready for a task.</h2><p>This Session’s conversation is owned by rustX.</p></div>}
+    {!messages.length && <Feedback kind="empty" title="Ready for a task."><p>This Session’s conversation is owned by rustX.</p></Feedback>}
     {messages.map(message => <Message key={message.id} message={message} />)}
-    {streaming && <MessageItem user={false} label={`Streaming · ${streaming.message_id}`}><Content blocks={streaming.blocks ?? []} /></MessageItem>}
+    {streaming && <MessageItem user={false} label={`Streaming · ${streaming.message_id}`}><Content blocks={streaming.blocks ?? []} markdown streaming /></MessageItem>}
   </div>;
 }
 export function RuntimeFacts({ snapshot }: { snapshot: RuntimeClientSnapshot }) {

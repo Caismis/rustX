@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
 /* Selected DeepSeek Harness presentation rules; see PROVENANCE.md. */
 .frame {
 position: relative;
@@ -40,3 +41,11 @@ position: relative;
 .rightbarCol { overflow: auto; border-left: 1px solid var(--dsw-alias-border-l3); background: var(--dsw-specific-sidebar-fill); }
 @media (max-width: 1100px) { .frame { grid-template-columns: 220px minmax(360px, 1fr); } .rightbarCol { grid-column: 1 / -1; max-height: 50vh; } .frame { overflow: auto; height: auto; min-height: 100dvh; grid-template-rows: minmax(700px, 100dvh) auto; } }
 @media (max-width: 650px) { .frame { display: flex; flex-direction: column; height: auto; } .sidebarCol { max-height: 400px; overflow: auto; } .centerCol { min-height: 75dvh; } }
+
+.frame[data-navigation="false"] { grid-template-columns: minmax(0, 1fr) 350px; }
+.frame[data-dock="false"] { grid-template-columns: 250px minmax(0, 1fr); }
+.frame[data-navigation="false"][data-dock="false"] { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 1100px) {
+  .frame[data-navigation="false"] { grid-template-columns: minmax(0, 1fr); }
+  .frame[data-dock="false"] { grid-template-rows: minmax(700px, 100dvh); }
+}

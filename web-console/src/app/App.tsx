@@ -2,9 +2,9 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { AppServerClient } from '../client/app-server';
 import type { RuntimeClientSessionDeletePreview } from '../../../protocol/app-server/v1';
 import { activeAttempt, json } from '../bindings/projection';
-import { AppFrame } from '../presentation/AppFrame';
-import { Sidebar } from '../presentation/Sidebar';
-import { InputBar } from '../presentation/InputBar';
+import { AppFrame } from '../presentation/layout/AppFrame';
+import { Sidebar } from './components/Sidebar';
+import { InputBar } from './components/InputBar';
 import { Button } from '../presentation/primitives/Button';
 import { Input } from '../presentation/primitives/Input';
 import { Pill } from '../presentation/primitives/Pill';
@@ -76,7 +76,7 @@ export function App({ client }: { client: AppServerClient }) {
     if (result.result.status === 'preview') setPreview(result.result.preview);
     else setError(`Delete preview: ${json(result.result)}`);
   });
-  return <AppFrame sidebar={<Sidebar footer={<>
+  return <AppFrame navigation={<Sidebar footer={<>
     <p className="muted">Native App Server · protocol v1</p><a href="https://github.com/Caismis/rustX" target="_blank" rel="noreferrer">rustX source</a>
     <p className="muted">UI source adapted from DeepSeek Harness. <a href="/LICENSE-DeepSeek-Harness.txt" target="_blank" rel="noreferrer">MIT notice</a></p>
   </>}>
@@ -108,7 +108,7 @@ export function App({ client }: { client: AppServerClient }) {
       <div className="row"><Button size="sm" disabled={!connected || offset === 0} onClick={() => { const next = Math.max(0, offset - 32); setOffset(next); run(() => client.listSessions(next)); }}>Previous</Button>
         <Button size="sm" disabled={!connected || state.nextOffset == null} onClick={() => { const next = state.nextOffset!; setOffset(next); run(() => client.listSessions(next)); }}>Next</Button></div>
     </section>
-  </Sidebar>} inspector={<Inspector client={client} state={state} view={view} />}>
+  </Sidebar>} dockLabel="Developer inspector" dock={<Inspector client={client} state={state} view={view} />}>
     <header className="console-header"><div><div className="eyebrow">DEVELOPER WEB CONSOLE</div><h1>Sessions, in motion.</h1></div><Pill>{state.connection}</Pill></header>
     <nav className="tabs" aria-label="Open Session views">{tabs.map(id => <div className="tab" key={id}>
       <Pill role="tab" active={selected === id} aria-selected={selected === id} onClick={() => setSelected(id)}>{state.sessions.find(item => item.id === id)?.name ?? id.slice(0, 16)}</Pill>

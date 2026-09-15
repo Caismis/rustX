@@ -335,6 +335,9 @@ jobs:
       - name: Deterministic native client and presentation tests
         working-directory: web-console
         run: pnpm test
+      - name: Source provenance and dependency notices
+        working-directory: web-console
+        run: pnpm check:provenance
       - name: Production build from checked-in source
         working-directory: web-console
         run: pnpm build
