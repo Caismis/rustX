@@ -1732,6 +1732,17 @@ pub trait ConversationStore: Send + Sync + 'static {
         event: RuntimeEventEnvelope,
     ) -> Result<(RuntimeEventEnvelope, TranscriptCursor), ConversationStoreError>;
 
+    /// Latest committed Journal position, read without enumerating history.
+    fn presentation_frontier(&self) -> Result<u64, ConversationStoreError>;
+
+    /// Indexed, bounded execution-fact reads for presentation consumers.
+    /// `before` is exclusive; `through` fixes a durable read cut. This is an
+    /// internal Journal query, never a public cursor or a semantic authority.
+    fn read_presentation_events(
+        &self,
+        query: &super::presentation::FactQuery,
+    ) -> Result<Vec<RuntimeEventEnvelope>, ConversationStoreError>;
+
     /// Reads a bounded Event Journal page in stable sequence order.
     fn read_events(
         &self,

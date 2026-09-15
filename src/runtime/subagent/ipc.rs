@@ -99,7 +99,7 @@ use crate::runtime::workspace::WorkspaceSnapshot;
 /// Version 24 carries frozen selection facts and Skill provenance, so child
 /// inspection describes the same composition that execution materializes.
 /// Version 25 carries explicit response/cancel controls to the originating
-/// interaction coordinator. It is independent of App Server protocol v2.
+/// interaction coordinator. It is independent of App Server protocol v3.
 pub(crate) const SUBAGENT_IPC_VERSION: u16 = 25;
 
 /// The hard upper bound of one control frame (`kind + payload`).

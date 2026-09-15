@@ -2305,6 +2305,116 @@ impl ConversationStore for SqliteConversationStore {
         Ok((persisted.event, transcript_cursor))
     }
 
+    fn presentation_frontier(&self) -> Result<u64, ConversationStoreError> {
+        let value: i64 = self
+            .lock()?
+            .query_row("SELECT COALESCE(MAX(sequence), 0) FROM events", [], |row| {
+                row.get(0)
+            })
+            .map_err(|_| storage("presentation frontier failed"))?;
+        sequence_from_i64(value)
+    }
+
+    fn read_presentation_events(
+        &self,
+        query: &super::presentation::FactQuery,
+    ) -> Result<Vec<RuntimeEventEnvelope>, ConversationStoreError> {
+        use super::presentation::FactScope;
+        use rusqlite::types::Value;
+        if query.limit == 0 || query.limit > 129 || query.kinds.is_empty() || query.kinds.len() > 32
+        {
+            return Err(storage("invalid presentation fact query bound"));
+        }
+        let mut values = vec![
+            Value::Integer(seq_to_i64(query.through)?),
+            Value::Integer(seq_to_i64(
+                query.before.unwrap_or(query.through.saturating_add(1)),
+            )?),
+        ];
+        let scope = match &query.scope {
+            FactScope::All => String::new(),
+            FactScope::Step(attempt, turn) => {
+                values.push(Value::Text(attempt.to_string()));
+                values.push(Value::Text(turn.to_string()));
+                " AND attempt_id = ?3 AND turn_id = ?4".to_owned()
+            }
+            FactScope::Attempt(attempt) => {
+                values.push(Value::Text(attempt.to_string()));
+                " AND attempt_id = ?3".to_owned()
+            }
+            FactScope::ToolCall {
+                call_id,
+                attempt,
+                turn,
+            } => {
+                values.push(Value::Text(call_id.clone()));
+                values.push(
+                    attempt
+                        .as_ref()
+                        .map_or(Value::Null, |id| Value::Text(id.to_string())),
+                );
+                values.push(
+                    turn.as_ref()
+                        .map_or(Value::Null, |id| Value::Text(id.to_string())),
+                );
+                " AND json_extract(event_json, '$.event.tool_call_id') = ?3 AND attempt_id IS ?4 AND turn_id IS ?5".to_owned()
+            }
+            other => {
+                let (field, value) = match other {
+                    FactScope::Request(value) => ("request_id", value),
+                    FactScope::Execution(value) => ("execution_id", value),
+                    FactScope::Subagent(value) => ("subagent_id", value),
+                    FactScope::Workflow(value) => ("run_id", value),
+                    FactScope::Interaction(value) => ("interaction_id", value),
+                    FactScope::All
+                    | FactScope::Step(..)
+                    | FactScope::Attempt(..)
+                    | FactScope::ToolCall { .. } => unreachable!(),
+                };
+                values.push(Value::Text(value.clone()));
+                format!(" AND json_extract(event_json, '$.event.{field}') = ?3")
+            }
+        };
+        let connection = self.lock()?;
+        let mut events: Vec<RuntimeEventEnvelope> = Vec::new();
+        // One equality-index seek per allowlisted kind, each with its own
+        // LIMIT. IN + ORDER BY could otherwise sort the entire matching past.
+        for kind in &query.kinds {
+            let mut params = values.clone();
+            params.push(Value::Text((*kind).to_owned()));
+            let kind_param = params.len();
+            params.push(Value::Integer(seq_to_i64(query.after)?));
+            let after_param = params.len();
+            params.push(Value::Integer(
+                i64::try_from(query.limit).map_err(|_| storage("fact limit"))?,
+            ));
+            let direction = if query.ascending { "ASC" } else { "DESC" };
+            let sql = format!("SELECT event_json FROM events WHERE sequence <= ?1 AND sequence < ?2{scope}
+                AND json_extract(event_json, '$.event.type') = ?{kind_param} AND sequence > ?{after_param}
+                ORDER BY sequence {direction} LIMIT ?{}", params.len());
+            let mut statement = connection
+                .prepare(&sql)
+                .map_err(|_| storage("presentation query preparation failed"))?;
+            let rows = statement
+                .query_map(rusqlite::params_from_iter(params), |row| {
+                    row.get::<_, String>(0)
+                })
+                .map_err(|_| storage("presentation query failed"))?;
+            for row in rows {
+                events.push(decode(
+                    &row.map_err(|_| storage("presentation row failed"))?,
+                    "presentation fact",
+                )?);
+            }
+        }
+        events.sort_by_key(|event| event.sequence);
+        if !query.ascending {
+            events.reverse();
+        }
+        events.truncate(query.limit);
+        Ok(events)
+    }
+
     fn read_events(
         &self,
         after_sequence: Option<u64>,
@@ -4649,6 +4759,16 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
             CREATE INDEX IF NOT EXISTS transcript_order_reference_idx ON transcript_order(reference_kind, reference_id);
             CREATE INDEX IF NOT EXISTS surface_ops_revision_idx ON surface_ops(revision);
             CREATE INDEX IF NOT EXISTS events_sequence_idx ON events(sequence);
+            CREATE INDEX IF NOT EXISTS events_kind_idx ON events(json_extract(event_json, '$.event.type'), sequence);
+            CREATE INDEX IF NOT EXISTS events_attempt_kind_idx ON events(attempt_id, json_extract(event_json, '$.event.type'), sequence);
+            CREATE INDEX IF NOT EXISTS events_step_kind_idx ON events(attempt_id, turn_id, json_extract(event_json, '$.event.type'), sequence);
+            CREATE INDEX IF NOT EXISTS events_request_id_kind_idx ON events(json_extract(event_json, '$.event.request_id'), json_extract(event_json, '$.event.type'), sequence);
+            CREATE INDEX IF NOT EXISTS events_tool_call_scope_kind_idx ON events(json_extract(event_json, '$.event.tool_call_id'), attempt_id, turn_id, json_extract(event_json, '$.event.type'), sequence);
+            CREATE INDEX IF NOT EXISTS events_execution_id_kind_idx ON events(json_extract(event_json, '$.event.execution_id'), json_extract(event_json, '$.event.type'), sequence);
+            CREATE INDEX IF NOT EXISTS events_subagent_id_kind_idx ON events(json_extract(event_json, '$.event.subagent_id'), json_extract(event_json, '$.event.type'), sequence);
+            CREATE INDEX IF NOT EXISTS events_run_id_kind_idx ON events(json_extract(event_json, '$.event.run_id'), json_extract(event_json, '$.event.type'), sequence);
+            CREATE INDEX IF NOT EXISTS events_interaction_id_kind_idx ON events(json_extract(event_json, '$.event.interaction_id'), json_extract(event_json, '$.event.type'), sequence);
+
             CREATE INDEX IF NOT EXISTS events_attempt_idx ON events(attempt_id, sequence);
             CREATE INDEX IF NOT EXISTS request_snapshots_surface_idx ON request_snapshots(surface_revision);
             CREATE INDEX IF NOT EXISTS agent_status_emission_heads_lookup_idx ON agent_status_emission_heads(module_id, semantic_key);

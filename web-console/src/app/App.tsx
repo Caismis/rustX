@@ -1,6 +1,7 @@
+import { Trajectory } from './Trajectory';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { AppServerClient } from '../client/app-server';
-import type { RuntimeClientSessionDeletePreview } from '../../../protocol/app-server/v2';
+import type { RuntimeClientSessionDeletePreview } from '../../../protocol/app-server/v3';
 import { activeAttempt, json } from '../bindings/projection';
 import { ArtifactResources } from '../client/artifacts';
 import { ArtifactContext } from './components/Artifact';
@@ -30,6 +31,7 @@ function readPreferences(): { endpoint: string; tabs: string[] } {
 }
 export function App({ client }: { client: AppServerClient }) {
   const state = useSyncExternalStore(client.subscribe, client.getSnapshot);
+  const [conversationMode, setConversationMode] = useState<'chat' | 'trajectory'>('chat');
   const [preferences] = useState(readPreferences);
   const [endpoint, setEndpoint] = useState(preferences.endpoint);
   const [token, setToken] = useState('');
@@ -82,7 +84,7 @@ export function App({ client }: { client: AppServerClient }) {
     else setError(`Delete preview: ${json(result.result)}`);
   });
   return <AppFrame navigation={<Sidebar footer={<>
-    <p className="muted">Native App Server · protocol v2</p><a href="https://github.com/Caismis/rustX" target="_blank" rel="noreferrer">rustX source</a>
+    <p className="muted">Native App Server · protocol v3</p><a href="https://github.com/Caismis/rustX" target="_blank" rel="noreferrer">rustX source</a>
     <p className="muted">UI source adapted from DeepSeek Harness. <a href="/LICENSE-DeepSeek-Harness.txt" target="_blank" rel="noreferrer">MIT notice</a></p>
   </>}>
     <section className="connection-form" aria-label="Connection">
@@ -145,12 +147,13 @@ export function App({ client }: { client: AppServerClient }) {
           <Button size="sm" disabled={!attached} onClick={() => run(() => client.release(view.id, true))}>Unload runtime</Button></div>
       </section>
       {view.attachment !== 'attached' && <p className="notice">{view.attachment}: last observed values may be stale. Execution and pending interactions remain server-owned. {view.error}</p>}
-      <ArtifactContext.Provider value={artifacts}><ChatViewport key={`${view.id}:${view.target?.attachment_id ?? state.generation}`}>
+      <div className="row" role="tablist" aria-label="Conversation view"><Button role="tab" aria-selected={conversationMode === 'chat'} onClick={() => setConversationMode('chat')}>Chat</Button><Button role="tab" aria-selected={conversationMode === 'trajectory'} onClick={() => setConversationMode('trajectory')}>Trajectory</Button></div>
+      <ArtifactContext.Provider value={artifacts}>{conversationMode === 'trajectory' && view.trace ? <Trajectory key={view.id} cache={view.trace} loadEarlier={() => run(() => client.loadEarlierTrace(view.id))} latest={() => client.latestTrace(view.id)} /> : <ChatViewport key={`${view.id}:${view.target?.attachment_id ?? state.generation}`}>
         {view.snapshot && <><Conversation snapshot={view.snapshot} history={view.history} loadEarlier={() => run(() => client.loadEarlier(view.id))} latest={() => client.latestTranscript(view.id)} /><RuntimeFacts snapshot={view.snapshot} />
           <div className="attempt-status" role="status">Attempt: {view.snapshot.attempt ? `${view.snapshot.attempt.attempt_id} · ${view.snapshot.attempt.phase.type}` : 'none observed'}{view.snapshot.attempt?.phase.type === 'settled' && ` · ${view.snapshot.attempt.phase.outcome.type}`}</div>
           <Interactions client={client} state={state} view={view} run={run} />
         </>}
-      </ChatViewport></ArtifactContext.Provider>
+      </ChatViewport>}</ArtifactContext.Provider>
       <InputBar key={view.id} disabled={!attached || !!view.snapshot?.shutting_down || !!view.snapshot?.durability_failure} busy={sending[view.id] === state.generation} active={activeAttempt(view.snapshot)}
         onCancel={() => run(() => client.cancelTurn(view.id))} onSend={async (text, steer, files) => {
           const generation = state.generation; setSending(current => ({ ...current, [view.id]: generation })); setError('');

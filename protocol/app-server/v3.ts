@@ -54,6 +54,14 @@ export type Request1 =
       };
     }
   | {
+      method: 'session/trace';
+      params: {
+        target: AttachmentTarget;
+        before?: TraceCursor | null;
+        limit: number;
+      };
+    }
+  | {
       method: 'session/transcript';
       params: {
         target: AttachmentTarget;
@@ -348,6 +356,10 @@ export type DefaultScope = 'user';
  */
 export type DefaultTarget = 'model_selection' | 'approval_mode';
 /**
+ * Opaque Trace-only exclusive boundary. Valid only in its conversation.
+ */
+export type TraceCursor = string;
+/**
  * The cursor domain of durable transcript paging.
  */
 export type RuntimeClientTranscriptCursor = string;
@@ -632,6 +644,10 @@ export type MethodResult =
       type: 'context';
     }
   | {
+      page: TracePage;
+      type: 'trace';
+    }
+  | {
       page: RuntimeClientTranscriptPage;
       type: 'transcript';
     }
@@ -796,6 +812,75 @@ export type Modality = 'text' | 'image' | 'file';
  */
 export type McpServerId = string;
 /**
+ * Identifies one attempt to execute an agent manifest.
+ */
+export type AttemptId = string;
+/**
+ * Identifies one turn within an attempt.
+ */
+export type TurnId = string;
+export type TraceKind =
+  | 'attempt'
+  | 'step'
+  | 'request'
+  | 'assistant'
+  | 'tool'
+  | 'compaction'
+  | 'background'
+  | 'subagent'
+  | 'workflow'
+  | 'interaction';
+export type TraceState =
+  | 'incomplete'
+  | 'running'
+  | 'pending'
+  | 'cancelling'
+  | 'settling'
+  | 'waiting'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'timed_out'
+  | 'limited'
+  | 'denied'
+  | 'outcome_unknown'
+  | 'interrupted';
+/**
+ * Identifies one actual provider-neutral model request.
+ *
+ * A request identity is distinct from an attempt, turn, retry ordinal,
+ * and Event Journal sequence. It is derived once from the immutable
+ * [`RequestIdentity`](crate::model::snapshot::RequestIdentity) and is
+ * the durable correlation key for the Request Snapshot and its
+ * request-start fact.
+ */
+export type RequestId2 = string;
+/**
+ * Error classes the runtime distinguishes for retry/termination decisions.
+ * Provider SDK error structs never cross this boundary.
+ */
+export type ModelErrorKind =
+  | 'invalid_request'
+  | 'authentication'
+  | 'rate_limit'
+  | 'timeout'
+  | 'transport'
+  | 'provider_error'
+  | 'context_window_exceeded'
+  | 'cancelled'
+  | 'unsupported'
+  | 'malformed_tool_proposal'
+  | 'generation_degenerated'
+  | 'generation_budget_exceeded';
+/**
+ * Identifies one tool call issued by the current agent.
+ */
+export type ToolCallId = string;
+/**
+ * Identifies a tool definition in the capability set.
+ */
+export type ToolId = string;
+/**
  * The semantic family of one admitted model-visible context fact.
  */
 export type ContextKind =
@@ -823,10 +908,6 @@ export type GoalOrigin =
   | {
       kind: 'runtime_control';
     };
-/**
- * Identifies one attempt to execute an agent manifest.
- */
-export type AttemptId = string;
 /**
  * The stable identity of one code-owned Agent Status module.
  *
@@ -1071,11 +1152,11 @@ export type PublicationAuditBlock =
        */
       block_index: number;
       /**
-       * The proposal identity.
+       * Identifies one tool call issued by the current agent.
        */
       call_id: string;
       /**
-       * The registry-facing tool identity the model named.
+       * Identifies a tool definition in the capability set.
        */
       tool_id: string;
       /**
@@ -1104,10 +1185,6 @@ export type ReviewSubject =
       inspection_path: string;
       type: 'candidate';
     };
-/**
- * Identifies one tool call issued by the current agent.
- */
-export type ToolCallId = string;
 /**
  * Caller correlation for one native invocation. Capability source is
  * independently represented by [`ToolOrigin`].
@@ -1260,10 +1337,6 @@ export type WorkflowExecutionOutcome =
   'completed' | 'failed' | 'cancelled' | 'denied' | 'timed_out' | 'outcome_unknown';
 export type WorkflowNodeKind =
   'block' | 'agent' | 'tool' | 'branch' | 'parallel' | 'review' | 'loop' | 'return';
-/**
- * Identifies a tool definition in the capability set.
- */
-export type ToolId = string;
 /**
  * Normal finite Loop completion; neither case claims business verification passed.
  */
@@ -1907,6 +1980,9 @@ export type Notification1 =
  */
 export type RuntimeClientEvent =
   | {
+      type: 'trace_changed';
+    }
+  | {
       view: GoalView;
       type: 'goal_changed';
     }
@@ -1995,7 +2071,8 @@ export type RuntimeClientEvent =
             error:
               | {
                   /**
-                   * The normalized model error kind.
+                   * Error classes the runtime distinguishes for retry/termination decisions.
+                   * Provider SDK error structs never cross this boundary.
                    */
                   kind:
                     | 'invalid_request'
@@ -3593,6 +3670,132 @@ export interface TokenMeasurement {
    */
   source: 'provider_reported' | 'provider_anchored' | 'estimated';
 }
+export interface TracePage {
+  entries: TraceEntry[];
+  next_cursor?: TraceCursor | null;
+}
+export interface TraceEntry {
+  id: string;
+  /**
+   * Opaque Trace-only exclusive boundary. Valid only in its conversation.
+   */
+  position: string;
+  location: TraceLocation;
+  kind: TraceKind;
+  state: TraceState;
+  timing: TraceTiming;
+  request?: TraceRequest | null;
+  tool?: TraceTool | null;
+  /**
+   * Accepted canonical `ToolCalls`, in canonical block order. Not start evidence.
+   */
+  calls: TraceTool[];
+  /**
+   * Exact native detached execution / child / Workflow run / interaction ID.
+   */
+  native_id?: string | null;
+  /**
+   * Canonical output only. Publication without acceptance is not copied here.
+   */
+  message_id?: MessageId | null;
+  output: TraceText[];
+  reasoning: TraceText[];
+  artifacts: TraceArtifact[];
+  truncated: boolean;
+}
+/**
+ * Server-resolved grouping. Native `TurnId` is the logical model step within
+ * an Attempt; actual requests never allocate a new step.
+ */
+export interface TraceLocation {
+  attempt_id?: AttemptId | null;
+  step_id?: TurnId | null;
+}
+export interface TraceTiming {
+  started_at: string;
+  ended_at?: string | null;
+  duration_ms?: string | null;
+}
+export interface TraceRequest {
+  request_id: RequestId2;
+  retry_number: number;
+  assistant_message_id: MessageId;
+  /**
+   * Previous actual request failure, proven through the native retry ordinal.
+   */
+  previous_failure_kind?: ModelErrorKind | null;
+  model: TraceText;
+  max_output_tokens: number;
+  reasoning_enabled: boolean;
+  effective_system_prompt: TraceText1;
+  context_input: TraceText;
+  tool_schema: TraceText;
+  failure_kind?: ModelErrorKind | null;
+  usage?: ModelUsage | null;
+}
+export interface TraceText {
+  text: string;
+  truncated: boolean;
+  redacted: boolean;
+}
+/**
+ * Exact request input is internal. These sections are explicitly withheld,
+ * never replaced by today's configuration or reconstructed in the browser.
+ */
+export interface TraceText1 {
+  text: string;
+  truncated: boolean;
+  redacted: boolean;
+}
+/**
+ * Normalized token accounting for one generation.
+ *
+ * Providers do not expose identical token metrics; this is the stable
+ * common core. Provider SDK usage objects never appear here.
+ */
+export interface ModelUsage {
+  /**
+   * Input tokens consumed by the request.
+   */
+  input_tokens: number;
+  /**
+   * Output tokens produced by the response.
+   */
+  output_tokens: number;
+  /**
+   * Total tokens, where the provider reports or can derive them.
+   */
+  total_tokens: number;
+  /**
+   * Optional normalized usage details.
+   */
+  details?: UsageDetails | null;
+}
+/**
+ * Optional normalized token details where providers expose them.
+ */
+export interface UsageDetails {
+  /**
+   * Tokens consumed by reasoning.
+   */
+  reasoning_tokens?: number | null;
+  /**
+   * Input tokens served from cache.
+   */
+  cached_input_tokens?: number | null;
+}
+export interface TraceTool {
+  call_id: ToolCallId;
+  tool_id: ToolId;
+  arguments: TraceText;
+}
+/**
+ * Safe reference to the existing native artifact carrier, never a storage path.
+ */
+export interface TraceArtifact {
+  artifact_id: ArtifactId;
+  image: boolean;
+}
 /**
  * One bounded newest-or-older page of derived transcript history.
  */
@@ -3652,7 +3855,7 @@ export interface RuntimeClientTranscriptEntry {
          */
         attempt_id: string;
         /**
-         * Owning turn.
+         * Identifies one turn within an attempt.
          */
         turn_id: string;
         /**
@@ -3681,7 +3884,7 @@ export interface RuntimeClientTranscriptEntry {
                     caller: 'workflow';
                   };
               /**
-               * The registry-resolved tool identity.
+               * Identifies a tool definition in the capability set.
                */
               tool_id: string;
               /**
@@ -3720,7 +3923,7 @@ export interface RuntimeClientTranscriptEntry {
          */
         attempt_id: string;
         /**
-         * Owning turn.
+         * Identifies one turn within an attempt.
          */
         turn_id: string;
         /**
@@ -3967,12 +4170,11 @@ export interface AnthropicContinuation {
  */
 export interface ToolCall {
   /**
-   * Identity of this specific call, referenced by the matching
-   * `ToolMessageBlock` and tool-result events.
+   * Identifies one tool call issued by the current agent.
    */
   id: string;
   /**
-   * Identity of the tool being called within the capability set.
+   * Identifies a tool definition in the capability set.
    */
   tool_id: string;
   /**
@@ -4012,11 +4214,11 @@ export interface ToolMessageBlock {
    */
   id: string;
   /**
-   * Identity of the tool call this block answers.
+   * Identifies one tool call issued by the current agent.
    */
   tool_call_id: string;
   /**
-   * Identity of the executed tool.
+   * Identifies a tool definition in the capability set.
    */
   tool_id: string;
   result: ToolExecutionResult;
@@ -4181,11 +4383,17 @@ export interface PublicationAudit {
    */
   attempt_id: string;
   /**
-   * The turn that owned the stream.
+   * Identifies one turn within an attempt.
    */
   turn_id: string;
   /**
-   * The provider request the stream published.
+   * Identifies one actual provider-neutral model request.
+   *
+   * A request identity is distinct from an attempt, turn, retry ordinal,
+   * and Event Journal sequence. It is derived once from the immutable
+   * [`RequestIdentity`](crate::model::snapshot::RequestIdentity) and is
+   * the durable correlation key for the Request Snapshot and its
+   * request-start fact.
    */
   request_id: string;
   /**
@@ -4228,7 +4436,7 @@ export interface ReviewFact {
  */
 export interface InteractionRequester {
   /**
-   * The canonical registry-resolved tool identity.
+   * Identifies a tool definition in the capability set.
    */
   tool_id: string;
   /**
@@ -4409,7 +4617,7 @@ export interface RuntimeClientBackgroundExecution {
    */
   execution_id: string;
   /**
-   * The canonical tool identity.
+   * Identifies a tool definition in the capability set.
    */
   tool_id: string;
   /**
@@ -4679,7 +4887,13 @@ export interface SubagentObservation {
       }
     | {
         /**
-         * The in-flight provider request.
+         * Identifies one actual provider-neutral model request.
+         *
+         * A request identity is distinct from an attempt, turn, retry ordinal,
+         * and Event Journal sequence. It is derived once from the immutable
+         * [`RequestIdentity`](crate::model::snapshot::RequestIdentity) and is
+         * the durable correlation key for the Request Snapshot and its
+         * request-start fact.
          */
         request_id: string;
         /**
@@ -4702,7 +4916,7 @@ export interface SubagentObservation {
          */
         tool_call_id: string;
         /**
-         * The executed tool.
+         * Identifies a tool definition in the capability set.
          */
         tool_id: string;
         /**
@@ -4725,7 +4939,7 @@ export interface SubagentObservation {
             }
           | {
               /**
-               * The tool awaiting approval.
+               * Identifies a tool definition in the capability set.
                */
               tool_id: string;
               type: 'approval';
@@ -5218,6 +5432,7 @@ export interface RuntimeClientSnapshot {
    */
   messages: MessageBlock[];
   transcript: RuntimeClientTranscriptPage1;
+  trace: TracePage1;
   /**
    * The current/latest attempt view, when any attempt exists.
    */
@@ -5528,6 +5743,13 @@ export interface RuntimeClientTranscriptPage1 {
   next_cursor?: RuntimeClientTranscriptCursor | null;
 }
 /**
+ * Bounded native Trace read window; independent from transcript and live cursors.
+ */
+export interface TracePage1 {
+  entries: TraceEntry[];
+  next_cursor?: TraceCursor | null;
+}
+/**
  * The external attempt view of the Runtime Client projection.
  *
  * The view folds attempt lifecycle, turn progress, in-flight agent
@@ -5610,7 +5832,8 @@ export interface RuntimeClientAttempt {
               error:
                 | {
                     /**
-                     * The normalized model error kind.
+                     * Error classes the runtime distinguishes for retry/termination decisions.
+                     * Provider SDK error structs never cross this boundary.
                      */
                     kind:
                       | 'invalid_request'
@@ -5768,43 +5991,6 @@ export interface RuntimeClientAttempt {
    * Unavailable for history lacking native admission evidence. Never derived from current resources.
    */
   execution_settings?: AdmittedSettings | null;
-}
-/**
- * Normalized token accounting for one generation.
- *
- * Providers do not expose identical token metrics; this is the stable
- * common core. Provider SDK usage objects never appear here.
- */
-export interface ModelUsage {
-  /**
-   * Input tokens consumed by the request.
-   */
-  input_tokens: number;
-  /**
-   * Output tokens produced by the response.
-   */
-  output_tokens: number;
-  /**
-   * Total tokens, where the provider reports or can derive them.
-   */
-  total_tokens: number;
-  /**
-   * Optional normalized usage details.
-   */
-  details?: UsageDetails | null;
-}
-/**
- * Optional normalized token details where providers expose them.
- */
-export interface UsageDetails {
-  /**
-   * Tokens consumed by reasoning.
-   */
-  reasoning_tokens?: number | null;
-  /**
-   * Input tokens served from cache.
-   */
-  cached_input_tokens?: number | null;
 }
 /**
  * The accumulated in-flight output of one streaming Assistant message.
@@ -6365,7 +6551,7 @@ export interface InteractionRequest {
  */
 export interface InteractionRequester1 {
   /**
-   * The canonical registry-resolved tool identity.
+   * Identifies a tool definition in the capability set.
    */
   tool_id: string;
   /**
@@ -6906,7 +7092,7 @@ export interface RuntimeClientTranscriptInteractionRequested {
    */
   attempt_id: string;
   /**
-   * Owning turn.
+   * Identifies one turn within an attempt.
    */
   turn_id: string;
   /**
@@ -6935,7 +7121,7 @@ export interface RuntimeClientTranscriptInteractionRequested {
               caller: 'workflow';
             };
         /**
-         * The registry-resolved tool identity.
+         * Identifies a tool definition in the capability set.
          */
         tool_id: string;
         /**
@@ -6976,7 +7162,7 @@ export interface RuntimeClientTranscriptInteractionSettled {
    */
   attempt_id: string;
   /**
-   * Owning turn.
+   * Identifies one turn within an attempt.
    */
   turn_id: string;
   /**
@@ -7069,12 +7255,11 @@ export interface ToolCallStart {
  */
 export interface ToolCall1 {
   /**
-   * Identity of this specific call, referenced by the matching
-   * `ToolMessageBlock` and tool-result events.
+   * Identifies one tool call issued by the current agent.
    */
   id: string;
   /**
-   * Identity of the tool being called within the capability set.
+   * Identifies a tool definition in the capability set.
    */
   tool_id: string;
   /**
@@ -7102,11 +7287,17 @@ export interface PublicationAudit1 {
    */
   attempt_id: string;
   /**
-   * The turn that owned the stream.
+   * Identifies one turn within an attempt.
    */
   turn_id: string;
   /**
-   * The provider request the stream published.
+   * Identifies one actual provider-neutral model request.
+   *
+   * A request identity is distinct from an attempt, turn, retry ordinal,
+   * and Event Journal sequence. It is derived once from the immutable
+   * [`RequestIdentity`](crate::model::snapshot::RequestIdentity) and is
+   * the durable correlation key for the Request Snapshot and its
+   * request-start fact.
    */
   request_id: string;
   /**
@@ -7393,7 +7584,7 @@ export interface RuntimeClientBackgroundExecution1 {
    */
   execution_id: string;
   /**
-   * The canonical tool identity.
+   * Identifies a tool definition in the capability set.
    */
   tool_id: string;
   /**

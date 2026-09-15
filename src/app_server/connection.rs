@@ -664,6 +664,7 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::Capability { target, .. }
         | Method::ArtifactRead { target, .. }
         | Method::ArtifactUpload { target, .. }
+        | Method::Trace { target, .. }
         | Method::Transcript { target, .. }
         | Method::Goal { target, .. }
         | Method::BackgroundStatus { target, .. }
@@ -734,6 +735,11 @@ async fn dispatch_runtime(
             native_result(authority.approval_mode_set(mode))
         }
         Method::Capability { target: _ } => native_result(authority.capability()),
+        Method::Trace {
+            target: _,
+            before,
+            limit,
+        } => native_result(authority.trace_page(before, limit)),
         Method::Transcript {
             target: _,
             before,
@@ -846,6 +852,7 @@ fn native_result(
             MethodResult::Capabilities { capabilities }
         }
         RuntimeClientResult::ContextCompacted { context } => MethodResult::Context { context },
+        RuntimeClientResult::TracePage { page } => MethodResult::Trace { page },
         RuntimeClientResult::TranscriptPage { page } => MethodResult::Transcript { page },
         RuntimeClientResult::Goal { view } => MethodResult::Goal { view },
         RuntimeClientResult::BackgroundStatus { execution }

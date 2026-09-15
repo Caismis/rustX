@@ -100,6 +100,7 @@ pub mod projection;
 pub mod session_deletion;
 pub mod settings;
 pub mod snapshot;
+pub mod trace;
 pub mod transport;
 pub mod types;
 

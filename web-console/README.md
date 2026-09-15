@@ -47,14 +47,14 @@ target/debug/rustx app-server \
 ```
 
 Read the token file locally. Enter `ws://127.0.0.1:8080/` and that token in the
-console, then **Connect**. The client sends `initialize` protocol v2, checks native
+console, then **Connect**. The client sends `initialize` protocol v3, checks native
 capabilities, lists Sessions, and attaches saved open views. Initialization failures
 and missing capabilities are visible. Enter an explicit absolute **Session cwd**
 to create a Session, or open a listed Session. rustX validates paths, trust and
 configuration; this UI does not author provider/MCP configuration or grant trust.
 
 Authentication is #36's **local/trusted, single writable controller** boundary.
-The browser sends subprotocols `rustx.app-server.v2` and `rustx-token.<token>` in its
+The browser sends subprotocols `rustx.app-server.v3` and `rustx-token.<token>` in its
 WebSocket handshake. No arbitrary authorization header, URL credential, login,
 OAuth, tenancy, BFF or production hosting layer is introduced. Use the matching
 App Server transport token, never a provider key. Provider/MCP credentials are
@@ -80,7 +80,7 @@ requests provider/MCP configuration.
   come from `snapshot.messages`; current activity comes from `snapshot.attempt`.
   An in-flight message with an already committed ID is suppressed. No Harness
   event model, fake V3 Session log, optimistic conversation or event reducer exists.
-- `src/client/`: one WebSocket, generated `protocol/app-server/v2.ts` unions,
+- `src/client/`: one WebSocket, generated `protocol/app-server/v3.ts` unions,
   correlation IDs, initialize/capabilities, bounded requests, native routing,
   replaceable snapshots, connection/attachment fences and wire observer. Rust DTOs
   remain authoritative. The shared generator normalizes schema `$ref` siblings

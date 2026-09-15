@@ -99,6 +99,7 @@ impl RuntimeAttachment {
     native_control!(model_set, true, config: crate::model::session::SessionModelConfig);
     native_control!(approval_mode_set, true, mode: crate::runtime::types::ApprovalMode);
     native_control!(goal_control, true, control: crate::goal::GoalControl);
+    native_control!(trace_page, false, before: Option<super::trace::TraceCursor>, limit: usize);
     native_control!(transcript_page, false, before: Option<super::snapshot::RuntimeClientTranscriptCursor>, limit: usize);
     native_control!(background_status, false, id: &crate::runtime::identity::ToolExecutionId);
     native_control!(background_cancel, true, id: &crate::runtime::identity::ToolExecutionId);

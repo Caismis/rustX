@@ -79,10 +79,14 @@ describe("Rust-produced App Server fixtures", () => {
       encoded.includes('"9007199254740993"'),
       "an exact domain crosses the wire as text",
     );
-    assert.ok(
-      !/[^"]9007199254740993/.test(encoded),
-      "no exact domain crosses the wire as a JSON number",
-    );
+    JSON.parse(encoded, (_key, value: unknown) => {
+      // Opaque Trace cursors may contain digits inside a larger string.
+      // Inspect JSON value types instead of treating every digit run as u64.
+      if (typeof value === "number" && Number.isInteger(value)) {
+        assert.ok(Number.isSafeInteger(value), "no exact domain crosses the wire as an unsafe JSON number");
+      }
+      return value;
+    });
   });
 
   it("orders exact domains numerically, never lexicographically", () => {

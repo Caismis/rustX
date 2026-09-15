@@ -383,7 +383,7 @@ fn deletion_process_writer_gate() {
         let connection =
             rusqlite::Connection::open(catalog.database_path(&session, &node.conversation_id))
                 .unwrap();
-        connection.execute_batch("PRAGMA cache_size=1; BEGIN IMMEDIATE; UPDATE events SET event_json=zeroblob(2000000);").unwrap();
+        connection.execute_batch("PRAGMA cache_size=1; BEGIN IMMEDIATE; UPDATE events SET event_json=json_set(event_json, '$.hot_journal_test', hex(zeroblob(1000000)));").unwrap();
         Some(connection)
     } else {
         None

@@ -128,6 +128,8 @@ pub struct RuntimeClientSnapshot {
     /// set, while this page remains readable after compaction retires Surface
     /// messages. Older pages are fetched through `transcript_page_get`.
     pub transcript: RuntimeClientTranscriptPage,
+    /// Bounded native Trace read window; independent from transcript and live cursors.
+    pub trace: super::trace::TracePage,
     /// The current/latest attempt view, when any attempt exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempt: Option<RuntimeClientAttempt>,

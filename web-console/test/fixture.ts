@@ -1,4 +1,4 @@
-import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v2';
+import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v3';
 import { fixtures } from '../../protocol/app-server/fixtures';
 import { AppServerClient, RpcFailure, sameTarget, type Socket } from '../src/client/app-server';
 
@@ -14,7 +14,7 @@ export function snapshot(id = 'A'): RuntimeClientSnapshot {
       attempt: 'frozen_admission', presentation: 'client_local', saved_defaults: 'next_launch', extensions: 'launch_capture',
     },
     conversation_id: `conversation-${id}`, shutting_down: false, effective_approval_mode: 'policy',
-    workflows: { revision: '0', runs: [], omitted_runs: 0 }, messages: [], transcript: { entries: [] },
+    workflows: { revision: '0', runs: [], omitted_runs: 0 }, messages: [], transcript: { entries: [] }, trace: { entries: [] },
     inbound: {}, capabilities: { revision: '0' }, pending_interactions: [],
   };
 }
@@ -60,10 +60,10 @@ export class Server {
   held = new Set<Request['method']>();
   requests: { request: Request; socket: FakeSocket }[] = [];
   private waiters: { method: Request['method']; count: number; resolve: (request: Request) => void }[] = [];
-  version = 2;
+  version = 3;
   capabilities = capabilities;
   client = new AppServerClient((_url, protocols) => {
-    if (protocols[0] !== 'rustx.app-server.v2' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
+    if (protocols[0] !== 'rustx.app-server.v3' || protocols[1] !== `rustx-token.${TOKEN}`) throw new Error('Wrong browser admission protocol');
     const socket = new FakeSocket((request, source) => this.receive(request, source), () => { this.targets.get(socket)?.clear(); this.reservations.get(socket)?.clear(); }); this.sockets.push(socket);
     queueMicrotask(() => socket.open()); return socket;
   });

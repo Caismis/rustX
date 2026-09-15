@@ -65,6 +65,7 @@
 //! ordered `P < U < C` and enforced by the store as `C => U => P`.
 
 pub mod inbox;
+pub mod presentation;
 pub mod sqlite;
 
 pub use inbox::{

@@ -70,7 +70,7 @@ async fn initialize(connection: &AppServerConnection) {
         connection,
         0,
         Method::Initialize(InitializeParams {
-            protocol_version: 2,
+            protocol_version: 3,
             client: ClientIdentity {
                 name: "scripted".into(),
                 version: "1".into(),
@@ -648,10 +648,10 @@ async fn initialize_and_malformed_wire_are_transactional() {
         let connection = AppServerConnection::new(f.host.clone());
         let before = connection.handle_json(r#"{"jsonrpc":"2.0","id":0,"method":"server/info","params":{}}"#).await.unwrap();
         assert!(matches!(before, Response::Failure(Failure { error: RpcError { data: Some(ErrorData::NotInitialized), .. }, .. })));
-        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":1,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
+        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":2,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 2, .. })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 3, .. })));
         initialize(&connection).await;
         for (json, expected_code) in [
             (r#"{"jsonrpc":"2.0","id":1,"method":"missing","params":{}}"#, -32601),
@@ -1686,4 +1686,44 @@ async fn artifact_upload_capacity_is_shared_durable_and_path_safe() {
         f.close().await;
     })
     .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn trace_reads_are_read_only_and_reconnect_repairs_the_same_native_facts() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        call(&connection, 900, Method::TurnStart { target: target.clone(), content: input("request-A") }).await;
+        f.gates[0].wait_entered().await;
+        let before = call(&connection, 901, Method::SessionSnapshot { target: target.clone() }).await;
+        let read = call(&connection, 902, Method::Trace { target: target.clone(), before: None, limit: 32 }).await;
+        let MethodResult::Trace { page } = read else { panic!("Trace page"); };
+        assert!(page.entries.iter().any(|entry| entry.kind == crate::runtime_client::trace::TraceKind::Request));
+        assert!(matches!(rejected(&connection, Method::Trace { target: target.clone(), before: None, limit: 0 }).await, ErrorData::InvalidParams));
+        let after = call(&connection, 903, Method::SessionSnapshot { target: target.clone() }).await;
+        assert_eq!(before, after, "Trace reads change no live cursor, inbound, interactions, attempt, surface or transcript");
+        connection.close();
+        let repaired = AppServerConnection::new(f.host.clone());
+        initialize(&repaired).await;
+        let repaired_target = attach(&repaired, &f, 0).await;
+        let MethodResult::Snapshot { snapshot: continuous, .. } = after else { panic!("snapshot"); };
+        let MethodResult::Snapshot { snapshot: reconnected, .. } = call(&repaired, 904, Method::SessionSnapshot { target: repaired_target.clone() }).await else { panic!("snapshot"); };
+        assert_eq!(continuous.trace, reconnected.trace);
+        f.gates[0].release();
+        loop {
+            if let NotificationMethod::Event { event, .. } = repaired.next_notification().await.notification
+                && matches!(*event, RuntimeClientEvent::AttemptSettled { .. }) { break; }
+        }
+        let MethodResult::Snapshot { snapshot: settled, .. } = call(&repaired, 905, Method::SessionSnapshot { target: repaired_target }).await else { panic!("snapshot"); };
+        repaired.close();
+        let final_connection = AppServerConnection::new(f.host.clone());
+        initialize(&final_connection).await;
+        let final_target = attach(&final_connection, &f, 0).await;
+        let MethodResult::Snapshot { snapshot: final_snapshot, .. } = call(&final_connection, 906, Method::SessionSnapshot { target: final_target }).await else { panic!("snapshot"); };
+        assert_eq!(settled.trace, final_snapshot.trace);
+        final_connection.close();
+        f.close().await;
+    }).await;
 }

@@ -1,4 +1,4 @@
-import type { RuntimeClientSnapshot } from '../../../protocol/app-server/v2';
+import type { RuntimeClientSnapshot } from '../../../protocol/app-server/v3';
 /** Select only canonical snapshot messages. Streaming is a separately labelled
  * server projection and disappears when its canonical identity is committed. */
 export function conversation(snapshot: RuntimeClientSnapshot) {

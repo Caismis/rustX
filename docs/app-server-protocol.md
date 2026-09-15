@@ -1,4 +1,4 @@
-# App Server protocol v2
+# App Server protocol v3
 
 The App Server protocol is rustX's public client boundary for the TUI,
 Developer Web Console, future Web UI, and SDKs. Rust DTOs in
@@ -119,13 +119,13 @@ A browser can supply the credential in its handshake without arbitrary headers:
 
 ```js
 const socket = new WebSocket("ws://127.0.0.1:8080/", [
-  "rustx.app-server.v2",
+  "rustx.app-server.v3",
   `rustx-token.${dedicatedTransportToken}`,
 ]);
 ```
 
 The server requires both offers on path `/` without a query, rejects failed admission
-with HTTP 401, and selects only `rustx.app-server.v2` in its response. It never echoes
+with HTTP 401, and selects only `rustx.app-server.v3` in its response. It never echoes
 the credential. Admission completes before constructing `AppServerConnection`, so
 unauthenticated clients cannot initialize or invoke any method. This is a dedicated
 single-user transport secret, never a provider key, MCP secret, or runtime credential.
@@ -214,7 +214,7 @@ an ID does not deduplicate a mutation. Integer correlation IDs must fit the
 JavaScript safe integer range. String IDs are recommended for arbitrary IDs.
 
 ```json
-{"jsonrpc":"2.0","id":"init-1","method":"initialize","params":{"protocol_version":2,"client":{"name":"example","version":"1"},"presentation":{"images":true,"questionnaires":true,"reviews":true}}}
+{"jsonrpc":"2.0","id":"init-1","method":"initialize","params":{"protocol_version":3,"client":{"name":"example","version":"1"},"presentation":{"images":true,"questionnaires":true,"reviews":true}}}
 ```
 
 `APP_SERVER_PROTOCOL_VERSION` is independent of crate, manifest, journal,
@@ -230,7 +230,7 @@ Parse, envelope, method and parameter errors use JSON-RPC codes -32700,
 Internal storage/provider details are not reflected into arbitrary wire errors.
 Errors with unknown correlation use a null ID. Client notifications receive
 no response and cannot invoke request-only mutations. Batch requests are not
-supported in v2; pipeline individual requests instead. This limitation is
+supported in v3; pipeline individual requests instead. This limitation is
 explicitly rejected as an invalid request before any action occurs.
 
 ## Methods and native owners
@@ -322,7 +322,7 @@ cannot remove a newly installed route.
 
 ## Attachment and observation lifetime
 
-Protocol v2 admits at most one writable external controller per resident
+Protocol v3 admits at most one writable external controller per resident
 Conversation. A second controller gets a deterministic rejection and cannot
 steal the first. Detach and connection destruction release external admission
 only. They do not cancel a turn, settle a pending interaction, unload a runtime,
@@ -401,8 +401,8 @@ DTO's standalone serde/schema representation.
 
 Generated client-neutral artifacts are in `protocol/app-server/`:
 
-- `v2.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
-- `v2.ts`: TypeScript generated from that schema using pinned
+- `v3.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
+- `v3.ts`: TypeScript generated from that schema using pinned
   `json-schema-to-typescript` and its committed pnpm lockfile.
 - `fixtures.json`: serialized Rust messages, including nulls, string/numeric
   request IDs, timestamps, exact domains above 2^53 and lossless Questionnaire
@@ -613,16 +613,16 @@ bounded by `max_connections * 16` outstanding operations; refusal is
 
 ## Bounded artifact carrier (WEB-02)
 
-App Server v2 identifies this complete mandatory vocabulary. A v1 initialize is
+App Server v3 identifies this complete mandatory vocabulary. A v1 initialize is
 rejected as `unsupported_version`; a v1-only WebSocket offer is refused before
-JSON-RPC. All stdio, TUI and Web clients use v2. Runtime Client versioning remains
+JSON-RPC. All stdio, TUI and Web clients use v3. Runtime Client versioning remains
 independent.
 
 `artifact/read { target, artifact_id } -> artifact_bytes { data }` is a read;
 `artifact/upload { target, data } -> artifact_uploaded { artifact_id }`
 is a mutation. `data` is standard base64, limited to 349,528 encoded characters
 and 256 KiB decoded bytes. Upload is storage-only: it does not inspect model,
-provider, modality, MIME or filename. Both methods are mandatory core v2 methods,
+provider, modality, MIME or filename. Both methods are mandatory core v3 methods,
 using existing complete attachment routing and native runtime operation leases.
 There is no separate Web file server.
 Existing 1 MiB framing, 16 in-flight requests per connection and host connection
@@ -667,3 +667,16 @@ explicit native binding; neither the artifact carrier nor the browser owns it.
 Direct native callers can therefore receive durable inbound acceptance before
 the actual model invocation refuses unsupported content locally. WEB-02 does
 not strengthen the native inbox acceptance contract.
+
+## Native Trace (protocol 3)
+
+`session/trace { target, before?: TraceCursor, limit: 1..32 }` is a mandatory read,
+returning `{ type: "trace", page: TracePage }`. Attach/snapshot also carries the
+bounded newest `snapshot.trace` window. Payloadless `trace_changed` notifications
+use the existing subscription as invalidation signals. Neither historical reads
+nor Trace cursors advance a subscription cursor. See [Trace architecture](trace.md)
+for source authorities, ordering, read cuts, repair, bounds and unavailable facts.
+
+Version 3 identifies this complete mandatory vocabulary. Protocol 2 and its
+WebSocket subprotocol are rejected; there are no aliases or dual-version paths.
+Generated Rust Schema/TypeScript, Web Console and TUI all negotiate version 3.

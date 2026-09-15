@@ -261,6 +261,7 @@ impl RuntimeClientProjection {
                 durability_failure: None,
                 messages: initial_messages,
                 transcript: super::snapshot::RuntimeClientTranscriptPage::default(),
+                trace: super::trace::TracePage::default(),
                 attempt: None,
                 inbound: InboundDiagnostics {
                     pending: Vec::new(),
@@ -1035,8 +1036,8 @@ impl RuntimeClientProjection {
     ///   [`RuntimeClientProjection::fold_publication_frame`];
     /// - PROJECT: turn counting and final request usage, carrying the exact
     ///   values folded into the attempt view;
-    /// - INTERNAL: model request mechanics (`ModelRequestStarted`,
-    ///   `ModelRequestFailed`, `ModelRetryScheduled`);
+    /// - INVALIDATE: request boundaries and retries publish only `TraceChanged`;
+    ///   their payloads stay internal and the Trace owner resolves safe reads;
     /// - PROJECT: compaction start/failure and committed completion, carrying
     ///   attempt attribution when automatic and no attempt identity when
     ///   manual.
@@ -1113,13 +1114,13 @@ impl RuntimeClientProjection {
                 }
                 Vec::new()
             }
-            // INTERNAL: model request mechanics never produce client events —
-            // the attempt settlement carries the normalized failure.
+            // Request mechanics publish only a payloadless Trace invalidation.
+            // The native Trace owner resolves safe facts on snapshot repair.
             RuntimeEvent::TurnCompleted
             | RuntimeEvent::ModelRequestStarted { .. }
             | RuntimeEvent::ModelRequestFailed { .. }
-            | RuntimeEvent::ModelRetryScheduled { .. }
-            | RuntimeEvent::AgentStatusEmitted { .. } => Vec::new(),
+            | RuntimeEvent::ModelRetryScheduled { .. } => vec![RuntimeClientEvent::TraceChanged],
+            RuntimeEvent::AgentStatusEmitted { .. } => Vec::new(),
             RuntimeEvent::ModelRequestCompleted { usage, .. } => {
                 if let Some(usage) = usage
                     && let Some(attempt) = &mut self.snapshot.attempt
@@ -1131,7 +1132,7 @@ impl RuntimeClientProjection {
                         usage: usage.clone(),
                     }];
                 }
-                Vec::new()
+                vec![RuntimeClientEvent::TraceChanged]
             }
             // The durable Journal event carries identity only; the projection
             // already receives the canonical body from the commit
@@ -4123,10 +4124,10 @@ mod tests {
         assert_eq!(first_cursor, second_cursor);
     }
 
-    /// Model-request mechanics stay internal; compaction start/failure and
+    /// Request payloads stay internal; invalidation and compaction lifecycle and
     /// committed completion are projected as runtime-owned lifecycle facts.
     #[test]
-    fn model_request_events_stay_internal_and_compaction_lifecycle_is_projected() {
+    fn request_payloads_stay_internal_and_trace_invalidation_is_projected() {
         let mut projection = projection();
         for event in [
             RuntimeEvent::ModelRequestStarted {
@@ -4172,22 +4173,28 @@ mod tests {
             apply_event(&mut projection, event);
         }
         let events = collect(&mut projection, RuntimeClientCursor::new(0));
-        assert_eq!(events.len(), 3);
+        assert_eq!(events.len(), 7);
+        assert!(
+            events[..3]
+                .iter()
+                .all(|event| matches!(event.event, RuntimeClientEvent::TraceChanged))
+        );
+        assert!(matches!(events[6].event, RuntimeClientEvent::TraceChanged));
         assert!(matches!(
-            &events[0].event,
+            &events[3].event,
             RuntimeClientEvent::ContextCompactionStarted { .. }
         ));
         assert!(matches!(
-            &events[1].event,
+            &events[4].event,
             RuntimeClientEvent::ContextCompacted { context, .. }
                 if context.compaction_count == 1
         ));
         assert!(matches!(
-            &events[2].event,
+            &events[5].event,
             RuntimeClientEvent::ContextCompactionFailed { error, .. } if error == "boom"
         ));
         let (snapshot, cursor) = projection.snapshot().expect("snapshot");
-        assert_eq!(cursor, RuntimeClientCursor::new(3));
+        assert_eq!(cursor, RuntimeClientCursor::new(7));
         assert!(!snapshot.context.compaction_in_progress);
         assert_eq!(snapshot.context.compaction_count, 1);
         assert!(snapshot.attempt.is_none());
@@ -4254,7 +4261,8 @@ mod tests {
             },
         );
         let events = collect(&mut projection, RuntimeClientCursor::new(1));
-        assert_eq!(events.len(), 2);
+        assert_eq!(events.len(), 3);
+        assert!(matches!(events[1].event, RuntimeClientEvent::TraceChanged));
         assert_eq!(
             events[0].event,
             RuntimeClientEvent::AttemptTurnUpdated {
@@ -4263,7 +4271,7 @@ mod tests {
             }
         );
         assert_eq!(
-            events[1].event,
+            events[2].event,
             RuntimeClientEvent::AttemptUsageUpdated {
                 attempt_id: attempt(),
                 usage: ModelUsage {

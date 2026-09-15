@@ -363,7 +363,7 @@
       "treatment": "substantially refactored: presentation extracted; native rustX bindings",
       "upstream_sha256": "9a3f529576191c8424544273c562e6f84741bd667b2a8efefac9c26dbaf82a02",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v2",
+        "../../../../protocol/app-server/v3",
         "../../bindings/questionnaire",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/icons",
@@ -785,6 +785,90 @@
         "Cordis slots and lifecycle",
         "Harness attachment identity and storage"
       ]
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
+      "treatment": "inspected and rewritten for native Trace props",
+      "upstream_sha256": "8761d0bbd471440ce331db1e4537e42cc630969244290f8b66cab090457ac70f",
+      "destination": "web-console/src/app/Trajectory.tsx",
+      "retained_dependencies": [
+        "../../../protocol/app-server/v3",
+        "../client/trace",
+        "../presentation/primitives/Button",
+        "../presentation/primitives/Input",
+        "./Trajectory.module.css",
+        "./components/Artifact",
+        "@tanstack/react-virtual",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis",
+        "Harness Session Controller and event assembly",
+        "Host/Remote services",
+        "dynamic view registry",
+        "diff",
+        "provider configuration authority"
+      ],
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.tsx",
+          "treatment": "inspected and rewritten for native Trace props",
+          "upstream_sha256": "c062d06535a38498051346095bb713a292f45085e7de817a9400a92292c4eedc"
+        },
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/trajectory-search-index.ts",
+          "treatment": "inspected and rewritten for native Trace props",
+          "upstream_sha256": "081fdf9092da9fe24e23b255262f3bd0f0e020aa9f377e318722f956b6cd371a"
+        },
+        {
+          "upstream": "packages/client/ui-trajectory/src/client/trajectory-virtual-rows.ts",
+          "treatment": "inspected and rewritten for native Trace props",
+          "upstream_sha256": "cce8c7e0a630bf53f4324c88a811c0df8b44930972f42db457d0be4efa9f84d1"
+        }
+      ]
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
+      "treatment": "inspected and rewritten for native Trace props",
+      "upstream_sha256": "74bd596bc3f5e0a7b27d18fac32c58bf72763cb7a001869820dbb5902dae8692",
+      "destination": "web-console/src/app/Trajectory.module.css",
+      "retained_dependencies": [
+        "existing theme tokens"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis",
+        "Harness Session Controller and event assembly",
+        "Host/Remote services",
+        "dynamic view registry",
+        "diff",
+        "provider configuration authority"
+      ]
+    },
+    {
+      "upstream": "packages/client/ui-trajectory/tests/table.client.spec.tsx",
+      "treatment": "inspected and rewritten for native Trace props",
+      "upstream_sha256": "2394738759cc3300e46bf01b97c9c3b59458f6b65809e11919505e264138f775",
+      "destination": "web-console/test/trajectory.test.tsx",
+      "retained_dependencies": [
+        "../src/app/App",
+        "../src/app/Trajectory",
+        "../src/client/trace",
+        "./fixture",
+        "./trace-fixture",
+        "@testing-library/react",
+        "vitest"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis",
+        "Harness Session Controller and event assembly",
+        "Host/Remote services",
+        "dynamic view registry",
+        "diff",
+        "provider configuration authority"
+      ]
     }
   ],
   "inspected": [
@@ -813,12 +897,15 @@
     "packages/client/ui-commands/src/client/PopupSelectView.tsx",
     "packages/client/ui-conversation/README.md",
     "packages/client/ui-conversation/package.json",
+    "packages/client/ui-conversation/src/client/contract/request-inspection.ts",
     "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
+    "packages/client/ui-conversation/tests/selection-survival.client.spec.tsx",
     "packages/client/ui-conversation/tests/submission-policy.client.spec.ts",
     "packages/client/ui-layout/package.json",
     "packages/client/ui-layout/src/client/AppFrame.tsx",
     "packages/client/ui-primitives/README.md",
     "packages/client/ui-primitives/package.json",
+    "packages/client/ui-primitives/src/DisclosureRow.tsx",
     "packages/client/ui-primitives/src/HoverCard.tsx",
     "packages/client/ui-primitives/src/Menu.module.css",
     "packages/client/ui-primitives/src/Menu.tsx",
@@ -837,6 +924,7 @@
     "packages/client/ui-primitives/src/markdown/parse.ts",
     "packages/client/ui-primitives/src/markdown/render.tsx",
     "packages/client/ui-primitives/src/markdown/useViewportHighlighting.ts",
+    "packages/client/ui-primitives/tests/atoms.client.spec.tsx",
     "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
     "packages/client/ui-primitives/tests/markdown.client.spec.tsx",
     "packages/client/ui-primitives/tests/streaming-code-block.client.spec.tsx",
@@ -844,6 +932,31 @@
     "packages/client/ui-theme/src/styles/shiki.css",
     "packages/client/ui-tool/README.md",
     "packages/client/ui-tool/src/client/tool/ToolCallTree.module.css",
-    "packages/client/ui-tool/src/client/tool/ToolCallTree.tsx"
+    "packages/client/ui-tool/src/client/tool/ToolCallTree.tsx",
+    "packages/client/ui-tool/src/client/tool/components/ToolRow.module.css",
+    "packages/client/ui-tool/src/client/tool/components/ToolRow.tsx",
+    "packages/client/ui-tool/tests/tool-row.client.spec.tsx",
+    "packages/client/ui-trajectory/README.md",
+    "packages/client/ui-trajectory/package.json",
+    "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
+    "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
+    "packages/client/ui-trajectory/src/client/TrajectoryTimeline.tsx",
+    "packages/client/ui-trajectory/src/client/trajectory-assistant-definition.ts",
+    "packages/client/ui-trajectory/src/client/trajectory-compaction-definition.ts",
+    "packages/client/ui-trajectory/src/client/trajectory-contract.ts",
+    "packages/client/ui-trajectory/src/client/trajectory-event-projection.ts",
+    "packages/client/ui-trajectory/src/client/trajectory-record.ts",
+    "packages/client/ui-trajectory/src/client/trajectory-search-index.ts",
+    "packages/client/ui-trajectory/src/client/trajectory-snapshot-builder.ts",
+    "packages/client/ui-trajectory/src/client/trajectory-virtual-rows.ts",
+    "packages/client/ui-trajectory/tests/layout.client.spec.tsx",
+    "packages/client/ui-trajectory/tests/snapshot-builder.client.spec.ts",
+    "packages/client/ui-trajectory/tests/table.client.spec.tsx",
+    "packages/client/ui-trajectory/tests/virtual-rows.client.spec.ts",
+    "packages/session/session-projection/README.md",
+    "packages/session/session-projection/package.json",
+    "packages/session/session-projection/src/index.ts",
+    "packages/session/session-projection/src/types.ts",
+    "packages/session/session-projection/tests/registry.spec.ts"
   ]
 }

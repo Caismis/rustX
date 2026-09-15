@@ -48,6 +48,8 @@ use crate::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult, ToolProg
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub enum RuntimeClientEvent {
+    /// Presentation invalidation only; fetch an authoritative snapshot.
+    TraceChanged,
     /// Bounded authoritative Goal view, including activation-only changes.
     GoalChanged { view: crate::goal::GoalView },
     /// Complete bounded replacement at one native Workflow revision.

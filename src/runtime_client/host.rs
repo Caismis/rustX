@@ -611,7 +611,13 @@ impl ClientInner {
         } else {
             self.refresh_transcript_page(&mut state)?;
         }
-        let (snapshot, cursor) = state.projection.snapshot()?;
+        let (mut snapshot, cursor) = state.projection.snapshot()?;
+        snapshot.trace = super::trace::TraceProjection::new(self.store.as_ref())
+            .and_then(|projection| projection.page(None, super::trace::TRACE_PAGE_LIMIT))
+            .map_err(|_| RuntimeClientError::RuntimeFailure {
+                message: "Trace attachment read failed".into(),
+            })?;
+        super::trace::repair_live(&mut snapshot);
         let next_attachment_seq = state
             .next_attachment_seq
             .checked_add(1)
@@ -948,7 +954,13 @@ impl ClientInner {
         } else {
             self.refresh_transcript_page(&mut state)?;
         }
-        let (snapshot, cursor) = state.projection.snapshot()?;
+        let (mut snapshot, cursor) = state.projection.snapshot()?;
+        snapshot.trace = super::trace::TraceProjection::new(self.store.as_ref())
+            .and_then(|projection| projection.page(None, super::trace::TRACE_PAGE_LIMIT))
+            .map_err(|_| RuntimeClientError::RuntimeFailure {
+                message: "Trace snapshot read failed".into(),
+            })?;
+        super::trace::repair_live(&mut snapshot);
         Ok((snapshot, cursor))
     }
 
@@ -966,6 +978,27 @@ impl ClientInner {
             .control_goal(control)
             .map(|view| RuntimeClientResult::Goal { view })
             .map_err(|message| RuntimeClientError::InvalidRequest { message })
+    }
+
+    /// Read Trace through its independent presentation owner. No cursor mutation.
+    #[allow(clippy::needless_pass_by_value)] // Attachment dispatch owns request parameters.
+    pub(crate) fn trace_page(
+        &self,
+        before: Option<super::trace::TraceCursor>,
+        limit: usize,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_session_runtime_live()?;
+        if limit == 0 || limit > super::trace::TRACE_PAGE_LIMIT {
+            return Err(RuntimeClientError::InvalidRequest {
+                message: "Trace limit must be 1..=32".into(),
+            });
+        }
+        let page = super::trace::TraceProjection::new(self.store.as_ref())
+            .and_then(|projection| projection.page(before.as_ref(), limit))
+            .map_err(|_| RuntimeClientError::InvalidRequest {
+                message: "Trace read failed or cursor is invalid".into(),
+            })?;
+        Ok(RuntimeClientResult::TracePage { page })
     }
 
     /// Reads one bounded durable transcript page. The transcript cursor is

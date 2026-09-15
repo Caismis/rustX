@@ -1,8 +1,9 @@
+import { TRACE_LIMIT, TRACE_PAGE_SIZE, prependTrace, refreshTrace, replaceTrace, type TraceCache } from './trace';
 import type {
   AttachmentTarget, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserContentBlock,
-} from '../../../protocol/app-server/v2';
+} from '../../../protocol/app-server/v3';
 import { ARTIFACT_MAX_BYTES, DRAFT_MAX_FILES } from './artifacts';
 import { HISTORY_LIMIT, HISTORY_PAGE_SIZE, prependTranscript, refreshTranscript, replaceTranscript, type TranscriptCache } from './transcript';
 import { ProtocolLog, type WireContext } from './protocol-log';
@@ -16,6 +17,7 @@ export interface SessionView {
   attachment: 'detached' | 'attaching' | 'attached' | 'resynchronizing' | 'stale' | 'unloaded' | 'error';
   target?: AttachmentTarget;
   snapshot?: RuntimeClientSnapshot;
+  trace?: TraceCache;
   cursor?: RuntimeClientCursor;
   history?: TranscriptCache;
   settings?: SessionPersistentState;
@@ -66,7 +68,7 @@ export class RpcFailure extends Error {
 }
 const READS = new Set<Request1['method']>([
   'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/tree', 'session/deletePreview',
-  'session/snapshot', 'session/transcript', 'settings/read', 'settings/model', 'settings/models',
+  'session/snapshot', 'session/transcript', 'session/trace', 'settings/read', 'settings/model', 'settings/models',
   'resources/read', 'background/status', 'subagent/status', 'settings/defaults',
 ]);
 export const interactionKey = (ref: InteractionRef) => JSON.stringify([ref.conversation_id, ref.interaction_id]);
@@ -116,7 +118,7 @@ export class AppServerClient {
     const generation = this.state.generation;
     this.publish({ connection: reconnect ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v2', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v3', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -134,12 +136,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 2, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 3, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (hello.protocol_version !== 2 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v2 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (hello.protocol_version !== 3 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v3 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       this.initialized = true;
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
@@ -345,7 +347,7 @@ export class AppServerClient {
       if (!current()) return;
       target = result.target;
       if (result.target.session_id !== id || result.target.conversation_id !== result.snapshot.conversation_id) throw new Error('Mismatched attachment identity.');
-      this.setSession(id, { target: result.target, snapshot: result.snapshot, cursor: result.cursor, history: replaceTranscript(result.snapshot.transcript, this.state.views[id]?.history), attachment: 'attached' });
+      this.setSession(id, { target: result.target, snapshot: result.snapshot, cursor: result.cursor, history: replaceTranscript(result.snapshot.transcript, this.state.views[id]?.history), trace: replaceTrace(result.snapshot.trace, this.state.views[id]?.trace), attachment: 'attached' });
       this.reconcileInteractions(id);
       const settings = await this.request({ method: 'settings/read', params: { session_id: id } }, 'settings');
       if (!current() || !sameTarget(this.state.views[id]?.target, result.target)) return;
@@ -375,12 +377,12 @@ export class AppServerClient {
       while (this.dirty.has(id) && current()) {
         this.dirty.delete(id);
         const resync = this.resubscribe.delete(id);
-        if (resync) this.setSession(id, { attachment: 'resynchronizing', history: replaceTranscript({ entries: [] }, this.state.views[id]?.history) });
+        if (resync) this.setSession(id, { attachment: 'resynchronizing', trace: replaceTrace({ entries: [], next_cursor: null }, this.state.views[id]?.trace), history: replaceTranscript({ entries: [] }, this.state.views[id]?.history) });
         const result = await this.request({ method: 'session/snapshot', params: { target } }, 'snapshot');
         if (!current()) return;
         if (result.snapshot.conversation_id !== target.conversation_id) throw new Error('Mismatched snapshot conversation.');
         if (BigInt(result.cursor) >= BigInt(this.state.views[id].cursor ?? '0')) {
-          this.setSession(id, { snapshot: result.snapshot, cursor: result.cursor, history: refreshTranscript(this.state.views[id]?.history, result.snapshot.transcript), error: undefined });
+          this.setSession(id, { snapshot: result.snapshot, cursor: result.cursor, history: refreshTranscript(this.state.views[id]?.history, result.snapshot.transcript), trace: refreshTrace(this.state.views[id]?.trace, result.snapshot.trace), error: undefined });
           this.reconcileInteractions(id);
         }
         if (resync) await this.request({ method: 'session/subscribe', params: { target, after_cursor: result.cursor } }, 'subscribed');
@@ -411,6 +413,28 @@ export class AppServerClient {
       if (current()) this.setSession(id, { history: { ...this.state.views[id].history!, loading: false, error: String(error) } });
       throw error;
     }
+  }
+  async loadEarlierTrace(id: string) {
+    const target = this.target(id);
+    const generation = this.state.generation;
+    const cache = this.state.views[id].trace;
+    if (!cache || cache.loading || cache.page.next_cursor == null) return;
+    const limit = Math.min(TRACE_PAGE_SIZE, TRACE_LIMIT - cache.page.entries.length);
+    if (limit < 1) throw new Error('Trace window is full. Return to latest first.');
+    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target)
+      && this.state.views[id]?.trace?.epoch === cache.epoch;
+    this.setSession(id, { trace: { ...cache, loading: true, error: undefined } });
+    try {
+      const result = await this.request({ method: 'session/trace', params: { target, before: cache.page.next_cursor, limit } }, 'trace');
+      if (current()) this.setSession(id, { trace: prependTrace(this.state.views[id].trace!, result.page) });
+    } catch (error) {
+      if (current()) this.setSession(id, { trace: { ...this.state.views[id].trace!, loading: false, error: String(error) } });
+      throw error;
+    }
+  }
+  latestTrace(id: string) {
+    const view = this.state.views[id];
+    if (view?.snapshot) this.setSession(id, { trace: replaceTrace(view.snapshot.trace, view.trace) });
   }
   latestTranscript(id: string) {
     const view = this.state.views[id];

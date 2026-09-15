@@ -185,6 +185,48 @@
           "properties": {
             "method": {
               "type": "string",
+              "const": "session/trace"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "before": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/TraceCursor"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "limit": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "limit"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
               "const": "session/transcript"
             },
             "params": {
@@ -1397,6 +1439,10 @@
         "model_selection",
         "approval_mode"
       ]
+    },
+    "TraceCursor": {
+      "description": "Opaque Trace-only exclusive boundary. Valid only in its conversation.",
+      "type": "string"
     },
     "RuntimeClientTranscriptCursor": {
       "description": "The cursor domain of durable transcript paging.",
@@ -2814,6 +2860,23 @@
           "required": [
             "type",
             "context"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "page": {
+              "$ref": "#/$defs/TracePage"
+            },
+            "type": {
+              "type": "string",
+              "const": "trace"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "page"
           ]
         },
         {
@@ -4665,6 +4728,508 @@
         }
       ]
     },
+    "TracePage": {
+      "type": "object",
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceEntry"
+          }
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "entries"
+      ]
+    },
+    "TraceEntry": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "position": {
+          "description": "Trace order, only for ordering this read model; not an event cursor.",
+          "$ref": "#/$defs/TraceCursor"
+        },
+        "location": {
+          "$ref": "#/$defs/TraceLocation"
+        },
+        "kind": {
+          "$ref": "#/$defs/TraceKind"
+        },
+        "state": {
+          "$ref": "#/$defs/TraceState"
+        },
+        "timing": {
+          "$ref": "#/$defs/TraceTiming"
+        },
+        "request": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceRequest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceTool"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "calls": {
+          "description": "Accepted canonical `ToolCalls`, in canonical block order. Not start evidence.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceTool"
+          }
+        },
+        "native_id": {
+          "description": "Exact native detached execution / child / Workflow run / interaction ID.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message_id": {
+          "description": "Canonical output only. Publication without acceptance is not copied here.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "output": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceText"
+          }
+        },
+        "reasoning": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceText"
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceArtifact"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "position",
+        "location",
+        "kind",
+        "state",
+        "timing",
+        "calls",
+        "output",
+        "reasoning",
+        "artifacts",
+        "truncated"
+      ]
+    },
+    "TraceLocation": {
+      "description": "Server-resolved grouping. Native `TurnId` is the logical model step within\nan Attempt; actual requests never allocate a new step.",
+      "type": "object",
+      "properties": {
+        "attempt_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AttemptId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "step_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TurnId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "TurnId": {
+      "description": "Identifies one turn within an attempt.",
+      "type": "string"
+    },
+    "TraceKind": {
+      "type": "string",
+      "enum": [
+        "attempt",
+        "step",
+        "request",
+        "assistant",
+        "tool",
+        "compaction",
+        "background",
+        "subagent",
+        "workflow",
+        "interaction"
+      ]
+    },
+    "TraceState": {
+      "type": "string",
+      "enum": [
+        "incomplete",
+        "running",
+        "pending",
+        "cancelling",
+        "settling",
+        "waiting",
+        "completed",
+        "failed",
+        "cancelled",
+        "timed_out",
+        "limited",
+        "denied",
+        "outcome_unknown",
+        "interrupted"
+      ]
+    },
+    "TraceTiming": {
+      "type": "object",
+      "properties": {
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ended_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "duration_ms": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "started_at"
+      ]
+    },
+    "TraceRequest": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "$ref": "#/$defs/RequestId2"
+        },
+        "retry_number": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "assistant_message_id": {
+          "$ref": "#/$defs/MessageId"
+        },
+        "previous_failure_kind": {
+          "description": "Previous actual request failure, proven through the native retry ordinal.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelErrorKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "$ref": "#/$defs/TraceText"
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "reasoning_enabled": {
+          "type": "boolean"
+        },
+        "effective_system_prompt": {
+          "description": "Exact request input is internal. These sections are explicitly withheld,\nnever replaced by today's configuration or reconstructed in the browser.",
+          "$ref": "#/$defs/TraceText"
+        },
+        "context_input": {
+          "$ref": "#/$defs/TraceText"
+        },
+        "tool_schema": {
+          "$ref": "#/$defs/TraceText"
+        },
+        "failure_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelErrorKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "retry_number",
+        "assistant_message_id",
+        "model",
+        "max_output_tokens",
+        "reasoning_enabled",
+        "effective_system_prompt",
+        "context_input",
+        "tool_schema"
+      ]
+    },
+    "RequestId2": {
+      "description": "Identifies one actual provider-neutral model request.\n\nA request identity is distinct from an attempt, turn, retry ordinal,\nand Event Journal sequence. It is derived once from the immutable\n[`RequestIdentity`](crate::model::snapshot::RequestIdentity) and is\nthe durable correlation key for the Request Snapshot and its\nrequest-start fact.",
+      "type": "string"
+    },
+    "ModelErrorKind": {
+      "description": "Error classes the runtime distinguishes for retry/termination decisions.\nProvider SDK error structs never cross this boundary.",
+      "oneOf": [
+        {
+          "description": "The request itself was invalid.",
+          "type": "string",
+          "const": "invalid_request"
+        },
+        {
+          "description": "Authentication or authorization failed.",
+          "type": "string",
+          "const": "authentication"
+        },
+        {
+          "description": "The provider is rate limiting requests.",
+          "type": "string",
+          "const": "rate_limit"
+        },
+        {
+          "description": "The request timed out.",
+          "type": "string",
+          "const": "timeout"
+        },
+        {
+          "description": "Transport-level failure.",
+          "type": "string",
+          "const": "transport"
+        },
+        {
+          "description": "Provider/server failure.",
+          "type": "string",
+          "const": "provider_error"
+        },
+        {
+          "description": "The context exceeds the provider window.",
+          "type": "string",
+          "const": "context_window_exceeded"
+        },
+        {
+          "description": "The request was cancelled.",
+          "type": "string",
+          "const": "cancelled"
+        },
+        {
+          "description": "The requested capability or protocol is unsupported.",
+          "type": "string",
+          "const": "unsupported"
+        },
+        {
+          "description": "The model generated tool intent that cannot become a trustworthy\ncanonical [`ToolCall`](crate::tools::types::ToolCall).\n\nThis is a *generation* defect, not a transport defect and not a Tool\nschema rejection: the proposal never crossed `ToolCall` acceptance, so\nnothing executed, nothing was settled, and nothing entered canonical\nhistory. The Agent Loop owns the bounded corrective regeneration this\nclass authorizes; see [`MalformedToolProposalSource`] for the\nprovider-independent provenance carried alongside it.",
+          "type": "string",
+          "const": "malformed_tool_proposal"
+        },
+        {
+          "description": "One generated channel deterministically degenerated into repetition.\n\nLike [`Self::MalformedToolProposal`] this is a *generation* defect:\nthe physical generation is discarded before the canonical commit\nboundary, and it shares the one semantic corrective-generation budget\nof the logical model step. The typed evidence is carried in\n[`ModelError::generation`].",
+          "type": "string",
+          "const": "generation_degenerated"
+        },
+        {
+          "description": "One generation budget was exhausted before the generation completed.\n\nEither the provider terminated at its own token limit, or the\nruntime's byte safeguard fired. Both mean the generation is\nincomplete, so it is never accepted as an ordinary successful\nassistant completion. The typed detail is carried in\n[`ModelError::generation`].",
+          "type": "string",
+          "const": "generation_budget_exceeded"
+        }
+      ]
+    },
+    "TraceText": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "redacted": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "truncated",
+        "redacted"
+      ]
+    },
+    "ModelUsage": {
+      "description": "Normalized token accounting for one generation.\n\nProviders do not expose identical token metrics; this is the stable\ncommon core. Provider SDK usage objects never appear here.",
+      "type": "object",
+      "properties": {
+        "input_tokens": {
+          "description": "Input tokens consumed by the request.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "output_tokens": {
+          "description": "Output tokens produced by the response.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "total_tokens": {
+          "description": "Total tokens, where the provider reports or can derive them.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "details": {
+          "description": "Optional normalized usage details.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UsageDetails"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "total_tokens"
+      ]
+    },
+    "UsageDetails": {
+      "description": "Optional normalized token details where providers expose them.",
+      "type": "object",
+      "properties": {
+        "reasoning_tokens": {
+          "description": "Tokens consumed by reasoning.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "cached_input_tokens": {
+          "description": "Input tokens served from cache.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "TraceTool": {
+      "type": "object",
+      "properties": {
+        "call_id": {
+          "$ref": "#/$defs/ToolCallId"
+        },
+        "tool_id": {
+          "$ref": "#/$defs/ToolId"
+        },
+        "arguments": {
+          "$ref": "#/$defs/TraceText"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "call_id",
+        "tool_id",
+        "arguments"
+      ]
+    },
+    "ToolCallId": {
+      "description": "Identifies one tool call issued by the current agent.",
+      "type": "string"
+    },
+    "TraceArtifact": {
+      "description": "Safe reference to the existing native artifact carrier, never a storage path.",
+      "type": "object",
+      "properties": {
+        "artifact_id": {
+          "$ref": "#/$defs/ArtifactId"
+        },
+        "image": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "image"
+      ]
+    },
     "RuntimeClientTranscriptPage": {
       "description": "One bounded newest-or-older page of derived transcript history.",
       "type": "object",
@@ -5466,10 +6031,6 @@
         }
       }
     },
-    "ToolCallId": {
-      "description": "Identifies one tool call issued by the current agent.",
-      "type": "string"
-    },
     "ToolCall": {
       "description": "One tool call issued by the current agent.",
       "type": "object",
@@ -6088,14 +6649,6 @@
     },
     "PublicationStreamId": {
       "description": "Identifies one user-facing publication stream (Issue #108, FND-03).\n\nA publication stream is the durable release plane of exactly one\nprovider request: it is the identity under which committed-for-release\nframes are staged, under which the publication terminal marker\ncommits, and under which the stream settles exactly once as canonical,\nunaccepted, or incomplete. It is deliberately distinct from\n[`RequestId`] (the provider execution fact) and from [`MessageId`]\n(the canonical conversation fact), because publication durability is\na separate plane from both.",
-      "type": "string"
-    },
-    "TurnId": {
-      "description": "Identifies one turn within an attempt.",
-      "type": "string"
-    },
-    "RequestId2": {
-      "description": "Identifies one actual provider-neutral model request.\n\nA request identity is distinct from an attempt, turn, retry ordinal,\nand Event Journal sequence. It is derived once from the immutable\n[`RequestIdentity`](crate::model::snapshot::RequestIdentity) and is\nthe durable correlation key for the Request Snapshot and its\nrequest-start fact.",
       "type": "string"
     },
     "PublicationAuditKind": {
@@ -8299,6 +8852,10 @@
           "description": "The bounded newest page of the derived durable transcript. This is\ndistinct from `messages`: the latter is the current Surface working\nset, while this page remains readable after compaction retires Surface\nmessages. Older pages are fetched through `transcript_page_get`.",
           "$ref": "#/$defs/RuntimeClientTranscriptPage"
         },
+        "trace": {
+          "description": "Bounded native Trace read window; independent from transcript and live cursors.",
+          "$ref": "#/$defs/TracePage"
+        },
         "attempt": {
           "description": "The current/latest attempt view, when any attempt exists.",
           "anyOf": [
@@ -8420,6 +8977,7 @@
         "effective_approval_mode",
         "messages",
         "transcript",
+        "trace",
         "inbound",
         "capabilities"
       ]
@@ -9490,71 +10048,6 @@
         }
       ]
     },
-    "ModelErrorKind": {
-      "description": "Error classes the runtime distinguishes for retry/termination decisions.\nProvider SDK error structs never cross this boundary.",
-      "oneOf": [
-        {
-          "description": "The request itself was invalid.",
-          "type": "string",
-          "const": "invalid_request"
-        },
-        {
-          "description": "Authentication or authorization failed.",
-          "type": "string",
-          "const": "authentication"
-        },
-        {
-          "description": "The provider is rate limiting requests.",
-          "type": "string",
-          "const": "rate_limit"
-        },
-        {
-          "description": "The request timed out.",
-          "type": "string",
-          "const": "timeout"
-        },
-        {
-          "description": "Transport-level failure.",
-          "type": "string",
-          "const": "transport"
-        },
-        {
-          "description": "Provider/server failure.",
-          "type": "string",
-          "const": "provider_error"
-        },
-        {
-          "description": "The context exceeds the provider window.",
-          "type": "string",
-          "const": "context_window_exceeded"
-        },
-        {
-          "description": "The request was cancelled.",
-          "type": "string",
-          "const": "cancelled"
-        },
-        {
-          "description": "The requested capability or protocol is unsupported.",
-          "type": "string",
-          "const": "unsupported"
-        },
-        {
-          "description": "The model generated tool intent that cannot become a trustworthy\ncanonical [`ToolCall`](crate::tools::types::ToolCall).\n\nThis is a *generation* defect, not a transport defect and not a Tool\nschema rejection: the proposal never crossed `ToolCall` acceptance, so\nnothing executed, nothing was settled, and nothing entered canonical\nhistory. The Agent Loop owns the bounded corrective regeneration this\nclass authorizes; see [`MalformedToolProposalSource`] for the\nprovider-independent provenance carried alongside it.",
-          "type": "string",
-          "const": "malformed_tool_proposal"
-        },
-        {
-          "description": "One generated channel deterministically degenerated into repetition.\n\nLike [`Self::MalformedToolProposal`] this is a *generation* defect:\nthe physical generation is discarded before the canonical commit\nboundary, and it shares the one semantic corrective-generation budget\nof the logical model step. The typed evidence is carried in\n[`ModelError::generation`].",
-          "type": "string",
-          "const": "generation_degenerated"
-        },
-        {
-          "description": "One generation budget was exhausted before the generation completed.\n\nEither the provider terminated at its own token limit, or the\nruntime's byte safeguard fired. Both mean the generation is\nincomplete, so it is never accepted as an ordinary successful\nassistant completion. The typed detail is carried in\n[`ModelError::generation`].",
-          "type": "string",
-          "const": "generation_budget_exceeded"
-        }
-      ]
-    },
     "RuntimeError": {
       "description": "A normalized runtime-owned execution error.\n\n`RuntimeError` describes failures of the runtime itself, distinct from\nnormalized model errors (`ModelError`) and tool execution statuses.",
       "oneOf": [
@@ -9793,75 +10286,6 @@
           ]
         }
       ]
-    },
-    "ModelUsage": {
-      "description": "Normalized token accounting for one generation.\n\nProviders do not expose identical token metrics; this is the stable\ncommon core. Provider SDK usage objects never appear here.",
-      "type": "object",
-      "properties": {
-        "input_tokens": {
-          "description": "Input tokens consumed by the request.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "output_tokens": {
-          "description": "Output tokens produced by the response.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "total_tokens": {
-          "description": "Total tokens, where the provider reports or can derive them.",
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "details": {
-          "description": "Optional normalized usage details.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/UsageDetails"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "input_tokens",
-        "output_tokens",
-        "total_tokens"
-      ]
-    },
-    "UsageDetails": {
-      "description": "Optional normalized token details where providers expose them.",
-      "type": "object",
-      "properties": {
-        "reasoning_tokens": {
-          "description": "Tokens consumed by reasoning.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "cached_input_tokens": {
-          "description": "Input tokens served from cache.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        }
-      }
     },
     "InFlightAssistantMessage": {
       "description": "The accumulated in-flight output of one streaming Assistant message.\n\nThis is the repair state of streaming: a snapshot taken mid-stream\ncarries every accumulated delta through its cursor, so a client\nrepairing after `resync` reconstructs the exact message it would have\nobserved incrementally.",
@@ -12720,6 +13144,20 @@
     "RuntimeClientEvent": {
       "description": "One externally visible Runtime Client observation.\n\nThe stable `type` discriminator is the protocol contract; unknown\nfields are rejected.",
       "oneOf": [
+        {
+          "description": "Presentation invalidation only; fetch an authoritative snapshot.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "trace_changed"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
         {
           "description": "Bounded authoritative Goal view, including activation-only changes.",
           "type": "object",
