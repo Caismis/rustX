@@ -69,11 +69,19 @@ a replaceable read. Transfer failure preserves drafts; retry is explicit. Aborte
 browser reads discard results after fencing. A completed but unused upload stays
 conversation-owned until Session deletion. No turn is manufactured to discover
 provider rejection. Upload is storage-only and accepts no modality or model metadata.
-`ConversationRuntime::admit_sourced_inbound` validates canonical input with the
-model invocation validator while holding the coordinator lock shared by model
-mutation, Attempt admission/settlement and durable inbound acceptance. An active
-Attempt uses its immutable primary model; idle admission uses the current
-Session model. Native rejection remains authoritative if browser preflight races.
+Native modality validation remains in `model::adapter::validation::validate_request`,
+using the actual request's frozen invocation capabilities before provider I/O.
+WEB-02 does not add a generic acceptance-time model gate. A current Attempt slot
+is not an inbound consumer binding: acceptance can miss that Attempt's finite
+safe-boundary watermark, and an idle acceptance can precede a Session model
+mutation before the next Attempt freezes its model. Browser preflight is an
+early presentation check, not a promise about which Attempt will adopt input.
+Current effective input is text-only, so unsupported drafts are preserved before
+upload or submission. Future multimodal turn admission needs an explicit native
+consumer-binding contract and is outside WEB-02.
+Direct native callers can therefore receive durable inbound acceptance before
+the actual model invocation refuses unsupported content locally. WEB-02 does
+not strengthen the native inbox acceptance contract.
 
 Artifact allocation reserves and syncs each identity before returning it. Cold
 reopen scans reserved/written IDs; byte writers use create-new, never truncate.

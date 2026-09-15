@@ -720,9 +720,6 @@ impl ClientInner {
                 InboundAdmissionError::Inactive => RuntimeClientError::InvalidState {
                     message: "the conversation runtime is not activated".to_owned(),
                 },
-                InboundAdmissionError::UnsupportedContent { message } => {
-                    RuntimeClientError::InvalidRequest { message }
-                }
                 InboundAdmissionError::EmptyContent => RuntimeClientError::InvalidRequest {
                     message: "inbound content must not be empty".to_owned(),
                 },

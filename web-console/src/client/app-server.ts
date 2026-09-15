@@ -441,6 +441,9 @@ export class AppServerClient {
     if (files.length > DRAFT_MAX_FILES || files.some(file => file.size > ARTIFACT_MAX_BYTES)) throw new Error('Choose at most 8 attachments, each at most 256 KiB.');
     const content: UserContentBlock[] = text ? [{ type: 'text', text }] : [];
     if (files.length) {
+      // Advisory presentation check, not a binding to an eventual consumer.
+      // Pending input can miss an Attempt's finite mailbox watermark. Actual
+      // model requests validate their own frozen capabilities before provider I/O.
       const { snapshot } = await this.request({ method: 'session/snapshot', params: { target } }, 'snapshot');
       if (!current()) throw new Error('Attachment target changed; draft retained.');
       const model = snapshot.attempt?.phase.type === 'settled' || !snapshot.attempt ? snapshot.model?.effective : snapshot.attempt.model?.primary;

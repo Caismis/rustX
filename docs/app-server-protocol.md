@@ -639,10 +639,16 @@ cursor domains, authoritative replacement, history-cache bounds, admission and
 browser Blob lifetime. These methods do not widen current provider-adapter
 multimodal support.
 
-Canonical image/file modality admission belongs to
-`ConversationRuntime::admit_sourced_inbound`, under the coordinator lock. The
-model invocation validator checks the frozen primary model of the active
-Attempt, or the current Session model when idle. A Session model change during
-an Attempt affects future Attempts only. Browser preflight uses those same
-authoritative model projections and preserves unsupported drafts; the native
-admission check is decisive when state races.
+Native canonical modality validation remains at the actual model invocation:
+`model::adapter::validation::validate_request` uses the request's immutable
+invocation capabilities before opening provider I/O. WEB-02 introduces no
+acceptance-time model inference from `current_attempt`: a finite mailbox
+watermark can exclude later acceptance while the Attempt slot still exists, and
+Session mutation can precede the next Attempt freeze after idle acceptance.
+Browser preflight reads authoritative model projections and preserves unsupported
+drafts with current text-only effective capabilities. It does not bind a pending
+inbound to an eventual consumer. Future multimodal turn admission requires that
+explicit native binding; neither the artifact carrier nor the browser owns it.
+Direct native callers can therefore receive durable inbound acceptance before
+the actual model invocation refuses unsupported content locally. WEB-02 does
+not strengthen the native inbox acceptance contract.

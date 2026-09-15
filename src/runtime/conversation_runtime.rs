@@ -651,14 +651,12 @@ pub struct RuntimeConversationConfig {
 
 /// The runtime-owned current attempt handle.
 ///
-/// The coordinator retains the immutable model snapshot for inbound modality
-/// admission and the exact cancellation trigger the attempt task runs against so that
+/// This is a control handle only: the coordinator keeps exactly the
+/// cancellation trigger the attempt task runs against so that
 /// `cancel_current_attempt` can request cancellation. It does **not** own a
 /// second cancellation state machine and never decides a terminal outcome;
 /// [`AgentExecution`] remains the attempt execution/terminal authority.
 struct CurrentAttempt {
-    /// Exact frozen model used by this attempt, also authoritative for steer admission.
-    model: AttemptModelSnapshot,
     /// The attempt identity.
     attempt_id: AttemptId,
     /// The attempt cancellation trigger observed by the loop.
@@ -2904,9 +2902,7 @@ impl RuntimeInner {
             // prior cause.
             let _ = cancellation.request_cancel(reason);
         }
-        let model = state.model.snapshot();
         state.current_attempt = Some(CurrentAttempt {
-            model: model.clone(),
             attempt_id: attempt_id.clone(),
             cancellation: cancellation.clone(),
         });
@@ -2926,6 +2922,7 @@ impl RuntimeInner {
         // the current session model, while a historical Request Snapshot is
         // reconstructed only from its own frozen durable facts and is never
         // rewritten to resemble the new configuration.
+        let model = state.model.snapshot();
         // The attempt's frozen *effective* model configuration, taken at the
         // same linearization point as its resolved snapshot. A named
         // subagent with no explicit model inherits exactly this — never live
@@ -4699,20 +4696,6 @@ impl ConversationRuntime {
         {
             return Err(InboundAdmissionError::GuidanceCancelled);
         }
-        // Model mutation, attempt publication/settlement and inbound acceptance
-        // share this coordinator lock. A steer uses the consumer's frozen model;
-        // idle input uses the Session model that admission will freeze.
-        let model = state
-            .current_attempt
-            .as_ref()
-            .map_or_else(|| state.model.snapshot(), |attempt| attempt.model.clone());
-        crate::model::invocation::validate_user_content_modalities(
-            &content,
-            model.primary().capabilities(),
-        )
-        .map_err(|error| InboundAdmissionError::UnsupportedContent {
-            message: format!("{}: {}", model.primary().model_ref(), error.message),
-        })?;
         // Test-only gate: parked while holding the coordinator lock, after
         // the shutdown/activation decision and before the durable acceptance,
         // so a race regression can prove shutdown cannot slip between the
@@ -5632,11 +5615,6 @@ pub enum InboundAdmissionError {
     Shutdown,
     /// Inbound content must not be empty.
     EmptyContent,
-    /// The consuming model cannot represent this canonical input.
-    UnsupportedContent {
-        /// Bounded modality diagnostic.
-        message: String,
-    },
     /// The runtime's durable authority failed persistently: no new inbound
     /// work may be accepted until the runtime is reconstructed.
     DurabilityFailed {
@@ -5658,7 +5636,6 @@ impl core::fmt::Display for InboundAdmissionError {
                 f.write_str("the child cancellation intent is already committed")
             }
             Self::Shutdown => f.write_str("the conversation runtime is shutting down"),
-            Self::UnsupportedContent { message } => f.write_str(message),
             Self::EmptyContent => f.write_str("inbound content must not be empty"),
             Self::DurabilityFailed { message } => write!(
                 f,

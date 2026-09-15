@@ -313,9 +313,6 @@ async fn a_model_update_after_admission_affects_only_future_attempts() {
         "the update is valid: {response:?}"
     );
 
-    // Steer acceptance uses frozen A even though Session now advertises B.
-    assert_modality_refusal(&attachment, "alpha/model-a");
-
     // The runtime can truthfully report both facts at once, so a client never
     // has to infer them from event ordering.
     let (snapshot, _) = host.snapshot().expect("snapshot");
@@ -404,8 +401,6 @@ async fn a_model_update_before_admission_is_observed_by_that_attempt() {
     });
     assert!(response.error.is_none());
 
-    // No attempt exists: the selected consumer is now B.
-    assert_modality_refusal(&attachment, "beta/model-b");
     submit(&attachment, 2, "hello");
     receive_until(&subscription, |event| {
         matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
@@ -972,34 +967,4 @@ async fn always_on_reasoning_is_preserved_by_session_resolution() {
     let snapshot = state.snapshot();
     assert_eq!(snapshot.primary().reasoning_profile(), None);
     assert!(snapshot.primary().reasoning_enabled());
-}
-
-/// Both current adapters are text-only. The native refusal identifies the exact
-/// invocation whose capabilities were checked, exposing selection without
-/// widening any production adapter or constructing a second admission machine.
-fn assert_modality_refusal(attachment: &rustx::runtime_client::RuntimeAttachment, model: &str) {
-    for content in [
-        UserContentBlock::Image(rustx::message::content::ImageReference {
-            artifact_id: rustx::runtime::identity::ArtifactId::new("artifact_1"),
-            alt: None,
-        }),
-        UserContentBlock::File(rustx::message::content::FileReference {
-            artifact_id: rustx::runtime::identity::ArtifactId::new("artifact_2"),
-            name: None,
-            mime_type: None,
-            description: None,
-        }),
-    ] {
-        let response = attachment.handle_request(RuntimeClientRequest::SubmitInbound {
-            id: RequestId::new(900),
-            content: vec![content],
-        });
-        let error = response
-            .error
-            .expect("known modality mismatch refused before durable acceptance");
-        assert!(
-            format!("{error:?}").contains(model),
-            "wrong consuming model: {error:?}"
-        );
-    }
 }

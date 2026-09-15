@@ -1330,32 +1330,6 @@ pub fn validate_content_modalities(
             ModelInputMessage::RequestOnly(_) => require(Modality::Text),
         }
     }
-    validate_modalities(required, capabilities)
-}
-
-/// Validates canonical user input before durable inbound acceptance.
-///
-/// # Errors
-/// Returns an unsupported-modality error before any provider request.
-pub fn validate_user_content_modalities(
-    content: &[crate::message::types::UserContentBlock],
-    capabilities: &ModelCapabilities,
-) -> Result<(), ModelError> {
-    use crate::message::types::UserContentBlock;
-    validate_modalities(
-        content.iter().map(|block| match block {
-            UserContentBlock::Text(_) => Modality::Text,
-            UserContentBlock::Image(_) => Modality::Image,
-            UserContentBlock::File(_) => Modality::File,
-        }),
-        capabilities,
-    )
-}
-
-fn validate_modalities(
-    required: impl IntoIterator<Item = Modality>,
-    capabilities: &ModelCapabilities,
-) -> Result<(), ModelError> {
     for modality in required {
         if !capabilities.input_modalities.contains(&modality) {
             return Err(ModelError {
