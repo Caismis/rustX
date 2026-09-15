@@ -68,6 +68,7 @@ pub(crate) struct SessionDeletePreview {
     pub name: Option<String>,
     pub target_revision: String,
     pub scopes: Vec<DeletionScope>,
+    pub upload_workspaces: Vec<PathBuf>,
 }
 /// Pre-commit safety rejection. No force path exists.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +117,7 @@ pub(crate) struct DeletionRecord {
     pub session_id: SessionId,
     pub target_revision: String,
     pub scopes: Vec<DeletionScope>,
+    pub upload_workspaces: Vec<PathBuf>,
 }
 /// An owned cleanup capability. It never borrows a catalog or root snapshot.
 #[derive(Debug)]
@@ -177,6 +179,9 @@ impl CleanupWork {
             drop(guard);
             #[cfg(test)]
             process_gate("cleanup_item");
+        }
+        for workspace in &self.record.upload_workspaces {
+            super::uploads::cleanup(workspace, &self.record.session_id)?;
         }
         Ok(())
     }
@@ -271,15 +276,26 @@ impl SessionCatalog {
         SessionDeletePreview {
             session_id: preflight.session_id().clone(),
             name: self.document.sessions[preflight.session_id()].name.clone(),
-            target_revision: preflight.ownership_revision().iter().fold(
-                String::with_capacity(64),
-                |mut text, b| {
-                    use std::fmt::Write;
-                    write!(&mut text, "{b:02x}").expect("write string");
-                    text
-                },
-            ),
+            target_revision: {
+                use sha2::{Digest, Sha256};
+                let mut hash = Sha256::new();
+                hash.update(preflight.ownership_revision());
+                hash.update(
+                    serde_json::to_vec(&self.document.sessions[preflight.session_id()].uploads)
+                        .expect("upload metadata serializes"),
+                );
+                hash.finalize()
+            }
+            .iter()
+            .fold(String::with_capacity(64), |mut text, b| {
+                use std::fmt::Write;
+                write!(&mut text, "{b:02x}").expect("write string");
+                text
+            }),
             scopes,
+            upload_workspaces: self.document.sessions[preflight.session_id()]
+                .uploads
+                .roots(),
         }
     }
     /// Return a finite snapshot and release all exclusion before confirmation.
@@ -322,6 +338,7 @@ impl SessionCatalog {
             session_id: id.clone(),
             target_revision: preview.target_revision,
             scopes: preview.scopes,
+            upload_workspaces: preview.upload_workspaces,
         };
         let mut next = self.document.clone();
         next.sessions.remove(id);
@@ -554,6 +571,17 @@ pub(super) fn validate_records(document: &CatalogDocument) -> Result<(), Session
     let mut nodes = BTreeSet::new();
     for (id, record) in &document.deletions {
         validate_id(id.as_str(), "deleted session")?;
+        if record.upload_workspaces.iter().any(|path| {
+            !path.is_absolute()
+                || path.components().any(|c| {
+                    !matches!(
+                        c,
+                        std::path::Component::RootDir | std::path::Component::Normal(_)
+                    )
+                })
+        }) {
+            return Err(invalid());
+        }
         if *id != record.session_id
             || document.sessions.contains_key(id)
             || record.scopes.is_empty()

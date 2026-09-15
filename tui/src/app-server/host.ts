@@ -38,7 +38,7 @@ import {
   type SessionId,
   type SurfaceRevision,
   type MessageId,
-  type UserContentBlock,
+  type UserInputBlock,
 } from "../protocol/app-server.ts";
 import { AppServerClient } from "./client.ts";
 import {
@@ -69,7 +69,7 @@ export type ProcessOwnership =
 export interface SessionTransition {
   session: SessionSnapshot;
   /** Fork/tree content selected before publication; never canonical history. */
-  editorContent?: UserContentBlock[];
+  editorContent?: UserInputBlock[];
   /** Present only when the transition committed before durability was certain. */
   durabilityDiagnostic?: string;
 }
@@ -496,7 +496,7 @@ export class AppServerHost {
 
 function transitionOf(result: {
   session: SessionSnapshot;
-  editor_content?: UserContentBlock[] | null;
+  editor_content?: UserInputBlock[] | null;
   durability_diagnostic?: string | null;
 }): SessionTransition {
   return {

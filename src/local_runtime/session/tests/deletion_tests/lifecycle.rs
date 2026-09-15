@@ -850,6 +850,7 @@ fn deletion_protocol_projection_is_bounded_for_large_frozen_graphs() {
             }))
             .collect();
         let preview = SessionDeletePreview {
+            upload_workspaces: vec![],
             session_id: SessionId::new("session-1"),
             name: Some("x".repeat(10_000)),
             target_revision: "a".repeat(64),
@@ -867,6 +868,7 @@ fn deletion_protocol_projection_is_bounded_for_large_frozen_graphs() {
         assert!(text.len() < 600);
         assert!(!text.contains("scopes"));
         let record = DeletionRecord {
+            upload_workspaces: vec![],
             session_id: SessionId::new("session-1"),
             target_revision: "a".repeat(64),
             scopes,

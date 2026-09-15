@@ -2784,7 +2784,7 @@ impl<'a> AgentExecution<'a> {
                 &effective_system_prompt,
             )
             .map_err(|error| Self::context_failure_terminal(&error))?;
-        let request_messages = crate::model::input::assemble_model_input(
+        let mut request_messages = crate::model::input::assemble_model_input(
             &active,
             staged_context,
             carryover.as_ref(),
@@ -2796,6 +2796,11 @@ impl<'a> AgentExecution<'a> {
                 format!("request-only context cannot be assembled: {error}"),
             ))
         })?;
+        let upload_projection = self
+            .context_runtime
+            .engine
+            .project_uploads(&mut request_messages)
+            .map_err(|error| Self::context_failure_terminal(&error))?;
         let request = self.model_request_from_projection(&projection, request_messages);
         let accepted = self.accepted_context.as_ref().ok_or_else(|| {
             Self::context_failure_terminal(&ContextError::new(
@@ -2833,6 +2838,7 @@ impl<'a> AgentExecution<'a> {
                 .map(crate::conversation::message_id_of)
                 .collect(),
         );
+        snapshot.upload_projection = upload_projection;
         if let Some(frozen_carryover) = self.frozen_carryover.as_ref() {
             snapshot.unresolved_output_carryover_source =
                 Some(frozen_carryover.full.source_stream_id.clone());

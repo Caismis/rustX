@@ -1585,7 +1585,8 @@ fn translate_user_message(
                     },
                 ));
             }
-            crate::message::types::UserContentBlock::Image(_)
+            crate::message::types::UserContentBlock::UploadedFile(_)
+            | crate::message::types::UserContentBlock::Image(_)
             | crate::message::types::UserContentBlock::File(_) => {
                 return Err(unsupported(
                     "OpenAI Chat Completions cannot represent canonical image/file references without artifact resolution",

@@ -298,6 +298,7 @@ impl ConversationRuntimeConfig {
 /// replaced.
 #[derive(Clone)]
 pub struct ConversationToolRuntime {
+    pub(crate) uploads: Option<Arc<dyn crate::model::uploads::UploadProjectionResolver>>,
     workflows: crate::runtime::workflow::read_model::WorkflowReadModel,
     conversation_id: ConversationId,
     workspace: Workspace,
@@ -529,6 +530,7 @@ impl ConversationToolRuntime {
             .goal()
             .map(|_| crate::goal::GoalDomain::new(durable_binding.full_store(), mailbox.wake()));
         Ok(Self {
+            uploads: None,
             _lifecycle: config.lifecycle,
             workflows: crate::runtime::workflow::read_model::WorkflowReadModel::new(
                 conversation_id.clone(),

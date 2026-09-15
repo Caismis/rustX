@@ -81,7 +81,7 @@ import {
   type SubagentId,
   type SurfaceRevision,
   type ToolExecutionId,
-  type UserContentBlock,
+  type UserInputBlock,
 } from "../protocol/app-server.ts";
 import {
   mergeTranscriptPage,
@@ -265,7 +265,7 @@ export class AppServerSession {
 
   /** Submits one inbound message. Acceptance, never completion. */
   async submitInbound(
-    content: UserContentBlock[],
+    content: UserInputBlock[],
   ): Promise<{ messageId: string; sequence: string }> {
     const accepted = await this.#client.call(
       "turn/start",

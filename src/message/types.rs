@@ -644,11 +644,13 @@ impl ContextKind {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[derive(schemars::JsonSchema)]
 pub enum UserContentBlock {
+    /// Session-owned workspace upload, independent of managed Tool artifacts.
+    UploadedFile(crate::message::content::UploadedFileRef),
     /// Plain text.
     Text(TextBlock),
-    /// An image reference.
+    /// A Tool-generated managed image notification, never a human upload.
     Image(ImageReference),
-    /// A file reference.
+    /// A Tool-generated managed file notification, never a human upload.
     File(FileReference),
 }
 

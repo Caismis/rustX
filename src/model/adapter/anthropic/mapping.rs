@@ -427,7 +427,9 @@ fn translate_messages(
                                 "text": text.text,
                             }));
                         }
-                        UserContentBlock::Image(_) | UserContentBlock::File(_) => {
+                        UserContentBlock::UploadedFile(_)
+                        | UserContentBlock::Image(_)
+                        | UserContentBlock::File(_) => {
                             return Err(unsupported(
                                 "Anthropic cannot represent canonical image/file references                                  without artifact resolution",
                             ));

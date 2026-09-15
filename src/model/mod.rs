@@ -89,3 +89,5 @@ pub use types::{ModelProtocol, ModelRequest, ModelUsage, UsageDetails};
 pub(crate) fn chat_protocol() -> ModelProtocol {
     ModelProtocol::OpenAiChatCompletions
 }
+
+pub mod uploads;

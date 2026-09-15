@@ -1850,7 +1850,7 @@ impl RuntimeInner {
         assembly: crate::context::ContextAssembly,
         model_timeout_policy: ModelTimeoutPolicy,
     ) -> Result<ContextRuntime, crate::context::ContextError> {
-        ContextRuntime::for_attempt_with_assembly(
+        let mut context = ContextRuntime::for_attempt_with_assembly(
             self.context.policy,
             Arc::clone(&self.context.estimator),
             self.context
@@ -1861,7 +1861,11 @@ impl RuntimeInner {
             model,
             model_timeout_policy,
             Arc::clone(&self.monotonic_clock),
-        )
+        )?;
+        if let Some(owner) = &self.tool_runtime.uploads {
+            context.engine.set_upload_resolver(owner.clone());
+        }
+        Ok(context)
     }
 
     fn approval_mode_state(state: &CoordinatorState) -> ApprovalModeState {

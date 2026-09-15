@@ -850,7 +850,9 @@ fn text_of(content: &[UserContentBlock]) -> String {
         .iter()
         .map(|block| match block {
             UserContentBlock::Text(text) => text.text.clone(),
-            UserContentBlock::Image(_) | UserContentBlock::File(_) => String::new(),
+            UserContentBlock::UploadedFile(_)
+            | UserContentBlock::Image(_)
+            | UserContentBlock::File(_) => String::new(),
         })
         .collect()
 }

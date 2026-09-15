@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
 import { AppServerHost } from '../../../tui/src/app-server/host';
 
-test('native history, rich settlement, real image decode/lightbox, reconnect and admission refusal', async ({ page }) => {
+test('native history, rich settlement, real image decode/lightbox, reconnect and native upload receipts', async ({ page }) => {
   const fixture = await startDogfood('web_chat_history');
   let passed = false;
   const errors: string[] = [];
@@ -95,10 +95,12 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await page.getByLabel('Message', { exact: true }).fill('Keep this draft');
     await page.getByLabel('Attach files').setInputFiles({ name: 'note.txt', mimeType: 'text/plain', buffer: Buffer.from('file content') });
     await page.getByRole('button', { name: 'Send', exact: true }).click();
-    await expect(page.getByRole('alert')).toContainText('does not support');
-    await expect(page.getByLabel('Message', { exact: true })).toHaveValue('Keep this draft');
-    await expect(page.getByRole('button', { name: 'Remove note.txt' })).toBeVisible();
-    await page.getByRole('button', { name: 'Remove note.txt' }).click();
+    await expect(page.getByText('Uploaded workspace file received.', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('Message', { exact: true })).toHaveValue('');
+    await expect(page.getByLabel('Canonical conversation').getByText('note.txt', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Reconnect', exact: true }).click();
+    await expect(page.locator('.status strong')).toHaveText('connected');
+    await expect(page.getByLabel('Canonical conversation').getByText('note.txt', { exact: true })).toBeVisible();
     await page.getByLabel('Message', { exact: true }).fill('Image please');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     const canonical = page.getByLabel('Canonical conversation');
@@ -135,7 +137,7 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await expect(trajectory.locator(`[data-trace-id="${stableToolId}"]`)).toHaveCount(1);
     expect(await trajectory.innerText()).not.toContain(fixture.workspaceA);
     await page.getByRole('tab', { name: 'Chat', exact: true }).click();
-    expect((await fixture.control('requests')).requests).toHaveLength(36);
+    expect((await fixture.control('requests')).requests).toHaveLength(37);
     await page.screenshot({ path: 'test-results/chat-history.png', fullPage: true });
     expect(errors).toEqual([]); passed = true;
   } catch (error) {

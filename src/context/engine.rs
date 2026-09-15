@@ -377,6 +377,7 @@ impl EstimateCorrection {
 /// The deterministic context engine.
 #[derive(Clone)]
 pub struct ContextEngine {
+    uploads: Option<Arc<dyn crate::model::uploads::UploadProjectionResolver>>,
     config: ContextConfig,
     estimator: Arc<dyn TokenEstimator>,
 }
@@ -386,6 +387,7 @@ impl core::fmt::Debug for ContextEngine {
         formatter
             .debug_struct("ContextEngine")
             .field("config", &self.config)
+            .field("uploads", &self.uploads)
             .field("estimator", &"<opaque token estimator>")
             .finish()
     }
@@ -412,7 +414,33 @@ impl ContextEngine {
                 ),
             ));
         }
-        Ok(Self { config, estimator })
+        Ok(Self {
+            config,
+            estimator,
+            uploads: None,
+        })
+    }
+
+    pub(crate) fn set_upload_resolver(
+        &mut self,
+        owner: Arc<dyn crate::model::uploads::UploadProjectionResolver>,
+    ) {
+        self.estimator = Arc::new(UploadEstimator {
+            inner: self.estimator.clone(),
+            owner: owner.clone(),
+        });
+        self.uploads = Some(owner);
+    }
+    pub(crate) fn project_uploads(
+        &self,
+        messages: &mut [ModelInputMessage],
+    ) -> Result<crate::model::uploads::UploadProjection, ContextError> {
+        let projection = match &self.uploads {
+            Some(owner) => owner.resolve(messages).map_err(|e| malformed(&e))?,
+            None => crate::model::uploads::UploadProjection::default(),
+        };
+        projection.apply(messages).map_err(|e| malformed(&e))?;
+        Ok(projection)
     }
 
     /// The engine configuration.
@@ -570,6 +598,7 @@ impl ContextEngine {
         let (messages, _) = state
             .structure()
             .map_err(|error| conversation_failed(&error))?;
+        self.project_uploads(&mut canonical_input(&messages))?;
         Ok(self.measured_projection(
             state.revision(),
             messages,
@@ -1123,4 +1152,43 @@ fn cannot_fit(
             config.context_window_tokens, config.reserve_tokens
         ),
     )
+}
+
+struct UploadEstimator {
+    inner: Arc<dyn TokenEstimator>,
+    owner: Arc<dyn crate::model::uploads::UploadProjectionResolver>,
+}
+impl TokenEstimator for UploadEstimator {
+    fn estimate_input(
+        &self,
+        messages: &[ModelInputMessage],
+        prompt: &str,
+        tools: &[ModelToolDefinition],
+    ) -> u64 {
+        let mut rendered = messages.to_vec();
+        let Ok(projection) = self.owner.resolve(messages) else {
+            return u64::MAX;
+        };
+        if projection.apply(&mut rendered).is_err() {
+            return u64::MAX;
+        }
+        self.inner.estimate_input(&rendered, prompt, tools)
+    }
+    fn estimate_conversation_input(&self, messages: &[MessageBlock]) -> u64 {
+        let mut rendered = canonical_input(messages);
+        let Ok(projection) = self.owner.resolve(&rendered) else {
+            return u64::MAX;
+        };
+        if projection.apply(&mut rendered).is_err() {
+            return u64::MAX;
+        }
+        let canonical = rendered
+            .into_iter()
+            .filter_map(|m| match m {
+                ModelInputMessage::Canonical(m) => Some(m),
+                ModelInputMessage::RequestOnly(_) => None,
+            })
+            .collect::<Vec<_>>();
+        self.inner.estimate_conversation_input(&canonical)
+    }
 }

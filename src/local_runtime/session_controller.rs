@@ -4,6 +4,7 @@ use super::session::{
     SessionPersistentState, SessionSnapshot,
 };
 use crate::durable::ConversationStore;
+use crate::message::types::{MessageBlock, UserContentBlock};
 use crate::runtime::local_storage::{ConversationAccess, ProductController};
 use std::sync::Arc;
 
@@ -12,7 +13,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionTransitionResult {
     pub session: SessionSnapshot,
-    pub editor_content: Option<Vec<crate::message::types::UserContentBlock>>,
+    pub editor_content: Option<Vec<super::session::uploads::UserInputBlock>>,
     pub durability_diagnostic: Option<String>,
 }
 
@@ -56,6 +57,15 @@ pub struct SessionAccess {
 /// ```
 #[derive(Clone, Debug)]
 pub struct SessionController {
+    #[cfg(test)]
+    pub(crate) upload_commit_gate:
+        Arc<std::sync::Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>>,
+    #[cfg(test)]
+    pub(crate) copy_upload_gate:
+        Arc<std::sync::Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>>,
+    #[cfg(test)]
+    pub(crate) copy_publication_gate:
+        Arc<std::sync::Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>>,
     pub(crate) catalog: Arc<tokio::sync::Mutex<SessionCatalog>>,
     // Allocation of the one process runtime owner, not ownership of its registry.
     pub(crate) runtime_owner: Arc<std::sync::OnceLock<()>>,
@@ -68,6 +78,81 @@ pub struct SessionController {
     copy_gate: Arc<std::sync::Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>>,
 }
 impl SessionController {
+    /// Commit a transport-independent batch to the addressed Session workspace.
+    /// # Errors
+    /// Invalid names, stale Session authority and durability failures are explicit.
+    /// # Panics
+    /// Panics only if internal allocation invariants or test gates are corrupted.
+    pub async fn upload(
+        &self,
+        id: &SessionId,
+        node: Option<&SessionNodeId>,
+        files: Vec<super::session::uploads::UploadFile>,
+    ) -> Result<Vec<super::session::uploads::UploadedFile>, SessionError> {
+        let _preparation = self.preparation.lock().await;
+        let access = self.acquire_session(id, node).await?;
+        let fail = |e: std::io::Error| SessionError::Catalog {
+            detail: e.to_string(),
+        };
+        let workspace = access.settings.cwd.canonicalize().map_err(fail)?;
+        if workspace.to_str().is_none() {
+            return Err(SessionError::Catalog {
+                detail: "upload workspace must be UTF-8".into(),
+            });
+        }
+        let mut registry = self.catalog.lock().await.upload_registry(id)?;
+        let batch = registry.claim(workspace, &files).map_err(fail)?;
+        // Durable ownership first. Even failed materialization is deletion work.
+        self.catalog
+            .lock()
+            .await
+            .commit_uploads(id, registry.clone())?;
+        registry.materialize(id, &batch, &files).map_err(fail)?;
+        #[cfg(test)]
+        {
+            let gate = self.upload_commit_gate.lock().unwrap().clone();
+            if let Some(gate) = gate {
+                tokio::task::spawn_blocking(move || gate.enter())
+                    .await
+                    .unwrap();
+            }
+        }
+        registry.verify_materialized(id, &batch).map_err(fail)?;
+        registry
+            .allocations
+            .get_mut(&batch)
+            .expect("claimed batch")
+            .ready = true;
+        // Semantic commit point: synced complete files plus durable ready registry.
+        self.catalog
+            .lock()
+            .await
+            .commit_uploads(id, registry.clone())?;
+        registry.receipts(id, &batch).map_err(fail)
+    }
+
+    /// Validate server receipts and author typed canonical content.
+    /// # Errors
+    /// Unknown, incomplete and cross-Session receipts are rejected.
+    pub async fn uploaded_content(
+        &self,
+        id: &SessionId,
+        receipts: &[super::session::uploads::UploadReceipt],
+    ) -> Result<Vec<crate::message::types::UserContentBlock>, SessionError> {
+        let registry = self.catalog.lock().await.upload_registry(id)?;
+        receipts
+            .iter()
+            .map(|receipt| {
+                registry
+                    .receipt_ref(id, receipt)
+                    .map(crate::message::types::UserContentBlock::UploadedFile)
+                    .map_err(|e| SessionError::Catalog {
+                        detail: e.to_string(),
+                    })
+            })
+            .collect()
+    }
+
     /// Open one root without selecting, resolving, or composing a Session.
     /// # Errors
     /// Competing controllers, invalid schemas and storage failures are explicit.
@@ -83,10 +168,17 @@ impl SessionController {
             None => SessionCatalog::empty(&controller)?,
         };
         catalog.retain_lifecycle(controller);
+        catalog.recover_upload_preparations()?;
         Ok(Self::new(catalog))
     }
     pub(crate) fn new(catalog: SessionCatalog) -> Self {
         Self {
+            #[cfg(test)]
+            upload_commit_gate: Arc::default(),
+            #[cfg(test)]
+            copy_upload_gate: Arc::default(),
+            #[cfg(test)]
+            copy_publication_gate: Arc::default(),
             catalog: Arc::new(tokio::sync::Mutex::new(catalog)),
             runtime_owner: Arc::default(),
             preparation: Arc::new(tokio::sync::Mutex::new(())),
@@ -269,6 +361,7 @@ impl SessionController {
     ) -> Result<SessionTransitionResult, SessionError> {
         self.copy_lineage(id, node, revision, boundary, false).await
     }
+    #[allow(clippy::too_many_lines)] // One prepare/copy/publication transaction.
     pub(crate) async fn copy_lineage(
         &self,
         id: &SessionId,
@@ -297,6 +390,24 @@ impl SessionController {
                 .load_surface_history(revision)
                 .map_err(SessionError::Store)?,
         };
+        self.copy_admitted_lineage(id, &access.node, &access.settings, &source, boundary, tree)
+            .await
+    }
+
+    /// Both durable and already-attached callers retain their allocation access
+    /// and the preparation mutex before entering this one lifecycle owner.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) async fn copy_admitted_lineage(
+        &self,
+        id: &SessionId,
+        node: &SessionNode,
+        settings: &SessionPersistentState,
+        source: &super::session::HistoricalConversationSnapshot,
+        boundary: Option<&crate::runtime::identity::MessageId>,
+        tree: bool,
+    ) -> Result<SessionTransitionResult, SessionError> {
+        let snapshot = self.catalog.lock().await.clone();
+        let revision = source.surface_revision;
         #[cfg(test)]
         {
             let gate = self.copy_gate.lock().unwrap().clone();
@@ -306,41 +417,134 @@ impl SessionController {
                     .unwrap();
             }
         }
-        let (prepared, editor_content, origin) = if let Some(message) = boundary {
+        let (mut prepared, editor_content, origin) = if let Some(message) = boundary {
             let (prepared, editor) = if tree {
-                snapshot.prepare_tree_node_at_user_message(
-                    id,
-                    &access.settings,
-                    &source,
-                    message,
-                )?
+                snapshot.prepare_tree_node_at_user_message(id, settings, source, message)?
             } else {
-                snapshot.prepare_fork_session(&access.settings, &source, message)?
+                snapshot.prepare_fork_session(settings, source, message)?
             };
             (
                 prepared,
                 Some(editor),
                 super::session::SessionNodeOrigin::Fork {
                     source_session: id.clone(),
-                    source_node: access.node.id.clone(),
+                    source_node: node.id.clone(),
                     source_surface_revision: revision,
                     source_user_message: message.clone(),
                 },
             )
         } else {
             (
-                snapshot.prepare_clone_session(&access.settings, &source)?,
+                snapshot.prepare_clone_session(settings, source)?,
                 None,
                 super::session::SessionNodeOrigin::Clone {
                     source_session: id.clone(),
-                    source_node: access.node.id.clone(),
+                    source_node: node.id.clone(),
                     source_surface_revision: revision,
                 },
             )
         };
+        if !tree {
+            let claim = self
+                .catalog
+                .lock()
+                .await
+                .claim_upload_preparation(&prepared.session_id, &[]);
+            if let Err(error) = claim {
+                // A visible claim is retained for recovery; a failed claim owns
+                // no uploads yet and the inert native seed can be discarded.
+                if !error.committed() {
+                    snapshot.discard_prepared_session(&prepared)?;
+                }
+                return Err(error);
+            }
+        }
+        let editor_result = async {
+            let registry =
+                if tree {
+                    snapshot.upload_registry(id)?
+                } else {
+                    let destination = crate::durable::SqliteConversationStore::open_existing(
+                        prepared.conversation_id.clone(),
+                        &prepared.database_path,
+                    )
+                    .map_err(SessionError::Store)?;
+                    let messages = destination.load_canonical().map_err(SessionError::Store)?;
+                    let references = messages
+                        .iter()
+                        .filter_map(|m| match m {
+                            MessageBlock::User(u) => Some(u.content.as_slice()),
+                            _ => None,
+                        })
+                        .chain(editor_content.as_deref())
+                        .flatten()
+                        .filter_map(|b| match b {
+                            UserContentBlock::UploadedFile(f) => Some(f.clone()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    if !references.is_empty() {
+                        let workspace = prepared.state.cwd.canonicalize().map_err(|e| {
+                            SessionError::Catalog {
+                                detail: e.to_string(),
+                            }
+                        })?;
+                        self.catalog
+                            .lock()
+                            .await
+                            .claim_upload_workspace(&prepared.session_id, &workspace)?;
+                        prepared.uploads = snapshot
+                            .upload_registry(id)?
+                            .copy_required(id, &prepared.session_id, &workspace, &references)
+                            .map_err(|e| SessionError::Catalog {
+                                detail: e.to_string(),
+                            })?;
+                        #[cfg(test)]
+                        {
+                            let gate = self.copy_upload_gate.lock().unwrap().clone();
+                            if let Some(gate) = gate {
+                                tokio::task::spawn_blocking(move || gate.enter())
+                                    .await
+                                    .unwrap();
+                            }
+                        }
+                        prepared
+                            .uploads
+                            .verify_all_materialized(&prepared.session_id)
+                            .map_err(|e| SessionError::Catalog {
+                                detail: e.to_string(),
+                            })?;
+                    }
+                    prepared.uploads.clone()
+                };
+            editor_content
+                .as_ref()
+                .map(|content| {
+                    registry
+                        .editor_input(&prepared.session_id, content)
+                        .map_err(|e| SessionError::Catalog {
+                            detail: e.to_string(),
+                        })
+                })
+                .transpose()
+        }
+        .await;
+        let editor_content = match editor_result {
+            Ok(editor) => editor,
+            Err(error) => return Err(self.discard_failed_copy(&prepared, tree, error).await),
+        };
+        #[cfg(test)]
+        {
+            let gate = self.copy_publication_gate.lock().unwrap().clone();
+            if let Some(gate) = gate {
+                tokio::task::spawn_blocking(move || gate.enter())
+                    .await
+                    .unwrap();
+            }
+        }
         let mut catalog = self.catalog.lock().await;
         let result = if tree {
-            catalog.publish_node(id, &prepared, access.node.id.clone(), origin)
+            catalog.publish_node(id, &prepared, node.id.clone(), origin)
         } else {
             catalog.publish_session(&prepared, origin)
         };
@@ -350,13 +554,45 @@ impl SessionController {
                 catalog.snapshot(if tree { id } else { &prepared.session_id })?,
                 Some(error.to_string()),
             ),
-            Err(error) => return Err(error),
+            Err(error) => {
+                drop(catalog);
+                return Err(self.discard_failed_copy(&prepared, tree, error).await);
+            }
         };
         Ok(SessionTransitionResult {
             session,
             editor_content,
             durability_diagnostic: diagnostic,
         })
+    }
+    /// One lifecycle owner consumes a claim only after the entire frozen private
+    /// workset is gone. Node cleanup never acquires Session deletion authority.
+    async fn discard_failed_copy(
+        &self,
+        prepared: &super::session::PreparedLineage,
+        tree: bool,
+        operation: SessionError,
+    ) -> SessionError {
+        let snapshot = self.catalog.lock().await.clone();
+        let cleanup = if tree {
+            snapshot.discard_prepared_node(prepared)
+        } else {
+            match snapshot.cleanup_upload_preparation(&prepared.session_id) {
+                Ok(()) => self
+                    .catalog
+                    .lock()
+                    .await
+                    .finish_upload_preparation(&prepared.session_id),
+                Err(error) => Err(error),
+            }
+        };
+        match cleanup {
+            Ok(()) => operation,
+            Err(cleanup) => SessionError::PreparationCleanupPending {
+                operation: Box::new(operation),
+                cleanup: Box::new(cleanup),
+            },
+        }
     }
     /// Read explicit selections and their CAS revision without resolving them.
     /// # Errors
@@ -576,7 +812,7 @@ mod tests {
         assert_eq!(reads.1.sessions.len(), 2);
         let bytes = std::fs::read(root.path().join("sessions/catalog.json")).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(json["schema_version"], 8);
+        assert_eq!(json["schema_version"], 9);
         assert!(json.get("active_session").is_none());
         assert!(
             serde_json::to_value(&reads.1.sessions)
@@ -866,10 +1102,11 @@ mod tests {
         let copied = fork.await.unwrap().unwrap();
         assert_eq!(
             copied.editor_content.unwrap(),
-            match user("boundary") {
-                crate::message::types::MessageBlock::User(message) => message.content,
-                _ => unreachable!(),
-            }
+            vec![super::super::session::uploads::UserInputBlock::Text(
+                crate::message::content::TextBlock {
+                    text: "boundary".into()
+                }
+            )]
         );
         let path = controller
             .catalog
