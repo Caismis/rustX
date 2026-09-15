@@ -398,14 +398,24 @@ describe("local self-hosted mode: one owned App Server child over stdio", { skip
     // unknown outcome — not a failure, and never something to resend.
     assert.ok(failure instanceof UncertainOutcomeError, String(failure));
     assert.ok(failure.transportFailure instanceof TransportClosedError);
-    assert.match(
-      failure.transportFailure.message,
-      /App Server process exited|closed its transport output stream/,
-    );
+    // SIGKILL can be observed first by the pending pipe write, stdout EOF,
+    // or the process-exit callback. These are all transport facts; callback
+    // ordering does not change the mutation's uncertain outcome.
+    if (failure.transportFailure.reason === "write_error") {
+      const cause = failure.transportFailure.cause;
+      assert.ok(cause instanceof Error && "code" in cause);
+      assert.equal(cause.code, "EPIPE");
+    } else {
+      assert.ok(
+        failure.transportFailure.reason === "process_exit" ||
+        failure.transportFailure.reason === "input_eof",
+        failure.transportFailure.reason,
+      );
+    }
     // Nothing here claims a turn settled, an interaction was answered, or a
     // tool completed. The client only lost its ability to observe.
     assert.ok(client.closed);
-    await child.waitOrTerminate(2_000);
+    assert.deepEqual(await child.wait(), { code: null, signal: "SIGKILL" });
   });
 });
 

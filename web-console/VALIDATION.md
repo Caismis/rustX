@@ -488,3 +488,10 @@ no unrelated storage behavior was changed in this repair.
 
 The complete external rerun passed: 23 conformance, 116 durable, 52 process,
 53 subagent and 157 Tool tests. Final Web E2E: 6 passed (24.6 seconds).
+
+CI run 34932328314 found a TUI integration assertion that allowed only process
+exit/EOF prose after SIGKILL. A pending write can instead observe EPIPE first;
+its typed `UncertainOutcomeError` and `TransportClosedError` were already correct.
+The test now checks `process_exit`/`input_eof`, or strictly `write_error` with an
+EPIPE cause, and separately awaits/asserts the actual SIGKILL child exit. It
+changes no transport or runtime semantics and introduces no delay/replay.
