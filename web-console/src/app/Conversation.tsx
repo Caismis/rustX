@@ -1,7 +1,8 @@
-import type { RuntimeClientSnapshot } from '../../../protocol/app-server/v1';
+import type { RuntimeClientSnapshot } from '../../../protocol/app-server/v2';
 import type { AppServerClient, ClientView, SessionView } from '../client/app-server';
 import { interactionKey } from '../client/app-server';
 import { conversation, json } from '../bindings/projection';
+import { SubagentCard, WorkflowCard, workflowKey } from './components/ActivityCards';
 import { ToolArtifacts } from './components/Artifact';
 import { MessageItem } from './components/MessageItem';
 import { ToolRow } from './components/ToolRow';
@@ -45,9 +46,9 @@ export function RuntimeFacts({ snapshot }: { snapshot: RuntimeClientSnapshot }) 
       output={'result' in tool.state ? json(tool.state.result) : 'progress' in tool.state ? json(tool.state.progress) : undefined} />
       {'result' in tool.state && <ToolArtifacts result={tool.state.result} />}
     </div>)}
-    {background.map(tool => <ToolRow key={tool.execution_id} title={tool.tool_name} summary={`${tool.state} · ${tool.execution_id}`} output={tool.result ? json(tool.result) : undefined} running={tool.state === 'running'} />)}
-    {children.map(child => <details key={child.subagent_id}><summary>Subagent · {child.agent} · {child.subagent_id}</summary><pre>{json(child)}</pre></details>)}
-    {workflows.map(workflow => <details key={json(workflow.id)}><summary>Workflow · {workflow.workflow_id} · {workflow.state.type}</summary><pre>{json(workflow)}</pre></details>)}
+    {background.map(tool => <div key={tool.execution_id} data-execution-id={tool.execution_id}><ToolRow title={tool.tool_name} summary={`${tool.state} · ${tool.execution_id}`} output={tool.result ? json(tool.result) : undefined} running={tool.state === 'running'} />{tool.result && <ToolArtifacts result={tool.result} />}</div>)}
+    {children.map(child => <SubagentCard key={child.subagent_id} child={child} />)}
+    {workflows.map(workflow => <WorkflowCard key={workflowKey(workflow.id)} run={workflow} />)}
     {!!snapshot.statuses?.length && <details><summary>Agent Status ({snapshot.statuses.length})</summary><pre>{json(snapshot.statuses)}</pre></details>}
   </section>;
 }

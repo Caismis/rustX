@@ -157,7 +157,6 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         Method::ArtifactUpload {
             target: target.clone(),
             data: "aGk=".into(),
-            modality: crate::model::catalog::Modality::File,
         },
         Method::SessionSubscribe {
             target: target.clone(),
@@ -445,7 +444,7 @@ mod tests {
     fn committed_rust_artifacts_are_current() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server");
         assert_eq!(
-            std::fs::read_to_string(root.join("v1.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v2.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

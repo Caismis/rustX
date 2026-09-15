@@ -3,8 +3,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ArtifactResources, ARTIFACT_MAX_BYTES } from '../src/client/artifacts';
 import { Artifact, ArtifactContext } from '../src/app/components/Artifact';
 import { InputBar } from '../src/app/components/InputBar';
-import type { SessionModelView } from '../../protocol/app-server/v1';
-import { Server } from './fixture';
+import type { SessionModelView } from '../../protocol/app-server/v2';
+import { Server, snapshot } from './fixture';
 let server: Server;
 let sequence = 0;
 const create = vi.fn(() => `blob:${++sequence}`), revoke = vi.fn();
@@ -66,18 +66,18 @@ const model = (supported: boolean): SessionModelView => {
   return { configured: { model: 'fixture/model' }, summary: { mode: 'session' }, effective: { model: 'fixture/model', protocol: 'openai_chat_completions', contextWindow: 128000, modelMaxOutputTokens: 4096, maxOutputTokens: 4096, reasoningEnabled: false, capabilities: caps, declaredCapabilities: caps } };
 };
 it('effective modality refusal sends neither upload nor turn', async () => {
-  await server.attached('A'); server.held.add('settings/model');
+  await server.attached('A'); server.held.add('session/snapshot');
   const work = server.client.send('A', 'keep text', false, [new File(['x'], 'image.png', { type: 'image/png' })]);
-  server.socket.success(server.requests.at(-1)!.request, { type: 'model', model: model(false) });
+  server.socket.success(server.requests.at(-1)!.request, { type: 'snapshot', cursor: '1', snapshot: { ...snapshot(), model: model(false) } });
   await expect(work).rejects.toThrow('does not support');
   expect(server.requests.some(item => ['artifact/upload', 'turn/start'].includes(item.request.method))).toBe(false);
 });
 it('supported draft upload retains mixed order and sends one typed content sequence', async () => {
-  await server.attached('A'); server.held.add('settings/model'); server.held.add('artifact/upload');
+  await server.attached('A'); server.held.add('session/snapshot'); server.held.add('artifact/upload');
   const files = [new File(['x'], 'first.png', { type: 'image/png' }), new File(['y'], 'second.txt', { type: 'text/plain' })];
   for (const file of files) Object.defineProperty(file, 'arrayBuffer', { value: async () => new Uint8Array([1]).buffer });
   const work = server.client.send('A', 'text', false, files);
-  server.socket.success(server.requests.at(-1)!.request, { type: 'model', model: model(true) });
+  server.socket.success(server.requests.at(-1)!.request, { type: 'snapshot', cursor: '1', snapshot: { ...snapshot(), model: model(true) } });
   const first = await server.waitFor('artifact/upload', 1); server.socket.success(first, { type: 'artifact_uploaded', artifact_id: 'artifact_1' });
   const second = await server.waitFor('artifact/upload', 2); server.socket.success(second, { type: 'artifact_uploaded', artifact_id: 'artifact_2' });
   await work;
@@ -114,4 +114,25 @@ it('oversized upload drafts are rejected without any model or upload request', a
   const oversized = new File([new Uint8Array(ARTIFACT_MAX_BYTES + 1)], 'huge');
   await expect(server.client.send('A', 'keep text', false, [oversized])).rejects.toThrow('256 KiB');
   expect(server.requests).toHaveLength(before);
+});
+it('active Attempt preflight uses frozen capabilities even when Session changes', async () => {
+  await server.attached('A'); server.held.add('session/snapshot');
+  const work = server.client.send('A', 'steer draft', true, [new File(['x'], 'image.png', { type: 'image/png' })]);
+  server.socket.success(server.requests.at(-1)!.request, { type: 'snapshot', cursor: '2', snapshot: {
+    ...snapshot(), model: model(true), attempt: { attempt_id: 'a', turn: 1, phase: { type: 'running' }, model: { primary: model(false).effective, summary: { mode: 'session' } } },
+  } });
+  await expect(work).rejects.toThrow('does not support');
+  expect(server.requests.some(item => ['artifact/upload', 'turn/steer'].includes(item.request.method))).toBe(false);
+});
+it('Blob uses safe authoritative MIME while semantic image bytes may omit MIME', async () => {
+  await server.attached('A'); server.held.add('artifact/read');
+  const resources = new ArtifactResources(server.client, 'A');
+  for (const [mime, expected] of [['image/png', 'image/png'], ['text/html', ''], [undefined, '']] as const) {
+    const read = resources.read('artifact_1', mime);
+    server.socket.success(server.requests.at(-1)!.request, { type: 'artifact_bytes', data: 'aGk=' });
+    const url = await read;
+    expect((create.mock.calls.at(-1) as unknown as [Blob])[0].type).toBe(expected);
+    resources.release(url);
+  }
+  resources.dispose(); expect(revoke).toHaveBeenCalledTimes(3);
 });

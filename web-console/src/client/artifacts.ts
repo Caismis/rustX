@@ -10,7 +10,7 @@ export class ArtifactResources {
   private active = 0;
   private disposed = false;
   constructor(private client: AppServerClient, private sessionId: string) {}
-  async read(id: string): Promise<string> {
+  async read(id: string, mimeType?: string): Promise<string> {
     if (this.disposed) throw new Error('Obsolete artifact view');
     if (this.active >= ARTIFACT_MAX_TRANSFERS || this.urls.size + this.active >= ARTIFACT_MAX_URLS) throw new Error('Artifact capacity reached; close a preview and retry.');
     const target = this.client.target(this.sessionId);
@@ -22,11 +22,17 @@ export class ArtifactResources {
       const decoded = atob(result.data);
       if (decoded.length > ARTIFACT_MAX_BYTES) throw new Error('Artifact exceeds 256 KiB');
       const bytes = Uint8Array.from(decoded, c => c.charCodeAt(0));
-      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+      const url = URL.createObjectURL(new Blob([bytes], { type: safeArtifactMime(mimeType) }));
       this.urls.add(url);
       return url;
     } finally { this.active--; }
   }
   release(url: string) { if (this.urls.delete(url)) URL.revokeObjectURL(url); }
   dispose() { this.disposed = true; for (const url of this.urls) URL.revokeObjectURL(url); this.urls.clear(); }
+}
+
+/** Only inert media/text MIME values from typed metadata; never filename inference.
+ * Empty MIME lets Chromium decode semantic images directly from bounded bytes. */
+export function safeArtifactMime(mimeType?: string): string {
+  return mimeType && /^(image\/(png|jpeg|gif|webp|avif|bmp)|text\/plain|application\/(pdf|octet-stream))$/i.test(mimeType) ? mimeType : '';
 }

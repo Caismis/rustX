@@ -103,7 +103,8 @@ describe("initialization", () => {
   it("negotiates the protocol version once and records server capabilities", async () => {
     const { client, transport } = await initialized();
     const params = paramsOf(transport.log.matching("initialize")[0]!, "initialize");
-    assert.equal(params.protocol_version, APP_SERVER_PROTOCOL_VERSION);
+    assert.equal(APP_SERVER_PROTOCOL_VERSION, 2);
+    assert.equal(params.protocol_version, 2);
     assert.equal(params.client.name, "rustx-tui");
     assert.deepEqual(client.capabilities, CAPABILITIES);
     assert.equal(transport.log.count("initialize"), 1);
@@ -116,7 +117,7 @@ describe("initialization", () => {
     const error: RpcError = {
       code: -32000,
       message: "unsupported protocol version",
-      data: { kind: "unsupported_version", supported: 2, requested: 1 },
+      data: { kind: "unsupported_version", supported: 1, requested: 2 },
     };
     transport.respondError(request!.id, error);
 

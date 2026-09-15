@@ -720,6 +720,9 @@ impl ClientInner {
                 InboundAdmissionError::Inactive => RuntimeClientError::InvalidState {
                     message: "the conversation runtime is not activated".to_owned(),
                 },
+                InboundAdmissionError::UnsupportedContent { message } => {
+                    RuntimeClientError::InvalidRequest { message }
+                }
                 InboundAdmissionError::EmptyContent => RuntimeClientError::InvalidRequest {
                     message: "inbound content must not be empty".to_owned(),
                 },
@@ -1212,27 +1215,12 @@ impl ClientInner {
     pub(crate) fn artifact_upload(
         &self,
         data: &str,
-        modality: crate::model::catalog::Modality,
     ) -> Result<crate::runtime::identity::ArtifactId, RuntimeClientError> {
         use base64::Engine;
         self.ensure_session_runtime_live()?;
         let invalid = || RuntimeClientError::InvalidState {
             message: "artifact upload unsupported, invalid or exceeds 256 KiB".into(),
         };
-        let state = self.lock_state();
-        let snapshot = state.projection.snapshot_ref_checked()?;
-        if modality == crate::model::catalog::Modality::Text
-            || !snapshot.model.as_ref().is_some_and(|model| {
-                model
-                    .effective
-                    .capabilities
-                    .input_modalities
-                    .contains(&modality)
-            })
-        {
-            return Err(invalid());
-        }
-        drop(state);
         if data.len() > crate::tools::artifacts::ARTIFACT_TRANSFER_MAX.div_ceil(3) * 4 {
             return Err(invalid());
         }

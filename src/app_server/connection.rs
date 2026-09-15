@@ -714,14 +714,8 @@ async fn dispatch_runtime(
                 .artifact_read(&artifact_id)
                 .map_err(client_error)?,
         }),
-        Method::ArtifactUpload {
-            target: _,
-            data,
-            modality,
-        } => Ok(MethodResult::ArtifactUploaded {
-            artifact_id: authority
-                .artifact_upload(&data, modality)
-                .map_err(client_error)?,
+        Method::ArtifactUpload { target: _, data } => Ok(MethodResult::ArtifactUploaded {
+            artifact_id: authority.artifact_upload(&data).map_err(client_error)?,
         }),
         Method::ModelGet { target: _ } => native_result(authority.model_get()),
         Method::ModelCatalog { target: _ } => native_result(authority.model_catalog()),

@@ -49,7 +49,7 @@ reassign that ownership. No timeout or sleep determines layout correctness.
 ## Attachments
 
 The composer retains at most eight File drafts, each at most 256 KiB (2 MiB total).
-Pick/drop order is preserved. Effective capabilities come from `settings/model`;
+Pick/drop order is preserved. Preflight reads an authoritative `session/snapshot`: an active Attempt uses `attempt.model.primary`, otherwise `model.effective`;
 unsupported image/file input refuses before upload or turn admission, retaining
 text and files. Supported drafts upload sequentially and enter one typed
 `turn/start` (or native steer) content sequence with opaque artifact references.
@@ -68,7 +68,12 @@ Upload is a mutation: a lost response is uncertain and is never replayed. Read i
 a replaceable read. Transfer failure preserves drafts; retry is explicit. Aborted
 browser reads discard results after fencing. A completed but unused upload stays
 conversation-owned until Session deletion. No turn is manufactured to discover
-provider rejection. The native upload gate checks the effective modality too.
+provider rejection. Upload is storage-only and accepts no modality or model metadata.
+`ConversationRuntime::admit_sourced_inbound` validates canonical input with the
+model invocation validator while holding the coordinator lock shared by model
+mutation, Attempt admission/settlement and durable inbound acceptance. An active
+Attempt uses its immutable primary model; idle admission uses the current
+Session model. Native rejection remains authoritative if browser preflight races.
 
 Artifact allocation reserves and syncs each identity before returning it. Cold
 reopen scans reserved/written IDs; byte writers use create-new, never truncate.
@@ -86,3 +91,25 @@ replacement disposes all URLs and fences unresolved reads. A failed image never
 retries automatically. Draft preview URLs are separate, at most eight / 2 MiB,
 and are revoked when their draft card is removed/replaced/unmounted. Artifact
 payloads are omitted from the finite protocol diagnostic log.
+
+## WEB-02 review corrections
+
+The mandatory App Server vocabulary is v2 (`rustx.app-server.v2` and generated
+`protocol/app-server/v2.ts` / `v2.schema.json`). v1 initialization and v1-only
+WebSocket offers are rejected; there is no compatibility mode. Runtime Client
+retains its independently versioned contract.
+
+Foreground, background and canonical Tool results all expose their typed
+artifact galleries. Subagents and Workflows remain current/live adjuncts, with
+native identity, lifecycle, wait, bounded diagnostic and run-budget facts in
+product cards. No raw protocol dump serves as their primary Chat presentation.
+
+Artifact Blob construction accepts safe authoritative MIME values from typed
+Tool/file metadata. Semantic image references without MIME use an empty Blob
+MIME, allowing the browser image decoder to inspect bounded image bytes. No
+filename inference or durable browser metadata store is introduced. Real
+Chromium acceptance uses a stdio MCP Tool that returns a PNG through the native
+Tool result/artifact pipeline; it proves actual decode, original-image dialog
+and a fresh load after reconnect. Current providers remain text-only, so the
+subsequent model continuation is refused natively rather than translating image
+input into an unsupported provider request.

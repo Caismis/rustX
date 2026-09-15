@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v1 envelope and method vocabulary.
+//! Rust authority for the App Server v2 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,8 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 1;
+/// One version identifies the complete mandatory method vocabulary. No v1 compatibility.
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -84,7 +85,6 @@ pub enum Method {
     ArtifactUpload {
         target: AttachmentTarget,
         data: String,
-        modality: crate::model::catalog::Modality,
     },
     #[serde(rename = "settings/defaults")]
     DefaultsRead {

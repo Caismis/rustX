@@ -70,7 +70,7 @@ async fn initialize(connection: &AppServerConnection) {
         connection,
         0,
         Method::Initialize(InitializeParams {
-            protocol_version: 1,
+            protocol_version: 2,
             client: ClientIdentity {
                 name: "scripted".into(),
                 version: "1".into(),
@@ -648,10 +648,10 @@ async fn initialize_and_malformed_wire_are_transactional() {
         let connection = AppServerConnection::new(f.host.clone());
         let before = connection.handle_json(r#"{"jsonrpc":"2.0","id":0,"method":"server/info","params":{}}"#).await.unwrap();
         assert!(matches!(before, Response::Failure(Failure { error: RpcError { data: Some(ErrorData::NotInitialized), .. }, .. })));
-        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":99,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
+        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":1,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { .. })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 2, .. })));
         initialize(&connection).await;
         for (json, expected_code) in [
             (r#"{"jsonrpc":"2.0","id":1,"method":"missing","params":{}}"#, -32601),
@@ -1455,18 +1455,32 @@ async fn artifact_carrier_is_native_scoped_bounded_and_cold_reopen_safe() {
             },
         )
         .await;
-        rejected(
+        let uploaded = call(
             &connection,
+            910,
             Method::ArtifactUpload {
                 target: target.clone(),
                 data: "aGk=".into(),
-                modality: crate::model::catalog::Modality::Image,
             },
         )
         .await;
+        assert!(matches!(uploaded, MethodResult::ArtifactUploaded { .. }));
+        for data in [
+            "not base64!".to_owned(),
+            "A".repeat(crate::tools::artifacts::ARTIFACT_TRANSFER_MAX.div_ceil(3) * 4 + 1),
+        ] {
+            rejected(
+                &connection,
+                Method::ArtifactUpload {
+                    target: target.clone(),
+                    data,
+                },
+            )
+            .await;
+        }
         assert!(
             f.provider.request_bodies().is_empty(),
-            "unsupported upload never reaches provider"
+            "storage-only upload never reaches provider"
         );
         call(
             &connection,

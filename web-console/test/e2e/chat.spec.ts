@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
 import { AppServerHost } from '../../../tui/src/app-server/host';
 
-test('native history pages, rich streaming settlement, reconnect and attachment refusal', async ({ page }) => {
+test('native history, rich settlement, real image decode/lightbox, reconnect and admission refusal', async ({ page }) => {
   const fixture = await startDogfood('web_chat_history');
   let passed = false;
   const errors: string[] = [];
@@ -14,13 +14,12 @@ test('native history pages, rich streaming settlement, reconnect and attachment 
     const id = created.session.id;
     const attached = await remote.client.call('session/attach', { session_id: id }, 'attached');
     await expect(remote.client.call('artifact/read', { target: attached.target, artifact_id: 'artifact_999' }, 'artifact_bytes')).rejects.toThrow();
-    await expect(remote.client.call('artifact/upload', { target: attached.target, modality: 'image', data: 'aGk=' }, 'artifact_uploaded')).rejects.toThrow();
     for (let i = 0; i < 34; i++) {
       await remote.client.call('turn/start', { target: attached.target, content: [{ type: 'text', text: `History ${i}` }] }, 'inbound_accepted');
       await expect.poll(async () => {
         const current = await remote.client.call('session/snapshot', { target: attached.target }, 'snapshot');
-        return current.snapshot.attempt?.phase.type;
-      }).toBe('settled');
+        return current.snapshot.attempt?.phase.type === 'settled' && current.snapshot.messages.some(message => message.role === 'assistant' && message.content.some(block => block.type === 'text' && block.text === `Answer ${i}`));
+      }).toBe(true);
     }
     await remote.client.call('session/detach', { target: attached.target }, 'detached');
     await remote.shutdown();
@@ -58,8 +57,34 @@ test('native history pages, rich streaming settlement, reconnect and attachment 
     await expect(page.getByRole('alert')).toContainText('does not support');
     await expect(page.getByLabel('Message', { exact: true })).toHaveValue('Keep this draft');
     await expect(page.getByRole('button', { name: 'Remove note.txt' })).toBeVisible();
-    expect((await fixture.control('requests')).requests).toHaveLength(35);
+    await page.getByRole('button', { name: 'Remove note.txt' }).click();
+    await page.getByLabel('Message', { exact: true }).fill('Image please');
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
+    const canonical = page.getByLabel('Canonical conversation');
+    const load = canonical.getByRole('button', { name: 'Load attachment' });
+    await expect(canonical.locator('[data-tool-call-id="chat-image"]')).toHaveCount(1);
+    await expect(load).toHaveCount(1);
+    const decode = async () => {
+      await load.click();
+      const image = canonical.locator('img');
+      await expect(image).toBeVisible();
+      await expect.poll(() => image.evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0 && node.naturalHeight > 0)).toBe(true);
+      await image.click();
+      const original = page.getByRole('dialog').locator('img');
+      await expect(original).toBeVisible();
+      await expect.poll(() => original.evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0)).toBe(true);
+      await page.keyboard.press('Escape');
+    };
+    await decode();
+    await page.getByRole('button', { name: 'Reconnect', exact: true }).click();
+    await expect(page.locator('.status strong')).toHaveText('connected');
+    await expect(load).toHaveCount(1);
+    await decode();
+    expect((await fixture.control('requests')).requests).toHaveLength(36);
     await page.screenshot({ path: 'test-results/chat-history.png', fullPage: true });
     expect(errors).toEqual([]); passed = true;
+  } catch (error) {
+    await test.info().attach('native-image-diagnostics', { body: JSON.stringify({ text: await page.locator('body').innerText(), diagnostics: fixture.diagnostics(), requests: await fixture.control('requests') }), contentType: 'application/json' });
+    throw error;
   } finally { await page.close(); await fixture.stop(passed); }
 });

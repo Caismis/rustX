@@ -44,6 +44,8 @@ def web_chat_history() -> Scenario:
     steps.append(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Rich reply",)),
                       Stream(Text("## Rich reply\n\n| Key | Value |\n| --- | --- |\n| native | history |\n\n```rust\nfn main() {}"),
                              Gate("settle-chat"), Text("\n```\n\n- **Settled**\n\n$x^2$"), Finish())))
+    steps.append(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Image please",)),
+                      Stream(ToolCall("chat-image", "render_image", "{}"), Finish("tool_calls"))))
     return Scenario("web_chat_history", *steps)
 
 

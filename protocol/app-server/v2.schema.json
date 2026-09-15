@@ -75,16 +75,12 @@
                 },
                 "data": {
                   "type": "string"
-                },
-                "modality": {
-                  "$ref": "#/$defs/Modality"
                 }
               },
               "additionalProperties": false,
               "required": [
                 "target",
-                "data",
-                "modality"
+                "data"
               ]
             }
           },
@@ -1387,26 +1383,6 @@
     "ArtifactId": {
       "description": "Identifies a durable artifact produced or referenced by the runtime.\n\nAn artifact is identified by an opaque runtime-owned id, never by a\nlocal filesystem path: paths are executor concerns and are not a\nuniversal durable artifact identity.",
       "type": "string"
-    },
-    "Modality": {
-      "description": "One semantic content modality of a model capability set.",
-      "oneOf": [
-        {
-          "description": "Textual content.",
-          "type": "string",
-          "const": "text"
-        },
-        {
-          "description": "Image content.",
-          "type": "string",
-          "const": "image"
-        },
-        {
-          "description": "File/document content.",
-          "type": "string",
-          "const": "file"
-        }
-      ]
     },
     "DefaultScope": {
       "type": "string",
@@ -3892,6 +3868,26 @@
         "outputModalities",
         "toolCalls",
         "reasoning"
+      ]
+    },
+    "Modality": {
+      "description": "One semantic content modality of a model capability set.",
+      "oneOf": [
+        {
+          "description": "Textual content.",
+          "type": "string",
+          "const": "text"
+        },
+        {
+          "description": "Image content.",
+          "type": "string",
+          "const": "image"
+        },
+        {
+          "description": "File/document content.",
+          "type": "string",
+          "const": "file"
+        }
       ]
     },
     "SummaryModelView": {

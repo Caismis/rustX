@@ -29,7 +29,6 @@ export type Request1 =
       params: {
         target: AttachmentTarget;
         data: string;
-        modality: Modality;
       };
     }
   | {
@@ -343,10 +342,6 @@ export type AttachmentId = string;
  * universal durable artifact identity.
  */
 export type ArtifactId = string;
-/**
- * One semantic content modality of a model capability set.
- */
-export type Modality = 'text' | 'image' | 'file';
 export type DefaultScope = 'user';
 /**
  * The native setting to capture at the save operation boundary.
@@ -792,6 +787,10 @@ export type SettingsBoundary =
   | 'frozen_admission'
   | 'client_local'
   | 'next_launch';
+/**
+ * One semantic content modality of a model capability set.
+ */
+export type Modality = 'text' | 'image' | 'file';
 /**
  * Identifies an MCP server bound to the runtime.
  */

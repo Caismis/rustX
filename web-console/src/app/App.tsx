@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { AppServerClient } from '../client/app-server';
-import type { RuntimeClientSessionDeletePreview } from '../../../protocol/app-server/v1';
+import type { RuntimeClientSessionDeletePreview } from '../../../protocol/app-server/v2';
 import { activeAttempt, json } from '../bindings/projection';
 import { ArtifactResources } from '../client/artifacts';
 import { ArtifactContext } from './components/Artifact';
@@ -82,7 +82,7 @@ export function App({ client }: { client: AppServerClient }) {
     else setError(`Delete preview: ${json(result.result)}`);
   });
   return <AppFrame navigation={<Sidebar footer={<>
-    <p className="muted">Native App Server · protocol v1</p><a href="https://github.com/Caismis/rustX" target="_blank" rel="noreferrer">rustX source</a>
+    <p className="muted">Native App Server · protocol v2</p><a href="https://github.com/Caismis/rustX" target="_blank" rel="noreferrer">rustX source</a>
     <p className="muted">UI source adapted from DeepSeek Harness. <a href="/LICENSE-DeepSeek-Harness.txt" target="_blank" rel="noreferrer">MIT notice</a></p>
   </>}>
     <section className="connection-form" aria-label="Connection">

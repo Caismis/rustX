@@ -48,3 +48,39 @@ it('durable user/assistant order and tool artifact galleries follow only transcr
   expect(ui.getByText('tool.png')).toBeTruthy();
   expect(ui.container.querySelector('[data-tool-call-id="native-call"]')).toBeTruthy();
 });
+it('background result galleries retain execution identities, including duplicate tool names', () => {
+  const s = snapshot();
+  s.background = ['exec-1', 'exec-2'].map(execution_id => ({ execution_id, tool_id: 'native', tool_name: 'Same name', state: 'succeeded', result: { status: { type: 'success' }, duration_ms: 1, artifacts: [{ artifact_id: `artifact-${execution_id}`, name: `${execution_id}.png`, mime_type: 'image/png' }, { artifact_id: `file-${execution_id}`, name: `${execution_id}.txt`, mime_type: 'text/plain' }] } }));
+  const ui = render(<RuntimeFacts snapshot={s} />);
+  for (const id of ['exec-1', 'exec-2']) {
+    expect(ui.container.querySelector(`[data-execution-id="${id}"]`)?.textContent).toContain(`${id}.png`);
+    expect(ui.container.querySelector(`[data-execution-id="${id}"]`)?.textContent).toContain(`${id}.txt`);
+  }
+});
+it('Subagent and Workflow cards bind native identities and lifecycle facts without debug dumps', () => {
+  const s = snapshot();
+  s.subagents = ['child-1', 'child-2'].map(subagent_id => ({
+    subagent_id, child_agent_id: `agent-${subagent_id}`, child_conversation_id: `conv-${subagent_id}`, agent: 'Same agent',
+    definition_digest: 'private-digest', profile_digest: 'private-profile', state: 'running', started_at: '2026-09-15T00:00:00Z',
+    observation: { revision: '1', activity: { type: 'waiting', on: { type: 'approval', tool_id: 'bash' } }, counters: { model_requests: 1, model_retries: 0, tool_executions: 0 } },
+    workspace: { logical_workspace: '/private/workspace', isolation: { type: 'shared' }, resource_state: 'none' },
+  }));
+  s.workflows.runs = ['1', '2'].map(invocation => ({
+    id: { conversation_id: 'conv', attempt_id: 'attempt', invocation }, workflow_id: 'Same workflow', program_digest: 'private-program', resource_revision: '1', tool_call_id: `call-${invocation}`,
+    state: { type: 'waiting', reason: 'review' }, instances: [], omitted_instances: 0, steps_consumed: 2, steps_max: 10, agents_consumed: 1, candidate_users: 0,
+  }));
+  const ui = render(<RuntimeFacts snapshot={s} />);
+  expect(ui.container.querySelectorAll('[data-subagent-id]')).toHaveLength(2);
+  expect(ui.container.querySelectorAll('[data-workflow-run-id]')).toHaveLength(2);
+  expect(ui.getAllByText('Waiting for approval')).toHaveLength(2);
+  expect(ui.getAllByText('Waiting for review')).toHaveLength(2);
+  const child = ui.container.querySelector('[data-subagent-id="child-1"]');
+  s.subagents[0].state = 'failed'; s.subagents[0].detail = 'Native failure';
+  s.workflows.runs[0].state = { type: 'settled', outcome: 'completed' };
+  ui.rerender(<RuntimeFacts snapshot={s} />);
+  expect(ui.container.querySelector('[data-subagent-id="child-1"]')).toBe(child);
+  expect(child?.textContent).toContain('Native failure');
+  expect(ui.getByText('Outcome: completed')).toBeTruthy();
+  expect(ui.container.querySelector('pre')).toBeNull();
+  expect(ui.container.textContent).not.toMatch(/private-|Todo|Goal|Trace/);
+});

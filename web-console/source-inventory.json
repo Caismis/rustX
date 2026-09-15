@@ -363,7 +363,7 @@
       "treatment": "substantially refactored: presentation extracted; native rustX bindings",
       "upstream_sha256": "9a3f529576191c8424544273c562e6f84741bd667b2a8efefac9c26dbaf82a02",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v1",
+        "../../../../protocol/app-server/v2",
         "../../bindings/questionnaire",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/icons",

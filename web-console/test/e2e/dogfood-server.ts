@@ -41,7 +41,18 @@ export async function startDogfood(scenario = 'web_console_dogfood') {
     });
     writeFileSync(join(taskConfig, 'rustx/models.toml'), `[providers.fixture]\nbase_url = "${providerUrl}/v1"\napi_key = "$RUSTX_CONSOLE_FIXTURE_KEY"\n` +
       ['console-model', 'second-model'].map(id => `\n[[providers.fixture.models]]\nid = "${id}"\nprotocol = "openai_chat_completions"\ncontext_window = 128000\nmax_output_tokens = 4096\ncapabilities = { input_modalities = ["text"], output_modalities = ["text"], tool_calls = true, reasoning = false }\ncompat = { chat_reasoning_replay = "omit" }\n`).join(''));
-    const writeSettings = (model = 'console-model') => writeFileSync(settings, `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[native_tools.bash]\napproval = "always"\n[agent.model]\nmodel = "fixture/${model}"\n`);
+    const imageSource = scenario === 'web_chat_history' ? `
+[mcp_servers.image_fixture]
+enabled = true
+type = "stdio"
+command = "python3"
+args = [${JSON.stringify(resolve(root, 'web-console/test/e2e/image-mcp.py'))}]
+[mcp_tool_policies.image_fixture]
+approval = "never"
+[agent.tools.sources]
+image_fixture = ["render_image"]
+` : '';
+    const writeSettings = (model = 'console-model') => writeFileSync(settings, `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[native_tools.bash]\napproval = "always"\n[agent.model]\nmodel = "fixture/${model}"\n` + imageSource);
     writeSettings();
     for (const workspace of [workspaceA, workspaceB]) {
       const trusted = spawnSync(binary, ['--workspace', workspace, '--trust', 'grant'], { env, encoding: 'utf8' });
