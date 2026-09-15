@@ -15,6 +15,7 @@ for (const entry of inventory.files) {
   assert(entry.destination.startsWith('web-console/') && !entry.destination.includes('..'), 'Invalid destination');
   assert(entry.upstream && entry.treatment && /^[a-f0-9]{64}$/.test(entry.upstream_sha256), 'Incomplete provenance');
   assert(entry.license.includes('DeepSeek') && Array.isArray(entry.retained_dependencies) && Array.isArray(entry.excluded_dependencies), 'Missing closure/license');
+  for (const source of entry.additional_sources ?? []) assert(source.upstream && source.treatment && /^[a-f0-9]{64}$/.test(source.upstream_sha256), 'Incomplete additional source provenance');
   const file = resolve(repository, entry.destination);
   assert(existsSync(file), `Missing destination ${entry.destination}`);
   if (/\.(tsx?|css)$/.test(file)) assert(readFileSync(file, 'utf8').includes('Copyright (c) 2026 DeepSeek'), `Missing header ${file}`);

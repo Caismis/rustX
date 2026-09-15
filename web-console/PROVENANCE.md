@@ -99,3 +99,33 @@ Cordis lifecycle, dynamic module loader, slots, provider configuration, workspac
 mutation or browser persistence of runtime facts is imported. No service shim is
 provided. rustX client/bindings continue to consume the generated native protocol.
 Menu/dialog state and Markdown caches are disposable browser presentation state.
+
+## WEB-02 inspection and adaptation
+
+The external checkout was reverified at the same exact pinned SHA before Chat
+changes. The `inspected` array now includes the Chat scroll/partial helpers,
+conversation submission policy tests, attachment cards/rail/lightbox, attachment
+load/retry and composer tests, Tool call tree/CSS, and the five package READMEs.
+These are inspection records; they do not imply copying entire packages.
+
+New source-derived destinations:
+
+- `presentation/layout/ChatViewport.tsx`: rewritten from `ui-chat/.../ChatView.tsx`.
+  Retains stable row/viewport measurement, distinct reader/follow ownership and
+  ResizeObserver cleanup. Uses React's pre-mutation snapshot lifecycle, with no
+  upstream timers, turn navigation, Session store, optimistic echoes or slots.
+- `presentation/attachments/AttachmentCard.tsx` and its CSS: rewritten/adapted from
+  `ui-attachment/MessageImage.tsx`, its CSS and `FileCard.tsx`. The inventory's
+  `additional_sources` records secondary origins under the same destination's
+  license, dependency closure and exclusions. Uses the WEB-01 native Dialog for
+  focus containment/restoration instead of importing the upstream lightbox owner.
+- Existing `app/components/InputBar.tsx`: extends the inventoried source extraction
+  with one mixed ordered draft rail. Native File drafts replace Harness upload,
+  Session, Remote and submission-echo semantics.
+
+No Harness Session Controller, event assembler, Host/Remote API, Cordis lifecycle,
+workspace path owner, provider translation, retry/fork or plugin slots are imported.
+The 64px thumbnails, 240px file cards and original-image dialog follow the inspected
+attachment presentation. Deliberate deviation: durable bytes load on explicit
+activation so a large history page cannot eagerly consume the finite image budget.
+The original is rendered at fit-to-viewport size; no thumbnail bytes are durable.

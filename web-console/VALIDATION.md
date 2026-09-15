@@ -321,7 +321,7 @@ native facts use generic renderers, and Review response wiring has deterministic
 coverage. This frontend run does not claim transport slow-consumer/backpressure
 conformance beyond the existing #36 process tests.
 
-## Intentional scope decisions
+## Historical WEB-01 scope decisions (superseded below)
 
 The pinned upstream commit is unchanged. No Rust runtime or public protocol/schema
 change was needed. The only shared protocol change is the compiler-input
@@ -331,3 +331,242 @@ presentation has the smaller coherent dependency closure. Specialized Subagent,
 Workflow and Goal views were replaced with native read-only JSON disclosures.
 Recovery is explicit reconnect; no automatic reconnect loop or mutation retry is
 provided. Rich Markdown/image/IDE/provider configuration features remain excluded.
+
+## WEB-02 (#305), 2026-09-15
+
+This section supersedes the older scope limitations above for Chat, Markdown,
+transcript paging and artifacts. Baseline: `8b8e99e87df61b1fe8a91134f818fddc54968e46`.
+The original `rustX` checkout remains clean at `6dd1ef144fdfedbd99cb0c9dd9856e1e8defbf51`;
+implementation lives in the retained `rustX-issue-305` worktree.
+
+Final validation commands (Linux, Node 24.20.0, pinned pnpm 11.13.1):
+
+| Location | Exact command | Result |
+| --- | --- | --- |
+| repository | `cargo fmt --all -- --check` | Passed |
+| repository | `cargo clippy --all-targets --all-features -- -D warnings` | Passed |
+| repository | `git diff --check` | Passed |
+| repository | `cargo build --bins` | Passed |
+| repository | `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 2805 passed, 1 existing ignored; bin/example targets passed |
+| repository | `cargo test --test contracts --test provider --all-features` | 25 + 166 passed; 5 existing opt-in provider tests ignored |
+| repository | `cargo test --lib --all-features -- boundary_suites::` | 226 passed |
+| repository | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance` | 116 durable, 52 process, 53 subagent, 157 tools, 23 conformance passed |
+| test-support/fake-provider | `uv sync --frozen` | Passed, Python 3.12.13 |
+| test-support/fake-provider | `uv run --frozen pytest` | 51 passed |
+| web-console, protocol/app-server, tui | `corepack install` and `pnpm install --frozen-lockfile` | Passed; `corepack enable` also run |
+| web-console | `pnpm typecheck` | Passed |
+| web-console | `pnpm test` | 131 tests passed across 12 files |
+| web-console | `pnpm check:provenance` | 53 source records, 98 production dependency notices passed |
+| web-console | `pnpm build` | Passed; existing large-chunk advisory remains |
+| web-console | `pnpm exec playwright install chromium` | Passed |
+| web-console | `pnpm test:e2e` | 6 passed against real App Server and mandatory provider emulator |
+| protocol/app-server | `pnpm check` and `pnpm typecheck` | Passed; regeneration left all four generated artifacts unchanged |
+| tui | `pnpm typecheck` and `pnpm test` | Passed; 810 tests |
+
+The new native owner regression also passed independently with
+`cargo test --lib --all-features artifact_carrier_is_native_scoped_bounded_and_cold_reopen_safe`.
+
+The browser flow admits 34 turns through the real App Server, crosses the 64-entry
+bootstrap boundary, asserts history is absent before paging, measures the stable
+prepend anchor, renders rich streaming Markdown through a deterministic provider
+gate, settles once, reconnects/reloads history and refuses an unsupported file
+while preserving text and attachment drafts. It also exercises native missing
+artifact rejection and a successful native MCP image Tool: canonical result ->
+artifact read -> decoded Chromium thumbnail -> original-image dialog -> fresh
+load after reconnect. The image fixture explicitly selects its MCP Tool through
+the native Agent profile. No provider multimodal translation is claimed. Existing multi-Session, interaction,
+transport-loss and cold-runtime flows remain green. No mock Web backend is used.
+
+Browser plugin not available: used the repository Playwright lane per the testing
+skill. Screenshots were visually inspected (`test-results/chat-history.png`,
+console desktop/mobile); desktop Chat plus 390/900/1440px shell tests passed.
+No blank page, framework overlay or page errors occurred. Initial new-test
+synchronization/mock errors and Clippy findings were corrected and the affected
+commands rerun; no failed command was waived. Initial root-directory pnpm
+invocations were corrected to package-specific working directories.
+
+Deliberate limits: durable image bytes load on explicit activation. Current
+provider adapters remain text-only, so successful provider multimodal execution
+is neither implemented nor claimed. Native bounded byte storage/read and browser
+supported-content construction have deterministic tests. Existing declared ignored
+Rust tests were not converted into passing coverage. See CHAT.md for all finite
+limits and PROVENANCE.md/source-inventory.json for the pinned source closure.
+
+## PR #317 review repair, 2026-09-15
+
+Repairs supersede the reviewed head `cd20592938b6c64b06ad204021588c5f0d7c2f3e`.
+The full validation table above was rerun after removing that gate, against unchanged
+`origin/main` (`8b8e99e87df61b1fe8a91134f818fddc54968e46`). The current CI workflow
+was re-read. GitHub Actions results for the final pushed head are recorded on
+PR #317; local Linux results do not substitute for the macOS job.
+
+- App Server v2 is mandatory for all clients and transports; v1 semantic
+  initialization and v1-only WebSocket offers are rejected. Generated v2 files
+  replace v1 files, with no duplicate API or Runtime Client version bump.
+- `artifact/upload { target, data }` is storage-only. The acceptance-time
+  `current_attempt` inference was removed after review identified the finite
+  mailbox-watermark and idle-acceptance/next-freeze gaps. No speculative
+  consumer-binding semantics remain in WEB-02.
+- Native `model::adapter::validation::validate_request` continues to validate
+  canonical modalities against the actual request's frozen invocation before
+  provider I/O. The existing gated A/B tests exercise real Attempt model
+  lifetimes; they are not claimed as proof of pending-inbound consumer binding.
+- `cargo test --lib --all-features a_model_update_`: 2 passed.
+  `cargo test --lib --all-features local_runtime::session_runtime_manager::tests::`:
+  71 passed, including the non-text acceptance/admission race, v2 negotiation, storage-only upload, invalid/oversized
+  carrier refusal, scoped reads and cold reopen. The complete process target
+  covers a v1-only offer with a valid token and successful v2 reconnection.
+- `cargo test --test provider --all-features capability_boundary::`: 11 passed,
+  covering image/file refusal before any network request. The real MCP image flow also proves that a canonical
+  Tool image is renderable while a text-only consumer refuses the subsequent
+  model invocation natively. Future multimodal inbound consumer binding is
+  explicitly outside this repair.
+- Web tests cover frozen Attempt preflight despite changed Session capabilities,
+  safe Blob MIME, native background image/file galleries, duplicate-name
+  Subagent/Workflow identities and authoritative lifecycle changes. The
+  transcript race uses exclusive `before=10` -> `[8,9]` and proves
+  `[8,9,10,11]` survives while the independent live cursor advances.
+- Real Chromium asserts `complete && naturalWidth > 0 && naturalHeight > 0`,
+  opens the original-image dialog, reconnects and loads the same native artifact
+  again. The fixture's MCP PNG has no browser-invented canonical reference.
+- Initial image-fixture selection failure and a stale v1 expected value in the
+  process reconnect test were corrected. The complete affected browser and
+  external boundary commands were rerun; no failing test was waived.
+
+No additional Harness files were imported or adapted for the repair. The
+Subagent/Workflow cards are rustX product composition over existing native DTOs.
+Pinned provenance remains authoritative and unchanged.
+
+### Final consumer-boundary correction
+
+The review head `250c53db` incorrectly treated acceptance-time `current_attempt`
+presence as consumer binding. The correction removes that validator, its
+`CurrentAttempt.model` copy, `InboundAdmissionError::UnsupportedContent`, Runtime
+Client mapping, and unused `validate_user_content_modalities` helper. The existing
+request-level `validate_content_modalities` is unchanged.
+
+`tests/scripted/app_server/inbound_model.rs` exercises the real Session manager,
+durable store, native runtime and production OpenAI Chat adapter. For both image
+and file input it arms the existing `ConversationRuntime` `admission_gate`
+(`Gate`, backed by a mutex/condition variable), accepts inbound with A selected,
+waits for admission to park before the coordinator lock, then selects B. The
+pending content is checked directly in durable storage before releasing the gate.
+A registered settlement notification then proves the admitted Attempt froze B,
+consumed the pending item, and failed through the existing model-request
+capability validator, with zero HTTP attempts at the provider fixture. There are
+no sleeps or widened capabilities. The original active-A/future-B model lifetime
+regressions remain intact.
+
+CI run 34930949461 exposed a separate five-second presentation assertion racing
+completion of the real approval Tool's provider continuation. The browser test
+now awaits the emulator's explicit fourth `response_completed` observation before
+asserting that answer in Chat, using the existing bounded observation API. This
+changes test synchronization only; it does not alter interaction settlement.
+
+Final focused commands:
+
+- `cargo test --lib --all-features accepted_non_text_inbound_crosses_model_change_before_attempt_admission`: 1 test, both image/file cases passed, including durable request model B.
+- `cargo test --lib --all-features pending_inbound`: 6 passed.
+- `cargo test --lib --all-features safe_boundary`: 5 passed.
+- `cargo test --lib --all-features before_attempt_admission`: 3 passed.
+- The literal `admission_gate` name filter selected zero tests; the actual regression
+  is selected by its full name above (the gate is an existing synchronization field).
+
+The final complete command results are reflected in the validation table above.
+The new regression initially called a model mutation on the managed read handle;
+this compile error was corrected to call the existing native `model_set` owner.
+No runtime API was added to accommodate the test.
+
+The first final external-boundary run stopped in
+`runtime_config::ext256_reload_cannot_recompose_extensions_but_the_next_launch_does`
+with `local product storage is in use` on its third composition. The unchanged
+test passed in isolation (`cargo test --test process --all-features
+ext256_reload_cannot_recompose_extensions_but_the_next_launch_does`). The entire
+external command was rerun, rather than excluding that test or proceeding with
+unrun targets. This observation does not establish a runtime lock-lifetime fix;
+no unrelated storage behavior was changed in this repair.
+
+The complete external rerun passed: 23 conformance, 116 durable, 52 process,
+53 subagent and 157 Tool tests. Final Web E2E: 6 passed (24.6 seconds).
+
+CI run 34932328314 found a TUI integration assertion that allowed only process
+exit/EOF prose after SIGKILL. A pending write can instead observe EPIPE first;
+its typed `UncertainOutcomeError` and `TransportClosedError` were already correct.
+The test now checks `process_exit`/`input_eof`, or strictly `write_error` with an
+EPIPE cause, and separately awaits/asserts the actual SIGKILL child exit. It
+changes no transport or runtime semantics and introduces no delay/replay.
+
+## PR #317 cumulative artifact capacity repair
+
+Starting head: `81d97d5167fda22491c1eab20a78cf84d6f01faa`.
+Base: `8b8e99e87df61b1fe8a91134f818fddc54968e46`, unchanged after fetch.
+The current `.github/workflows/ci.yml` was re-read before validation.
+
+`MAX_ARTIFACTS_PER_STORE = 256` belongs to the shared conversation ArtifactStore.
+Every Tool/MCP reservation and App Server upload consumes this same monotonic
+identity domain. A public upload remains capped at 256 KiB, giving at most
+64 MiB of upload payload contribution if all slots are uploads. This does not
+add a byte limit to native Tool/MCP artifacts. There is no upload counter,
+metadata database, configuration, eviction or cleanup scheduler. Session deletion
+remains the reclamation owner.
+
+Capacity is checked while holding the allocation mutex, before any reservation
+creation or allocator update. Successful reservation creation publishes the
+in-memory frontier before file/directory sync; later errors cannot reuse that
+identity. An already-existing reservation is also consumed conservatively.
+Failure before creation leaves the frontier unchanged. Cold reopen scans the
+maximum `.reserved`/`.bin` ordinal, including unwritten reservations. Older
+stores above the capacity still open for reads and refuse new allocation.
+`ArtifactError::CapacityExhausted` replaces the now-unreachable artifact sequence
+exhaustion mode. The carrier keeps App Server v2 and its existing `invalid_state`
+error data, with a bounded path-free capacity diagnostic instead of discarding
+it as a generic operation failure. No generated contract change is required.
+
+Focused regressions:
+
+- `artifact_capacity_exact_boundary_is_mutation_free_and_survives_cold_reopen`:
+  all 256 writes succeed; repeated create/upload refusal preserves the complete
+  root file snapshot and allocator frontier; cold reopen retains all bytes.
+- `artifact_capacity_counts_unwritten_and_failed_reserved_slots_after_reopen`:
+  unwritten reservations and a failed final byte-open consume slots after reopen.
+- `artifact_capacity_old_stores_above_limit_remain_readable`: `.bin` and
+  `.reserved` frontiers above capacity, including `u64::MAX`, permit reads and
+  reject allocation without mutation.
+- `reservation_creation_failure_does_not_advance_but_existing_reservation_does`:
+  failed creation consumes nothing; an existing reservation cannot be reused.
+- `artifact_upload_capacity_is_shared_durable_and_path_safe`: native reservations
+  occupy 255 slots; public upload takes slot 256; repeated upload refusals preserve
+  files, existing reads and empty inbound/Attempt state, with zero provider HTTP
+  attempts. Repeated native unload/reopen and connection replacement cannot reset
+  capacity. The exact error is sanitized and contains no artifact/workspace path.
+
+The initial App Server test snapshot helper assumed all root children were files;
+it was corrected to include native child-directory entries without reading them
+as byte files. Both focused suites then passed. No runtime workaround or test
+exclusion was used.
+
+Final local validation for this capacity repair:
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | Passed |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Passed |
+| `git diff --check` | Passed |
+| `cargo build --bins` | Passed |
+| `cargo test --lib --all-features tools::artifacts::tests::` | 8 passed |
+| `cargo test --lib --all-features artifact_upload_capacity_is_shared_durable_and_path_safe` | 1 passed |
+| `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 2809 passed; 1 existing ignored; bins/examples passed |
+| `cargo test --test contracts --test provider --all-features` | 25 + 166 passed; 5 existing opt-in ignored |
+| `cargo test --lib --all-features -- boundary_suites::` | 226 passed |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance` | 116 / 52 / 53 / 157 / 23 passed |
+| protocol/app-server: `pnpm install --frozen-lockfile`, `pnpm check`, `pnpm typecheck` | Passed; no generated drift |
+| web-console: `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test` | Passed; 131 tests |
+| web-console: `pnpm check:provenance`, `pnpm build` | Passed; 53 source records / 98 dependency notices |
+| web-console: `pnpm test:e2e` | 6 passed, including real native PNG decode/lightbox/reconnect and draft preservation |
+| tui: `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test` | Passed; 810 tests |
+| fake-provider: `uv sync --frozen`, `uv run --frozen pytest` | Passed; 51 tests |
+
+No final validation command failed or was waived. Final-head GitHub Actions
+results are recorded in PR #317 after completion; local checks do not substitute
+for the macOS CI lane. App Server v2, generated files, Harness provenance,
+model-agnostic acceptance and existing Chat/history behavior remain unchanged.

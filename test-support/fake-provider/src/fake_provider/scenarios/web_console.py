@@ -35,3 +35,18 @@ def web_console_dogfood() -> Scenario:
 
 
 SCENARIOS = {"web_console_dogfood": web_console_dogfood}
+
+
+def web_chat_history() -> Scenario:
+    """Thirty-four accepted turns cross the native 64-entry bootstrap boundary."""
+    steps = [Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=(f"History {i}",)),
+                  Stream(Text(f"Answer {i}"), Finish())) for i in range(34)]
+    steps.append(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Rich reply",)),
+                      Stream(Text("## Rich reply\n\n| Key | Value |\n| --- | --- |\n| native | history |\n\n```rust\nfn main() {}"),
+                             Gate("settle-chat"), Text("\n```\n\n- **Settled**\n\n$x^2$"), Finish())))
+    steps.append(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Image please",)),
+                      Stream(ToolCall("chat-image", "render_image", "{}"), Finish("tool_calls"))))
+    return Scenario("web_chat_history", *steps)
+
+
+SCENARIOS["web_chat_history"] = web_chat_history

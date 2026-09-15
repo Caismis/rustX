@@ -23,7 +23,7 @@ function exited(child: ChildProcess): Promise<number | null> {
     child.once('exit', code => { clearTimeout(timer); resolveExit(code); });
   });
 }
-export async function startDogfood() {
+export async function startDogfood(scenario = 'web_console_dogfood') {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-web-console-'));
   const taskConfig = join(directory, 'config');
   const settings = join(taskConfig, 'rustx/settings.toml');
@@ -32,7 +32,7 @@ export async function startDogfood() {
   mkdirSync(workspaceA); mkdirSync(workspaceB);
   const binary = process.env.RUSTX_BINARY ?? resolve(root, 'target/debug/rustx');
   const env = { ...process.env, XDG_CONFIG_HOME: taskConfig, XDG_STATE_HOME: join(directory, 'state'), RUSTX_CONSOLE_FIXTURE_KEY: 'fake-provider-only' };
-  const provider = spawn('uv', ['run', '--project', resolve(root, 'test-support/fake-provider'), '--frozen', 'fake-provider', '--scenario', 'web_console_dogfood', '--port', '0'], { stdio: ['pipe', 'pipe', 'pipe'] });
+  const provider = spawn('uv', ['run', '--project', resolve(root, 'test-support/fake-provider'), '--frozen', 'fake-provider', '--scenario', scenario, '--port', '0'], { stdio: ['pipe', 'pipe', 'pipe'] });
   let providerErrors = ''; provider.stderr.on('data', chunk => { providerErrors = (providerErrors + String(chunk)).slice(-16_384); });
   let app: ChildProcess | undefined;
   try {
@@ -41,7 +41,18 @@ export async function startDogfood() {
     });
     writeFileSync(join(taskConfig, 'rustx/models.toml'), `[providers.fixture]\nbase_url = "${providerUrl}/v1"\napi_key = "$RUSTX_CONSOLE_FIXTURE_KEY"\n` +
       ['console-model', 'second-model'].map(id => `\n[[providers.fixture.models]]\nid = "${id}"\nprotocol = "openai_chat_completions"\ncontext_window = 128000\nmax_output_tokens = 4096\ncapabilities = { input_modalities = ["text"], output_modalities = ["text"], tool_calls = true, reasoning = false }\ncompat = { chat_reasoning_replay = "omit" }\n`).join(''));
-    const writeSettings = (model = 'console-model') => writeFileSync(settings, `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[native_tools.bash]\napproval = "always"\n[agent.model]\nmodel = "fixture/${model}"\n`);
+    const imageSource = scenario === 'web_chat_history' ? `
+[mcp_servers.image_fixture]
+enabled = true
+type = "stdio"
+command = "python3"
+args = [${JSON.stringify(resolve(root, 'web-console/test/e2e/image-mcp.py'))}]
+[mcp_tool_policies.image_fixture]
+approval = "never"
+[agent.tools.sources]
+image_fixture = ["render_image"]
+` : '';
+    const writeSettings = (model = 'console-model') => writeFileSync(settings, `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[native_tools.bash]\napproval = "always"\n[agent.model]\nmodel = "fixture/${model}"\n` + imageSource);
     writeSettings();
     for (const workspace of [workspaceA, workspaceB]) {
       const trusted = spawnSync(binary, ['--workspace', workspace, '--trust', 'grant'], { env, encoding: 'utf8' });

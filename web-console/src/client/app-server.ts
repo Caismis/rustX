@@ -1,8 +1,10 @@
 import type {
   AttachmentTarget, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
-  SessionPersistentState, SessionSummary, ServerCapabilities,
-} from '../../../protocol/app-server/v1';
+  SessionPersistentState, SessionSummary, ServerCapabilities, UserContentBlock,
+} from '../../../protocol/app-server/v2';
+import { ARTIFACT_MAX_BYTES, DRAFT_MAX_FILES } from './artifacts';
+import { HISTORY_LIMIT, HISTORY_PAGE_SIZE, prependTranscript, refreshTranscript, replaceTranscript, type TranscriptCache } from './transcript';
 import { ProtocolLog, type WireContext } from './protocol-log';
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'resynchronizing' | 'stale' | 'incompatible' | 'error';
@@ -15,6 +17,7 @@ export interface SessionView {
   target?: AttachmentTarget;
   snapshot?: RuntimeClientSnapshot;
   cursor?: RuntimeClientCursor;
+  history?: TranscriptCache;
   settings?: SessionPersistentState;
   error?: string;
 }
@@ -62,7 +65,7 @@ export class RpcFailure extends Error {
   constructor(readonly error: Extract<Response, { error: unknown }>['error']) { super(`${error.message} (${error.code})${error.data ? `: ${JSON.stringify(error.data)}` : ''}`); }
 }
 const READS = new Set<Request1['method']>([
-  'initialize', 'server/info', 'session/list', 'session/read', 'session/tree', 'session/deletePreview',
+  'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/tree', 'session/deletePreview',
   'session/snapshot', 'session/transcript', 'settings/read', 'settings/model', 'settings/models',
   'resources/read', 'background/status', 'subagent/status', 'settings/defaults',
 ]);
@@ -113,7 +116,7 @@ export class AppServerClient {
     const generation = this.state.generation;
     this.publish({ connection: reconnect ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v1', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v2', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -131,12 +134,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 1, client: { name: 'rustx-web-console', version: '0.1.0' },
-        presentation: { images: false, questionnaires: true, reviews: true },
+        protocol_version: 2, client: { name: 'rustx-web-console', version: '0.1.0' },
+        presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (hello.protocol_version !== 1 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v1 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (hello.protocol_version !== 2 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v2 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       this.initialized = true;
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
@@ -185,7 +188,7 @@ export class AppServerClient {
     for (const item of uncertain) if (item.interactionKey) operations[item.interactionKey] = { sessionId: item.sessionId!, status: 'uncertain' };
     this.publish({ connection, generation: this.state.generation + 1, uncertain, interactionOperations: operations,
       views: Object.fromEntries(Object.entries(this.state.views).map(([id, view]) => [id, {
-        ...view, target: undefined, attachment: view.target || ['attaching', 'attached', 'resynchronizing'].includes(view.attachment) ? 'stale' : view.attachment,
+        ...view, history: undefined, target: undefined, attachment: view.target || ['attaching', 'attached', 'resynchronizing'].includes(view.attachment) ? 'stale' : view.attachment,
       }])),
     });
     oldSocket?.close();
@@ -193,6 +196,7 @@ export class AppServerClient {
   /** Correlation only. No call is ever retried. Every payload is a generated union. */
   async request<T extends MethodResult['type']>(operation: Request1, expected: T): Promise<Extract<MethodResult, { type: T }>> {
     if (!this.socket || (!this.initialized && operation.method !== 'initialize')) throw new Error('Connect and initialize first.');
+    if (operation.method.startsWith('artifact/') && [...this.pending.values()].filter(item => item.request.method.startsWith('artifact/')).length >= 2) throw new Error('Artifact transfer capacity reached. Retry after current transfers finish.');
     if (this.pending.size >= 64) throw new Error('Client request capacity reached.');
     // Keep uncertain diagnostics finite without silently forgetting unresolved mutations.
     if (!READS.has(operation.method) && this.state.uncertain.length + this.pending.size >= 64) throw new Error('Uncertain-operation capacity reached. Inspect and acknowledge diagnostics first.');
@@ -341,7 +345,7 @@ export class AppServerClient {
       if (!current()) return;
       target = result.target;
       if (result.target.session_id !== id || result.target.conversation_id !== result.snapshot.conversation_id) throw new Error('Mismatched attachment identity.');
-      this.setSession(id, { target: result.target, snapshot: result.snapshot, cursor: result.cursor, attachment: 'attached' });
+      this.setSession(id, { target: result.target, snapshot: result.snapshot, cursor: result.cursor, history: replaceTranscript(result.snapshot.transcript, this.state.views[id]?.history), attachment: 'attached' });
       this.reconcileInteractions(id);
       const settings = await this.request({ method: 'settings/read', params: { session_id: id } }, 'settings');
       if (!current() || !sameTarget(this.state.views[id]?.target, result.target)) return;
@@ -371,12 +375,12 @@ export class AppServerClient {
       while (this.dirty.has(id) && current()) {
         this.dirty.delete(id);
         const resync = this.resubscribe.delete(id);
-        if (resync) this.setSession(id, { attachment: 'resynchronizing' });
+        if (resync) this.setSession(id, { attachment: 'resynchronizing', history: replaceTranscript({ entries: [] }, this.state.views[id]?.history) });
         const result = await this.request({ method: 'session/snapshot', params: { target } }, 'snapshot');
         if (!current()) return;
         if (result.snapshot.conversation_id !== target.conversation_id) throw new Error('Mismatched snapshot conversation.');
         if (BigInt(result.cursor) >= BigInt(this.state.views[id].cursor ?? '0')) {
-          this.setSession(id, { snapshot: result.snapshot, cursor: result.cursor, error: undefined });
+          this.setSession(id, { snapshot: result.snapshot, cursor: result.cursor, history: refreshTranscript(this.state.views[id]?.history, result.snapshot.transcript), error: undefined });
           this.reconcileInteractions(id);
         }
         if (resync) await this.request({ method: 'session/subscribe', params: { target, after_cursor: result.cursor } }, 'subscribed');
@@ -386,6 +390,31 @@ export class AppServerClient {
       if (current()) { this.resubscribe.add(id); this.setSession(id, { attachment: 'stale', error: String(error) }); }
       throw error;
     }
+  }
+  /** Older reads are fenced by attachment, connection and read-window epoch.
+   * Ordinary live refreshes preserve the epoch only with a durable overlap. */
+  async loadEarlier(id: string) {
+    const target = this.target(id);
+    const generation = this.state.generation;
+    const history = this.state.views[id].history;
+    if (!history || history.loading || history.page.next_cursor == null) return;
+    const limit = Math.min(HISTORY_PAGE_SIZE, HISTORY_LIMIT - (history.page.entries?.length ?? 0));
+    if (limit < 1) throw new Error('History window is full. Return to latest first.');
+    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target)
+      && this.state.views[id]?.history?.epoch === history.epoch;
+    this.setSession(id, { history: { ...history, loading: true, error: undefined } });
+    try {
+      const result = await this.request({ method: 'session/transcript', params: { target, before: history.page.next_cursor, limit } }, 'transcript');
+      if (!current()) return;
+      this.setSession(id, { history: prependTranscript(this.state.views[id].history!, result.page) });
+    } catch (error) {
+      if (current()) this.setSession(id, { history: { ...this.state.views[id].history!, loading: false, error: String(error) } });
+      throw error;
+    }
+  }
+  latestTranscript(id: string) {
+    const view = this.state.views[id];
+    if (view?.snapshot) this.setSession(id, { history: replaceTranscript(view.snapshot.transcript, view.history) });
   }
   private reconcileInteractions(id: string) {
     const snapshot = this.state.views[id].snapshot!;
@@ -405,9 +434,35 @@ export class AppServerClient {
     if (!this.initialized || view?.attachment !== 'attached' || !view.target) throw new Error('Session is not authoritatively attached. Refresh or reconnect.');
     return view.target;
   }
-  async send(id: string, text: string, steer = false) {
+  async send(id: string, text: string, steer = false, files: readonly File[] = []) {
     const target = this.target(id);
-    return this.request({ method: steer ? 'turn/steer' : 'turn/start', params: { target, content: [{ type: 'text', text }] } }, 'inbound_accepted');
+    const generation = this.state.generation;
+    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
+    if (files.length > DRAFT_MAX_FILES || files.some(file => file.size > ARTIFACT_MAX_BYTES)) throw new Error('Choose at most 8 attachments, each at most 256 KiB.');
+    const content: UserContentBlock[] = text ? [{ type: 'text', text }] : [];
+    if (files.length) {
+      // Advisory presentation check, not a binding to an eventual consumer.
+      // Pending input can miss an Attempt's finite mailbox watermark. Actual
+      // model requests validate their own frozen capabilities before provider I/O.
+      const { snapshot } = await this.request({ method: 'session/snapshot', params: { target } }, 'snapshot');
+      if (!current()) throw new Error('Attachment target changed; draft retained.');
+      const model = snapshot.attempt?.phase.type === 'settled' || !snapshot.attempt ? snapshot.model?.effective : snapshot.attempt.model?.primary;
+      const modalities = model?.capabilities.inputModalities ?? [];
+      if (files.some(file => !modalities.includes(file.type.startsWith('image/') ? 'image' : 'file'))) throw new Error('The effective model does not support these attachments. Draft retained.');
+      // Sequential, finite uploads leave transport capacity for live snapshots.
+      for (const file of files) {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        if (!current()) throw new Error('Attachment target changed; draft retained.');
+        let binary = '';
+        for (const byte of bytes) binary += String.fromCharCode(byte);
+        const modality = file.type.startsWith('image/') ? 'image' : 'file';
+        const uploaded = await this.request({ method: 'artifact/upload', params: { target, data: btoa(binary) } }, 'artifact_uploaded');
+        if (!current()) throw new Error('Attachment target changed; draft retained.');
+        content.push(modality === 'image' ? { type: 'image', artifact_id: uploaded.artifact_id, alt: file.name }
+          : { type: 'file', artifact_id: uploaded.artifact_id, name: file.name, mime_type: file.type });
+      }
+    }
+    return this.request({ method: steer ? 'turn/steer' : 'turn/start', params: { target, content } }, 'inbound_accepted');
   }
   async cancelTurn(id: string) { return this.request({ method: 'turn/cancel', params: { target: this.target(id) } }, 'cancellation_accepted'); }
   async answer(id: string, interaction: InteractionRef, response?: InteractionResponse) {
@@ -466,6 +521,7 @@ export class AppServerClient {
   }
   private retireAttachmentWork(id: string) {
     this.refreshes.delete(id); this.dirty.delete(id); this.resubscribe.delete(id);
+    this.setSession(id, { history: undefined });
   }
   clearError() { this.publish({ error: undefined }); }
   acknowledgeDiagnostic(id: string) {

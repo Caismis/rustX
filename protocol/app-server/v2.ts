@@ -18,6 +18,20 @@ export type JsonRpcVersion = '2.0';
 export type RequestId = string | number;
 export type Request1 =
   | {
+      method: 'artifact/read';
+      params: {
+        target: AttachmentTarget;
+        artifact_id: ArtifactId;
+      };
+    }
+  | {
+      method: 'artifact/upload';
+      params: {
+        target: AttachmentTarget;
+        data: string;
+      };
+    }
+  | {
       method: 'settings/defaults';
       params: {
         target: AttachmentTarget;
@@ -320,6 +334,14 @@ export type RuntimeIncarnationId = string;
  * always receives a new attachment identity.
  */
 export type AttachmentId = string;
+/**
+ * Identifies a durable artifact produced or referenced by the runtime.
+ *
+ * An artifact is identified by an opaque runtime-owned id, never by a
+ * local filesystem path: paths are executor concerns and are not a
+ * universal durable artifact identity.
+ */
+export type ArtifactId = string;
 export type DefaultScope = 'user';
 /**
  * The native setting to capture at the save operation boundary.
@@ -469,7 +491,11 @@ export type UserContentBlock =
     }
   | {
       /**
-       * Durable artifact identity of the image.
+       * Identifies a durable artifact produced or referenced by the runtime.
+       *
+       * An artifact is identified by an opaque runtime-owned id, never by a
+       * local filesystem path: paths are executor concerns and are not a
+       * universal durable artifact identity.
        */
       artifact_id: string;
       /**
@@ -480,7 +506,11 @@ export type UserContentBlock =
     }
   | {
       /**
-       * Durable artifact identity of the file.
+       * Identifies a durable artifact produced or referenced by the runtime.
+       *
+       * An artifact is identified by an opaque runtime-owned id, never by a
+       * local filesystem path: paths are executor concerns and are not a
+       * universal durable artifact identity.
        */
       artifact_id: string;
       /**
@@ -556,6 +586,14 @@ export type ReviewDecision =
  */
 export type Response = Success | Failure;
 export type MethodResult =
+  | {
+      data: string;
+      type: 'artifact_bytes';
+    }
+  | {
+      artifact_id: ArtifactId;
+      type: 'artifact_uploaded';
+    }
   | {
       snapshot: ServerDiagnostics;
       type: 'diagnostics';
@@ -820,7 +858,11 @@ export type AssistantContentBlock =
     })
   | {
       /**
-       * Durable artifact identity of the image.
+       * Identifies a durable artifact produced or referenced by the runtime.
+       *
+       * An artifact is identified by an opaque runtime-owned id, never by a
+       * local filesystem path: paths are executor concerns and are not a
+       * universal durable artifact identity.
        */
       artifact_id: string;
       /**
@@ -898,7 +940,11 @@ export type ToolResultContent =
     }
   | {
       /**
-       * Durable artifact identity of the file.
+       * Identifies a durable artifact produced or referenced by the runtime.
+       *
+       * An artifact is identified by an opaque runtime-owned id, never by a
+       * local filesystem path: paths are executor concerns and are not a
+       * universal durable artifact identity.
        */
       artifact_id: string;
       /**
@@ -917,7 +963,11 @@ export type ToolResultContent =
     }
   | {
       /**
-       * Durable artifact identity of the image.
+       * Identifies a durable artifact produced or referenced by the runtime.
+       *
+       * An artifact is identified by an opaque runtime-owned id, never by a
+       * local filesystem path: paths are executor concerns and are not a
+       * universal durable artifact identity.
        */
       artifact_id: string;
       /**
@@ -4085,7 +4135,11 @@ export interface WorkflowToolIdentity {
  */
 export interface FileReference {
   /**
-   * Durable artifact identity of the file.
+   * Identifies a durable artifact produced or referenced by the runtime.
+   *
+   * An artifact is identified by an opaque runtime-owned id, never by a
+   * local filesystem path: paths are executor concerns and are not a
+   * universal durable artifact identity.
    */
   artifact_id: string;
   /**

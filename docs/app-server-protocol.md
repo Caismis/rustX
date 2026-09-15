@@ -1,4 +1,4 @@
-# App Server protocol v1
+# App Server protocol v2
 
 The App Server protocol is rustX's public client boundary for the TUI,
 Developer Web Console, future Web UI, and SDKs. Rust DTOs in
@@ -119,13 +119,13 @@ A browser can supply the credential in its handshake without arbitrary headers:
 
 ```js
 const socket = new WebSocket("ws://127.0.0.1:8080/", [
-  "rustx.app-server.v1",
+  "rustx.app-server.v2",
   `rustx-token.${dedicatedTransportToken}`,
 ]);
 ```
 
 The server requires both offers on path `/` without a query, rejects failed admission
-with HTTP 401, and selects only `rustx.app-server.v1` in its response. It never echoes
+with HTTP 401, and selects only `rustx.app-server.v2` in its response. It never echoes
 the credential. Admission completes before constructing `AppServerConnection`, so
 unauthenticated clients cannot initialize or invoke any method. This is a dedicated
 single-user transport secret, never a provider key, MCP secret, or runtime credential.
@@ -214,7 +214,7 @@ an ID does not deduplicate a mutation. Integer correlation IDs must fit the
 JavaScript safe integer range. String IDs are recommended for arbitrary IDs.
 
 ```json
-{"jsonrpc":"2.0","id":"init-1","method":"initialize","params":{"protocol_version":1,"client":{"name":"example","version":"1"},"presentation":{"images":true,"questionnaires":true,"reviews":true}}}
+{"jsonrpc":"2.0","id":"init-1","method":"initialize","params":{"protocol_version":2,"client":{"name":"example","version":"1"},"presentation":{"images":true,"questionnaires":true,"reviews":true}}}
 ```
 
 `APP_SERVER_PROTOCOL_VERSION` is independent of crate, manifest, journal,
@@ -230,7 +230,7 @@ Parse, envelope, method and parameter errors use JSON-RPC codes -32700,
 Internal storage/provider details are not reflected into arbitrary wire errors.
 Errors with unknown correlation use a null ID. Client notifications receive
 no response and cannot invoke request-only mutations. Batch requests are not
-supported in v1; pipeline individual requests instead. This limitation is
+supported in v2; pipeline individual requests instead. This limitation is
 explicitly rejected as an invalid request before any action occurs.
 
 ## Methods and native owners
@@ -322,7 +322,7 @@ cannot remove a newly installed route.
 
 ## Attachment and observation lifetime
 
-Protocol v1 admits at most one writable external controller per resident
+Protocol v2 admits at most one writable external controller per resident
 Conversation. A second controller gets a deterministic rejection and cannot
 steal the first. Detach and connection destruction release external admission
 only. They do not cancel a turn, settle a pending interaction, unload a runtime,
@@ -401,8 +401,8 @@ DTO's standalone serde/schema representation.
 
 Generated client-neutral artifacts are in `protocol/app-server/`:
 
-- `v1.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
-- `v1.ts`: TypeScript generated from that schema using pinned
+- `v2.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
+- `v2.ts`: TypeScript generated from that schema using pinned
   `json-schema-to-typescript` and its committed pnpm lockfile.
 - `fixtures.json`: serialized Rust messages, including nulls, string/numeric
   request IDs, timestamps, exact domains above 2^53 and lossless Questionnaire
@@ -610,3 +610,60 @@ one physical connection. Process catalog request ownership is additionally
 bounded by `max_connections * 16` outstanding operations; refusal is
 `request_capacity`. Other typed refusals are `residency_capacity`,
 `attachment_capacity`, and the existing `stale_runtime` for retired incarnations.
+
+## Bounded artifact carrier (WEB-02)
+
+App Server v2 identifies this complete mandatory vocabulary. A v1 initialize is
+rejected as `unsupported_version`; a v1-only WebSocket offer is refused before
+JSON-RPC. All stdio, TUI and Web clients use v2. Runtime Client versioning remains
+independent.
+
+`artifact/read { target, artifact_id } -> artifact_bytes { data }` is a read;
+`artifact/upload { target, data } -> artifact_uploaded { artifact_id }`
+is a mutation. `data` is standard base64, limited to 349,528 encoded characters
+and 256 KiB decoded bytes. Upload is storage-only: it does not inspect model,
+provider, modality, MIME or filename. Both methods are mandatory core v2 methods,
+using existing complete attachment routing and native runtime operation leases.
+There is no separate Web file server.
+Existing 1 MiB framing, 16 in-flight requests per connection and host connection
+bounds apply. A lost upload acknowledgement has uncertain outcome, never replay.
+
+The conversation ArtifactStore owns allocation, storage and bounded reads. IDs
+are durably reserved across cold reopening; create-new writers cannot overwrite
+old bytes. Reads reject path-shaped IDs, symlinks, non-regular files and oversized
+artifacts. No carrier metadata/error exposes a private storage path. Session
+unload retains bytes; native Session deletion owns their removal.
+
+
+The shared ArtifactStore has a fixed lifetime capacity of **256 artifact
+identities** (`MAX_ARTIFACTS_PER_STORE`). Native Tool/MCP artifacts consume the
+same slots as uploads; there is no separate upload counter. With each App Server
+upload capped at 256 KiB, uploads can contribute at most **64 MiB** of retained
+payload bytes if every slot is used by an upload. Native artifacts reduce the
+remaining upload capacity; this is not a new byte limit on arbitrary Tool/MCP
+artifacts. The monotonic maximum ordinal in either `.reserved` or `.bin` is the
+durable capacity frontier. Failed or abandoned work after reservation still
+consumes its slot. Capacity survives disconnect, detach, unload and cold reopen;
+Session deletion reclaims the owning store. Stores already at or above the limit
+still open for reads and reject new allocation. Capacity rejection creates no
+reservation or byte file and returns a stable, path-free `invalid_state`
+diagnostic: `artifact capacity exhausted (maximum 256 identities)`.
+
+See [Web Chat ownership](../web-console/CHAT.md) for independent live/transcript
+cursor domains, authoritative replacement, history-cache bounds, admission and
+browser Blob lifetime. These methods do not widen current provider-adapter
+multimodal support.
+
+Native canonical modality validation remains at the actual model invocation:
+`model::adapter::validation::validate_request` uses the request's immutable
+invocation capabilities before opening provider I/O. WEB-02 introduces no
+acceptance-time model inference from `current_attempt`: a finite mailbox
+watermark can exclude later acceptance while the Attempt slot still exists, and
+Session mutation can precede the next Attempt freeze after idle acceptance.
+Browser preflight reads authoritative model projections and preserves unsupported
+drafts with current text-only effective capabilities. It does not bind a pending
+inbound to an eventual consumer. Future multimodal turn admission requires that
+explicit native binding; neither the artifact carrier nor the browser owns it.
+Direct native callers can therefore receive durable inbound acceptance before
+the actual model invocation refuses unsupported content locally. WEB-02 does
+not strengthen the native inbox acceptance contract.

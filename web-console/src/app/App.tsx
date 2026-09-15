@@ -1,7 +1,10 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { AppServerClient } from '../client/app-server';
-import type { RuntimeClientSessionDeletePreview } from '../../../protocol/app-server/v1';
+import type { RuntimeClientSessionDeletePreview } from '../../../protocol/app-server/v2';
 import { activeAttempt, json } from '../bindings/projection';
+import { ArtifactResources } from '../client/artifacts';
+import { ArtifactContext } from './components/Artifact';
+import { ChatViewport } from '../presentation/layout/ChatViewport';
 import { AppFrame } from '../presentation/layout/AppFrame';
 import { Sidebar } from './components/Sidebar';
 import { InputBar } from './components/InputBar';
@@ -43,6 +46,8 @@ export function App({ client }: { client: AppServerClient }) {
   const [preview, setPreview] = useState<RuntimeClientSessionDeletePreview>();
   const [offset, setOffset] = useState(0);
   const view = selected ? state.views[selected] : undefined;
+  const artifacts = useMemo(() => selected && view?.target ? new ArtifactResources(client, selected) : undefined, [client, selected, view?.target, state.generation]);
+  useEffect(() => () => artifacts?.dispose(), [artifacts]);
   const connected = state.connection === 'connected';
   const attached = connected && view?.attachmentIntent === 'wanted' && view.attachment === 'attached';
   const run = (action: () => Promise<unknown>) => {
@@ -77,7 +82,7 @@ export function App({ client }: { client: AppServerClient }) {
     else setError(`Delete preview: ${json(result.result)}`);
   });
   return <AppFrame navigation={<Sidebar footer={<>
-    <p className="muted">Native App Server · protocol v1</p><a href="https://github.com/Caismis/rustX" target="_blank" rel="noreferrer">rustX source</a>
+    <p className="muted">Native App Server · protocol v2</p><a href="https://github.com/Caismis/rustX" target="_blank" rel="noreferrer">rustX source</a>
     <p className="muted">UI source adapted from DeepSeek Harness. <a href="/LICENSE-DeepSeek-Harness.txt" target="_blank" rel="noreferrer">MIT notice</a></p>
   </>}>
     <section className="connection-form" aria-label="Connection">
@@ -140,16 +145,16 @@ export function App({ client }: { client: AppServerClient }) {
           <Button size="sm" disabled={!attached} onClick={() => run(() => client.release(view.id, true))}>Unload runtime</Button></div>
       </section>
       {view.attachment !== 'attached' && <p className="notice">{view.attachment}: last observed values may be stale. Execution and pending interactions remain server-owned. {view.error}</p>}
-      <div className="conversation-scroll">
-        {view.snapshot && <><Conversation snapshot={view.snapshot} /><RuntimeFacts snapshot={view.snapshot} />
+      <ArtifactContext.Provider value={artifacts}><ChatViewport key={`${view.id}:${view.target?.attachment_id ?? state.generation}`}>
+        {view.snapshot && <><Conversation snapshot={view.snapshot} history={view.history} loadEarlier={() => run(() => client.loadEarlier(view.id))} latest={() => client.latestTranscript(view.id)} /><RuntimeFacts snapshot={view.snapshot} />
           <div className="attempt-status" role="status">Attempt: {view.snapshot.attempt ? `${view.snapshot.attempt.attempt_id} · ${view.snapshot.attempt.phase.type}` : 'none observed'}{view.snapshot.attempt?.phase.type === 'settled' && ` · ${view.snapshot.attempt.phase.outcome.type}`}</div>
           <Interactions client={client} state={state} view={view} run={run} />
         </>}
-      </div>
+      </ChatViewport></ArtifactContext.Provider>
       <InputBar key={view.id} disabled={!attached || !!view.snapshot?.shutting_down || !!view.snapshot?.durability_failure} busy={sending[view.id] === state.generation} active={activeAttempt(view.snapshot)}
-        onCancel={() => run(() => client.cancelTurn(view.id))} onSend={async (text, steer) => {
+        onCancel={() => run(() => client.cancelTurn(view.id))} onSend={async (text, steer, files) => {
           const generation = state.generation; setSending(current => ({ ...current, [view.id]: generation })); setError('');
-          try { await client.send(view.id, text, steer); return generation === client.getSnapshot().generation; }
+          try { await client.send(view.id, text, steer, files); return generation === client.getSnapshot().generation; }
           catch (cause) { if (generation === client.getSnapshot().generation) setError(String(cause)); return false; }
           finally { if (generation === client.getSnapshot().generation) setSending(current => { const next = { ...current }; delete next[view.id]; return next; }); }
         }} />

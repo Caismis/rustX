@@ -70,7 +70,7 @@ async fn initialize(connection: &AppServerConnection) {
         connection,
         0,
         Method::Initialize(InitializeParams {
-            protocol_version: 1,
+            protocol_version: 2,
             client: ClientIdentity {
                 name: "scripted".into(),
                 version: "1".into(),
@@ -648,10 +648,10 @@ async fn initialize_and_malformed_wire_are_transactional() {
         let connection = AppServerConnection::new(f.host.clone());
         let before = connection.handle_json(r#"{"jsonrpc":"2.0","id":0,"method":"server/info","params":{}}"#).await.unwrap();
         assert!(matches!(before, Response::Failure(Failure { error: RpcError { data: Some(ErrorData::NotInitialized), .. }, .. })));
-        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":99,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
+        let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":1,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { .. })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 2, .. })));
         initialize(&connection).await;
         for (json, expected_code) in [
             (r#"{"jsonrpc":"2.0","id":1,"method":"missing","params":{}}"#, -32601),
@@ -1399,6 +1399,290 @@ async fn host_request_owner_outlives_dropped_protocol_waiter() {
         );
         connection.close();
         f.host.finish_drain().unwrap();
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn artifact_carrier_is_native_scoped_bounded_and_cold_reopen_safe() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let other = attach(&connection, &f, 1).await;
+        let artifact_id = {
+            let managed = f.load(0).await.unwrap().unwrap();
+            managed
+                .inspect_runtime()
+                .unwrap()
+                .tool_runtime()
+                .artifacts()
+                .put_bounded(b"canonical bytes")
+                .unwrap()
+        };
+        let read = call(
+            &connection,
+            801,
+            Method::ArtifactRead {
+                target: target.clone(),
+                artifact_id: artifact_id.clone(),
+            },
+        )
+        .await;
+        assert_eq!(
+            read,
+            MethodResult::ArtifactBytes {
+                data: "Y2Fub25pY2FsIGJ5dGVz".into()
+            }
+        );
+        let encoded = serde_json::to_string(&read).unwrap();
+        assert!(!encoded.contains(f.workspaces[0].parent().unwrap().to_str().unwrap()));
+        rejected(
+            &connection,
+            Method::ArtifactRead {
+                target: other,
+                artifact_id: artifact_id.clone(),
+            },
+        )
+        .await;
+        rejected(
+            &connection,
+            Method::ArtifactRead {
+                target: target.clone(),
+                artifact_id: crate::runtime::identity::ArtifactId::new("../conversation.sqlite"),
+            },
+        )
+        .await;
+        let uploaded = call(
+            &connection,
+            910,
+            Method::ArtifactUpload {
+                target: target.clone(),
+                data: "aGk=".into(),
+            },
+        )
+        .await;
+        assert!(matches!(uploaded, MethodResult::ArtifactUploaded { .. }));
+        for data in [
+            "not base64!".to_owned(),
+            "A".repeat(crate::tools::artifacts::ARTIFACT_TRANSFER_MAX.div_ceil(3) * 4 + 1),
+        ] {
+            rejected(
+                &connection,
+                Method::ArtifactUpload {
+                    target: target.clone(),
+                    data,
+                },
+            )
+            .await;
+        }
+        assert!(
+            f.provider.request_bodies().is_empty(),
+            "storage-only upload never reaches provider"
+        );
+        call(
+            &connection,
+            802,
+            Method::SessionUnload {
+                target: target.clone(),
+            },
+        )
+        .await;
+        rejected(
+            &connection,
+            Method::ArtifactRead {
+                target,
+                artifact_id: artifact_id.clone(),
+            },
+        )
+        .await;
+        let reopened = attach(&connection, &f, 0).await;
+        assert_eq!(
+            call(
+                &connection,
+                803,
+                Method::ArtifactRead {
+                    target: reopened,
+                    artifact_id: artifact_id.clone()
+                }
+            )
+            .await,
+            read
+        );
+        let next = {
+            let managed = f.load(0).await.unwrap().unwrap();
+            managed
+                .inspect_runtime()
+                .unwrap()
+                .tool_runtime()
+                .artifacts()
+                .put_bounded(b"new bytes")
+                .unwrap()
+        };
+        assert_ne!(artifact_id, next);
+        connection.close();
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn artifact_upload_capacity_is_shared_durable_and_path_safe() {
+    use crate::tools::artifacts::MAX_ARTIFACTS_PER_STORE;
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let mut target = attach(&connection, &f, 0).await;
+        let root = {
+            let managed = f.load(0).await.unwrap().unwrap();
+            let native = managed.inspect_runtime().unwrap();
+            let artifacts = native.tool_runtime().artifacts();
+            // Native Tool reservations and public uploads share one domain.
+            for _ in 0..MAX_ARTIFACTS_PER_STORE - 1 {
+                artifacts.create_artifact().unwrap();
+            }
+            artifacts.root().to_path_buf()
+        };
+        let MethodResult::ArtifactUploaded { artifact_id } = call(
+            &connection,
+            920,
+            Method::ArtifactUpload {
+                target: target.clone(),
+                data: "aGk=".into(),
+            },
+        )
+        .await
+        else {
+            panic!("final slot should upload");
+        };
+        assert_eq!(
+            artifact_id.as_str(),
+            format!("artifact_{MAX_ARTIFACTS_PER_STORE}")
+        );
+        let contents = || -> std::collections::BTreeMap<_, _> {
+            std::fs::read_dir(&root)
+                .unwrap()
+                .map(|entry| {
+                    let entry = entry.unwrap();
+                    // Other native owners may retain child directories here;
+                    // ArtifactStore reservations and byte files are direct children.
+                    let bytes = entry
+                        .file_type()
+                        .unwrap()
+                        .is_file()
+                        .then(|| std::fs::read(entry.path()).unwrap());
+                    (entry.file_name(), bytes)
+                })
+                .collect()
+        };
+        let before = contents();
+        // Repeat across native unload/cold reopen; a new connection follows.
+        for _ in 0..2 {
+            for _ in 0..2 {
+                let response = connection
+                    .handle_request(Request {
+                        jsonrpc: JsonRpcVersion::V2,
+                        id: RequestId::Integer(921),
+                        call: Method::ArtifactUpload {
+                            target: target.clone(),
+                            data: "bm8=".into(),
+                        },
+                    })
+                    .await;
+                let encoded = serde_json::to_string(&response).unwrap();
+                let Response::Failure(Failure { error, .. }) = response else {
+                    panic!("capacity must reject");
+                };
+                assert_eq!(error.data, Some(ErrorData::InvalidState));
+                assert_eq!(
+                    error.message,
+                    "artifact capacity exhausted (maximum 256 identities)"
+                );
+                assert!(!encoded.contains(root.to_str().unwrap()));
+                assert!(!encoded.contains(f.workspaces[0].to_str().unwrap()));
+                assert_eq!(
+                    contents(),
+                    before,
+                    "rejection changes no reservation or byte file"
+                );
+                assert!(!root.join("artifact_257.reserved").exists());
+                assert!(!root.join("artifact_257.bin").exists());
+            }
+            assert_eq!(
+                call(
+                    &connection,
+                    922,
+                    Method::ArtifactRead {
+                        target: target.clone(),
+                        artifact_id: artifact_id.clone(),
+                    }
+                )
+                .await,
+                MethodResult::ArtifactBytes {
+                    data: "aGk=".into()
+                }
+            );
+            let MethodResult::Snapshot { snapshot, .. } = call(
+                &connection,
+                923,
+                Method::SessionSnapshot {
+                    target: target.clone(),
+                },
+            )
+            .await
+            else {
+                panic!("runtime remains usable");
+            };
+            assert!(snapshot.messages.is_empty());
+            assert!(snapshot.inbound.pending.is_empty());
+            assert!(snapshot.attempt.is_none());
+            assert_eq!(f.provider.attempt_count(), 0);
+            call(
+                &connection,
+                924,
+                Method::SessionUnload {
+                    target: target.clone(),
+                },
+            )
+            .await;
+            target = attach(&connection, &f, 0).await;
+        }
+        // Connection lifetime also cannot reset the durable capacity.
+        connection.close();
+        let reconnected = AppServerConnection::new(f.host.clone());
+        initialize(&reconnected).await;
+        let target = attach(&reconnected, &f, 0).await;
+        assert_eq!(
+            rejected(
+                &reconnected,
+                Method::ArtifactUpload {
+                    target: target.clone(),
+                    data: "aGk=".into(),
+                }
+            )
+            .await,
+            ErrorData::InvalidState
+        );
+        assert_eq!(contents(), before);
+        assert_eq!(
+            call(
+                &reconnected,
+                925,
+                Method::ArtifactRead {
+                    target,
+                    artifact_id
+                }
+            )
+            .await,
+            MethodResult::ArtifactBytes {
+                data: "aGk=".into()
+            }
+        );
+        assert_eq!(f.provider.attempt_count(), 0);
+        reconnected.close();
         f.close().await;
     })
     .await;

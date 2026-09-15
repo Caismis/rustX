@@ -3,6 +3,7 @@
 #![allow(clippy::too_many_lines)]
 #[path = "../../support/app_server_conformance.rs"]
 mod app_server_conformance;
+mod inbound_model;
 mod protocol;
 mod residency_policy;
 mod transports;
@@ -166,7 +167,19 @@ impl Fixture {
             "chat_reasoning_replay = \"omit\"",
         ]
         .map(str::to_owned);
-        let documents = crate::local_runtime::initialization::documents(&args).unwrap();
+        let mut documents = crate::local_runtime::initialization::documents(&args).unwrap();
+        // Two identities, identical text-only production adapter capabilities.
+        // Admission races can change the selected model without inventing a
+        // multimodal adapter or bypassing the real request validator.
+        let mut catalog: toml::Value =
+            toml::from_str(std::str::from_utf8(&documents[0]).unwrap()).unwrap();
+        let models = catalog["providers"]["local"]["models"]
+            .as_array_mut()
+            .unwrap();
+        let mut alternate = models[0].clone();
+        alternate["id"] = toml::Value::String("b".into());
+        models.push(alternate);
+        documents[0] = toml::to_string(&catalog).unwrap().into_bytes();
         crate::local_runtime::initialization::initialize(&host, &documents);
         for workspace in &workspaces {
             let request = LaunchRequest {
