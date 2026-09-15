@@ -8,6 +8,8 @@
 //! [`FileReference`](crate::message::content::FileReference) remains the
 //! model/runtime reference. Session-owned roots survive cold reopen and are
 //! removed by Session deletion. Existing artifact files are never truncated.
+//! The shared lifetime identity capacity is [`MAX_ARTIFACTS_PER_STORE`]; durable
+//! reservations consume slots even when the subsequent byte write is abandoned.
 
 use std::fs::File;
 use std::io::{Read, Write};
@@ -22,8 +24,11 @@ use crate::runtime::identity::{ArtifactId, ConversationId};
 pub enum ArtifactError {
     /// The artifact root cannot be created.
     RootUnavailable(String),
-    /// The artifact sequence space is exhausted.
-    SequenceExhausted,
+    /// The store's lifetime allocation capacity has been consumed.
+    CapacityExhausted {
+        /// Fixed maximum number of allocated identities per store.
+        max_artifacts: u64,
+    },
     /// The artifact cannot be written.
     WriteFailed(String),
 }
@@ -32,7 +37,12 @@ impl core::fmt::Display for ArtifactError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::RootUnavailable(message) => write!(f, "artifact root unavailable: {message}"),
-            Self::SequenceExhausted => write!(f, "the artifact sequence space is exhausted"),
+            Self::CapacityExhausted { max_artifacts } => {
+                write!(
+                    f,
+                    "artifact capacity exhausted (maximum {max_artifacts} identities)"
+                )
+            }
             Self::WriteFailed(message) => write!(f, "artifact write failed: {message}"),
         }
     }
@@ -140,27 +150,39 @@ impl ArtifactStore {
 
     /// Allocates one opaque monotonic artifact id.
     ///
-    /// The first allocation receives `artifact_1` and successful allocations
-    /// advance strictly monotonically with checked arithmetic; exhaustion
-    /// fails explicitly instead of wrapping.
+    /// The first allocation receives `artifact_1`. Reservations consume the
+    /// fixed lifetime capacity even if syncing or later byte writing fails.
+    /// Cold reopen recovers the same frontier from reserved/written ordinals.
     ///
     /// # Errors
     ///
-    /// Returns [`ArtifactError::SequenceExhausted`] when the sequence space
-    /// is exhausted.
+    /// Returns [`ArtifactError::CapacityExhausted`] without mutation at capacity,
+    /// or [`ArtifactError::WriteFailed`] if the reservation cannot be persisted.
     pub fn create_artifact(&self) -> Result<ArtifactId, ArtifactError> {
         let mut state = self.state();
-        let next = state
-            .next
-            .checked_add(1)
-            .ok_or(ArtifactError::SequenceExhausted)?;
-        state.next = next;
+        if state.next >= MAX_ARTIFACTS_PER_STORE {
+            return Err(ArtifactError::CapacityExhausted {
+                max_artifacts: MAX_ARTIFACTS_PER_STORE,
+            });
+        }
+        let next = state.next + 1;
         let reservation = self.root.join(format!("artifact_{next}.reserved"));
-        File::options()
+        let file = File::options()
             .create_new(true)
             .write(true)
             .open(reservation)
-            .and_then(|file| file.sync_all())
+            .map_err(|error| {
+                // An already-existing reservation also consumes this identity.
+                // Never retry it as a fresh allocation within this runtime.
+                if error.kind() == std::io::ErrorKind::AlreadyExists {
+                    state.next = next;
+                }
+                ArtifactError::WriteFailed("artifact reservation failed".into())
+            })?;
+        // Creation consumes the slot in memory before either durability barrier.
+        // A subsequent sync failure must not allow this identity to be reused.
+        state.next = next;
+        file.sync_all()
             .and_then(|()| File::open(&self.root)?.sync_all())
             .map_err(|_| ArtifactError::WriteFailed("artifact reservation failed".into()))?;
         Ok(ArtifactId::new(format!("artifact_{next}")))
@@ -254,6 +276,12 @@ impl ArtifactStore {
 
 /// One-shot carrier bound: base64 is at most 349,528 bytes, below 1 MiB ingress.
 pub const ARTIFACT_TRANSFER_MAX: usize = 256 * 1024;
+
+/// Lifetime capacity shared by uploads and native Tool/MCP artifacts. The
+/// monotonic reserved/written ordinal is the durable frontier, not a live-file
+/// count. Session deletion is the reclamation boundary. At 256 KiB per upload,
+/// public uploads can contribute at most 64 MiB of retained bytes per store.
+pub const MAX_ARTIFACTS_PER_STORE: u64 = 256;
 
 fn validate_id(id: &ArtifactId) -> Result<(), ArtifactError> {
     if id
@@ -361,15 +389,129 @@ mod tests {
         );
     }
 
-    #[test]
-    fn sequence_exhaustion_fails_explicitly() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let store = ArtifactStore::new(ConversationId::new("conv-1"), &dir).expect("store");
-        store.state.lock().expect("lock").next = u64::MAX;
+    fn root_contents(store: &ArtifactStore) -> std::collections::BTreeMap<String, Vec<u8>> {
+        std::fs::read_dir(store.root())
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                (
+                    entry.file_name().into_string().unwrap(),
+                    std::fs::read(entry.path()).unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    fn assert_capacity_noop(store: &ArtifactStore) {
+        let before = root_contents(store);
+        let frontier = store.state().next;
+        let error = ArtifactError::CapacityExhausted {
+            max_artifacts: super::MAX_ARTIFACTS_PER_STORE,
+        };
+        assert_eq!(store.create_artifact(), Err(error.clone()));
+        assert_eq!(store.put_bounded(b"rejected"), Err(error));
+        assert_eq!(store.state().next, frontier);
         assert_eq!(
-            store.create_artifact().expect_err("exhausted"),
-            ArtifactError::SequenceExhausted
+            root_contents(store),
+            before,
+            "no reservation, bytes or overwrite"
         );
+        assert!(!store.root().join("artifact_257.reserved").exists());
+        assert!(!store.root().join("artifact_257.bin").exists());
+    }
+
+    #[test]
+    fn artifact_capacity_exact_boundary_is_mutation_free_and_survives_cold_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ArtifactStore::new(ConversationId::new("A"), &dir).unwrap();
+        for ordinal in 1..=super::MAX_ARTIFACTS_PER_STORE {
+            let bytes = ordinal.to_le_bytes();
+            let id = store.put_bounded(&bytes).unwrap();
+            assert_eq!(id.as_str(), format!("artifact_{ordinal}"));
+        }
+        assert_capacity_noop(&store);
+        let before = root_contents(&store);
+        drop(store);
+        let reopened = ArtifactStore::new(ConversationId::new("A"), &dir).unwrap();
+        assert_capacity_noop(&reopened);
+        assert_eq!(root_contents(&reopened), before);
+        for ordinal in 1..=super::MAX_ARTIFACTS_PER_STORE {
+            let id = crate::runtime::identity::ArtifactId::new(format!("artifact_{ordinal}"));
+            assert_eq!(reopened.read_bounded(&id).unwrap(), ordinal.to_le_bytes());
+        }
+    }
+
+    #[test]
+    fn artifact_capacity_counts_unwritten_and_failed_reserved_slots_after_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ArtifactStore::new(ConversationId::new("A"), &dir).unwrap();
+        let retained = store.put_bounded(b"retained").unwrap();
+        for _ in 1..super::MAX_ARTIFACTS_PER_STORE {
+            store.create_artifact().unwrap();
+        }
+        // The final identity has only a reservation; no byte writer ever ran.
+        assert!(store.root().join("artifact_256.reserved").exists());
+        assert!(!store.root().join("artifact_256.bin").exists());
+        let unwritten = crate::runtime::identity::ArtifactId::new("artifact_256");
+        // Force a byte-open failure after successful reservation, then leave
+        // only the reservation as an abandoned producer would.
+        std::fs::create_dir(store.path_of(&unwritten)).unwrap();
+        assert!(store.open_writer(&unwritten).is_err());
+        std::fs::remove_dir(store.path_of(&unwritten)).unwrap();
+        assert_capacity_noop(&store);
+        drop(store);
+        let reopened = ArtifactStore::new(ConversationId::new("A"), &dir).unwrap();
+        assert_capacity_noop(&reopened);
+        assert_eq!(reopened.read_bounded(&retained).unwrap(), b"retained");
+    }
+
+    #[test]
+    fn artifact_capacity_old_stores_above_limit_remain_readable() {
+        for suffix in ["bin", "reserved"] {
+            for frontier in [super::MAX_ARTIFACTS_PER_STORE + 1, u64::MAX] {
+                let dir = tempfile::tempdir().unwrap();
+                std::fs::write(dir.path().join("artifact_1.bin"), b"retained").unwrap();
+                std::fs::write(
+                    dir.path().join(format!("artifact_{frontier}.{suffix}")),
+                    b"",
+                )
+                .unwrap();
+                let store = ArtifactStore::new(ConversationId::new("A"), &dir).unwrap();
+                let before = root_contents(&store);
+                assert_eq!(store.state().next, frontier);
+                assert!(matches!(
+                    store.create_artifact(),
+                    Err(ArtifactError::CapacityExhausted { max_artifacts: 256 })
+                ));
+                assert_eq!(store.state().next, frontier);
+                assert_eq!(root_contents(&store), before);
+                assert_eq!(
+                    store
+                        .read_bounded(&crate::runtime::identity::ArtifactId::new("artifact_1"))
+                        .unwrap(),
+                    b"retained"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn reservation_creation_failure_does_not_advance_but_existing_reservation_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("artifacts");
+        let store = ArtifactStore::new(ConversationId::new("A"), &root).unwrap();
+        std::fs::remove_dir(&root).unwrap();
+        assert!(store.create_artifact().is_err());
+        assert_eq!(store.state().next, 0);
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("artifact_1.reserved"), b"").unwrap();
+        assert!(store.create_artifact().is_err());
+        assert_eq!(
+            store.state().next,
+            1,
+            "an existing identity must not be reused"
+        );
+        assert_eq!(store.create_artifact().unwrap().as_str(), "artifact_2");
     }
 
     #[test]

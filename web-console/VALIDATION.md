@@ -495,3 +495,78 @@ its typed `UncertainOutcomeError` and `TransportClosedError` were already correc
 The test now checks `process_exit`/`input_eof`, or strictly `write_error` with an
 EPIPE cause, and separately awaits/asserts the actual SIGKILL child exit. It
 changes no transport or runtime semantics and introduces no delay/replay.
+
+## PR #317 cumulative artifact capacity repair
+
+Starting head: `81d97d5167fda22491c1eab20a78cf84d6f01faa`.
+Base: `8b8e99e87df61b1fe8a91134f818fddc54968e46`, unchanged after fetch.
+The current `.github/workflows/ci.yml` was re-read before validation.
+
+`MAX_ARTIFACTS_PER_STORE = 256` belongs to the shared conversation ArtifactStore.
+Every Tool/MCP reservation and App Server upload consumes this same monotonic
+identity domain. A public upload remains capped at 256 KiB, giving at most
+64 MiB of upload payload contribution if all slots are uploads. This does not
+add a byte limit to native Tool/MCP artifacts. There is no upload counter,
+metadata database, configuration, eviction or cleanup scheduler. Session deletion
+remains the reclamation owner.
+
+Capacity is checked while holding the allocation mutex, before any reservation
+creation or allocator update. Successful reservation creation publishes the
+in-memory frontier before file/directory sync; later errors cannot reuse that
+identity. An already-existing reservation is also consumed conservatively.
+Failure before creation leaves the frontier unchanged. Cold reopen scans the
+maximum `.reserved`/`.bin` ordinal, including unwritten reservations. Older
+stores above the capacity still open for reads and refuse new allocation.
+`ArtifactError::CapacityExhausted` replaces the now-unreachable artifact sequence
+exhaustion mode. The carrier keeps App Server v2 and its existing `invalid_state`
+error data, with a bounded path-free capacity diagnostic instead of discarding
+it as a generic operation failure. No generated contract change is required.
+
+Focused regressions:
+
+- `artifact_capacity_exact_boundary_is_mutation_free_and_survives_cold_reopen`:
+  all 256 writes succeed; repeated create/upload refusal preserves the complete
+  root file snapshot and allocator frontier; cold reopen retains all bytes.
+- `artifact_capacity_counts_unwritten_and_failed_reserved_slots_after_reopen`:
+  unwritten reservations and a failed final byte-open consume slots after reopen.
+- `artifact_capacity_old_stores_above_limit_remain_readable`: `.bin` and
+  `.reserved` frontiers above capacity, including `u64::MAX`, permit reads and
+  reject allocation without mutation.
+- `reservation_creation_failure_does_not_advance_but_existing_reservation_does`:
+  failed creation consumes nothing; an existing reservation cannot be reused.
+- `artifact_upload_capacity_is_shared_durable_and_path_safe`: native reservations
+  occupy 255 slots; public upload takes slot 256; repeated upload refusals preserve
+  files, existing reads and empty inbound/Attempt state, with zero provider HTTP
+  attempts. Repeated native unload/reopen and connection replacement cannot reset
+  capacity. The exact error is sanitized and contains no artifact/workspace path.
+
+The initial App Server test snapshot helper assumed all root children were files;
+it was corrected to include native child-directory entries without reading them
+as byte files. Both focused suites then passed. No runtime workaround or test
+exclusion was used.
+
+Final local validation for this capacity repair:
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all -- --check` | Passed |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Passed |
+| `git diff --check` | Passed |
+| `cargo build --bins` | Passed |
+| `cargo test --lib --all-features tools::artifacts::tests::` | 8 passed |
+| `cargo test --lib --all-features artifact_upload_capacity_is_shared_durable_and_path_safe` | 1 passed |
+| `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 2809 passed; 1 existing ignored; bins/examples passed |
+| `cargo test --test contracts --test provider --all-features` | 25 + 166 passed; 5 existing opt-in ignored |
+| `cargo test --lib --all-features -- boundary_suites::` | 226 passed |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance` | 116 / 52 / 53 / 157 / 23 passed |
+| protocol/app-server: `pnpm install --frozen-lockfile`, `pnpm check`, `pnpm typecheck` | Passed; no generated drift |
+| web-console: `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test` | Passed; 131 tests |
+| web-console: `pnpm check:provenance`, `pnpm build` | Passed; 53 source records / 98 dependency notices |
+| web-console: `pnpm test:e2e` | 6 passed, including real native PNG decode/lightbox/reconnect and draft preservation |
+| tui: `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test` | Passed; 810 tests |
+| fake-provider: `uv sync --frozen`, `uv run --frozen pytest` | Passed; 51 tests |
+
+No final validation command failed or was waived. Final-head GitHub Actions
+results are recorded in PR #317 after completion; local checks do not substitute
+for the macOS CI lane. App Server v2, generated files, Harness provenance,
+model-agnostic acceptance and existing Chat/history behavior remain unchanged.

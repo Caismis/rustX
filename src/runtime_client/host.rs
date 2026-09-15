@@ -1230,7 +1230,14 @@ impl ClientInner {
             .tool_runtime()
             .artifacts()
             .put_bounded(&bytes)
-            .map_err(|_| invalid())
+            .map_err(|error| match error {
+                crate::tools::artifacts::ArtifactError::CapacityExhausted { .. } => {
+                    RuntimeClientError::InvalidState {
+                        message: error.to_string(),
+                    }
+                }
+                _ => invalid(),
+            })
     }
 
     /// Reads the authoritative session model state through the folded

@@ -715,7 +715,17 @@ async fn dispatch_runtime(
                 .map_err(client_error)?,
         }),
         Method::ArtifactUpload { target: _, data } => Ok(MethodResult::ArtifactUploaded {
-            artifact_id: authority.artifact_upload(&data).map_err(client_error)?,
+            artifact_id: authority
+                .artifact_upload(&data)
+                .map_err(|error| match error {
+                    // This carrier authors bounded, path-free InvalidState diagnostics,
+                    // including ArtifactStore capacity. Do not discard that distinction
+                    // or forward unsanitized filesystem errors from other operations.
+                    RuntimeClientError::InvalidState { message } => {
+                        rpc_error(-32000, &message, Some(ErrorData::InvalidState))
+                    }
+                    error => client_error(error),
+                })?,
         }),
         Method::ModelGet { target: _ } => native_result(authority.model_get()),
         Method::ModelCatalog { target: _ } => native_result(authority.model_catalog()),

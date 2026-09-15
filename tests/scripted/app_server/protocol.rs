@@ -1527,3 +1527,163 @@ async fn artifact_carrier_is_native_scoped_bounded_and_cold_reopen_safe() {
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn artifact_upload_capacity_is_shared_durable_and_path_safe() {
+    use crate::tools::artifacts::MAX_ARTIFACTS_PER_STORE;
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let mut target = attach(&connection, &f, 0).await;
+        let root = {
+            let managed = f.load(0).await.unwrap().unwrap();
+            let native = managed.inspect_runtime().unwrap();
+            let artifacts = native.tool_runtime().artifacts();
+            // Native Tool reservations and public uploads share one domain.
+            for _ in 0..MAX_ARTIFACTS_PER_STORE - 1 {
+                artifacts.create_artifact().unwrap();
+            }
+            artifacts.root().to_path_buf()
+        };
+        let MethodResult::ArtifactUploaded { artifact_id } = call(
+            &connection,
+            920,
+            Method::ArtifactUpload {
+                target: target.clone(),
+                data: "aGk=".into(),
+            },
+        )
+        .await
+        else {
+            panic!("final slot should upload");
+        };
+        assert_eq!(
+            artifact_id.as_str(),
+            format!("artifact_{MAX_ARTIFACTS_PER_STORE}")
+        );
+        let contents = || -> std::collections::BTreeMap<_, _> {
+            std::fs::read_dir(&root)
+                .unwrap()
+                .map(|entry| {
+                    let entry = entry.unwrap();
+                    // Other native owners may retain child directories here;
+                    // ArtifactStore reservations and byte files are direct children.
+                    let bytes = entry
+                        .file_type()
+                        .unwrap()
+                        .is_file()
+                        .then(|| std::fs::read(entry.path()).unwrap());
+                    (entry.file_name(), bytes)
+                })
+                .collect()
+        };
+        let before = contents();
+        // Repeat across native unload/cold reopen; a new connection follows.
+        for _ in 0..2 {
+            for _ in 0..2 {
+                let response = connection
+                    .handle_request(Request {
+                        jsonrpc: JsonRpcVersion::V2,
+                        id: RequestId::Integer(921),
+                        call: Method::ArtifactUpload {
+                            target: target.clone(),
+                            data: "bm8=".into(),
+                        },
+                    })
+                    .await;
+                let encoded = serde_json::to_string(&response).unwrap();
+                let Response::Failure(Failure { error, .. }) = response else {
+                    panic!("capacity must reject");
+                };
+                assert_eq!(error.data, Some(ErrorData::InvalidState));
+                assert_eq!(
+                    error.message,
+                    "artifact capacity exhausted (maximum 256 identities)"
+                );
+                assert!(!encoded.contains(root.to_str().unwrap()));
+                assert!(!encoded.contains(f.workspaces[0].to_str().unwrap()));
+                assert_eq!(
+                    contents(),
+                    before,
+                    "rejection changes no reservation or byte file"
+                );
+                assert!(!root.join("artifact_257.reserved").exists());
+                assert!(!root.join("artifact_257.bin").exists());
+            }
+            assert_eq!(
+                call(
+                    &connection,
+                    922,
+                    Method::ArtifactRead {
+                        target: target.clone(),
+                        artifact_id: artifact_id.clone(),
+                    }
+                )
+                .await,
+                MethodResult::ArtifactBytes {
+                    data: "aGk=".into()
+                }
+            );
+            let MethodResult::Snapshot { snapshot, .. } = call(
+                &connection,
+                923,
+                Method::SessionSnapshot {
+                    target: target.clone(),
+                },
+            )
+            .await
+            else {
+                panic!("runtime remains usable");
+            };
+            assert!(snapshot.messages.is_empty());
+            assert!(snapshot.inbound.pending.is_empty());
+            assert!(snapshot.attempt.is_none());
+            assert_eq!(f.provider.attempt_count(), 0);
+            call(
+                &connection,
+                924,
+                Method::SessionUnload {
+                    target: target.clone(),
+                },
+            )
+            .await;
+            target = attach(&connection, &f, 0).await;
+        }
+        // Connection lifetime also cannot reset the durable capacity.
+        connection.close();
+        let reconnected = AppServerConnection::new(f.host.clone());
+        initialize(&reconnected).await;
+        let target = attach(&reconnected, &f, 0).await;
+        assert_eq!(
+            rejected(
+                &reconnected,
+                Method::ArtifactUpload {
+                    target: target.clone(),
+                    data: "aGk=".into(),
+                }
+            )
+            .await,
+            ErrorData::InvalidState
+        );
+        assert_eq!(contents(), before);
+        assert_eq!(
+            call(
+                &reconnected,
+                925,
+                Method::ArtifactRead {
+                    target,
+                    artifact_id
+                }
+            )
+            .await,
+            MethodResult::ArtifactBytes {
+                data: "aGk=".into()
+            }
+        );
+        assert_eq!(f.provider.attempt_count(), 0);
+        reconnected.close();
+        f.close().await;
+    })
+    .await;
+}

@@ -92,6 +92,21 @@ preserves artifact bytes. Browser code has no artifact-directory or arbitrary
 filesystem read access. Tool artifact MIME metadata controls presentation only,
 not provider admission.
 
+
+The shared ArtifactStore has a fixed lifetime capacity of **256 artifact
+identities** (`MAX_ARTIFACTS_PER_STORE`). Native Tool/MCP artifacts consume the
+same slots as uploads; there is no separate upload counter. With each App Server
+upload capped at 256 KiB, uploads can contribute at most **64 MiB** of retained
+payload bytes if every slot is used by an upload. Native artifacts reduce the
+remaining upload capacity; this is not a new byte limit on arbitrary Tool/MCP
+artifacts. The monotonic maximum ordinal in either `.reserved` or `.bin` is the
+durable capacity frontier. Failed or abandoned work after reservation still
+consumes its slot. Capacity survives disconnect, detach, unload and cold reopen;
+Session deletion reclaims the owning store. Stores already at or above the limit
+still open for reads and reject new allocation. Capacity rejection creates no
+reservation or byte file and returns a stable, path-free `invalid_state`
+diagnostic: `artifact capacity exhausted (maximum 256 identities)`.
+
 Per visible view, ArtifactResources retains at most 16 URLs / 4 MiB artifact bytes
 and two outstanding reads, with no read queue. Images/files are loaded explicitly.
 Cards release URLs on unmount/retry/decode failure. View/attachment/connection
