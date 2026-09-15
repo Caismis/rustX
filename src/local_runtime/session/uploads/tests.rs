@@ -256,15 +256,15 @@ async fn fork_and_clone_copy_current_cut_before_publication_and_survive_source_d
             std::fs::read(&destination_path).unwrap(),
             b"current mutable bytes"
         );
-        assert!(
+        assert_eq!(
             file_path(
                 workspace.path(),
                 &SessionId::new("session-2"),
                 &orphan[0].file.batch_id,
                 &orphan[0].file.name
             )
-            .exists()
-                == fork
+            .exists(),
+            fork
         );
         assert!(controller.catalog.try_lock().is_ok());
         drop(release);
