@@ -198,7 +198,7 @@ async fn app_server_websocket_real_process_shared_conformance_and_listener_survi
         replacement.send(INITIALIZE.into()).await.unwrap();
         assert_eq!(
             json_response(&mut replacement).await["result"]["protocol_version"],
-            1
+            2
         );
         kill(
             Pid::from_raw(i32::try_from(child.id().unwrap()).unwrap()),

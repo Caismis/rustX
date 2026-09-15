@@ -321,7 +321,7 @@ native facts use generic renderers, and Review response wiring has deterministic
 coverage. This frontend run does not claim transport slow-consumer/backpressure
 conformance beyond the existing #36 process tests.
 
-## Intentional scope decisions
+## Historical WEB-01 scope decisions (superseded below)
 
 The pinned upstream commit is unchanged. No Rust runtime or public protocol/schema
 change was needed. The only shared protocol change is the compiler-input
@@ -355,7 +355,7 @@ Final validation commands (Linux, Node 24.20.0, pinned pnpm 11.13.1):
 | test-support/fake-provider | `uv run --frozen pytest` | 51 passed |
 | web-console, protocol/app-server, tui | `corepack install` and `pnpm install --frozen-lockfile` | Passed; `corepack enable` also run |
 | web-console | `pnpm typecheck` | Passed |
-| web-console | `pnpm test` | 127 tests passed across 12 files |
+| web-console | `pnpm test` | 131 tests passed across 12 files |
 | web-console | `pnpm check:provenance` | 53 source records, 98 production dependency notices passed |
 | web-console | `pnpm build` | Passed; existing large-chunk advisory remains |
 | web-console | `pnpm exec playwright install chromium` | Passed |
@@ -371,7 +371,10 @@ bootstrap boundary, asserts history is absent before paging, measures the stable
 prepend anchor, renders rich streaming Markdown through a deterministic provider
 gate, settles once, reconnects/reloads history and refuses an unsupported file
 while preserving text and attachment drafts. It also exercises native missing
-artifact and unsupported upload rejection. Existing multi-Session, interaction,
+artifact rejection and a successful native MCP image Tool: canonical result ->
+artifact read -> decoded Chromium thumbnail -> original-image dialog -> fresh
+load after reconnect. The image fixture explicitly selects its MCP Tool through
+the native Agent profile. No provider multimodal translation is claimed. Existing multi-Session, interaction,
 transport-loss and cold-runtime flows remain green. No mock Web backend is used.
 
 Browser plugin not available: used the repository Playwright lane per the testing
@@ -388,3 +391,43 @@ is neither implemented nor claimed. Native bounded byte storage/read and browser
 supported-content construction have deterministic tests. Existing declared ignored
 Rust tests were not converted into passing coverage. See CHAT.md for all finite
 limits and PROVENANCE.md/source-inventory.json for the pinned source closure.
+
+## PR #317 review repair, 2026-09-15
+
+Repairs supersede the reviewed head `cd20592938b6c64b06ad204021588c5f0d7c2f3e`.
+The full validation table above was rerun for this repair against unchanged
+`origin/main` (`8b8e99e87df61b1fe8a91134f818fddc54968e46`). The current CI workflow
+was re-read. GitHub Actions results for the final pushed head are recorded on
+PR #317; local Linux results do not substitute for the macOS job.
+
+- App Server v2 is mandatory for all clients and transports; v1 semantic
+  initialization and v1-only WebSocket offers are rejected. Generated v2 files
+  replace v1 files, with no duplicate API or Runtime Client version bump.
+- `artifact/upload { target, data }` is storage-only. Native inbound admission
+  validates canonical modalities under the coordinator lock against the active
+  Attempt's frozen primary model, otherwise the current Session model.
+- `a_model_update_after_admission_affects_only_future_attempts` and
+  `a_model_update_before_admission_is_observed_by_that_attempt` now prove
+  image/file refusals use the correct consumer under existing deterministic
+  model gates. Both adapters remain text-only; refusal diagnostics identify
+  the exact invocation checked, without widening production capabilities.
+- `cargo test --lib --all-features a_model_update_`: 2 passed.
+  `cargo test --lib --all-features local_runtime::session_runtime_manager::tests::`:
+  70 passed, including v2 negotiation, storage-only upload, invalid/oversized
+  carrier refusal, scoped reads and cold reopen. The complete process target
+  covers a v1-only offer with a valid token and successful v2 reconnection.
+- Web tests cover frozen Attempt preflight despite changed Session capabilities,
+  safe Blob MIME, native background image/file galleries, duplicate-name
+  Subagent/Workflow identities and authoritative lifecycle changes. The
+  transcript race uses exclusive `before=10` -> `[8,9]` and proves
+  `[8,9,10,11]` survives while the independent live cursor advances.
+- Real Chromium asserts `complete && naturalWidth > 0 && naturalHeight > 0`,
+  opens the original-image dialog, reconnects and loads the same native artifact
+  again. The fixture's MCP PNG has no browser-invented canonical reference.
+- Initial image-fixture selection failure and a stale v1 expected value in the
+  process reconnect test were corrected. The complete affected browser and
+  external boundary commands were rerun; no failing test was waived.
+
+No additional Harness files were imported or adapted for the repair. The
+Subagent/Workflow cards are rustX product composition over existing native DTOs.
+Pinned provenance remains authoritative and unchanged.
