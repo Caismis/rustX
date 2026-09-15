@@ -570,3 +570,100 @@ No final validation command failed or was waived. Final-head GitHub Actions
 results are recorded in PR #317 after completion; local checks do not substitute
 for the macOS CI lane. App Server v2, generated files, Harness provenance,
 model-agnostic acceptance and existing Chat/history behavior remain unchanged.
+
+## WEB-03 native Trace / Trajectory — 2026-09-15
+
+Validated on Linux in the isolated `issue-306-native-trace-trajectory` worktree,
+based on `94dfa0ae77b49619e2c164428cce75b4bcf7267d` (including WEB-02).
+This section supersedes the earlier App Server v2 statements: the mandatory
+App Server contract is now v3; separate native Runtime Client envelopes are v35.
+
+### Final validation
+
+Repository-root commands:
+
+| Exact command | Result |
+| --- | --- |
+| `git diff --check` | Pass |
+| `cargo fmt --all -- --check` | Pass |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Pass |
+| `cargo build --bins` | Pass |
+| `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 2,821 passed, 1 pre-existing ignored process-writer helper; bins/examples passed with 0 tests |
+| `cargo test --test contracts --test provider --all-features` | Contracts 25 passed; provider 166 passed, 5 pre-existing opt-in live tests ignored |
+| `cargo test --lib --all-features -- boundary_suites::` | 226 passed |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance` | Conformance 23, durable 116, process 52, subagent 53, tools 157 passed (401 total) |
+
+Package commands (each executed in the directory shown):
+
+| Directory | Exact commands | Result |
+| --- | --- | --- |
+| `test-support/fake-provider` | `uv sync --frozen`; `uv run --frozen pytest` | Pass; 51 tests |
+| `protocol/app-server` | `corepack enable`; `corepack install`; `pnpm install --frozen-lockfile`; `pnpm check`; `pnpm typecheck` | Pass, including generated Schema/TypeScript/fixture drift |
+| `web-console` | `pnpm install --frozen-lockfile`; `pnpm typecheck`; `pnpm test`; `pnpm check:provenance`; `pnpm build`; `pnpm test:e2e` | Pass; 145 component/client tests in 14 files, 56 source records, 100 production dependency notices, 6 browser tests |
+| `tui` | `pnpm install --frozen-lockfile`; `pnpm typecheck`; `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test` | Pass; 810 tests, no skips |
+
+The production build reports the existing bundler's non-fatal chunk-size advisory
+for chunks over 500 kB. `.github/workflows/ci.yml` was re-read; the additional local
+CI commands are the emulator sync/pytest and mandatory-emulator TUI run above.
+The macOS platform lane cannot be claimed from this Linux run and remains CI
+coverage. No failing test was skipped.
+
+### Deterministic owner evidence
+
+`src/runtime_client/trace/tests.rs` covers exact request ordinals within one Step,
+transient/context-overflow/corrective failure classes, historical model metadata,
+request usage, reopen equality, read cuts during progress, finite pagination,
+unchanged native heads/transcript/frontiers, parallel Tool completion and exact
+call/Tool correlation, unknown/incomplete results, cancellation/timeout, deep
+historical compaction boundaries, live identity matching, encoded-byte bounds,
+and distinct Workflow run identity despite an identical definition/call name.
+Sensitive prompt/parameter/schema/Tool fixtures remain withheld; Unicode and
+JSON escaping exercise the actual public bounds.
+
+The direct App Server test
+`trace_reads_are_read_only_and_reconnect_repairs_the_same_native_facts` holds a
+real provider request at an explicit gate. It proves historical Trace reads leave
+the entire snapshot/live cursor unchanged, then proves attach/snapshot repair
+before and after controlled settlement. Trace introduces no recovery input.
+
+`trace-cache.test.ts` checks its independent bounded cache, overlap replacement,
+pending history with live updates, stale-response fences, reconnect, reattach and
+resync. `trajectory.test.tsx` uses measured layout to verify bounded virtualization,
+Attempt/Step folding, retries, search/filtering, supported inspector sections,
+unavailable/redacted/truncated presentation, stable selection/removal, follow at
+the tail, scroll-away suspension, stable prepend, and payload updates above/below
+the reader anchor. View switching remains on one native attachment.
+
+### Real App Server acceptance
+
+The existing `web_chat_history` provider-emulator flow now creates 34 historical
+turns and pages native Trace through the actual App Server. In Chromium it checks
+32→64 Trace records, stable prepend geometry, request/Step identity, redacted
+input inspection, tail position, live execution during disconnect/reconnect,
+scroll-away preservation through settlement, canonical Tool/artifact identity,
+record selection and reconnect deduplication. The original rich Chat, transcript,
+image decode/lightbox, upload refusal and draft-retention assertions still pass.
+There is no alternate fake product path or extra subscription.
+
+All six existing browser flows pass, including two-Session ownership and shell
+geometry at 390/900/1440 pixels. Browser evidence includes
+`test-results/trajectory-inspector.png` and `test-results/chat-history.png`;
+the Trajectory screenshot was visually inspected. The existing CI browser-evidence
+artifact collects these files. The Trace inspector assertions exclude the private
+fixture workspace path; raw internal request fields never enter its DTO.
+
+Fixture repairs reflect the new contract: Session-tab counts now exclude the
+Chat/Trajectory tabs; exact-u64 validation checks JSON number types instead of
+digit substrings inside opaque Trace cursors; version rejection checks reject the
+obsolete and next unsupported versions. The hot-journal fixture now dirties large
+**valid JSON** so expression indexes can evaluate it while retaining the same
+crash-before-commit/nonmutating-preflight recovery invariant.
+
+### Deliberate omissions
+
+See [Trace architecture](../docs/trace.md) for the complete policy. Arbitrary
+request/Tool payloads are withheld, not secret-scanned; unaccepted publication
+bodies remain in Chat's existing audit presentation. Harness-only semantic
+categories, server search, telemetry and TUI Trajectory are excluded. Interaction
+settlement remains in the existing Chat controls. The exact inspected paths and
+adaptation subset are in [PROVENANCE.md](PROVENANCE.md) and the existing inventory.

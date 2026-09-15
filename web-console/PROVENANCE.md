@@ -159,3 +159,48 @@ uses rustX logical Step/request identities and terminal certainty; it does not
 claim Harness request payload visibility, compaction IDs, first-token timing,
 plugin records or other semantics rustX cannot truthfully supply. See
 [Trace architecture](../docs/trace.md) for the explicit field withholding policy.
+
+### WEB-03 inspected paths
+
+The following implementation, test, style and package inputs were inspected for
+this change (relevant sections of the large files). The adaptation subset is the
+table above; all other paths below are inspection-only. Existing WEB-01/02 source
+records continue to own the reused primitives, Markdown and artifact UI.
+
+```text
+packages/client/ui-conversation/README.md
+packages/client/ui-conversation/package.json
+packages/client/ui-conversation/src/client/contract/request-inspection.ts
+packages/client/ui-conversation/tests/selection-survival.client.spec.tsx
+packages/client/ui-primitives/README.md
+packages/client/ui-primitives/package.json
+packages/client/ui-primitives/src/DisclosureRow.tsx
+packages/client/ui-primitives/tests/atoms.client.spec.tsx
+packages/client/ui-tool/README.md
+packages/client/ui-tool/package.json
+packages/client/ui-tool/src/client/tool/components/ToolRow.module.css
+packages/client/ui-tool/src/client/tool/components/ToolRow.tsx
+packages/client/ui-tool/tests/tool-row.client.spec.tsx
+packages/client/ui-trajectory/README.md
+packages/client/ui-trajectory/package.json
+packages/client/ui-trajectory/src/client/TrajectoryTable.module.css
+packages/client/ui-trajectory/src/client/TrajectoryTable.tsx
+packages/client/ui-trajectory/src/client/TrajectoryTimeline.tsx
+packages/client/ui-trajectory/src/client/trajectory-assistant-definition.ts
+packages/client/ui-trajectory/src/client/trajectory-compaction-definition.ts
+packages/client/ui-trajectory/src/client/trajectory-contract.ts
+packages/client/ui-trajectory/src/client/trajectory-event-projection.ts
+packages/client/ui-trajectory/src/client/trajectory-record.ts
+packages/client/ui-trajectory/src/client/trajectory-search-index.ts
+packages/client/ui-trajectory/src/client/trajectory-snapshot-builder.ts
+packages/client/ui-trajectory/src/client/trajectory-virtual-rows.ts
+packages/client/ui-trajectory/tests/layout.client.spec.tsx
+packages/client/ui-trajectory/tests/snapshot-builder.client.spec.ts
+packages/client/ui-trajectory/tests/table.client.spec.tsx
+packages/client/ui-trajectory/tests/virtual-rows.client.spec.ts
+packages/session/session-projection/README.md
+packages/session/session-projection/package.json
+packages/session/session-projection/src/index.ts
+packages/session/session-projection/src/types.ts
+packages/session/session-projection/tests/registry.spec.ts
+```
