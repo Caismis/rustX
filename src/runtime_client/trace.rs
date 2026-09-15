@@ -300,7 +300,7 @@ impl<'a> TraceProjection<'a> {
     pub(crate) fn refresh(
         &self,
         records: &[TraceCursor],
-        snapshot: &super::snapshot::RuntimeClientSnapshot,
+        snapshot: Option<&super::snapshot::RuntimeClientSnapshot>,
     ) -> Result<Vec<TraceLifecycle>, ConversationStoreError> {
         if records.len() > TRACE_RECORD_LIMIT {
             return Err(ConversationStoreError::InvalidReference(
@@ -327,7 +327,9 @@ impl<'a> TraceProjection<'a> {
                     return Ok(None);
                 };
                 let mut entry = self.entry(&anchor)?;
-                repair_entries(std::slice::from_mut(&mut entry), snapshot);
+                if let Some(snapshot) = snapshot {
+                    repair_entries(std::slice::from_mut(&mut entry), snapshot);
+                }
                 bound_entry(&mut entry);
                 let mut update = TraceLifecycle {
                     id: entry.id,
@@ -545,25 +547,7 @@ impl<'a> TraceProjection<'a> {
                             && message.tool_id == *tool_id
                         {
                             entry.message_id = Some(message_id.clone());
-                            entry.truncated = message.result.content.len() > TRACE_BLOCK_LIMIT;
-                            for content in message.result.content.iter().take(TRACE_BLOCK_LIMIT) {
-                                match content {
-                                    crate::tools::types::ToolResultContent::Image(image) => {
-                                        entry.artifacts.push(TraceArtifact {
-                                            artifact_id: image.artifact_id.clone(),
-                                            image: true,
-                                        });
-                                    }
-                                    crate::tools::types::ToolResultContent::File(file) => {
-                                        entry.artifacts.push(TraceArtifact {
-                                            artifact_id: file.artifact_id.clone(),
-                                            image: false,
-                                        });
-                                    }
-                                    // Arbitrary Tool output can include executor secrets/paths.
-                                    _ => entry.output.push(TraceText::withheld()),
-                                }
-                            }
+                            project_tool_artifacts(&message.result, &mut entry);
                         }
                     }
                 }
@@ -703,6 +687,64 @@ fn tool_state(state: &ToolExecutionStatus) -> TraceState {
         ToolExecutionStatus::Cancelled { .. } => TraceState::Cancelled,
         ToolExecutionStatus::TimedOut => TraceState::TimedOut,
         ToolExecutionStatus::OutcomeUnknown { .. } => TraceState::OutcomeUnknown,
+    }
+}
+
+/// Canonical content references precede the result's separately owned files.
+/// First occurrence wins (an Image content block remains an image even when
+/// the same `ArtifactId` is also listed as a generic `FileReference`). No filename
+/// or path inference is involved. Payload bodies are always withheld.
+fn project_tool_artifacts(
+    result: &crate::tools::types::ToolExecutionResult,
+    entry: &mut TraceEntry,
+) {
+    use crate::tools::types::ToolResultContent;
+    let mut seen = std::collections::HashSet::new();
+    entry.truncated |=
+        result.content.len() > TRACE_BLOCK_LIMIT || result.artifacts.len() > TRACE_BLOCK_LIMIT;
+    for content in result.content.iter().take(TRACE_BLOCK_LIMIT) {
+        let reference = match content {
+            ToolResultContent::Image(image) => Some(TraceArtifact {
+                artifact_id: image.artifact_id.clone(),
+                image: true,
+            }),
+            ToolResultContent::File(file) => Some(TraceArtifact {
+                artifact_id: file.artifact_id.clone(),
+                image: false,
+            }),
+            _ => {
+                if entry.output.is_empty() {
+                    entry.output.push(TraceText::withheld());
+                }
+                None
+            }
+        };
+        if let Some(reference) = reference {
+            append_tool_artifact(entry, &mut seen, reference);
+        }
+    }
+    for file in result.artifacts.iter().take(TRACE_BLOCK_LIMIT) {
+        append_tool_artifact(
+            entry,
+            &mut seen,
+            TraceArtifact {
+                artifact_id: file.artifact_id.clone(),
+                image: false,
+            },
+        );
+    }
+}
+fn append_tool_artifact(
+    entry: &mut TraceEntry,
+    seen: &mut std::collections::HashSet<ArtifactId>,
+    reference: TraceArtifact,
+) {
+    if seen.insert(reference.artifact_id.clone()) {
+        if entry.artifacts.len() < TRACE_BLOCK_LIMIT {
+            entry.artifacts.push(reference);
+        } else {
+            entry.truncated = true;
+        }
     }
 }
 

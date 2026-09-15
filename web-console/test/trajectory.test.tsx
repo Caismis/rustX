@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Trajectory, visibleTrace } from '../src/app/Trajectory';
-import { replaceTrace, refreshTrace } from '../src/client/trace';
+import { replaceTrace, refreshTrace, selectTrace } from '../src/client/trace';
 import { traceEntry } from './trace-fixture';
 import { App } from '../src/app/App';
 import { Server, snapshot } from './fixture';
@@ -118,7 +118,7 @@ it('selected historical inspector updates terminal details beyond the newest tai
   const cache = replaceTrace({ entries: [old], next_cursor: 'trace:1' });
   const ui = render(<Trajectory cache={cache} loadEarlier={() => {}} latest={() => {}} />);
   fireEvent.click(screen.getByTitle('Request #1 · historical-model'));
-  const next = refreshTrace(cache, { entries: [traceEntry(100)] }, [{
+  const next = refreshTrace(selectTrace(cache, old.id), { entries: [traceEntry(100)] }, [{
     id: old.id, state: 'completed', timing: { ...old.timing, duration_ms: '2500' },
     request: { usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } }, artifacts: [], truncated: false,
   }]);
@@ -128,4 +128,8 @@ it('selected historical inspector updates terminal details beyond the newest tai
   expect(within(inspector).getByText('completed')).toBeDefined();
   fireEvent.click(within(inspector).getByRole('tab', { name: 'Timing' }));
   expect(within(inspector).getByText('2500 ms')).toBeDefined();
+  // A page captured before settlement cannot regress the retained inspector.
+  const older = { ...next, page: { entries: [old, ...next.page.entries] } };
+  ui.rerender(<Trajectory cache={older} loadEarlier={() => {}} latest={() => {}} />);
+  expect(within(screen.getByLabelText('Trace record inspector')).getByText('2500 ms')).toBeDefined();
 });

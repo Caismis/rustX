@@ -349,8 +349,10 @@ impl std::fmt::Debug for SqliteConversationStore {
     }
 }
 
-/// Publishes only successfully committed Journal advancement, before releasing
-/// the store lock. Rollbacks and read-only guards cannot advance the prefix.
+/// Stages only successfully committed Journal receipts before releasing the
+/// store lock. Staging cannot advance a Runtime Client cursor. The native owner
+/// subsequently publishes the exact receipt after installing its semantic state.
+/// Rollbacks and read-only guards produce no receipt.
 struct StoreGuard<'a> {
     connection: MutexGuard<'a, Connection>,
     changes: u64,
@@ -386,8 +388,11 @@ impl Drop for StoreGuard<'_> {
         if let Some((observer, previous)) = subscription.as_mut() {
             match journal_prefix(&self.connection) {
                 Ok(through) if through > *previous => {
+                    let events = self.connection.prepare("SELECT event_json FROM events WHERE sequence > ?1 AND sequence <= ?2 ORDER BY sequence")
+                        .and_then(|mut query| query.query_map(rusqlite::params![*previous, through], |row| row.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>())
+                        .ok().and_then(|rows| rows.into_iter().map(|row| serde_json::from_str::<RuntimeEventEnvelope>(&row).ok()).collect());
                     *previous = through;
-                    observer.committed(Some(through));
+                    observer.committed(events);
                 }
                 Err(_) => observer.committed(None),
                 _ => {}
@@ -12947,8 +12952,11 @@ mod tests {
         #[derive(Default)]
         struct Observer(Mutex<Vec<Option<u64>>>);
         impl super::super::presentation::JournalObserver for Observer {
-            fn committed(&self, through: Option<u64>) {
-                self.0.lock().unwrap().push(through);
+            fn committed(&self, events: Option<Vec<RuntimeEventEnvelope>>) {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push(events.and_then(|events| events.last().map(|event| event.sequence)));
             }
         }
         let id = ConversationId::new("journal-cut");

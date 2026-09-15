@@ -4,7 +4,7 @@ export const TRACE_LIMIT = 512;
 export const TRACE_MAX_BYTES = 4 * 1024 * 1024;
 export const TRACE_PAGE_SIZE = 32;
 /** Independent replaceable read domain. No events or execution decisions. */
-export interface TraceCache { page: TracePage; epoch: number; loading?: boolean; error?: string }
+export interface TraceCache { page: TracePage; epoch: number; selection?: TraceEntry; loading?: boolean; error?: string }
 export function replaceTrace(page: TracePage, previous?: TraceCache): TraceCache {
   return { page, epoch: (previous?.epoch ?? 0) + 1 };
 }
@@ -27,19 +27,29 @@ function merge(older: TraceEntry[], newer: TraceEntry[]) {
   return [...merged, ...older.slice(offset), ...pending];
 }
 function bounded(entries: TraceEntry[]) { return entries.length <= TRACE_LIMIT && JSON.stringify(entries).length * 2 <= TRACE_MAX_BYTES; }
+export function traceInterests(cache?: TraceCache) {
+  const entries = cache ? [...(cache.selection ? [cache.selection] : []), ...cache.page.entries] : [];
+  return [...new Map(entries.map(entry => [entry.id, entry.position])).values()].slice(0, TRACE_LIMIT);
+}
+export function selectTrace(cache: TraceCache, id?: string): TraceCache {
+  return { ...cache, selection: cache.page.entries.find(entry => entry.id === id) ?? (cache.selection?.id === id ? cache.selection : undefined) };
+}
 export function refreshTrace(previous: TraceCache | undefined, page: TracePage, updates: TraceLifecycle[] = []): TraceCache {
   if (!previous) return replaceTrace(page);
-  if (previous.page.entries.length === 0) return { ...previous, page };
   const repairs = new Map(updates.map(update => [update.id, update]));
-  // Native lifecycle repairs belong to this snapshot cut. Neither tail
-  // membership nor missing terminal evidence is a browser invalidation rule.
-  const retained = previous.page.entries.map(entry => {
+  const repair = (entry: TraceEntry) => {
     const update = repairs.get(entry.id);
     return update ? { ...entry, ...update, request: entry.request && update.request ? { ...entry.request, ...update.request } : entry.request } : entry;
-  });
-  const entries = merge(retained, page.entries);
-  if (!bounded(entries)) return { ...replaceTrace(page, previous), error: 'Trace window reached its bound; showing latest.' };
-  return { ...previous, page: { entries, next_cursor: previous.page.next_cursor } };
+  };
+  const selection = previous.selection ? repair(page.entries.find(entry => entry.id === previous.selection!.id) ?? previous.selection) : undefined;
+  if (previous.page.entries.length === 0) return { ...previous, page, selection };
+  const overlap = new Set(previous.page.entries.map(entry => entry.id));
+  // A flat ledger describes one server-proven interval. No shared anchor
+  // means unknown intervening history, never permission to concatenate.
+  if (!page.entries.some(entry => overlap.has(entry.id))) return { ...replaceTrace(page, previous), selection };
+  const entries = merge(previous.page.entries.map(repair), page.entries);
+  if (!bounded(entries)) return { ...replaceTrace(page, previous), selection, error: 'Trace window reached its bound; showing latest.' };
+  return { ...previous, selection, page: { entries, next_cursor: previous.page.next_cursor } };
 }
 export function prependTrace(previous: TraceCache, page: TracePage): TraceCache {
   const entries = merge(page.entries, previous.page.entries);

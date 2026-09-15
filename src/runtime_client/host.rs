@@ -273,6 +273,25 @@ pub(crate) struct ClientState {
 }
 
 impl ClientState {
+    /// One read-model synchronization step shared by requests and the worker.
+    fn repair(
+        &mut self,
+        pending: &PendingObservations,
+        workflows: Option<&crate::runtime::workflow::read_model::WorkflowReadModel>,
+    ) {
+        self.apply_pending(pending);
+        if let Some(workflows) = workflows
+            && !pending.has_unpublished()
+        {
+            let cuts = workflows.cuts_after(self.projection.snapshot_ref().workflows.revision);
+            // Reconcile queued interaction publications before their native cuts.
+            self.apply_pending(pending);
+            for cut in cuts {
+                self.projection.fold_workflows(cut);
+            }
+        }
+    }
+
     /// Applies every queued pending observation in queue order.
     fn apply_pending(&mut self, pending: &PendingObservations) {
         for observation in pending.drain() {
@@ -345,7 +364,7 @@ pub(crate) struct ClientInner {
     defaults: Option<Arc<dyn super::settings::DefaultSettingsStore>>,
     session_control: Option<Arc<dyn RuntimeClientSessionControl>>,
     /// The one projection synchronization boundary.
-    state: Mutex<ClientState>,
+    state: Arc<Mutex<ClientState>>,
     /// The observation queue shared with the conversation runtime (the
     /// projection sink installed at construction).
     pending: Arc<PendingObservations>,
@@ -388,18 +407,12 @@ impl ClientInner {
             .state
             .lock()
             .expect("runtime client host lock poisoned");
-        guard.apply_pending(&self.pending);
-        if let Some(runtime) = &self.runtime {
-            let revision = guard.projection.snapshot_ref().workflows.revision;
-            let cuts = runtime.tool_runtime().workflows().cuts_after(revision);
-            // Coordinator publication precedes return to a Workflow waiter.
-            // Drain again after the native read so a completed human step
-            // cannot retain its earlier queued actionable reference at this cut.
-            guard.apply_pending(&self.pending);
-            for cut in cuts {
-                guard.projection.fold_workflows(cut);
-            }
-        }
+        guard.repair(
+            &self.pending,
+            self.runtime
+                .as_ref()
+                .map(|runtime| runtime.tool_runtime().workflows()),
+        );
         guard
     }
 
@@ -468,16 +481,11 @@ impl ClientInner {
     ///
     /// # Lifetime
     ///
-    /// The worker never owns the host. It captures `Weak<ClientInner>` plus
-    /// an `Arc<PendingObservations>` — the minimal wait state — and it
-    /// upgrades the weak handle only inside a folding step, never across
-    /// an await. A parked worker therefore holds no strong reference, so it
-    /// cannot keep a host alive that has no semantic owner left.
-    ///
-    /// Termination is deterministic, not timed: dropping the last
-    /// `Arc<ClientInner>` runs `ClientInner::drop`, which closes the pending
-    /// queue and wakes the worker; the worker observes the closed queue and
-    /// exits. The upgrade check is a second, independent exit path.
+    /// The worker owns only the projection mutex, pending observations and the
+    /// native Workflow read model. It never upgrades the host and cannot retain
+    /// runtime, catalog, executor or durable storage authority even during a fold.
+    /// Dropping the last host closes the pending queue immediately; that close
+    /// wakes and terminates the worker independently of native resource release.
     pub(crate) fn ensure_worker(self: &Arc<Self>) {
         // Construction may happen outside a runtime; a later call from a
         // request path spawns the worker instead.
@@ -487,12 +495,15 @@ impl ClientInner {
         if self.worker_started.swap(true, Ordering::SeqCst) {
             return;
         }
-        let weak = Arc::downgrade(self);
+        let state = self.state.clone();
         let pending = Arc::clone(&self.pending);
-        let mut workflows = self
+        let workflow_state = self
             .runtime
             .as_ref()
-            .map(|runtime| runtime.tool_runtime().workflows().subscribe());
+            .map(|runtime| runtime.tool_runtime().workflows().clone());
+        let mut workflows = workflow_state
+            .as_ref()
+            .map(crate::runtime::workflow::read_model::WorkflowReadModel::subscribe);
         let worker = tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -507,14 +518,10 @@ impl ClientInner {
                 if pending.is_closed() {
                     break;
                 }
-                // The strong handle exists only inside this block, so it is
-                // never held across the await above.
-                {
-                    let Some(inner) = weak.upgrade() else {
-                        break;
-                    };
-                    let _state = inner.lock_state();
-                }
+                state
+                    .lock()
+                    .expect("runtime client host lock poisoned")
+                    .repair(&pending, workflow_state.as_ref());
             }
             #[cfg(test)]
             pending.signal_worker_exit();
@@ -523,7 +530,7 @@ impl ClientInner {
     }
 
     /// Residency shutdown joins the observer before releasing resource authority.
-    /// Closing the leaf queue prevents another fold from upgrading the weak host.
+    /// Closing the leaf queue ends read-model delivery without retaining the host.
     pub(crate) async fn drain_projection(&self) -> Result<(), tokio::task::JoinError> {
         self.pending.close();
         let worker = self.worker.lock().expect("projection worker mutex").take();
@@ -985,10 +992,12 @@ impl ClientInner {
             .map_err(|_| RuntimeClientError::RuntimeFailure {
                 message: "Trace snapshot read failed".into(),
             })?;
-        super::trace::repair_live(snapshot);
+        if self.runtime.is_some() {
+            super::trace::repair_live(snapshot);
+        }
         snapshot.trace_updates =
             super::trace::TraceProjection::through(self.store.as_ref(), through)
-                .refresh(records, snapshot)
+                .refresh(records, self.runtime.as_ref().map(|_| &*snapshot))
                 .map_err(|_| RuntimeClientError::InvalidRequest {
                     message: "Invalid Trace refresh".into(),
                 })?;
@@ -1024,19 +1033,32 @@ impl ClientInner {
                 message: "Trace limit must be 1..=32".into(),
             });
         }
-        let current = self
+        let (current, _, through) = self
             .state
             .lock()
             .expect("runtime client host lock poisoned")
             .projection
-            .snapshot()?
-            .0;
-        let mut page = super::trace::TraceProjection::new(self.store.as_ref())
+            .snapshot_cut()?;
+        // A live historical read must not expose an unpublished terminal that
+        // the next current-cut lifecycle repair would have to retract. Capture
+        // its own represented cut without draining or advancing the live cursor.
+        // Inactive durable inspection has no live semantic publication boundary.
+        let projection = if self.runtime.is_some() {
+            Ok(super::trace::TraceProjection::through(
+                self.store.as_ref(),
+                through,
+            ))
+        } else {
+            super::trace::TraceProjection::new(self.store.as_ref())
+        };
+        let mut page = projection
             .and_then(|projection| projection.page(before.as_ref(), limit))
             .map_err(|_| RuntimeClientError::InvalidRequest {
                 message: "Trace read failed or cursor is invalid".into(),
             })?;
-        super::trace::repair_entries(&mut page.entries, &current);
+        if self.runtime.is_some() {
+            super::trace::repair_entries(&mut page.entries, &current);
+        }
         Ok(RuntimeClientResult::TracePage { page })
     }
 
@@ -1948,12 +1970,12 @@ impl RuntimeClientHost {
             replay_limit,
             session_control: None,
             defaults: None,
-            state: Mutex::new(ClientState {
+            state: Arc::new(Mutex::new(ClientState {
                 projection,
                 control_attachment: None,
                 read_only_attachments: BTreeMap::new(),
                 next_attachment_seq: 0,
-            }),
+            })),
             pending,
             worker_started: AtomicBool::new(false),
             worker: Mutex::new(None),
@@ -2021,7 +2043,7 @@ impl RuntimeClientHost {
         let pending = Arc::new(PendingObservations::new());
         let seed = match config
             .runtime
-            .install_observation_bridge(Arc::clone(&pending))
+            .install_client_observation_bridge(Arc::clone(&pending))
         {
             Ok(seed) => seed,
             Err(RuntimeBootstrapError::BridgeAlreadyInstalled { conversation_id }) => {
@@ -2085,12 +2107,12 @@ impl RuntimeClientHost {
             replay_limit,
             session_control,
             defaults,
-            state: Mutex::new(ClientState {
+            state: Arc::new(Mutex::new(ClientState {
                 projection,
                 control_attachment: None,
                 read_only_attachments: BTreeMap::new(),
                 next_attachment_seq: 0,
-            }),
+            })),
             pending,
             worker_started: AtomicBool::new(false),
             worker: Mutex::new(None),
@@ -2712,6 +2734,7 @@ impl EventSubscription {
 
 #[cfg(test)]
 mod tests {
+    use crate::runtime::observation::ConversationObservation;
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
@@ -5888,7 +5911,7 @@ mod tests {
                 },
             })
             .unwrap();
-        assert!(inner.queued_observations() > 0);
+        assert!(inner.pending.has_unpublished());
         assert_eq!(host_projection_snapshot(&inner).1, cursor);
         release_tx.send(()).unwrap();
         let (before, returned) = task.await.unwrap();
@@ -5898,6 +5921,13 @@ mod tests {
         // Historical reads have their own frontier, but never fold the queue or move C.
         let _ = inner.trace_page(None, 32).unwrap();
         assert_eq!(host_projection_snapshot(&inner).1, cursor);
+        inner.pending.push(ConversationObservation::Published {
+            journal_sequence: committed.sequence,
+            observation: Box::new(ConversationObservation::Event {
+                attempt_id: committed.attempt_id.clone().unwrap(),
+                event: committed.event.clone(),
+            }),
+        });
         inner.pending.unpark();
         let (continuous, after_cursor) = fixture.host.snapshot().unwrap();
         assert!(after_cursor > cursor);
@@ -5927,6 +5957,129 @@ mod tests {
         };
         assert_eq!(reconnect.trace, continuous.trace);
         assert_eq!(cursor, after_cursor);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn background_durable_commit_cannot_publish_a_half_semantic_snapshot() {
+        let (_, fixture) =
+            host_fixture_with_native_tools(Vec::new(), ToolRegistry::new(), status_engine(), true)
+                .await;
+        let registry = fixture.runtime.tool_runtime().background().clone();
+        let (tool, mut started, release) = ParkingBackgroundTool::new();
+        let executor: Arc<dyn ToolExecutor> = Arc::new(tool);
+        let prepared = registry
+            .prepare_dispatch(
+                &claim_background_invocation("cut-background"),
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .unwrap();
+        let hook = Arc::new(crate::tools::background::test_sync::CommitBoundaryHook::default());
+        registry.install_publication_hook(hook.clone());
+        let (baseline, cursor) = fixture.host.snapshot().unwrap();
+        let commit_registry = registry.clone();
+        let commit = tokio::task::spawn_blocking(move || {
+            commit_registry
+                .commit_dispatch(prepared, &CancellationSignal::new())
+                .unwrap()
+        });
+        hook.wait_entered(); // SQLite COMMIT complete; native registry installation deliberately paused.
+        let (during, during_cursor) = fixture.host.snapshot().unwrap();
+        assert_eq!(during_cursor, cursor);
+        assert_eq!(during.background, baseline.background);
+        assert_eq!(during.trace, baseline.trace);
+        hook.proceed();
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = commit.await.unwrap() else {
+            panic!("accepted")
+        };
+        await_background_started(&mut started, "published background").await;
+        let (after, after_cursor) = fixture.host.snapshot().unwrap();
+        assert!(after_cursor > cursor);
+        assert!(
+            after
+                .background
+                .iter()
+                .any(|record| record.execution_id == execution_id)
+        );
+        assert!(
+            after
+                .trace
+                .entries
+                .iter()
+                .any(|record| record.native_id.as_deref() == Some(execution_id.as_str()))
+        );
+        let position = after
+            .trace
+            .entries
+            .iter()
+            .find(|record| record.native_id.as_deref() == Some(execution_id.as_str()))
+            .unwrap()
+            .position
+            .clone();
+        let terminal_hook =
+            Arc::new(crate::tools::background::test_sync::CommitBoundaryHook::default());
+        registry.install_publication_hook(terminal_hook.clone());
+        release.send(true).unwrap();
+        terminal_hook.wait_entered(); // Terminal COMMIT complete; native lifecycle still running.
+        let inner = fixture.host.weak_inner().upgrade().unwrap();
+        let (during_terminal, terminal_cursor) = inner
+            .snapshot_with_trace(std::slice::from_ref(&position))
+            .unwrap();
+        assert_eq!(terminal_cursor, after_cursor);
+        assert_eq!(during_terminal.trace_updates.len(), 1);
+        assert_eq!(
+            during_terminal.trace_updates[0].state,
+            crate::runtime_client::trace::TraceState::Running
+        );
+        assert_eq!(during_terminal.trace_updates[0].timing.duration_ms, None);
+        let RuntimeClientResult::TracePage { page: historical } =
+            inner.trace_page(None, 32).unwrap()
+        else {
+            panic!("Trace page")
+        };
+        assert_eq!(
+            historical
+                .entries
+                .iter()
+                .find(|entry| entry.native_id.as_deref() == Some(execution_id.as_str()))
+                .unwrap()
+                .state,
+            crate::runtime_client::trace::TraceState::Running
+        );
+        assert_eq!(host_projection_snapshot(&inner).1, terminal_cursor);
+        terminal_hook.proceed();
+        await_background_terminal(&registry, &execution_id, "settled background").await;
+        let (settled, settled_cursor) = inner.snapshot_with_trace(&[position]).unwrap();
+        assert!(settled_cursor > terminal_cursor);
+        assert_eq!(
+            settled.trace_updates[0].id,
+            during_terminal.trace_updates[0].id
+        );
+        assert_eq!(
+            settled.trace_updates[0].state,
+            crate::runtime_client::trace::TraceState::Completed
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_parked_projection_fold_cannot_retain_the_host_or_storage_authority() {
+        let probe = Arc::new(crate::runtime_client::test_sync::ProjectionProbe::default());
+        let (_, fixture) = host_fixture_probe(probe.clone(), Vec::new()).await;
+        let weak = fixture.host.weak_inner();
+        let pending = weak.upgrade().unwrap().pending.clone();
+        let (exited, exit) = std::sync::mpsc::channel();
+        fixture.host.install_worker_exit_probe(exited);
+        probe.arm_publish();
+        pending.push(ConversationObservation::GoalDisarmed);
+        probe.wait_publish_entered(); // Worker holds the projection mutex inside a fold.
+        drop(fixture.host);
+        let host_released = weak.upgrade().is_none();
+        probe.release_publish();
+        await_worker_exit(exit).await;
+        assert!(
+            host_released,
+            "a read-model fold must not own the host's resource authority"
+        );
     }
 
     /// The exact snapshot/cursor race, interleaving A (snapshot wins): the

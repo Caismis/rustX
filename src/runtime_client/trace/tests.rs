@@ -789,7 +789,13 @@ fn old_background_and_workflow_records_are_repaired_and_settle_by_identity() {
         assert_eq!(entry.state, TraceState::Running);
         assert_eq!(entry.timing.duration_ms, None);
     }
-    let live = projection.refresh(&positions, &snapshot).unwrap();
+    let inactive = projection.refresh(&positions, None).unwrap();
+    assert!(
+        inactive
+            .iter()
+            .all(|entry| entry.state == TraceState::Incomplete)
+    );
+    let live = projection.refresh(&positions, Some(&snapshot)).unwrap();
     assert!(live.iter().all(|entry| entry.state == TraceState::Running));
     append(
         &store,
@@ -809,10 +815,13 @@ fn old_background_and_workflow_records_are_repaired_and_settle_by_identity() {
         101,
     );
     // The captured old cut cannot pick up later terminals, even with the same snapshot.
-    assert_eq!(projection.refresh(&positions, &snapshot).unwrap(), live);
+    assert_eq!(
+        projection.refresh(&positions, Some(&snapshot)).unwrap(),
+        live
+    );
     let settled = TraceProjection::new(&store)
         .unwrap()
-        .refresh(&positions, &snapshot)
+        .refresh(&positions, Some(&snapshot))
         .unwrap();
     assert_eq!(
         settled.iter().map(|entry| &entry.id).collect::<Vec<_>>(),
@@ -862,7 +871,7 @@ fn loaded_lifecycle_refresh_is_bounded_and_never_repeats_internal_request_input(
     .unwrap()
     .0;
     let updates = projection
-        .refresh(&vec![position.clone(); TRACE_RECORD_LIMIT], &snapshot)
+        .refresh(&vec![position.clone(); TRACE_RECORD_LIMIT], Some(&snapshot))
         .unwrap();
     assert_eq!(updates.len(), TRACE_RECORD_LIMIT);
     for update in &updates {
@@ -884,7 +893,109 @@ fn loaded_lifecycle_refresh_is_bounded_and_never_repeats_internal_request_input(
     }
     assert!(
         projection
-            .refresh(&vec![position; TRACE_RECORD_LIMIT + 1], &snapshot)
+            .refresh(&vec![position; TRACE_RECORD_LIMIT + 1], Some(&snapshot))
             .is_err()
     );
+}
+
+#[test]
+fn canonical_tool_artifacts_merge_by_identity_with_bounded_first_occurrence() {
+    use crate::message::content::{FileReference, ImageReference};
+    use crate::tools::types::{ToolExecutionResult, ToolResultContent};
+    let store = SqliteConversationStore::in_memory(ConversationId::new("artifact-tool")).unwrap();
+    start(&store);
+    let file = |id: &str| FileReference {
+        artifact_id: ArtifactId::new(id),
+        name: Some("/private/host/path".into()),
+        mime_type: None,
+        description: Some("private executor metadata".into()),
+    };
+    for (index, content) in [
+        vec![],
+        vec![ToolResultContent::Image(ImageReference {
+            artifact_id: ArtifactId::new("artifact-one"),
+            alt: None,
+        })],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let call = ToolCallId::new(format!("artifact-call-{index}"));
+        let tool = ToolId::new("artifact-tool");
+        let owner = MessageId::new(format!("artifact-owner-{index}"));
+        store
+            .append_canonical_with_event(
+                &MessageBlock::Assistant(crate::message::types::AssistantMessageBlock {
+                    id: owner.clone(),
+                    content: vec![AssistantContentBlock::ToolCall(
+                        crate::tools::types::ToolCall {
+                            id: call.clone(),
+                            tool_id: tool.clone(),
+                            name: "files".into(),
+                            arguments: serde_json::json!({}),
+                        },
+                    )],
+                }),
+                event(
+                    &store,
+                    E::AssistantMessageCommitted { message_id: owner },
+                    1,
+                ),
+            )
+            .unwrap();
+        append(
+            &store,
+            E::ToolExecutionStarted {
+                tool_call_id: call.clone(),
+                tool_id: tool.clone(),
+            },
+            2,
+        );
+        let result = ToolExecutionResult {
+            status: ToolExecutionStatus::Success,
+            content,
+            duration_ms: 0,
+            exit_code: None,
+            artifacts: vec![file("artifact-one"), file("artifact-two")],
+            truncation: None,
+            workflow: None,
+            managed_output: None,
+        };
+        let id = MessageId::new(format!("artifact-result-{index}"));
+        store
+            .append_canonical_with_event(
+                &MessageBlock::Tool(crate::message::types::ToolMessageBlock {
+                    id: id.clone(),
+                    tool_call_id: call.clone(),
+                    tool_id: tool.clone(),
+                    result,
+                }),
+                event(
+                    &store,
+                    E::ToolMessageCommitted {
+                        message_id: id,
+                        tool_call_id: call.clone(),
+                    },
+                    3,
+                ),
+            )
+            .unwrap();
+        let projected = page(&store);
+        let entry = projected
+            .entries
+            .iter()
+            .find(|entry| entry.tool.as_ref().is_some_and(|view| view.call_id == call))
+            .unwrap();
+        assert_eq!(
+            entry
+                .artifacts
+                .iter()
+                .map(|artifact| artifact.artifact_id.as_str())
+                .collect::<Vec<_>>(),
+            ["artifact-one", "artifact-two"]
+        );
+        assert_eq!(entry.artifacts[0].image, index == 1);
+        assert!(!entry.artifacts[1].image);
+        assert!(!serde_json::to_string(entry).unwrap().contains("private"));
+    }
 }

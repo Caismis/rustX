@@ -732,7 +732,13 @@ impl RecordingPublicationObserver {
 }
 
 impl AgentExecutionObserver for RecordingPublicationObserver {
-    fn observe_event(&self, _attempt_id: &AttemptId, _event: &RuntimeEvent) {}
+    fn observe_event(
+        &self,
+        _attempt_id: &AttemptId,
+        _event: &RuntimeEvent,
+        _journal_sequence: u64,
+    ) {
+    }
 
     fn observe_committed(
         &self,

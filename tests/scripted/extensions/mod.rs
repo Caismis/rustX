@@ -515,7 +515,7 @@ impl Recorder {
 }
 
 impl AgentExecutionObserver for Recorder {
-    fn observe_event(&self, _attempt_id: &AttemptId, event: &RuntimeEvent) {
+    fn observe_event(&self, _attempt_id: &AttemptId, event: &RuntimeEvent, _journal_sequence: u64) {
         self.events.lock().expect("events").push(event.clone());
     }
 

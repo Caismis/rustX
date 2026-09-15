@@ -1635,6 +1635,9 @@ impl RuntimeInner {
                 let result = inner
                     .drain_to_quiescence(completion_for_task.clone(), interaction_cancel_reason)
                     .await;
+                // Release the drain task's native ownership before waking a
+                // shutdown caller that may immediately relinquish the product.
+                drop(inner);
                 completion_for_task.complete(result);
             });
         }
@@ -2031,9 +2034,11 @@ impl RuntimeInner {
     /// [`RuntimeBootstrapError::BridgeAlreadyInstalled`] when an
     /// observation bridge already exists, or [`RuntimeBootstrapError::Durable`]
     /// when the native durable bootstrap cannot be read coherently.
+    #[allow(clippy::too_many_lines)] // One inactive-runtime bootstrap synchronization boundary.
     fn install_observation_bridge(
         self: &Arc<Self>,
         queue: Arc<PendingObservations>,
+        client_projection: bool,
     ) -> Result<RuntimeBootstrapSnapshot, RuntimeBootstrapError> {
         // The one coordinator lock is held across every phase below: it is
         // the freeze that makes the combined seed one real global state.
@@ -2111,10 +2116,24 @@ impl RuntimeInner {
             .map(crate::goal::GoalDomain::view)
             .transpose()
             .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
-        let journal_through = self
-            .store
-            .observe_journal(queue.clone())
-            .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
+        let journal_through = if client_projection {
+            let through = self
+                .store
+                .observe_journal(queue.clone())
+                .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
+            let workflow_observer = observer.clone();
+            self.tool_runtime
+                .workflows()
+                .install_publication_observer(Arc::new(move |snapshot, sequence| {
+                    workflow_observer.push(ConversationObservation::Published {
+                        journal_sequence: sequence,
+                        observation: Box::new(ConversationObservation::Workflow(snapshot)),
+                    });
+                }));
+            through
+        } else {
+            0
+        };
         self.interaction.install_observer(observer.clone());
         // ---- T1: the mailbox (frozen: an inactive conversation refuses
         //          inbound) ----
@@ -2507,8 +2526,11 @@ impl RuntimeInner {
                         block: success.completed.summary_block,
                         transcript_cursor: Some(success.completed.transcript_cursor),
                     });
-                    self.observe(ConversationObservation::ManualCompactionEvent {
-                        event: success.completed.persisted_event.event,
+                    self.observe(ConversationObservation::Published {
+                        journal_sequence: success.completed.persisted_event.sequence,
+                        observation: Box::new(ConversationObservation::ManualCompactionEvent {
+                            event: success.completed.persisted_event.event,
+                        }),
                     });
                     Ok(success.outcome)
                 }
@@ -3909,11 +3931,21 @@ impl ConversationRuntime {
     /// consumer). The one-time Runtime Client binding claim guarantees
     /// this cannot happen for a production adapter, and a failed host
     /// construction releases that claim again.
+    #[cfg(test)]
     pub(crate) fn install_observation_bridge(
         &self,
         queue: Arc<PendingObservations>,
     ) -> Result<RuntimeBootstrapSnapshot, RuntimeBootstrapError> {
-        self.inner.install_observation_bridge(queue)
+        self.inner.install_observation_bridge(queue, false)
+    }
+
+    /// Runtime Client composition additionally stages durable publication receipts.
+    /// Native/headless consumers retain ordinary semantic observation delivery.
+    pub(crate) fn install_client_observation_bridge(
+        &self,
+        queue: Arc<PendingObservations>,
+    ) -> Result<RuntimeBootstrapSnapshot, RuntimeBootstrapError> {
+        self.inner.install_observation_bridge(queue, true)
     }
 
     /// Adds a bounded local consumer to the Runtime Client observation
@@ -6045,10 +6077,13 @@ impl crate::goal::GoalObserver for RuntimeObserver {
 }
 
 impl AgentExecutionObserver for RuntimeObserver {
-    fn observe_event(&self, attempt_id: &AttemptId, event: &RuntimeEvent) {
-        self.push(ConversationObservation::Event {
-            attempt_id: attempt_id.clone(),
-            event: event.clone(),
+    fn observe_event(&self, attempt_id: &AttemptId, event: &RuntimeEvent, journal_sequence: u64) {
+        self.push(ConversationObservation::Published {
+            journal_sequence,
+            observation: Box::new(ConversationObservation::Event {
+                attempt_id: attempt_id.clone(),
+                event: event.clone(),
+            }),
         });
     }
 
@@ -6136,6 +6171,12 @@ impl InboundObserver for RuntimeObserver {
 // only, so no `coordinator -> registry` ordering discipline is ever
 // required of a caller.
 impl BackgroundObserver for RuntimeObserver {
+    fn on_committed(&self, snapshot: &BackgroundExecutionSnapshot, sequence: u64) {
+        self.push(ConversationObservation::Published {
+            journal_sequence: sequence,
+            observation: Box::new(ConversationObservation::Background(snapshot.clone())),
+        });
+    }
     fn on_snapshot(&self, snapshot: &BackgroundExecutionSnapshot) {
         self.push(ConversationObservation::Background(snapshot.clone()));
     }
@@ -6146,6 +6187,12 @@ impl BackgroundObserver for RuntimeObserver {
 // publications are reliable; live-activity publications are disposable and
 // land in the coalescing latest-value lane.
 impl crate::runtime::subagent::SubagentObserver for RuntimeObserver {
+    fn on_committed(&self, snapshot: &crate::runtime::subagent::SubagentSnapshot, sequence: u64) {
+        self.push(ConversationObservation::Published {
+            journal_sequence: sequence,
+            observation: Box::new(ConversationObservation::SubagentLifecycle(snapshot.clone())),
+        });
+    }
     fn on_snapshot(&self, snapshot: &crate::runtime::subagent::SubagentSnapshot) {
         self.push(ConversationObservation::SubagentLifecycle(snapshot.clone()));
     }

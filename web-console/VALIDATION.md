@@ -702,7 +702,7 @@ This section supersedes the preceding Trace cut/cache and SQLite version claims.
   512 interests are finite, 513 are rejected; private prompt/schema/provider/MCP
   fields never enter patches. Existing retry, Tool correlation, redaction,
   missing-terminal and timestamp tests continue to pass.
-- Web tests cover old-window preservation without tail overlap, terminal patch
+- Web tests cover contiguous-window rebasing without tail overlap, terminal patch
   application, selected inspector stability, settlement while older paging is
   pending, newly revealed prefix ordering, and restoration of paging in a fresh
   resync epoch. Existing stale-response, reconnect, folding, virtualization and
@@ -736,3 +736,55 @@ The generated App Server contract remains v3; SQLite advances independently from
 34 to 35. No additional upstream Harness code or dependency was introduced.
 CI was re-read. This Linux run does not claim execution of the macOS-only lane.
 The production bundle retains its existing non-fatal chunk-size advisory.
+
+### Second-review corrections: final local validation
+
+Current regressions add a real Background COMMIT/native-publication barrier,
+real SQLite interaction publication barrier, cross-owner receipt ordering,
+Workflow revision-chain delivery, parked-reader storage-lifetime independence,
+non-overlap rebase with stale-page fencing and retained selected-record repair,
+and canonical Tool artifact-only/deduplication cases. The earlier command table
+records the previous reviewed head; final-head validation is recorded separately.
+
+
+The final corrected code passed the following commands (Linux). The unchanged
+original main checkout remained clean. App Server generated v3 DTOs did not drift;
+SQLite schema 35 and all required index/query-plan contracts remain covered.
+
+| Directory | Exact command | Result |
+| --- | --- | --- |
+| root | `cargo fmt --all -- --check` | Passed |
+| root | `git diff --check` | Passed |
+| root | `cargo clippy --all-targets --all-features -- -D warnings` | Passed |
+| root | `cargo build --bins` | Passed |
+| root | `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 2,833 passed; one existing fixture-generation test ignored |
+| root | `cargo test --test contracts --test provider --all-features` | 25 contracts + 166 provider passed; five opt-in live-provider tests ignored |
+| root | `cargo test --lib --all-features -- boundary_suites::` | 226 passed |
+| root | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance` | 401 passed: durable 116, process 52, Subagent 53, Tools 157, conformance 23 |
+| test-support/fake-provider | `uv sync --frozen` | Passed |
+| test-support/fake-provider | `uv run --frozen pytest` | 51 passed |
+| protocol/app-server | `pnpm install --frozen-lockfile` | Passed |
+| protocol/app-server | `pnpm check` | Passed Rust schema/TypeScript generation check |
+| protocol/app-server | `pnpm typecheck` | Passed |
+| web-console | `pnpm install --frozen-lockfile` | Passed |
+| web-console | `pnpm typecheck` | Passed |
+| web-console | `pnpm test` | 152 passed, 14 files |
+| web-console | `pnpm check:provenance` | 56 source records and 100 production package notices passed |
+| web-console | `pnpm build` | Passed; existing non-fatal bundle-size advisory |
+| web-console | `pnpm test:e2e` | Six passed against the real App Server |
+| tui | `pnpm install --frozen-lockfile` | Passed |
+| tui | `pnpm typecheck` | Passed |
+| tui | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test` | 810 passed, zero skipped |
+
+Earlier development runs exposed and corrected headless observation interference,
+Workflow revision delivery gaps, and runtime/projection-worker reference lifetimes.
+Two boundary retries also encountered PyPI network-unreachable errors; the full
+unchanged command passed after connectivity recovered, without offline mode,
+changed dependency settings, sleeps, weakened assertions or excluded tests.
+The table above records full successful runs after the code corrections.
+
+The macOS job budget is 40 minutes: the previous reviewed-head run spent about
+19 minutes in cold compilation and reached passing external targets before the
+old 25-minute job deadline cancelled it. Native test liveness limits are unchanged.
+Final-head GitHub Actions results are recorded on PR #318 after all seven jobs
+finish; this local record alone makes no claim about pending remote jobs.

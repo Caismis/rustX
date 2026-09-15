@@ -2592,7 +2592,17 @@ impl WorkflowRuntime {
             timestamp: Utc::now(),
             event,
         };
-        let _ = self.event_store.append_event(envelope);
+        if let Ok(committed) = self.event_store.append_event(envelope)
+            && matches!(
+                committed.event,
+                RuntimeEvent::WorkflowStarted { .. }
+                    | RuntimeEvent::WorkflowCompleted { .. }
+                    | RuntimeEvent::WorkflowFailed { .. }
+                    | RuntimeEvent::WorkflowCancelled { .. }
+            )
+        {
+            self.read_model.publish_committed(committed.sequence);
+        }
     }
 
     #[allow(clippy::too_many_arguments)] // the explicit child admission boundary

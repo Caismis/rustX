@@ -144,5 +144,9 @@ selector is presentation state. Trace has its own bounded cache/cursor/epoch;
 Chat's transcript cursor is never used for Trace. Switching views leaves native
 execution untouched. The raw developer inspector remains a separate tool.
 
+Trajectory keeps one contiguous loaded history interval. A newest tail without
+shared records replaces that interval and its paging epoch; one selected record
+can remain separately inspector-visible and receive native lifecycle repairs.
+
 See [Native Trace](../docs/trace.md) for server projection ownership, request/retry
 grouping, current snapshot repair, redaction and deliberate inspector omissions.

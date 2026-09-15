@@ -119,9 +119,20 @@ use crate::tools::types::ToolProgress;
 // allocation to the hot observation path. The size spread is by design.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum ConversationObservation {
-    /// Committed Journal prefix, enqueued under the native store serialization
-    /// lock. It becomes visible only when folded with the client cursor.
-    JournalCommitted(Option<u64>),
+    /// One ready semantic publication batch and its represented durable prefix.
+    /// The queue cannot release this batch while any earlier Trace-affecting
+    /// commit still awaits its owner's infallible native installation.
+    JournalBatch {
+        through: Option<u64>,
+        observations: Vec<ConversationObservation>,
+    },
+    /// The owner has installed native state for this exact committed receipt.
+    Published {
+        journal_sequence: u64,
+        observation: Box<ConversationObservation>,
+    },
+    /// A native Workflow cut published after its corresponding durable receipt.
+    Workflow(Vec<crate::runtime::workflow::read_model::WorkflowSnapshot>),
     /// Bounded authoritative replacement, ordered under the Goal mutex.
     GoalChanged(crate::goal::GoalView),
     /// Activation-only transition; the durable read-model copy is unchanged.
@@ -479,6 +490,12 @@ impl ObservationFanout {
 
 /// The delivery lanes behind the one queue lock.
 struct PendingState {
+    // Client-only publication synchronization, not execution state. Each key
+    // exists only from durable COMMIT to the owner's synchronous publication.
+    unpublished: std::collections::BTreeSet<u64>,
+    // Latest Trace-affecting receipt; ignored Journal kinds cannot advance it.
+    committed_through: Option<u64>,
+    journal_failed: bool,
     /// The reliable lane: ordered, non-lossy semantic/lifecycle
     /// observations.
     reliable: VecDeque<ConversationObservation>,
@@ -498,6 +515,9 @@ impl PendingObservations {
     pub(crate) fn new() -> Self {
         Self {
             state: Mutex::new(PendingState {
+                unpublished: std::collections::BTreeSet::new(),
+                committed_through: None,
+                journal_failed: false,
                 reliable: VecDeque::new(),
                 latest_activity: BTreeMap::new(),
                 latest_progress: BTreeMap::new(),
@@ -521,6 +541,29 @@ impl PendingObservations {
             .state
             .lock()
             .expect("pending observation queue lock poisoned");
+        let observation = if let ConversationObservation::Published {
+            journal_sequence,
+            observation,
+        } = observation
+        {
+            state.unpublished.remove(&journal_sequence);
+            *observation
+        } else {
+            observation
+        };
+        match &observation {
+            ConversationObservation::InteractionPending {
+                audit: Some((event, _)),
+                ..
+            }
+            | ConversationObservation::InteractionSettled {
+                audit: Some((event, _)),
+                ..
+            } => {
+                state.unpublished.remove(&event.sequence);
+            }
+            _ => {}
+        }
         match observation {
             // Disposable: overwrite in place — the queue holds only the
             // latest unpublished activity snapshot per subagent.
@@ -602,6 +645,9 @@ impl PendingObservations {
             // was about to fold, it folds nothing from here on.
             return Vec::new();
         }
+        if !state.unpublished.is_empty() && !state.journal_failed {
+            return Vec::new();
+        }
         let mut drained: Vec<ConversationObservation> = state.reliable.drain(..).collect();
         drained.extend(std::mem::take(&mut state.latest_progress).into_values());
         drained.extend(
@@ -609,7 +655,21 @@ impl PendingObservations {
                 .into_values()
                 .map(ConversationObservation::SubagentActivity),
         );
-        drained
+        if state.committed_through.is_some() || state.journal_failed {
+            let committed = state.committed_through.take();
+            let through = if std::mem::take(&mut state.journal_failed) {
+                state.unpublished.clear();
+                None
+            } else {
+                committed
+            };
+            vec![ConversationObservation::JournalBatch {
+                through,
+                observations: drained,
+            }]
+        } else {
+            drained
+        }
     }
 
     /// Waits for the next push or for close.
@@ -618,6 +678,15 @@ impl PendingObservations {
     /// push or a close between two waits is never missed.
     pub(crate) async fn wait(&self) {
         self.notify.notified().await;
+    }
+
+    pub(crate) fn has_unpublished(&self) -> bool {
+        !self
+            .state
+            .lock()
+            .expect("pending observation queue lock poisoned")
+            .unpublished
+            .is_empty()
     }
 
     pub(crate) fn is_closed(&self) -> bool {
@@ -638,6 +707,9 @@ impl PendingObservations {
             .lock()
             .expect("pending observation queue lock poisoned");
         state.reliable.clear();
+        state.unpublished.clear();
+        state.committed_through = None;
+        state.journal_failed = false;
         state.latest_activity.clear();
         state.latest_progress.clear();
         drop(state);
@@ -657,6 +729,27 @@ impl PendingObservations {
             .state
             .lock()
             .expect("pending observation queue lock poisoned");
+        if !state.unpublished.is_empty() {
+            return None;
+        }
+        if state.committed_through.is_some() || state.journal_failed {
+            let through = state
+                .committed_through
+                .take()
+                .filter(|_| !state.journal_failed);
+            state.journal_failed = false;
+            let mut observations: Vec<_> = state.reliable.drain(..).collect();
+            observations.extend(std::mem::take(&mut state.latest_progress).into_values());
+            observations.extend(
+                std::mem::take(&mut state.latest_activity)
+                    .into_values()
+                    .map(ConversationObservation::SubagentActivity),
+            );
+            return Some(ConversationObservation::JournalBatch {
+                through,
+                observations,
+            });
+        }
         if let Some(observation) = state.reliable.pop_front() {
             return Some(observation);
         }
@@ -737,8 +830,93 @@ impl PendingObservations {
 }
 
 impl crate::durable::presentation::JournalObserver for PendingObservations {
-    fn committed(&self, through: Option<u64>) {
-        self.push(ConversationObservation::JournalCommitted(through));
+    fn committed(&self, events: Option<Vec<RuntimeEventEnvelope>>) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("pending observation queue lock poisoned");
+        if self.closed.load(Ordering::Acquire) {
+            return;
+        }
+        if let Some(events) = events {
+            for event in events {
+                if trace_fact_requires_publication(&event.event) {
+                    state.committed_through = Some(event.sequence);
+                    state.unpublished.insert(event.sequence);
+                }
+            }
+        } else {
+            state.journal_failed = true;
+        }
+        drop(state);
+        self.notify.notify_one();
+    }
+}
+
+/// Closed dependency list for Trace's durable facts. Other native facts are
+/// deliberately excluded from Trace; they do not create a Trace-only cursor
+/// transition. Their owners continue publishing ordinary observations.
+fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
+    match event {
+        RuntimeEvent::AttemptStarted { .. }
+        | RuntimeEvent::AttemptCompleted { .. }
+        | RuntimeEvent::AttemptCancelled { .. }
+        | RuntimeEvent::AttemptTimedOut { .. }
+        | RuntimeEvent::AttemptLimitExceeded { .. }
+        | RuntimeEvent::AttemptFailed { .. }
+        | RuntimeEvent::TurnStarted
+        | RuntimeEvent::TurnCompleted
+        | RuntimeEvent::ModelRequestStarted { .. }
+        | RuntimeEvent::AgentStatusEmitted { .. }
+        | RuntimeEvent::ModelRequestCompleted { .. }
+        | RuntimeEvent::ModelRequestFailed { .. }
+        | RuntimeEvent::ModelRetryScheduled { .. }
+        | RuntimeEvent::AssistantMessageCommitted { .. }
+        | RuntimeEvent::ToolExecutionStarted { .. }
+        | RuntimeEvent::ToolExecutionCompleted { .. }
+        | RuntimeEvent::ToolExecutionFailed { .. }
+        | RuntimeEvent::ToolMessageCommitted { .. }
+        | RuntimeEvent::CompactionStarted
+        | RuntimeEvent::CompactionCompleted { .. }
+        | RuntimeEvent::CompactionFailed { .. }
+        | RuntimeEvent::BackgroundExecutionCommitted { .. }
+        | RuntimeEvent::BackgroundTerminalPublished { .. }
+        | RuntimeEvent::SubagentOwnershipCommitted { .. }
+        | RuntimeEvent::SubagentTerminalPublished { .. }
+        | RuntimeEvent::SubagentTerminalSettled { .. }
+        | RuntimeEvent::WorkflowStarted { .. }
+        | RuntimeEvent::WorkflowCompleted { .. }
+        | RuntimeEvent::WorkflowFailed { .. }
+        | RuntimeEvent::WorkflowCancelled { .. }
+        | RuntimeEvent::InteractionRequested { .. }
+        | RuntimeEvent::InteractionSettled { .. } => true,
+        RuntimeEvent::Goal { .. }
+        | RuntimeEvent::NativeToolInvocation { .. }
+        | RuntimeEvent::InboundTurnAdopted { .. }
+        | RuntimeEvent::ToolExecutionProgress { .. }
+        | RuntimeEvent::ToolExecutionDeadlineFired { .. }
+        | RuntimeEvent::ToolExecutionCancellationRequested { .. }
+        | RuntimeEvent::ToolExecutionSettlementObserved { .. }
+        | RuntimeEvent::ToolExecutionSettlementControlFailed { .. }
+        | RuntimeEvent::SubagentWorkspaceDisposalStarted { .. }
+        | RuntimeEvent::SubagentWorkspaceDisposalSettled { .. }
+        | RuntimeEvent::WorkflowWorkspaceOwned { .. }
+        | RuntimeEvent::WorkflowWorkspaceSettled { .. }
+        | RuntimeEvent::WorkflowCandidateInvocation { .. }
+        | RuntimeEvent::WorkflowWorkspaceDisposalStarted { .. }
+        | RuntimeEvent::WorkflowWorkspaceDisposalSettled { .. }
+        | RuntimeEvent::WorkflowBlockStarted { .. }
+        | RuntimeEvent::WorkflowLoopIterationAdmitted { .. }
+        | RuntimeEvent::WorkflowLoopIterationSettled { .. }
+        | RuntimeEvent::WorkflowLoopExited { .. }
+        | RuntimeEvent::WorkflowBlockSettled { .. }
+        | RuntimeEvent::WorkflowNodeStarted { .. }
+        | RuntimeEvent::WorkflowNodeSettled { .. }
+        | RuntimeEvent::WorkflowAgentAdmitted { .. }
+        | RuntimeEvent::WorkflowAgentOutputCommitted { .. }
+        | RuntimeEvent::WorkflowBranchSelected { .. }
+        | RuntimeEvent::WorkflowParallelAdmitted { .. }
+        | RuntimeEvent::WorkflowParallelSettled { .. } => false,
     }
 }
 
@@ -750,6 +928,51 @@ mod tests {
         SubagentObservation, SubagentState, SubagentWorkspaceResourceState,
     };
     use crate::runtime::workspace::WorkspaceSnapshot;
+
+    #[test]
+    fn unpublished_earlier_commit_cannot_be_overtaken_by_a_later_owner() {
+        use crate::durable::presentation::JournalObserver;
+        use crate::runtime::identity::EventId;
+        let queue = PendingObservations::new();
+        let receipt = |sequence| RuntimeEventEnvelope {
+            schema_version: 1,
+            event_id: EventId::new(format!("receipt-{sequence}")),
+            sequence,
+            conversation_id: ConversationId::new("publication-order"),
+            attempt_id: Some(AttemptId::new("attempt")),
+            turn_id: None,
+            timestamp: chrono::DateTime::UNIX_EPOCH,
+            event: RuntimeEvent::AttemptStarted {
+                attempt_id: AttemptId::new("attempt"),
+            },
+        };
+        queue.committed(Some(vec![receipt(1)]));
+        queue.committed(Some(vec![receipt(2)]));
+        let published = |sequence| ConversationObservation::Published {
+            journal_sequence: sequence,
+            observation: Box::new(ConversationObservation::Event {
+                attempt_id: AttemptId::new("attempt"),
+                event: receipt(sequence).event,
+            }),
+        };
+        queue.push(published(2));
+        assert!(queue.drain().is_empty());
+        assert!(queue.pop_one().is_none());
+        queue.push(published(1));
+        let batch = queue.drain();
+        assert!(
+            matches!(batch.as_slice(), [ConversationObservation::JournalBatch { through: Some(2), observations }] if observations.len() == 2)
+        );
+        assert!(queue.drain().is_empty());
+        // A fact excluded from Trace cannot independently publish a cursor.
+        let mut ignored = receipt(3);
+        // Inbound adoption is native history, but is not consumed by Trace.
+        ignored.event = RuntimeEvent::InboundTurnAdopted {
+            message_ids: vec![],
+        };
+        queue.committed(Some(vec![ignored]));
+        assert!(queue.drain().is_empty());
+    }
 
     /// A minimal subagent snapshot carrying only the identity and the
     /// activity revision this suite distinguishes.

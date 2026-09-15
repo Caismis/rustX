@@ -213,7 +213,13 @@ async fn run_inner(
 struct NoopObserver;
 
 impl AgentExecutionObserver for NoopObserver {
-    fn observe_event(&self, _attempt_id: &AttemptId, _event: &RuntimeEvent) {}
+    fn observe_event(
+        &self,
+        _attempt_id: &AttemptId,
+        _event: &RuntimeEvent,
+        _journal_sequence: u64,
+    ) {
+    }
 
     fn observe_committed(
         &self,
@@ -288,7 +294,7 @@ impl CancelOnToolEvent {
 }
 
 impl AgentExecutionObserver for CancelOnToolEvent {
-    fn observe_event(&self, _attempt_id: &AttemptId, event: &RuntimeEvent) {
+    fn observe_event(&self, _attempt_id: &AttemptId, event: &RuntimeEvent, _journal_sequence: u64) {
         if self.matches(event) {
             let _ = self.cancellation.request_cancel(self.reason);
         }

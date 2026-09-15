@@ -72,14 +72,15 @@ function Inspector({ entry, close }: { entry: TraceEntry; close: () => void }) {
     </div>
   </aside>;
 }
-export function Trajectory({ cache, loadEarlier, latest }: { cache: TraceCache; loadEarlier: () => void; latest: () => void }) {
+export function Trajectory({ cache, loadEarlier, latest, onSelect }: { cache: TraceCache; loadEarlier: () => void; latest: () => void; onSelect?: (id?: string) => void }) {
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState('');
   const [folded, setFolded] = useState<Set<string>>(new Set());
-  const [selectedId, setSelectedId] = useState<string>();
+  const [selectedId, setSelectedId] = useState<string | undefined>(cache.selection?.id);
   const entries = cache.page.entries;
   const rows = useMemo(() => visibleTrace(entries, query, kind, folded), [entries, query, kind, folded]);
-  const selected = entries.find(entry => entry.id === selectedId);
+  const selected = (cache.selection?.id === selectedId ? cache.selection : undefined) ?? entries.find(entry => entry.id === selectedId);
+  const select = (id?: string) => { setSelectedId(id); onSelect?.(id); };
   const viewport = useRef<HTMLDivElement>(null);
   const key = useCallback((index: number) => rows[index]!.id, [rows]);
   const virtualizer = useVirtualizer({ count: rows.length, getScrollElement: () => viewport.current,
@@ -95,15 +96,16 @@ export function Trajectory({ cache, loadEarlier, latest }: { cache: TraceCache; 
     <Button size="sm" disabled={cache.loading || !cache.page.next_cursor || entries.length >= TRACE_LIMIT} onClick={loadEarlier}>{cache.loading ? 'Loading Trace…' : 'Load older Trace'}</Button>
     <Button size="sm" onClick={latest}>Latest Trace</Button><small>{entries.length} loaded</small>
   </div>{cache.error && <p role="alert">{cache.error}</p>}
-    <Overview entries={entries} select={setSelectedId} />
-    {removed && <p role="status">Selected record left the loaded window. <Button size="sm" onClick={() => setSelectedId(undefined)}>Dismiss selection</Button></p>}
+    <Overview entries={entries} select={select} />
+    {selected && !entries.some(entry => entry.id === selected.id) && <p role="status">Selected record retained outside loaded history.</p>}
+    {removed && <p role="status">Selected record left the loaded window. <Button size="sm" onClick={() => select(undefined)}>Dismiss selection</Button></p>}
     <div className={css.split}><div ref={viewport} className={css.ledger} role="table" aria-label="Trace ledger" aria-rowcount={rows.length} style={{ overflowAnchor: 'none' }}>
       <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
         {virtualizer.getVirtualItems().map(item => { const entry = rows[item.index]!; const group = entry.kind === 'step' ? stepGroup(entry) : entry.location.attempt_id; return <div key={item.key} data-trace-id={entry.id} role="row" aria-rowindex={item.index + 1} aria-selected={selectedId === entry.id} className={css.record} style={{ position: 'absolute', top: 0, transform: `translateY(${item.start}px)`, height: item.size, width: '100%' }}>
           <span role="cell" className={css.group}>{['attempt', 'step'].includes(entry.kind) && group ? <Button size="sm" aria-label={`Fold ${entry.kind === 'step' ? 'Step ' + entry.location.step_id : 'Attempt ' + group}`} aria-expanded={!folded.has(group)} onClick={() => setFolded(current => { const next = new Set(current); if (next.has(group)) next.delete(group); else next.add(group); return next; })}>{folded.has(group) ? '▸' : '▾'}</Button> : null}{entry.location.step_id ? `Step ${entry.location.step_id}` : entry.kind}</span>
-          <button role="cell" className={css.recordButton} onClick={() => setSelectedId(entry.id)} title={label(entry)}>{label(entry)}</button><span role="cell">{entry.state}</span><span role="cell">{duration(entry)}</span>
+          <button role="cell" className={css.recordButton} onClick={() => select(entry.id)} title={label(entry)}>{label(entry)}</button><span role="cell">{entry.state}</span><span role="cell">{duration(entry)}</span>
         </div>; })}
       </div>{!rows.length && <p>No matching loaded records.</p>}
-    </div>{selected && <Inspector key={selected.id} entry={selected} close={() => setSelectedId(undefined)} />}</div>
+    </div>{selected && <Inspector key={selected.id} entry={selected} close={() => select(undefined)} />}</div>
   </section>;
 }

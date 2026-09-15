@@ -212,3 +212,8 @@ refresh and cache epoch regressions are rustX-authored. No additional Harness
 implementation or dependencies were copied. The existing `trajectory.test.tsx`
 source record continues to identify its adapted upstream presentation contracts;
 the new historical-selection regression exercises rustX's native lifecycle DTO.
+
+The second review's semantic-publication receipts, contiguous history rebase,
+separately retained selection and canonical artifact merge are also rustX-authored.
+They add no Harness source files or dependencies. The existing source inventory
+and MIT notices remain the sole provenance mechanism.

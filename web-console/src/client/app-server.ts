@@ -1,4 +1,4 @@
-import { TRACE_LIMIT, TRACE_PAGE_SIZE, prependTrace, refreshTrace, replaceTrace, type TraceCache } from './trace';
+import { TRACE_LIMIT, TRACE_PAGE_SIZE, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterests, type TraceCache } from './trace';
 import type {
   AttachmentTarget, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
@@ -378,7 +378,7 @@ export class AppServerClient {
         this.dirty.delete(id);
         const resync = this.resubscribe.delete(id);
         if (resync) this.setSession(id, { attachment: 'resynchronizing', trace: replaceTrace({ entries: [], next_cursor: null }, this.state.views[id]?.trace), history: replaceTranscript({ entries: [] }, this.state.views[id]?.history) });
-        const result = await this.request({ method: 'session/snapshot', params: { target, trace_records: this.state.views[id]?.trace?.page.entries.map(entry => entry.position) ?? [] } }, 'snapshot');
+        const result = await this.request({ method: 'session/snapshot', params: { target, trace_records: traceInterests(this.state.views[id]?.trace) } }, 'snapshot');
         if (!current()) return;
         if (result.snapshot.conversation_id !== target.conversation_id) throw new Error('Mismatched snapshot conversation.');
         if (BigInt(result.cursor) >= BigInt(this.state.views[id].cursor ?? '0')) {
@@ -436,6 +436,10 @@ export class AppServerClient {
       if (current()) this.setSession(id, { trace: { ...this.state.views[id].trace!, loading: false, error: String(error) } });
       throw error;
     }
+  }
+  selectTrace(id: string, record?: string) {
+    const trace = this.state.views[id]?.trace;
+    if (trace) this.setSession(id, { trace: selectTrace(trace, record) });
   }
   latestTrace(id: string) {
     const view = this.state.views[id];

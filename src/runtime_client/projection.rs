@@ -493,6 +493,25 @@ impl RuntimeClientProjection {
         if self.exhausted {
             return;
         }
+        if let ConversationObservation::JournalBatch {
+            through,
+            observations,
+        } = observation
+        {
+            let before = self.cursor;
+            for observation in observations {
+                self.apply(observation);
+            }
+            if let Some(through) = through {
+                self.journal_through = through;
+            } else {
+                self.exhausted = true;
+            }
+            if self.cursor == before {
+                self.publish(RuntimeClientEvent::TraceChanged);
+            }
+            return;
+        }
         let published = self.fold(observation);
         #[cfg(test)]
         self.probe_publish_enter();
@@ -506,13 +525,15 @@ impl RuntimeClientProjection {
     #[allow(clippy::too_many_lines)]
     fn fold(&mut self, observation: ConversationObservation) -> Vec<RuntimeClientEvent> {
         match observation {
-            ConversationObservation::JournalCommitted(through) => {
-                if let Some(through) = through {
-                    self.journal_through = through;
-                } else {
-                    self.exhausted = true;
+            ConversationObservation::JournalBatch { .. } => {
+                unreachable!("batches are applied at the synchronization boundary")
+            }
+            ConversationObservation::Published { observation, .. } => self.fold(*observation),
+            ConversationObservation::Workflow(cuts) => {
+                for cut in cuts {
+                    self.fold_workflows(cut);
                 }
-                vec![RuntimeClientEvent::TraceChanged]
+                Vec::new()
             }
             ConversationObservation::GoalChanged(view) => {
                 if self.snapshot.goal.as_ref() == Some(&view) {
@@ -3043,7 +3064,12 @@ mod tests {
     }
 
     impl AgentExecutionObserver for StatusParkObserver {
-        fn observe_event(&self, attempt_id: &AttemptId, event: &RuntimeEvent) {
+        fn observe_event(
+            &self,
+            attempt_id: &AttemptId,
+            event: &RuntimeEvent,
+            _journal_sequence: u64,
+        ) {
             self.apply(ConversationObservation::Event {
                 attempt_id: attempt_id.clone(),
                 event: event.clone(),
@@ -3596,7 +3622,12 @@ mod tests {
     }
 
     impl AgentExecutionObserver for EventPathObserver {
-        fn observe_event(&self, attempt_id: &AttemptId, event: &RuntimeEvent) {
+        fn observe_event(
+            &self,
+            attempt_id: &AttemptId,
+            event: &RuntimeEvent,
+            _journal_sequence: u64,
+        ) {
             if matches!(event, RuntimeEvent::CompactionCompleted { .. }) {
                 self.facts
                     .lock()

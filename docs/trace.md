@@ -66,20 +66,51 @@ captures the snapshot, Runtime Client cursor and represented Journal prefix.
 Trace queries run **after releasing that mutex**, bounded by that captured prefix.
 They never obtain an independent latest SQLite frontier.
 
-The store's serialized connection guard publishes a leaf `JournalCommitted`
-observation after a successful commit and before releasing the connection lock.
-It carries only the committed `next_event_sequence` prefix, not event payloads.
-Rollback, duplicate commits and reads cannot advance it. Installation captures a
-bootstrap prefix under the same store lock. Folding this observation advances the
-projection's represented prefix and publishes the existing payloadless
-`trace_changed` invalidation at a Runtime Client cursor. Thus a commit after a
-snapshot cut belongs to a subsequent observation/cursor, even when its durable
-rows already exist while Trace is being materialized. The observer cannot execute,
-settle or recover anything; failure to establish its prefix fences the client
-projection. It is not a second event stream or stored projection.
+The store's serialized connection guard stages commit receipts under the SQLite
+serialization lock. Staging never publishes a Runtime Client cursor. For every
+Trace-affecting semantic fact, the queue retains only its unacknowledged sequence.
+The native owner installs hot state, then publishes its existing observation with
+that exact receipt: Agent events, canonical messages/Tool commits, Background and
+Subagent snapshots, manual compaction, interaction audit observations, and native
+Workflow cuts. Workflow delivery carries the retained native revision chain,
+not just its latest replacement, so ordinary progress does not manufacture a
+revision gap/resync. No owner samples a later durable maximum.
 
-Historical `session/trace` reads repair their returned entries against a copied
-native runtime projection without draining observations or moving the live cursor.
+The queue releases one semantic observation batch only after every staged
+Trace-affecting receipt has been acknowledged. Thus a later owner's publication
+cannot advance the durable prefix past an earlier uninstalled transition. Under
+the host mutex the batch folds native state, publishes the ordinary invalidations,
+and advances the represented prefix. `snapshot_cut()` then copies all four: native
+state, cursor, Trace frontier, and the lifecycle evidence used by `trace_updates`.
+Materialization runs outside that mutex. Runtime owners never wait for Trace.
+The projection worker owns only read-model state, the pending queue and the native
+Workflow read model. It cannot retain the host, runtime or durable storage lease,
+even while actively folding; native resource release does not wait for a reader.
+
+The closed classification in `runtime::observation` gates Attempt/Turn/request,
+Assistant/Tool message and execution, compaction, Background, Subagent terminal
+and ownership, Workflow run lifecycle, and interaction facts. Other Journal facts
+(Goal, adoption, execution control/progress, workspace and Workflow node/block
+and value audits) are not consumed by Trace and never independently advance its
+frontier or allocate a cursor. There is no generic `JournalCommitted` publication
+and no separate audit-only Trace stream. A later represented Trace prefix may
+include those ignored rows, but Trace cannot expose them.
+
+Bootstrap remains under inactive runtime ownership: the coordinator freezes the
+semantic seed, installs the store staging observer and captures the initial prefix,
+then installs the native observers before activation. Only Runtime Client
+composition installs receipt staging; native/headless observation consumers retain
+their ordinary semantic delivery and never consume Trace batches. No live transition can enter
+between the seed and its first observation. Store errors fence the read model;
+Trace remains irrelevant to execution, settlement and recovery.
+
+Historical `session/trace` is an independent read: on a live host it captures
+one represented semantic prefix and its native lifecycle projection without
+draining observations or moving the live cursor. Thus historical pages cannot
+expose an unpublished terminal that the next snapshot repair would retract.
+Inactive durable inspection instead captures its own SQLite frontier; it has no
+live publication boundary and receives no live lifecycle overlay: a durable start
+alone remains incomplete. Paging cursors remain Trace-specific in both cases.
 Exact positive lifecycle evidence applies regardless of anchor age. For loaded
 records outside the newest tail, `session/snapshot` accepts at most 512 opaque
 `trace_records` positions and returns `snapshot.trace_updates`, resolved at the
@@ -91,16 +122,29 @@ Workflow run ID, and the existing exact Attempt/request/Tool/interaction identit
 are the only correlations. Durable terminal facts win; absent native evidence
 stays incomplete. No in-flight duration is synthesized.
 
-The browser has a separate Trace cache (512 entries / 4 MiB estimated encoded
-UTF-16 size), independent from transcript and live cursors. Connection generation,
-full attachment target and Trace epoch fence older responses. Ordinary newest-tail
-refreshes preserve loaded older rows, their cursor, epoch and selection, even
-without overlap. Server patches update those rows by stable Trace identity.
+The browser has a separate Trace cache (512 history entries / 4 MiB estimated
+encoded UTF-16 size), independent from transcript and live cursors. Its flat list
+represents one contiguous server-proven interval. An overlapping newest tail
+updates that interval by stable identity. A tail without overlap rebases to its
+own interval, cursor and a new epoch; it never concatenates disconnected ranges.
+Connection generation, full attachment target and Trace epoch fence older replies.
+Paging after rebase starts from the new tail's cursor.
+
+At most one selected entry is retained separately from history. It stays
+inspector-visible after a no-overlap rebase and receives server lifecycle patches
+through the existing bounded interests request. It is not inserted into the
+historical list. Selection receives first priority within the 512-interest bound.
 Paging completion requests another repair so settlement while an older read was
-pending cannot leave the newly loaded record stale. Reconnect/reattach/resync,
-explicit latest, or the finite retention bound replace the window. Selection
-reports removal only when the selected identity actually leaves that window.
-Notifications remain invalidation signals; the browser never folds Journal facts.
+pending cannot leave newly loaded entries stale. Reconnect/reattach/resync and
+explicit latest replace the domain, including retained selection. Notifications
+remain invalidation signals; the browser never folds Journal facts.
+
+Canonical Tool attachments merge Image/File references in `result.content` first,
+then `result.artifacts`, deduplicated by ArtifactId. The first canonical occurrence
+owns image/file typing; filename and path never determine type. Each source is
+visited for at most eight blocks, the combined result contains at most eight
+identities, and omitted blocks set `truncated`. File display metadata, raw text,
+JSON and physical paths remain withheld. The existing artifact carrier is reused.
 
 ## Durable schema contract
 

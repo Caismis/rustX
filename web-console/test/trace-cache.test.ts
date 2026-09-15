@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from 'vitest';
 import { Server, snapshot } from './fixture';
-import { prependTrace, refreshTrace, replaceTrace, TRACE_LIMIT } from '../src/client/trace';
+import { prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterests, TRACE_LIMIT } from '../src/client/trace';
 import { traceEntry as entry } from './trace-fixture';
 let server: Server;
 afterEach(() => server?.client.disconnect());
@@ -11,14 +11,15 @@ it('prepends overlapping pages exactly once and retains native numeric order', (
   expect(prependTrace(next, { entries: [entry(9), entry(10)], next_cursor: 'trace:9' })).toEqual(next);
   expect(prependTrace(next, { entries: [] }).page.next_cursor).toBeUndefined();
 });
-it('ordinary live refresh preserves older pages even without newest-tail overlap', () => {
+it('overlapping refresh preserves history; a disconnected tail establishes a new interval', () => {
   const first = replaceTrace({ entries: [entry(8), entry(9)], next_cursor: 'trace:8' });
   const live = refreshTrace(first, { entries: [entry(9), entry(10)], next_cursor: 'trace:9' });
   expect(live.epoch).toBe(first.epoch);
   expect(live.page.entries?.map(item => item.id)).toEqual(['trace:8', 'trace:9', 'trace:10']);
   const gap = refreshTrace(live, { entries: [entry(20)], next_cursor: 'trace:20' });
-  expect(gap.epoch).toBe(live.epoch);
-  expect(gap.page.entries.map(item => item.id)).toEqual(['trace:8', 'trace:9', 'trace:10', 'trace:20']);
+  expect(gap.epoch).toBeGreaterThan(live.epoch);
+  expect(gap.page.next_cursor).toBe('trace:20');
+  expect(gap.page.entries.map(item => item.id)).toEqual(['trace:20']);
 });
 it('retention is finite', () => {
   const full = replaceTrace({ entries: Array.from({ length: TRACE_LIMIT }, (_, i) => entry(i + 1)), next_cursor: 'trace:1' });
@@ -69,16 +70,16 @@ it('reattachment in the same connection rejects the old page and duplicate load 
   expect(server.requests.filter(item => item.request.method === 'session/trace')).toHaveLength(1);
 });
 
-it('native lifecycle patches repair old records without replacing history or cursor', () => {
+it('native lifecycle patches repair a selected old record separately from rebased history', () => {
   const old = { ...entry(1), state: 'running' as const };
-  const first = replaceTrace({ entries: [old, entry(2)], next_cursor: 'trace:1' });
+  const first = selectTrace(replaceTrace({ entries: [old, entry(2)], next_cursor: 'trace:1' }), old.id);
   const updated = refreshTrace(first, { entries: [entry(100)] }, [
     { id: old.id, state: 'completed', artifacts: [], truncated: false, timing: { ...old.timing, duration_ms: '123' } },
   ]);
-  expect(updated.epoch).toBe(first.epoch);
-  expect(updated.page.next_cursor).toBe(first.page.next_cursor);
-  expect(updated.page.entries.map(item => item.id)).toEqual([old.id, 'trace:2', 'trace:100']);
-  expect(updated.page.entries.find(item => item.id === old.id)).toMatchObject({ state: 'completed', timing: { ...old.timing, duration_ms: '123' } });
+  expect(updated.epoch).toBeGreaterThan(first.epoch);
+  expect(updated.page.next_cursor).toBeUndefined();
+  expect(updated.page.entries.map(item => item.id)).toEqual(['trace:100']);
+  expect(updated.selection).toMatchObject({ state: 'completed', timing: { ...old.timing, duration_ms: '123' } });
 });
 
 it('paging completion repairs newly loaded interests after a terminal notification raced the page', async () => {
@@ -112,4 +113,35 @@ it('the first repaired tail restores older paging in a new resync epoch', () => 
   expect(repaired.epoch).toBe(empty.epoch);
   expect(repaired.epoch).toBeGreaterThan(old.epoch);
   expect(repaired.page.next_cursor).toBe('trace:100');
+});
+
+it('forty new anchors rebase history, retain one exact selection, and bound interests', () => {
+  const old = entry(4, { state: 'running' });
+  const cache = selectTrace(replaceTrace({ entries: [old, entry(8), entry(9), entry(10)], next_cursor: 'before-four' }), old.id);
+  const committed = Array.from({ length: 40 }, (_, index) => entry(11 + index));
+  const tail = { entries: committed.slice(-32), next_cursor: 'before-nineteen' };
+  const next = refreshTrace(cache, tail);
+  expect(next.page).toEqual(tail);
+  expect(next.epoch).toBeGreaterThan(cache.epoch);
+  expect(next.selection).toEqual(old);
+  expect(traceInterests(next)[0]).toBe(old.position);
+  const settled = refreshTrace(next, tail, [{ id: old.id, state: 'completed', timing: old.timing, artifacts: [], truncated: false }]);
+  expect(settled.selection).toMatchObject({ id: old.id, state: 'completed' });
+  expect(settled.page.entries).toEqual(tail.entries);
+  expect(settled.page.entries.some(row => row.id === old.id)).toBe(false);
+  expect(traceInterests({ ...settled, page: { entries: Array.from({ length: TRACE_LIMIT }, (_, i) => entry(i + 100)) } })).toHaveLength(TRACE_LIMIT);
+});
+it('non-overlap rebase fences a pending older page and uses the new interval cursor', async () => {
+  server = new Server(); server.snapshots.set('A', { ...snapshot(), trace: { entries: [entry(8), entry(9), entry(10)], next_cursor: 'before-eight' } });
+  await server.attached('A'); server.held.add('session/trace');
+  server.client.selectTrace('A', 'trace:8');
+  const older = server.client.loadEarlierTrace('A'); const request = await server.waitFor('session/trace', 1);
+  await server.update('A', { ...snapshot(), trace: { entries: [entry(20), entry(21), entry(22)], next_cursor: 'before-twenty' } });
+  server.socket.success(request, { type: 'trace', page: { entries: [entry(7)] } }); await older;
+  expect(server.client.getSnapshot().views.A.trace?.page.entries.map(row => row.id)).toEqual(['trace:20', 'trace:21', 'trace:22']);
+  expect(server.client.getSnapshot().views.A.trace?.selection?.id).toBe('trace:8');
+  const next = server.client.loadEarlierTrace('A'); const nextRequest = await server.waitFor('session/trace', 2);
+  expect(nextRequest.params).toMatchObject({ before: 'before-twenty' });
+  server.socket.success(nextRequest, { type: 'trace', page: { entries: [entry(19)] } }); await next;
+  expect(server.client.getSnapshot().views.A.trace?.page.entries.map(row => row.id)).toEqual(['trace:19', 'trace:20', 'trace:21', 'trace:22']);
 });

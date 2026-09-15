@@ -31,9 +31,11 @@ pub struct FactQuery {
     pub limit: usize,
 }
 
-/// Leaf, non-authoritative observation of a committed Journal prefix. Called
-/// under the store serialization lock; implementations may only enqueue.
+/// Leaf staging receipt for committed Journal rows, ordered under the store
+/// serialization lock. This is not semantic publication: a consumer must wait
+/// for each corresponding owner's native installation/publication receipt.
+/// Implementations may only enqueue; they never control execution or recovery.
 pub trait JournalObserver: Send + Sync {
     /// None fences the read model if a committed prefix cannot be established.
-    fn committed(&self, through: Option<u64>);
+    fn committed(&self, events: Option<Vec<crate::events::types::RuntimeEventEnvelope>>);
 }

@@ -682,8 +682,13 @@ WebSocket subprotocol are rejected; there are no aliases or dual-version paths.
 Generated Rust Schema/TypeScript, Web Console and TUI all negotiate version 3.
 
 `session/snapshot` optionally accepts `trace_records: TraceCursor[]` (maximum 512)
-for the client's bounded loaded window. `snapshot.trace_updates` contains typed
+for the client's bounded loaded window and separately retained selected record. `snapshot.trace_updates` contains typed
 native lifecycle repairs for those identities, including records older than the
 newest Trace page. Both the newest page and repairs use the Journal prefix
 captured with the returned Runtime Client cursor, never a later SQLite frontier.
+Only installed native semantic publications can advance that prefix; a raw SQLite
+commit receipt cannot publish it. Historical `session/trace` independently captures
+a represented semantic prefix and native lifecycle snapshot on live hosts, without
+folding observations or changing the live cursor. Inactive durable inspection
+captures its own SQLite frontier and has no live publication boundary.
 This remains mandatory protocol v3; no compatibility path is provided.

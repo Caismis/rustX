@@ -172,11 +172,23 @@ impl WorkflowInstanceView {
     }
 }
 
-#[derive(Clone, Debug)]
+type PublicationObserver = Arc<dyn Fn(Vec<WorkflowSnapshot>, u64) + Send + Sync>;
+struct PublicationDelivery {
+    observer: PublicationObserver,
+    revision: WorkflowRevision,
+}
+
+#[derive(Clone)]
 pub struct WorkflowReadModel {
     conversation_id: crate::runtime::identity::ConversationId,
     state: Arc<Mutex<NativeReadState>>,
     wake: tokio::sync::watch::Sender<()>,
+    publication: Arc<Mutex<Option<PublicationDelivery>>>,
+}
+impl std::fmt::Debug for WorkflowReadModel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkflowReadModel").finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -194,11 +206,37 @@ impl WorkflowReadModel {
             conversation_id,
             state: Arc::new(Mutex::new(NativeReadState::default())),
             wake: tokio::sync::watch::Sender::new(()),
+            publication: Arc::new(Mutex::new(None)),
         }
     }
 }
 
 impl WorkflowReadModel {
+    pub(crate) fn install_publication_observer(&self, observer: PublicationObserver) {
+        *self
+            .publication
+            .lock()
+            .expect("Workflow publication observer") = Some(PublicationDelivery {
+            observer,
+            revision: WorkflowRevision(0),
+        });
+    }
+    pub(crate) fn publish_committed(&self, sequence: u64) {
+        // Preserve the native revision chain, not only its latest replacement.
+        // The retained cut queue owns loss detection; this is delivery position
+        // for one observer and has no execution or recovery meaning.
+        let mut publication = self
+            .publication
+            .lock()
+            .expect("Workflow publication observer");
+        if let Some(delivery) = publication.as_mut() {
+            let cuts = self.cuts_after(delivery.revision);
+            if let Some(last) = cuts.last() {
+                delivery.revision = last.revision;
+            }
+            (delivery.observer)(cuts, sequence);
+        }
+    }
     /// Copies one coherent native cut.
     ///
     /// # Panics
@@ -578,6 +616,42 @@ mod tests {
                 outcome: WorkflowExecutionOutcome::Cancelled
             }
         ));
+    }
+
+    #[test]
+    fn committed_publication_delivers_the_native_revision_chain_without_a_false_gap() {
+        let owner = WorkflowReadModel::new(run(1).id.conversation_id);
+        let delivered = Arc::new(Mutex::new(Vec::new()));
+        let sink = delivered.clone();
+        owner.install_publication_observer(Arc::new(move |cuts, receipt| {
+            sink.lock().unwrap().push((cuts, receipt));
+        }));
+        owner.register(run(1));
+        owner.update(&run(1).id, |view| view.steps_consumed = 1);
+        owner.update(&run(1).id, |view| view.steps_consumed = 2);
+        owner.publish_committed(10);
+        owner.update(&run(1).id, |view| view.steps_consumed = 3);
+        owner.publish_committed(20);
+        let batches = delivered.lock().unwrap();
+        assert_eq!(batches[0].1, 10);
+        assert_eq!(
+            batches[0]
+                .0
+                .iter()
+                .map(|cut| cut.revision.0)
+                .collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+        assert_eq!(batches[1].1, 20);
+        assert_eq!(
+            batches[1]
+                .0
+                .iter()
+                .map(|cut| cut.revision.0)
+                .collect::<Vec<_>>(),
+            [4]
+        );
+        assert_eq!(batches[1].0.last(), Some(&owner.snapshot()));
     }
 
     #[test]

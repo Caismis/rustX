@@ -45,7 +45,7 @@ struct StartedSignal {
 }
 
 impl AgentExecutionObserver for StartedSignal {
-    fn observe_event(&self, _attempt_id: &AttemptId, event: &RuntimeEvent) {
+    fn observe_event(&self, _attempt_id: &AttemptId, event: &RuntimeEvent, _journal_sequence: u64) {
         if matches!(event, RuntimeEvent::ToolExecutionStarted { .. }) {
             self.started.send_replace(true);
         }
