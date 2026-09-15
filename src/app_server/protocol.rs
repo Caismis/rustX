@@ -75,6 +75,17 @@ pub struct Request {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "method", content = "params", deny_unknown_fields)]
 pub enum Method {
+    #[serde(rename = "artifact/read")]
+    ArtifactRead {
+        target: AttachmentTarget,
+        artifact_id: crate::runtime::identity::ArtifactId,
+    },
+    #[serde(rename = "artifact/upload")]
+    ArtifactUpload {
+        target: AttachmentTarget,
+        data: String,
+        modality: crate::model::catalog::Modality,
+    },
     #[serde(rename = "settings/defaults")]
     DefaultsRead {
         target: AttachmentTarget,
@@ -321,6 +332,12 @@ pub struct Failure {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MethodResult {
+    ArtifactBytes {
+        data: String,
+    },
+    ArtifactUploaded {
+        artifact_id: crate::runtime::identity::ArtifactId,
+    },
     Diagnostics {
         snapshot: crate::app_server::host::ServerDiagnostics,
     },

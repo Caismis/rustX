@@ -1403,3 +1403,113 @@ async fn host_request_owner_outlives_dropped_protocol_waiter() {
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn artifact_carrier_is_native_scoped_bounded_and_cold_reopen_safe() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let other = attach(&connection, &f, 1).await;
+        let artifact_id = {
+            let managed = f.load(0).await.unwrap().unwrap();
+            managed
+                .inspect_runtime()
+                .unwrap()
+                .tool_runtime()
+                .artifacts()
+                .put_bounded(b"canonical bytes")
+                .unwrap()
+        };
+        let read = call(
+            &connection,
+            801,
+            Method::ArtifactRead {
+                target: target.clone(),
+                artifact_id: artifact_id.clone(),
+            },
+        )
+        .await;
+        assert_eq!(
+            read,
+            MethodResult::ArtifactBytes {
+                data: "Y2Fub25pY2FsIGJ5dGVz".into()
+            }
+        );
+        let encoded = serde_json::to_string(&read).unwrap();
+        assert!(!encoded.contains(f.workspaces[0].parent().unwrap().to_str().unwrap()));
+        rejected(
+            &connection,
+            Method::ArtifactRead {
+                target: other,
+                artifact_id: artifact_id.clone(),
+            },
+        )
+        .await;
+        rejected(
+            &connection,
+            Method::ArtifactRead {
+                target: target.clone(),
+                artifact_id: crate::runtime::identity::ArtifactId::new("../conversation.sqlite"),
+            },
+        )
+        .await;
+        rejected(
+            &connection,
+            Method::ArtifactUpload {
+                target: target.clone(),
+                data: "aGk=".into(),
+                modality: crate::model::catalog::Modality::Image,
+            },
+        )
+        .await;
+        assert!(
+            f.provider.request_bodies().is_empty(),
+            "unsupported upload never reaches provider"
+        );
+        call(
+            &connection,
+            802,
+            Method::SessionUnload {
+                target: target.clone(),
+            },
+        )
+        .await;
+        rejected(
+            &connection,
+            Method::ArtifactRead {
+                target,
+                artifact_id: artifact_id.clone(),
+            },
+        )
+        .await;
+        let reopened = attach(&connection, &f, 0).await;
+        assert_eq!(
+            call(
+                &connection,
+                803,
+                Method::ArtifactRead {
+                    target: reopened,
+                    artifact_id: artifact_id.clone()
+                }
+            )
+            .await,
+            read
+        );
+        let next = {
+            let managed = f.load(0).await.unwrap().unwrap();
+            managed
+                .inspect_runtime()
+                .unwrap()
+                .tool_runtime()
+                .artifacts()
+                .put_bounded(b"new bytes")
+                .unwrap()
+        };
+        assert_ne!(artifact_id, next);
+        connection.close();
+        f.close().await;
+    })
+    .await;
+}

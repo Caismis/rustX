@@ -139,6 +139,8 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "settings/saveDefault": "side_effecting",
   "session/unload": "side_effecting",
   "session/transcript": "read",
+  "artifact/read": "read",
+  "artifact/upload": "side_effecting",
   "settings/model": "read",
   "settings/models": "read",
   "settings/setModel": "side_effecting",

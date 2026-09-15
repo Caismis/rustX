@@ -267,6 +267,8 @@
       "treatment": "substantially refactored: presentation extracted; native rustX bindings",
       "upstream_sha256": "98fd669d20af309e31bf2cf0cc591b247905acf9ae02c98a3248c02429742477",
       "retained_dependencies": [
+        "../../client/artifacts",
+        "../../presentation/attachments/AttachmentCard",
         "../../presentation/primitives/Button",
         "./InputBar.module.css",
         "react"
@@ -730,19 +732,92 @@
       ],
       "excluded_dependencies": [],
       "license": "MIT; Copyright (c) 2026 DeepSeek"
+    },
+    {
+      "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
+      "destination": "web-console/src/presentation/layout/ChatViewport.tsx",
+      "treatment": "rewritten from",
+      "upstream_sha256": "5f6ba885fc60f79cefd212f8b0cb89ceaf72115d971db771fa40c190df89f414",
+      "retained_dependencies": [
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Session/Host/Remote authority",
+        "Cordis slots and lifecycle",
+        "Harness attachment identity and storage"
+      ]
+    },
+    {
+      "upstream": "packages/client/ui-attachment/src/MessageImage.tsx",
+      "destination": "web-console/src/presentation/attachments/AttachmentCard.tsx",
+      "treatment": "rewritten from",
+      "upstream_sha256": "5deb09445813e6b612465cb00aea8e7b400eba0f55b783a57c867d2dfa51500b",
+      "retained_dependencies": [
+        "../primitives/Button",
+        "../primitives/Dialog",
+        "./AttachmentCard.module.css",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Session/Host/Remote authority",
+        "Cordis slots and lifecycle",
+        "Harness attachment identity and storage"
+      ],
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-attachment/src/FileCard.tsx",
+          "upstream_sha256": "e9842a3b35b12bf4b96fc00c8f24a52edd5c06f47ee8f20d325fd1c0d7bee846",
+          "treatment": "rewritten from: ordered file card, status and removal controls"
+        }
+      ]
+    },
+    {
+      "upstream": "packages/client/ui-attachment/src/MessageImage.module.css",
+      "destination": "web-console/src/presentation/attachments/AttachmentCard.module.css",
+      "treatment": "adapted",
+      "upstream_sha256": "a46e6b258a6d8e711d59ec3c2c47683a7563fc45ac90dcdb61796fccc0e96cc7",
+      "retained_dependencies": [],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Session/Host/Remote authority",
+        "Cordis slots and lifecycle",
+        "Harness attachment identity and storage"
+      ]
     }
   ],
   "inspected": [
     "packages/client/README.md",
+    "packages/client/ui-attachment/README.md",
+    "packages/client/ui-attachment/src/AttachmentRail.module.css",
+    "packages/client/ui-attachment/src/AttachmentRail.tsx",
+    "packages/client/ui-attachment/src/DropOverlay.module.css",
+    "packages/client/ui-attachment/src/FileCard.tsx",
+    "packages/client/ui-attachment/src/ImageLightbox.tsx",
+    "packages/client/ui-attachment/src/MessageImage.module.css",
+    "packages/client/ui-attachment/src/MessageImage.tsx",
+    "packages/client/ui-attachment/src/client/ComposerAttachments.tsx",
+    "packages/client/ui-attachment/tests/composer-attachments.client.spec.tsx",
+    "packages/client/ui-attachment/tests/image-lightbox.client.spec.tsx",
+    "packages/client/ui-attachment/tests/message-image.client.spec.tsx",
+    "packages/client/ui-chat/README.md",
     "packages/client/ui-chat/package.json",
     "packages/client/ui-chat/src/client/chat/AssistantMarkdown.tsx",
+    "packages/client/ui-chat/src/client/chat/ChatView.tsx",
     "packages/client/ui-chat/src/client/chat/MessageItem.tsx",
+    "packages/client/ui-chat/src/client/chat/ReasoningRow.tsx",
+    "packages/client/ui-chat/src/client/chat/turn-assistant.ts",
+    "packages/client/ui-chat/tests/conversation.client.spec.ts",
     "packages/client/ui-commands/package.json",
     "packages/client/ui-commands/src/client/PopupSelectView.tsx",
+    "packages/client/ui-conversation/README.md",
     "packages/client/ui-conversation/package.json",
     "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
+    "packages/client/ui-conversation/tests/submission-policy.client.spec.ts",
     "packages/client/ui-layout/package.json",
     "packages/client/ui-layout/src/client/AppFrame.tsx",
+    "packages/client/ui-primitives/README.md",
     "packages/client/ui-primitives/package.json",
     "packages/client/ui-primitives/src/HoverCard.tsx",
     "packages/client/ui-primitives/src/Menu.module.css",
@@ -766,6 +841,9 @@
     "packages/client/ui-primitives/tests/markdown.client.spec.tsx",
     "packages/client/ui-primitives/tests/streaming-code-block.client.spec.tsx",
     "packages/client/ui-theme/package.json",
-    "packages/client/ui-theme/src/styles/shiki.css"
+    "packages/client/ui-theme/src/styles/shiki.css",
+    "packages/client/ui-tool/README.md",
+    "packages/client/ui-tool/src/client/tool/ToolCallTree.module.css",
+    "packages/client/ui-tool/src/client/tool/ToolCallTree.tsx"
   ]
 }

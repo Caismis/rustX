@@ -1186,6 +1186,68 @@ impl ClientInner {
         Ok(RuntimeClientResult::ModelCatalog { catalog })
     }
 
+    /// Read a bounded conversation-owned artifact without exposing its path.
+    pub(crate) fn artifact_read(
+        &self,
+        id: &crate::runtime::identity::ArtifactId,
+    ) -> Result<String, RuntimeClientError> {
+        use base64::Engine;
+        self.ensure_session_runtime_live()?;
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or_else(|| RuntimeClientError::InvalidState {
+                message: "artifact runtime unavailable".into(),
+            })?;
+        let bytes = runtime
+            .tool_runtime()
+            .artifacts()
+            .read_bounded(id)
+            .map_err(|_| RuntimeClientError::InvalidState {
+                message: "artifact unavailable or exceeds 256 KiB".into(),
+            })?;
+        Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+    }
+
+    pub(crate) fn artifact_upload(
+        &self,
+        data: &str,
+        modality: crate::model::catalog::Modality,
+    ) -> Result<crate::runtime::identity::ArtifactId, RuntimeClientError> {
+        use base64::Engine;
+        self.ensure_session_runtime_live()?;
+        let invalid = || RuntimeClientError::InvalidState {
+            message: "artifact upload unsupported, invalid or exceeds 256 KiB".into(),
+        };
+        let state = self.lock_state();
+        let snapshot = state.projection.snapshot_ref_checked()?;
+        if modality == crate::model::catalog::Modality::Text
+            || !snapshot.model.as_ref().is_some_and(|model| {
+                model
+                    .effective
+                    .capabilities
+                    .input_modalities
+                    .contains(&modality)
+            })
+        {
+            return Err(invalid());
+        }
+        drop(state);
+        if data.len() > crate::tools::artifacts::ARTIFACT_TRANSFER_MAX.div_ceil(3) * 4 {
+            return Err(invalid());
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(|_| invalid())?;
+        self.runtime
+            .as_ref()
+            .ok_or_else(invalid)?
+            .tool_runtime()
+            .artifacts()
+            .put_bounded(&bytes)
+            .map_err(|_| invalid())
+    }
+
     /// Reads the authoritative session model state through the folded
     /// projection, so the value always agrees with the snapshot read model.
     ///

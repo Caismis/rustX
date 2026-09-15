@@ -331,3 +331,59 @@ presentation has the smaller coherent dependency closure. Specialized Subagent,
 Workflow and Goal views were replaced with native read-only JSON disclosures.
 Recovery is explicit reconnect; no automatic reconnect loop or mutation retry is
 provided. Rich Markdown/image/IDE/provider configuration features remain excluded.
+
+## WEB-02 (#305), 2026-09-15
+
+This section supersedes the older scope limitations above for Chat, Markdown,
+transcript paging and artifacts. Baseline: `8b8e99e87df61b1fe8a91134f818fddc54968e46`.
+The original `rustX` checkout remains clean at `6dd1ef144fdfedbd99cb0c9dd9856e1e8defbf51`;
+implementation lives in the retained `rustX-issue-305` worktree.
+
+Final validation commands (Linux, Node 24-compatible pinned pnpm 11.13.1):
+
+| Location | Exact command | Result |
+| --- | --- | --- |
+| repository | `cargo fmt --all -- --check` | Passed |
+| repository | `cargo clippy --all-targets --all-features -- -D warnings` | Passed |
+| repository | `git diff --check` | Passed |
+| repository | `cargo build --bins` | Passed |
+| repository | `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 2804 passed, 1 existing ignored; bin/example targets passed |
+| repository | `cargo test --test contracts --test provider --all-features` | 25 + 166 passed; 5 existing opt-in provider tests ignored |
+| repository | `cargo test --lib --all-features -- boundary_suites::` | 226 passed |
+| repository | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance` | 116 durable, 52 process, 53 subagent, 157 tools, 23 conformance passed |
+| test-support/fake-provider | `uv sync --frozen` | Passed, Python 3.12.13 |
+| test-support/fake-provider | `uv run --frozen pytest` | 51 passed |
+| web-console, protocol/app-server, tui | `corepack install` and `pnpm install --frozen-lockfile` | Passed; `corepack enable` also run |
+| web-console | `pnpm typecheck` | Passed |
+| web-console | `pnpm test` | Final result recorded below |
+| web-console | `pnpm check:provenance` | 53 source records, 98 production dependency notices passed |
+| web-console | `pnpm build` | Passed; existing large-chunk advisory remains |
+| web-console | `pnpm exec playwright install chromium` | Passed |
+| web-console | `pnpm test:e2e` | 6 passed against real App Server and mandatory provider emulator |
+| tui | `pnpm typecheck` and `pnpm test` | Passed; 810 tests |
+
+The new native owner regression also passed independently with
+`cargo test --lib --all-features artifact_carrier_is_native_scoped_bounded_and_cold_reopen_safe`.
+
+The browser flow admits 34 turns through the real App Server, crosses the 64-entry
+bootstrap boundary, asserts history is absent before paging, measures the stable
+prepend anchor, renders rich streaming Markdown through a deterministic provider
+gate, settles once, reconnects/reloads history and refuses an unsupported file
+while preserving text and attachment drafts. It also exercises native missing
+artifact and unsupported upload rejection. Existing multi-Session, interaction,
+transport-loss and cold-runtime flows remain green. No mock Web backend is used.
+
+Browser plugin not available: used the repository Playwright lane per the testing
+skill. Screenshots were visually inspected (`test-results/chat-history.png`,
+console desktop/mobile); desktop Chat plus 390/900/1440px shell tests passed.
+No blank page, framework overlay or page errors occurred. Initial new-test
+synchronization/mock errors and Clippy findings were corrected and the affected
+commands rerun; no failed command was waived. Initial root-directory pnpm
+invocations were corrected to package-specific working directories.
+
+Deliberate limits: durable image bytes load on explicit activation. Current
+provider adapters remain text-only, so successful provider multimodal execution
+is neither implemented nor claimed. Native bounded byte storage/read and browser
+supported-content construction have deterministic tests. Existing declared ignored
+Rust tests were not converted into passing coverage. See CHAT.md for all finite
+limits and PROVENANCE.md/source-inventory.json for the pinned source closure.

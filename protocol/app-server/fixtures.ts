@@ -179,6 +179,35 @@ export const fixtures = [
   {
     "jsonrpc": "2.0",
     "id": "exact-u64",
+    "method": "artifact/read",
+    "params": {
+      "target": {
+        "session_id": "session-fixture",
+        "conversation_id": "conversation-fixture",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "artifact_id": "artifact_1"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "artifact/upload",
+    "params": {
+      "target": {
+        "session_id": "session-fixture",
+        "conversation_id": "conversation-fixture",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "data": "aGk=",
+      "modality": "file"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
     "method": "session/subscribe",
     "params": {
       "target": {

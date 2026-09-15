@@ -662,6 +662,8 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::ModelSet { target, .. }
         | Method::ApprovalModeSet { target, .. }
         | Method::Capability { target, .. }
+        | Method::ArtifactRead { target, .. }
+        | Method::ArtifactUpload { target, .. }
         | Method::Transcript { target, .. }
         | Method::Goal { target, .. }
         | Method::BackgroundStatus { target, .. }
@@ -704,6 +706,23 @@ async fn dispatch_runtime(
                 .defaults_save(scope, expected_revision, setting)
                 .await,
         ),
+        Method::ArtifactRead {
+            target: _,
+            artifact_id,
+        } => Ok(MethodResult::ArtifactBytes {
+            data: authority
+                .artifact_read(&artifact_id)
+                .map_err(client_error)?,
+        }),
+        Method::ArtifactUpload {
+            target: _,
+            data,
+            modality,
+        } => Ok(MethodResult::ArtifactUploaded {
+            artifact_id: authority
+                .artifact_upload(&data, modality)
+                .map_err(client_error)?,
+        }),
         Method::ModelGet { target: _ } => native_result(authority.model_get()),
         Method::ModelCatalog { target: _ } => native_result(authority.model_catalog()),
         Method::ModelSet { target: _, config } => native_result(authority.model_set(*config)),

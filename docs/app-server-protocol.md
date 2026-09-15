@@ -610,3 +610,25 @@ one physical connection. Process catalog request ownership is additionally
 bounded by `max_connections * 16` outstanding operations; refusal is
 `request_capacity`. Other typed refusals are `residency_capacity`,
 `attachment_capacity`, and the existing `stale_runtime` for retired incarnations.
+
+## Bounded artifact carrier (WEB-02)
+
+`artifact/read { target, artifact_id } -> artifact_bytes { data }` is a read;
+`artifact/upload { target, modality, data } -> artifact_uploaded { artifact_id }`
+is a mutation. `data` is standard base64, limited to 349,528 encoded characters
+and 256 KiB decoded bytes. Upload accepts only effective image/file input
+modalities. Both use existing complete attachment routing and native runtime
+operation leases; they do not introduce another protocol version or file server.
+Existing 1 MiB framing, 16 in-flight requests per connection and host connection
+bounds apply. A lost upload acknowledgement has uncertain outcome, never replay.
+
+The conversation ArtifactStore owns allocation, storage and bounded reads. IDs
+are durably reserved across cold reopening; create-new writers cannot overwrite
+old bytes. Reads reject path-shaped IDs, symlinks, non-regular files and oversized
+artifacts. No carrier metadata/error exposes a private storage path. Session
+unload retains bytes; native Session deletion owns their removal.
+
+See [Web Chat ownership](../web-console/CHAT.md) for independent live/transcript
+cursor domains, authoritative replacement, history-cache bounds, admission and
+browser Blob lifetime. These methods do not widen current provider-adapter
+multimodal support.

@@ -1,48 +1,55 @@
-import type { MessageBlock, RuntimeClientSnapshot, UserContentBlock, AssistantContentBlock, InFlightBlock } from '../../../protocol/app-server/v1';
+import type { RuntimeClientSnapshot } from '../../../protocol/app-server/v1';
 import type { AppServerClient, ClientView, SessionView } from '../client/app-server';
 import { interactionKey } from '../client/app-server';
 import { conversation, json } from '../bindings/projection';
+import { ToolArtifacts } from './components/Artifact';
 import { MessageItem } from './components/MessageItem';
 import { ToolRow } from './components/ToolRow';
 import { ApprovalPanel } from './components/ApprovalPanel';
 import { QuestionComposer } from './components/QuestionComposer';
 import { Button } from '../presentation/primitives/Button';
 import { Feedback } from '../presentation/primitives/Surface';
-import { MarkdownText } from '../presentation/markdown/MarkdownText';
+import { Content, Message } from './components/ChatMessage';
+import { entryIdentity, HISTORY_LIMIT, type TranscriptCache } from '../client/transcript';
 import { useState } from 'react';
 
-function Content({ blocks, markdown = false, streaming = false }: { markdown?: boolean; streaming?: boolean; blocks: (UserContentBlock | AssistantContentBlock | InFlightBlock)[] }) {
-  return blocks.map((block, index) => {
-    if (block.type === 'text') return markdown ? <MarkdownText key={index} text={block.text} streaming={streaming} /> : <span key={index}>{block.text}</span>;
-    if (block.type === 'reasoning') return <details key={index}><summary>Reasoning</summary>{block.text}</details>;
-    if (block.type === 'refusal') return <p key={index}>{block.text}</p>;
-    if (block.type === 'tool_call') return <ToolRow key={index} title={block.name} summary="Tool call" input={typeof block.arguments === 'string' ? block.arguments : json(block.arguments)} />;
-    return <details key={index}><summary>{block.type} reference</summary><pre>{json(block)}</pre></details>;
-  });
-}
-function Message({ message }: { message: MessageBlock }) {
-  return <MessageItem user={message.role === 'user'} label={`${message.role} · ${message.id}`}>
-    {message.role === 'tool' ? <ToolRow title={message.tool_id} summary={message.result.status.type} output={json(message.result)} /> : <Content blocks={message.content} markdown={message.role === 'assistant'} />}
-  </MessageItem>;
-}
-export function Conversation({ snapshot }: { snapshot: RuntimeClientSnapshot }) {
+export function Conversation({ snapshot, history, loadEarlier, latest }: { snapshot: RuntimeClientSnapshot; history?: TranscriptCache; loadEarlier?: () => void; latest?: () => void }) {
   const { messages, streaming } = conversation(snapshot);
+  const entries = history?.page.entries ?? snapshot.transcript.entries ?? [];
+  const durableIds = new Set(entries.flatMap(entry => entry.item.type === 'message' ? [entry.item.message.id] : []));
   return <div className="messages" aria-label="Canonical conversation">
-    {!messages.length && <Feedback kind="empty" title="Ready for a task."><p>This Session’s conversation is owned by rustX.</p></Feedback>}
-    {messages.map(message => <Message key={message.id} message={message} />)}
-    {streaming && <MessageItem user={false} label={`Streaming · ${streaming.message_id}`}><Content blocks={streaming.blocks ?? []} markdown streaming /></MessageItem>}
+    {history?.page.next_cursor != null && <Button disabled={history.loading || entries.length >= HISTORY_LIMIT} onClick={loadEarlier}>{history.loading ? 'Loading earlier…' : 'Load earlier'}</Button>}
+    {entries.length >= HISTORY_LIMIT && <p>History window is full. <Button onClick={latest}>Return to latest</Button></p>}
+    {history?.error && <p role="alert">{history.error}</p>}
+    {!messages.length && !entries.length && <Feedback kind="empty" title="Ready for a task."><p>This Session’s conversation is owned by rustX.</p></Feedback>}
+    {entries.map(entry => <div key={entryIdentity(entry)} data-chat-anchor-key={entryIdentity(entry)}>
+      {entry.item.type === 'message' ? <Message message={entry.item.message} /> : <details>
+        <summary>{entry.item.type === 'publication_audit' ? 'Assistant publication / recovery' : `Historical interaction · ${entry.item.interaction_id}`}</summary>
+        <pre>{json(entry.item)}</pre>
+      </details>}
+    </div>)}
+    {messages.some(message => message.role === 'user' && message.kind && message.kind !== 'message' && !durableIds.has(message.id)) && <details><summary>Current context</summary>{messages.filter(message => message.role === 'user' && message.kind && message.kind !== 'message' && !durableIds.has(message.id)).map(message => <Message key={message.id} message={message} />)}</details>}
+    {streaming && !durableIds.has(streaming.message_id) && <div data-chat-anchor-key={`message:${streaming.message_id}`}><MessageItem user={false} label={`Streaming · ${streaming.message_id}`}><Content blocks={streaming.blocks ?? []} markdown streaming /></MessageItem></div>}
   </div>;
 }
 export function RuntimeFacts({ snapshot }: { snapshot: RuntimeClientSnapshot }) {
-  return <div className="runtime-facts">
-    {snapshot.attempt?.foreground?.map(tool => <ToolRow key={tool.call_id} title={tool.name}
+  const tools = snapshot.attempt?.foreground ?? [];
+  const children = snapshot.subagents ?? [];
+  const background = snapshot.background ?? [];
+  const workflows = snapshot.workflows.runs;
+  if (!tools.length && !children.length && !workflows.length && !background.length && !snapshot.statuses?.length) return null;
+  return <section className="runtime-facts" aria-label="Current activity">
+    <small>Current activity</small>
+    {tools.map(tool => <div key={tool.call_id} data-tool-call-id={tool.call_id}><ToolRow title={tool.name}
       summary={`${tool.state.type} · ${tool.call_id}`} running={tool.state.type === 'running'} input={tool.state.arguments}
-      output={'result' in tool.state ? json(tool.state.result) : 'progress' in tool.state ? json(tool.state.progress) : undefined} />)}
-    {([
-      ['Subagents', snapshot.subagents], ['Background', snapshot.background], ['Workflows', snapshot.workflows],
-      ['Todo', snapshot.todos], ['Goal', snapshot.goal], ['Inbound', snapshot.inbound], ['Agent Status', snapshot.statuses],
-    ] as const).map(([label, value]) => value != null && <details key={label}><summary>{label}{Array.isArray(value) ? ` (${value.length})` : ''}</summary><pre>{json(value)}</pre></details>)}
-  </div>;
+      output={'result' in tool.state ? json(tool.state.result) : 'progress' in tool.state ? json(tool.state.progress) : undefined} />
+      {'result' in tool.state && <ToolArtifacts result={tool.state.result} />}
+    </div>)}
+    {background.map(tool => <ToolRow key={tool.execution_id} title={tool.tool_name} summary={`${tool.state} · ${tool.execution_id}`} output={tool.result ? json(tool.result) : undefined} running={tool.state === 'running'} />)}
+    {children.map(child => <details key={child.subagent_id}><summary>Subagent · {child.agent} · {child.subagent_id}</summary><pre>{json(child)}</pre></details>)}
+    {workflows.map(workflow => <details key={json(workflow.id)}><summary>Workflow · {workflow.workflow_id} · {workflow.state.type}</summary><pre>{json(workflow)}</pre></details>)}
+    {!!snapshot.statuses?.length && <details><summary>Agent Status ({snapshot.statuses.length})</summary><pre>{json(snapshot.statuses)}</pre></details>}
+  </section>;
 }
 export function Interactions({ client, state, view, run }: {
   client: AppServerClient; state: ClientView; view: SessionView; run: (action: () => Promise<unknown>) => void;

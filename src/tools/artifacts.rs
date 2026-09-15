@@ -1,17 +1,17 @@
 //! The conversation-owned development artifact store.
 //!
 //! M5 implements the smallest conversation/runtime-owned artifact store
-//! needed by the tool plane: opaque monotonic [`ArtifactId`] allocation,
+//! shared by the tool plane and bounded App Server carrier: opaque monotonic [`ArtifactId`] allocation,
 //! local filesystem storage outside the model workspace, and streaming
 //! spooling so large subprocess output never has to be held entirely in
 //! memory. The mapping from `ArtifactId` to physical path stays internal;
 //! [`FileReference`](crate::message::content::FileReference) remains the
-//! model/runtime reference. Conversation-lifetime retention is sufficient for
-//! the current tool-plane contract; artifact recovery/database authority is
-//! outside Issue #11.
+//! model/runtime reference. Session-owned roots survive cold reopen and are
+//! removed by Session deletion. Existing artifact files are never truncated.
 
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -99,11 +99,30 @@ impl ArtifactStore {
         std::fs::create_dir_all(&root).map_err(|error| {
             ArtifactError::RootUnavailable(format!("{}: {error}", root.display()))
         })?;
+        let mut next = 0;
+        for entry in std::fs::read_dir(&root)
+            .map_err(|_| ArtifactError::RootUnavailable("cannot enumerate artifacts".into()))?
+        {
+            let entry = entry
+                .map_err(|_| ArtifactError::RootUnavailable("cannot enumerate artifact".into()))?;
+            if let Some(value) = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.strip_prefix("artifact_"))
+                .and_then(|name| {
+                    name.strip_suffix(".bin")
+                        .or_else(|| name.strip_suffix(".reserved"))
+                })
+                .and_then(|name| name.parse::<u64>().ok())
+            {
+                next = next.max(value);
+            }
+        }
         Ok(Self {
             lifecycle: None,
             conversation_id,
             root,
-            state: Arc::new(Mutex::new(ArtifactStoreState { next: 0 })),
+            state: Arc::new(Mutex::new(ArtifactStoreState { next })),
         })
     }
 
@@ -136,6 +155,14 @@ impl ArtifactStore {
             .checked_add(1)
             .ok_or(ArtifactError::SequenceExhausted)?;
         state.next = next;
+        let reservation = self.root.join(format!("artifact_{next}.reserved"));
+        File::options()
+            .create_new(true)
+            .write(true)
+            .open(reservation)
+            .and_then(|file| file.sync_all())
+            .and_then(|()| File::open(&self.root)?.sync_all())
+            .map_err(|_| ArtifactError::WriteFailed("artifact reservation failed".into()))?;
         Ok(ArtifactId::new(format!("artifact_{next}")))
     }
 
@@ -154,11 +181,11 @@ impl ArtifactStore {
     /// Panics only if the store lock is poisoned, which would mean a
     /// previous operation panicked while holding the lock.
     pub fn open_writer(&self, id: &ArtifactId) -> Result<ArtifactWriter, ArtifactError> {
+        validate_id(id)?;
         let path = self.path_of(id);
         let file = File::options()
-            .create(true)
+            .create_new(true)
             .write(true)
-            .truncate(true)
             .open(&path)
             .map_err(|error| ArtifactError::WriteFailed(format!("{}: {error}", path.display())))?;
         Ok(ArtifactWriter {
@@ -167,10 +194,79 @@ impl ArtifactStore {
         })
     }
 
+    /// Read a finite artifact through its conversation-owned identity.
+    /// # Errors
+    /// Missing, invalid, non-regular or oversized artifacts are refused.
+    pub fn read_bounded(&self, id: &ArtifactId) -> Result<Vec<u8>, ArtifactError> {
+        validate_id(id)?;
+        let mut file = File::options()
+            .read(true)
+            .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
+            .open(self.path_of(id))
+            .map_err(|_| ArtifactError::WriteFailed("artifact unavailable".into()))?;
+        let metadata = file
+            .metadata()
+            .map_err(|_| ArtifactError::WriteFailed("artifact unavailable".into()))?;
+        if !metadata.is_file() || metadata.len() > ARTIFACT_TRANSFER_MAX as u64 {
+            return Err(ArtifactError::WriteFailed(
+                "artifact exceeds read limit or is not a regular file".into(),
+            ));
+        }
+        let mut bytes = Vec::with_capacity(ARTIFACT_TRANSFER_MAX + 1);
+        Read::by_ref(&mut file)
+            .take((ARTIFACT_TRANSFER_MAX + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|_| ArtifactError::WriteFailed("artifact read failed".into()))?;
+        if bytes.len() > ARTIFACT_TRANSFER_MAX {
+            return Err(ArtifactError::WriteFailed(
+                "artifact exceeds read limit".into(),
+            ));
+        }
+        Ok(bytes)
+    }
+
+    /// Publish one bounded byte payload. Never replaces an existing artifact.
+    /// # Errors
+    /// Oversized content, allocation and durable write failures are returned.
+    pub fn put_bounded(&self, bytes: &[u8]) -> Result<ArtifactId, ArtifactError> {
+        if bytes.len() > ARTIFACT_TRANSFER_MAX {
+            return Err(ArtifactError::WriteFailed(
+                "artifact exceeds upload limit".into(),
+            ));
+        }
+        let id = self.create_artifact()?;
+        let mut writer = self.open_writer(&id)?;
+        writer
+            .write_all(bytes)
+            .and_then(|()| writer.file.sync_all())
+            .map_err(|_| ArtifactError::WriteFailed("artifact write failed".into()))?;
+        File::open(&self.root)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|_| ArtifactError::WriteFailed("artifact directory sync failed".into()))?;
+        Ok(id)
+    }
+
     /// The physical path of an allocated artifact.
     fn path_of(&self, id: &ArtifactId) -> PathBuf {
         self.root.join(format!("{}.bin", id.as_str()))
     }
+}
+
+/// One-shot carrier bound: base64 is at most 349,528 bytes, below 1 MiB ingress.
+pub const ARTIFACT_TRANSFER_MAX: usize = 256 * 1024;
+
+fn validate_id(id: &ArtifactId) -> Result<(), ArtifactError> {
+    if id
+        .as_str()
+        .strip_prefix("artifact_")
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_none()
+    {
+        return Err(ArtifactError::WriteFailed(
+            "invalid artifact identity".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// A streaming writer bound to one artifact file.
@@ -197,6 +293,55 @@ mod tests {
     use super::{ArtifactError, ArtifactStore};
     use crate::runtime::identity::ConversationId;
     use std::io::Write;
+
+    #[test]
+    fn cold_reopen_preserves_bytes_and_never_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ArtifactStore::new(ConversationId::new("A"), &dir).unwrap();
+        let id = store.put_bounded(b"canonical attachment").unwrap();
+        let reserved = store.create_artifact().unwrap();
+        drop(store);
+        let reopened = ArtifactStore::new(ConversationId::new("A"), &dir).unwrap();
+        let next = reopened.put_bounded(b"new attachment").unwrap();
+        assert_ne!(id, next);
+        assert_ne!(reserved, next);
+        assert_eq!(reopened.read_bounded(&id).unwrap(), b"canonical attachment");
+        assert!(reopened.open_writer(&id).is_err());
+        assert_eq!(reopened.read_bounded(&id).unwrap(), b"canonical attachment");
+        let other = tempfile::tempdir().unwrap();
+        let other = ArtifactStore::new(ConversationId::new("B"), other.path()).unwrap();
+        assert!(other.read_bounded(&id).is_err());
+    }
+
+    #[test]
+    fn bounded_carrier_rejects_paths_missing_symlinks_and_oversize() {
+        use crate::runtime::identity::ArtifactId;
+        let dir = tempfile::tempdir().unwrap();
+        let store = ArtifactStore::new(ConversationId::new("A"), &dir).unwrap();
+        assert!(store.read_bounded(&ArtifactId::new("../secret")).is_err());
+        assert!(store.read_bounded(&ArtifactId::new("artifact_99")).is_err());
+        assert!(
+            store
+                .put_bounded(&vec![0; super::ARTIFACT_TRANSFER_MAX + 1])
+                .is_err()
+        );
+        let id = store
+            .put_bounded(&vec![0; super::ARTIFACT_TRANSFER_MAX])
+            .unwrap();
+        assert_eq!(
+            store.read_bounded(&id).unwrap().len(),
+            super::ARTIFACT_TRANSFER_MAX
+        );
+        let oversized = store.create_artifact().unwrap();
+        store
+            .open_writer(&oversized)
+            .unwrap()
+            .write_all(&vec![0; super::ARTIFACT_TRANSFER_MAX + 1])
+            .unwrap();
+        assert!(store.read_bounded(&oversized).is_err());
+        std::os::unix::fs::symlink(store.path_of(&id), dir.path().join("artifact_99.bin")).unwrap();
+        assert!(store.read_bounded(&ArtifactId::new("artifact_99")).is_err());
+    }
 
     #[test]
     fn allocation_is_monotonic_and_deterministic() {

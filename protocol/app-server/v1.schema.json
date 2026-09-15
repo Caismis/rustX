@@ -36,6 +36,68 @@
           "properties": {
             "method": {
               "type": "string",
+              "const": "artifact/read"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "artifact_id": {
+                  "$ref": "#/$defs/ArtifactId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "artifact_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "artifact/upload"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "data": {
+                  "type": "string"
+                },
+                "modality": {
+                  "$ref": "#/$defs/Modality"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "data",
+                "modality"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
               "const": "settings/defaults"
             },
             "params": {
@@ -1322,6 +1384,30 @@
       "description": "The identity of one Runtime Client attachment.\n\nDistinct from [`ConversationId`], [`AttemptId`], [`RuntimeClientCursor`],\nand request ids: one attachment is one client session, and reconnecting\nalways receives a new attachment identity.",
       "type": "string"
     },
+    "ArtifactId": {
+      "description": "Identifies a durable artifact produced or referenced by the runtime.\n\nAn artifact is identified by an opaque runtime-owned id, never by a\nlocal filesystem path: paths are executor concerns and are not a\nuniversal durable artifact identity.",
+      "type": "string"
+    },
+    "Modality": {
+      "description": "One semantic content modality of a model capability set.",
+      "oneOf": [
+        {
+          "description": "Textual content.",
+          "type": "string",
+          "const": "text"
+        },
+        {
+          "description": "Image content.",
+          "type": "string",
+          "const": "image"
+        },
+        {
+          "description": "File/document content.",
+          "type": "string",
+          "const": "file"
+        }
+      ]
+    },
     "DefaultScope": {
       "type": "string",
       "enum": [
@@ -1896,10 +1982,6 @@
           ]
         }
       ]
-    },
-    "ArtifactId": {
-      "description": "Identifies a durable artifact produced or referenced by the runtime.\n\nAn artifact is identified by an opaque runtime-owned id, never by a\nlocal filesystem path: paths are executor concerns and are not a\nuniversal durable artifact identity.",
-      "type": "string"
     },
     "InteractionRef": {
       "description": "The root-facing address of a conversation-local interaction.\n\n`InteractionId` is allocated inside one conversation/attempt domain and is\nintentionally not globally unique. The pair is the only identity that\ncrosses a Runtime Client or parent/child routing boundary.",
@@ -2560,6 +2642,40 @@
     },
     "MethodResult": {
       "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "artifact_bytes"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "data"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "artifact_id": {
+              "$ref": "#/$defs/ArtifactId"
+            },
+            "type": {
+              "type": "string",
+              "const": "artifact_uploaded"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "artifact_id"
+          ]
+        },
         {
           "type": "object",
           "properties": {
@@ -3776,26 +3892,6 @@
         "outputModalities",
         "toolCalls",
         "reasoning"
-      ]
-    },
-    "Modality": {
-      "description": "One semantic content modality of a model capability set.",
-      "oneOf": [
-        {
-          "description": "Textual content.",
-          "type": "string",
-          "const": "text"
-        },
-        {
-          "description": "Image content.",
-          "type": "string",
-          "const": "image"
-        },
-        {
-          "description": "File/document content.",
-          "type": "string",
-          "const": "file"
-        }
       ]
     },
     "SummaryModelView": {

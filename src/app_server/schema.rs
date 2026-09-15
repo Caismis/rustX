@@ -150,6 +150,15 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         }))),
     ];
     for call in [
+        Method::ArtifactRead {
+            target: target.clone(),
+            artifact_id: crate::runtime::identity::ArtifactId::new("artifact_1"),
+        },
+        Method::ArtifactUpload {
+            target: target.clone(),
+            data: "aGk=".into(),
+            modality: crate::model::catalog::Modality::File,
+        },
         Method::SessionSubscribe {
             target: target.clone(),
             after_cursor: crate::runtime_client::RuntimeClientCursor::new(EXACT),

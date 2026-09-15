@@ -37,7 +37,7 @@ it('renders streaming then one committed response, and an authoritative Approval
     in_flight: { message_id: 'assistant-1', blocks: [{ type: 'text' as const, block_index: 0, text: 'Streaming response' }] } } };
   await act(() => server.update('A', live));
   expect(screen.getByLabelText('Streaming · assistant-1')).toBeTruthy();
-  await act(() => server.update('A', { ...snapshot(), messages: [{ role: 'assistant', id: 'assistant-1', content: [{ type: 'text', text: 'Committed response' }] }], pending_interactions: [interaction('approval')] }));
+  await act(() => server.update('A', { ...snapshot(), messages: [{ role: 'assistant', id: 'assistant-1', content: [{ type: 'text', text: 'Committed response' }] }], transcript: { entries: [{ cursor: '1', item: { type: 'message', message: { role: 'assistant', id: 'assistant-1', content: [{ type: 'text', text: 'Committed response' }] } } }] }, pending_interactions: [interaction('approval')] }));
   expect(screen.queryByLabelText('Streaming · assistant-1')).toBeNull();
   expect(screen.getAllByText('Committed response')).toHaveLength(1);
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Allow once' })); await server.waitFor('interaction/respond', 1); await server.client.refresh('A'); });
