@@ -80,6 +80,15 @@ async fn idle_grace_detach_eviction_cold_resume_and_session_independence() {
     let clock = policy(&mut f, 2);
     let a = f.load(0).await.unwrap().unwrap();
     let b = f.load(1).await.unwrap().unwrap();
+    let live = a.inspect_runtime().unwrap();
+    live.submit_inbound(input("idle-history")).unwrap();
+    f.gates[0].wait_entered().await;
+    let done = live.settlement_signal().notified();
+    f.gates[0].release();
+    done.await;
+    let history = live.historical_canonical_history().unwrap();
+    let controller = f.manager.session_controller();
+    let settings = controller.read_settings(&f.sessions[0].id).await.unwrap();
     let (_attachment, external) = a.client().attach().unwrap();
     let (_b_attachment, _b_external) = b.client().attach().unwrap();
     f.manager.reap_idle();
@@ -112,8 +121,38 @@ async fn idle_grace_detach_eviction_cold_resume_and_session_independence() {
         f.manager.residency(b.conversation_id()),
         ResidencyState::Loaded
     );
+    assert_eq!(
+        controller.read_session(&f.sessions[0].id).await.unwrap().id,
+        f.sessions[0].id
+    );
+    assert!(
+        controller
+            .list_sessions(None, 0, 10)
+            .await
+            .unwrap()
+            .sessions
+            .iter()
+            .any(|row| row.id == f.sessions[0].id)
+    );
+    assert_eq!(
+        controller.read_settings(&f.sessions[0].id).await.unwrap(),
+        settings
+    );
     let recovered = f.load(0).await.unwrap().unwrap();
     assert_ne!(a.incarnation_id(), recovered.incarnation_id());
+    assert_eq!(
+        recovered
+            .inspect_runtime()
+            .unwrap()
+            .historical_canonical_history()
+            .unwrap(),
+        history
+    );
+    assert_eq!(
+        f.provider.request_bodies().len(),
+        1,
+        "cold resume never resubmits the completed turn"
+    );
     f.close().await;
 }
 

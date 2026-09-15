@@ -307,6 +307,17 @@ pub async fn representative_scenario(
     else {
         panic!("reattach A")
     };
+    let Response::Failure(stale) = driver
+        .request(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::Integer(80),
+            call: Method::TurnCancel { target: a.clone() },
+        })
+        .await
+    else {
+        panic!("obsolete controller accepted")
+    };
+    assert_eq!(stale.error.data, Some(ErrorData::StaleAttachment));
     assert_ne!(replacement.attachment_id, a.attachment_id);
     assert_eq!(replacement.runtime_incarnation, a.runtime_incarnation);
     assert_eq!(replacement.conversation_id, a.conversation_id);

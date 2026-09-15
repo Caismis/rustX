@@ -609,7 +609,27 @@ def frozen_attempt_model() -> Scenario:
     )
 
 
+def app_server_user(marker: str) -> Scenario:
+    """Host-supplied environment/cwd and a committed side effect before death."""
+    import json
+    return Scenario(
+        f"app_server_user_{marker}",
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=f"user-{marker}",
+                    body_contains=(f"host user {marker}",)),
+             Stream(ToolCall(f"host-{marker}", "bash", json.dumps({
+                 "command": "printf '%s:%s\\n' \"$RUSTX_HOST_MARKER\" \"${TEST_KEY-unset}\"; pwd; printf x >> host-effect",
+                 "execution_mode": "foreground",
+             })), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=f"user-{marker}",
+                    body_contains=(f"{marker}:unset",)),
+             Stream(Gate("host-result"), Text(f"result-{marker}"), Finish()),
+             allow_disconnect=marker == "b"),
+    )
+
+
 SCENARIOS = {
+    "app_server_user_a": lambda: app_server_user("a"),
+    "app_server_user_b": lambda: app_server_user("b"),
     "openai_chat_streamed_turn": openai_chat_streamed_turn,
     "openai_responses_streamed_turn": openai_responses_streamed_turn,
     "anthropic_streamed_turn": anthropic_streamed_turn,

@@ -1,5 +1,15 @@
 # Process-death conformance (FND-06 / Issue #111)
 
+The App Server product-shell evidence is
+`app_server_reference_host_two_users_and_external_crash_recovery` in
+`tests/process/app_server.rs`: SIGKILL after a committed tool result reaches the
+next gated provider request, restart with no auto-loaded Sessions, explicit cold
+resume, and exactly one filesystem side effect. The other user's running process
+is unaffected. This composes the recovery owners below; it does not duplicate
+their full before/after commit matrix. Local TUI child death is exercised in
+`tui/test/integration.test.ts` and remains a process failure/uncertain response,
+never a fabricated runtime outcome.
+
 ## Session ownership and local lifecycle exclusion (Issue #254)
 
 Session deletion cascades along durable ownership, never provenance. `/tree`

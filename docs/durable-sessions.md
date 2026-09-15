@@ -29,22 +29,21 @@ Conversations can hold these accesses concurrently. Allocation access is
 necessary destructive exclusion, not a replacement for the manager's single-writer
 runtime admission.
 
-Client focus is routing/UI state. `LocalSessionClient` and
-`LocalSessionAttachment` are the existing CLI's single-runtime composition and
-protocol adapter. Their attached identity is local and is never serialized.
-Their catalog commands cannot shut down another runtime. An ordinary open is a
-metadata read; it does not publish focus. A startup plan carries a routing node
-separately from its optional durable document mutation. An explicit `--node`
-(including the existing default) never changes catalog bytes, generation, timestamps,
-or the Session graph default. Only an explicit graph operation such as
-`set_current_node` changes that default. `SessionRoute` preserves the durable
-snapshot and identifies the client node separately; the legacy wire translation
-stays inside the local adapter until #288. CLI cold resume requires `--session`
-(and optionally `--node`); implicit `--continue` is refused. The existing wire
-transition vocabulary is temporarily retained until #288; ordinary transitions
-return `restart_required: false`. The wire's committed-durability result still
-carries an exact fork editor payload. The local TUI routes by the returned identity when reopening its own subprocess;
-it never asks the catalog for a global focus. Shared-process runtime residency belongs to `SessionRuntimeManager`, not this CLI adapter.
+Client focus is routing/UI state. Ordinary local TUI switching uses the same
+App Server child and changes only the focused attachment. Remote TUI and Web
+Console use WebSocket to an externally managed process. A focus change never
+quiesces another Session, unloads its runtime, or replaces the process.
+
+An explicit node route does not change catalog bytes, generation, timestamps,
+or the Session graph default. Only an explicit graph operation changes the
+Session-local default node. Changing the loaded node uses confirmed, targeted
+unload/cold attachment; other Sessions remain independent. The CLI cold-resume
+path also requires an explicit Session identity, with an optional node.
+
+Session identifiers are scoped to their product root. Two independent users'
+processes can allocate the same identifier spelling; routing to the right user
+process is the higher-level host's responsibility, never an in-server tenant key.
+See the [host acceptance and dogfooding flows](app-server-acceptance.md).
 
 ## Persisted configuration classification
 
@@ -117,7 +116,7 @@ record. Recovery never rediscovers a new deletion workset.
 Deletion preview, execution, and recovery on `SessionController` remain
 crate-private. `DeletionScope`, `DeletionRecord`, previews, blockers, and internal
 results are not public native DTOs: their frozen scopes are cleanup authority.
-#288 will define bounded public control-plane projections. Compile-fail API
+App Server v1 exposes bounded public control-plane projections. Compile-fail API
 regressions enforce this boundary.
 
 ## Schema

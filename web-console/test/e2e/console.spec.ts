@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { readFileSync } from 'node:fs';
+import { AppServerHost } from '../../../tui/src/app-server/host.ts';
 import { startDogfood } from './dogfood-server';
 
 test('two real rustX Sessions, browser loss, native interactions, raw wire, and cold configuration resolution', async ({ page }) => {
@@ -14,6 +15,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
   };
   const send = async (text: string) => { await page.getByRole('textbox', { name: 'Message', exact: true }).fill(text); await page.getByRole('button', { name: 'Send', exact: true }).click(); };
   const reload = async () => { await page.reload(); await connect(); };
+  let remote: AppServerHost | undefined;
   let passed = false;
   try {
     await page.goto('/'); await expect(page).toHaveTitle('rustX Developer Console');
@@ -32,6 +34,21 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
     await page.getByRole('tab', { name: idB.slice(0, 16), exact: true }).click(); await send('Use B while A runs');
     await expect(page.getByText('B stayed responsive.', { exact: true })).toBeVisible();
+    // The actual TUI client joins the browser's server. Handoff is explicit;
+    // neither client needs a private API or a second writable controller.
+    remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
+    await expect(remote.attach(idB)).rejects.toMatchObject({ kind: 'controller_in_use' });
+    await page.getByRole('button', { name: 'Detach', exact: true }).click();
+    await expect(page.locator('.session-toolbar small')).toContainText('detached');
+    const terminalB = await remote.attach(idB);
+    expect(JSON.stringify(terminalB.state.transcript)).toContain('B stayed responsive.');
+    expect((await remote.readSession(idA)).id).toBe(idA);
+    await terminalB.resync();
+    await remote.detach(idB);
+    await page.getByRole('button', { name: 'Attach / cold resume' }).click();
+    await expect(page.locator('.session-toolbar small')).toContainText('attached');
+    await remote.shutdown(); remote = undefined;
+
     await page.getByRole('tab', { name: idA.slice(0, 16), exact: true }).click();
     await page.getByRole('button', { name: 'Disconnect', exact: true }).click();
     await expect(page.locator('.status strong')).toHaveText('disconnected');
@@ -61,17 +78,27 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     }
     await page.getByRole('tab', { name: idA, exact: true }).click();
     await send('Approval please'); await expect(page.getByRole('button', { name: 'Allow once' })).toBeEnabled();
+    const pendingApproval = JSON.parse(await page.getByLabel('Runtime facts').innerText()).pending_interactions[0].interaction;
     await page.getByRole('button', { name: 'Disconnect', exact: true }).click(); await reload();
-    await expect(page.getByRole('button', { name: 'Allow once' })).toBeEnabled(); await page.getByRole('button', { name: 'Allow once' }).click();
+    await expect(page.getByRole('button', { name: 'Allow once' })).toBeEnabled();
+    expect(JSON.parse(await page.getByLabel('Runtime facts').innerText()).pending_interactions[0].interaction).toEqual(pendingApproval);
+    await page.getByRole('button', { name: 'Allow once' }).click();
     await expect(page.getByText('Approval completed.', { exact: true })).toBeVisible();
     await send('Questionnaire please'); await expect(page.getByRole('region', { name: 'Questionnaire' })).toBeVisible();
     await reload(); await page.getByRole('radio', { name: 'Keep native', exact: true }).click(); await page.getByRole('button', { name: 'Submit answers' }).click();
     await expect(page.getByText('Questionnaire completed.', { exact: true })).toBeVisible();
     await send('Publish while detached'); await fixture.gate('publish-question');
-    await page.getByRole('button', { name: 'Detach', exact: true }).click(); await expect(page.locator('.session-toolbar small')).toContainText('detached');
+    await page.getByRole('button', { name: 'Disconnect', exact: true }).click();
+    await expect(page.locator('.status strong')).toHaveText('disconnected');
+    remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
+    // Observe connection cleanup at the native owner before publishing an
+    // interaction with no UI attached. This observer never attaches a Session.
+    await expect.poll(async () => (await remote!.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.external_attachments).toBe(0);
     await fixture.release('publish-question');
     await fixture.control('observations/await?kind=response_completed&count=7&timeoutMs=30000');
-    await page.getByRole('button', { name: 'Attach / cold resume' }).click();
+    await remote.shutdown(); remote = undefined;
+    await page.getByRole('button', { name: 'Reconnect', exact: true }).click();
+    await expect(page.locator('.status strong')).toHaveText('connected');
     await expect(page.getByRole('region', { name: 'Questionnaire' })).toBeVisible();
     await page.getByRole('radio', { name: 'Keep native', exact: true }).click(); await page.getByRole('button', { name: 'Submit answers' }).click();
     await expect(page.getByText('Detached question completed.', { exact: true })).toBeVisible();
@@ -106,7 +133,9 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(page.getByRole('button', { name: 'Open session-2', exact: true })).toHaveCount(0);
     await expect(page.getByRole('tab')).toHaveCount(1);
     await expect(page.locator('.session-toolbar strong')).toHaveText(idA);
+    expect(readFileSync(`${fixture.workspaceA}/console-effect`, 'utf8')).toBe('x');
+    expect((await fixture.control('requests')).requests).toHaveLength(8);
     expect(errors).toEqual([]); passed = true;
   } catch (error) { console.error(fixture.diagnostics(), await page.locator('.notice').allTextContents(), await page.locator('.protocol-log pre').allTextContents()); throw error; }
-  finally { await page.close(); await fixture.stop(passed); }
+  finally { await remote?.shutdown(); await page.close(); await fixture.stop(passed); }
 });
