@@ -288,6 +288,21 @@ export type Request1 =
       };
     }
   | {
+      method: 'inbound/edit';
+      params: {
+        target: AttachmentTarget;
+        expected: PendingInboundRef;
+        text: string;
+      };
+    }
+  | {
+      method: 'inbound/remove';
+      params: {
+        target: AttachmentTarget;
+        expected: PendingInboundRef;
+      };
+    }
+  | {
       method: 'turn/cancel';
       params: {
         target: AttachmentTarget;
@@ -573,6 +588,10 @@ export type ReviewDecision =
 export type Response = Success | Failure;
 export type MethodResult =
   | {
+      outcome: PendingMutationOutcome;
+      type: 'inbound_mutation';
+    }
+  | {
       data: string;
       type: 'artifact_bytes';
     }
@@ -738,6 +757,25 @@ export type MethodResult =
       resource_revision: string;
       capability_revision: CapabilityRevision;
       type: 'resources_reloaded';
+    };
+/**
+ * Typed pending mutation disposition; uncertainty requires authoritative reread.
+ */
+export type PendingMutationOutcome =
+  | {
+      status: 'durability_uncertain';
+    }
+  | {
+      status: 'applied';
+    }
+  | {
+      status: 'not_pending';
+    }
+  | {
+      status: 'conflict';
+    }
+  | {
+      status: 'invalid_item';
     };
 export type ServerLifecycle = 'Accepting' | 'Draining' | 'Terminated';
 /**
@@ -2629,6 +2667,13 @@ export type RuntimeClientEvent =
     }
   | {
       /**
+       * Complete committed pending projection, in durable sequence order.
+       */
+      pending: InboundItemView[];
+      type: 'pending_inbound_changed';
+    }
+  | {
+      /**
        * A conversation-scoped inbound sequence number.
        *
        * The sequence identifies one item of the conversation's inbound ordering
@@ -2820,6 +2865,23 @@ export interface SessionPersistentState {
   no_direct_tools?: boolean;
   tools?: string[] | null;
   exclude_tools?: string[] | null;
+}
+/**
+ * Exact durable pending occurrence and compare-and-set revision.
+ */
+export interface PendingInboundRef {
+  /**
+   * Durable sequence; never reused.
+   */
+  sequence: string;
+  /**
+   * Identifies a committed canonical message block.
+   */
+  message_id: string;
+  /**
+   * Expected native content revision.
+   */
+  revision: string;
 }
 /**
  * The root-facing address of a conversation-local interaction.
@@ -6391,6 +6453,10 @@ export interface InboundDiagnostics {
  * One pending inbound item of the diagnostics view.
  */
 export interface InboundItemView {
+  /**
+   * Native compare-and-set revision.
+   */
+  revision: string;
   /**
    * The mailbox-assigned inbound sequence.
    */

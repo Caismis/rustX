@@ -1151,7 +1151,7 @@ describe("CommandDispatcher", () => {
         inbound: {
           pending: [
             {
-              sequence: "3",
+              revision: "0", sequence: "3",
               message: {
                 id: "m2",
                 content: [{ type: "text", text: "queued" }],

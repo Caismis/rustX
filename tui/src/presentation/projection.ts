@@ -628,7 +628,7 @@ export function reduce(
         ...state.inbound,
         pending: [
           ...(state.inbound.pending ?? []),
-          { sequence: event.sequence, message: event.message },
+          { sequence: event.sequence, revision: "0", message: event.message },
         ],
       };
       // Durable acceptance is the display frontier. Context facts remain
@@ -649,10 +649,21 @@ export function reduce(
       }
       return next;
 
+    case "pending_inbound_changed": {
+      const previous = new Set((state.inbound.pending ?? []).map(item => item.message.id));
+      const pending = new Map(event.pending.map(item => [item.message.id, item.message]));
+      next.inbound = { ...state.inbound, pending: event.pending };
+      next.transcript = state.transcript.flatMap(entry => {
+        if (entry.kind !== "committed" || !previous.has(entry.messageId)) return [entry];
+        const message = pending.get(entry.messageId);
+        return message ? [{ ...entry, message: { role: "user" as const, ...message } }] : [];
+      });
+      return next;
+    }
     case "inbound_drained":
       next.inbound = {
         pending: (state.inbound.pending ?? []).filter(
-          (item) => item.sequence > event.watermark,
+          (item) => BigInt(item.sequence) > BigInt(event.watermark),
         ),
         last_drain: { watermark: event.watermark, count: event.count },
       };

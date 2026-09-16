@@ -70,7 +70,7 @@ import {
 } from "./transport.ts";
 
 /** The protocol version this client speaks. Independent of every other version. */
-export const APP_SERVER_PROTOCOL_VERSION = 4;
+export const APP_SERVER_PROTOCOL_VERSION = 5;
 
 /** How this client identifies itself in `initialize`. */
 export const CLIENT_IDENTITY: ClientIdentity = {
@@ -176,6 +176,8 @@ export const METHOD_RESPONSE_LOSS_CLASS = Object.freeze({
   "session/subscribe": "connection_local",
   "turn/start": "side_effecting",
   "turn/steer": "side_effecting",
+  "inbound/edit": "side_effecting",
+  "inbound/remove": "side_effecting",
   "turn/cancel": "side_effecting",
   "interaction/respond": "side_effecting",
   "interaction/cancel": "side_effecting",
@@ -331,7 +333,7 @@ export class AppServerClient {
 
     const record = decodeProtocolMessage(untrusted);
     if (record === undefined) {
-      this.#fail("invalid App Server v4 protocol message");
+      this.#fail("invalid App Server v5 protocol message");
       return;
     }
 

@@ -680,6 +680,8 @@ fn runtime_target(method: &Method) -> Option<&AttachmentTarget> {
         | Method::SessionSubscribe { target, .. }
         | Method::TurnStart { target, .. }
         | Method::TurnSteer { target, .. }
+        | Method::InboundEdit { target, .. }
+        | Method::InboundRemove { target, .. }
         | Method::TurnCancel { target, .. }
         | Method::InteractionRespond { target, .. }
         | Method::InteractionCancel { target, .. }
@@ -849,6 +851,21 @@ async fn dispatch_runtime(
             }
             native_result(authority.submit_session_inbound(canonical))
         }
+        Method::InboundEdit {
+            target: _,
+            expected,
+            text,
+        } => Ok(MethodResult::InboundMutation {
+            outcome: authority
+                .edit_pending(&expected, &text)
+                .map_err(client_error)?,
+        }),
+        Method::InboundRemove {
+            target: _,
+            expected,
+        } => Ok(MethodResult::InboundMutation {
+            outcome: authority.remove_pending(&expected).map_err(client_error)?,
+        }),
         Method::TurnCancel { target: _ } => native_result(authority.cancel_current_attempt()),
         Method::InteractionRespond {
             target: _,

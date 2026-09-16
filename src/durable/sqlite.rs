@@ -247,7 +247,8 @@ use super::inbox::{
 /// Version 36 records Session upload facts and request-time path projection.
 /// Version 35 requires the fixed Journal presentation indexes for bounded Trace
 /// seeks. Older development stores are rejected, never lazily repaired.
-pub const SQLITE_SCHEMA_VERSION: i64 = 36;
+/// Version 37 adds native compare-and-set revisions to Pending Inbound.
+pub const SQLITE_SCHEMA_VERSION: i64 = 37;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -1054,6 +1055,77 @@ impl SqliteConversationStore {
     }
 }
 
+impl SqliteConversationStore {
+    fn mutate_pending(
+        &self,
+        expected: &crate::durable::inbox::PendingInboundRef,
+        text: Option<&str>,
+    ) -> Result<crate::durable::inbox::PendingMutationOutcome, ConversationStoreError> {
+        use crate::durable::inbox::PendingMutationOutcome as Outcome;
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("pending mutation: {error}")))?;
+        let Some(mut item) = load_pending_until(&transaction, expected.sequence)?
+            .into_iter()
+            .find(|item| {
+                item.sequence == expected.sequence && item.message_id == expected.message_id
+            })
+        else {
+            return Ok(Outcome::NotPending);
+        };
+        if item.revision != expected.revision {
+            return Ok(Outcome::Conflict);
+        }
+        // Producer-correlated runtime work is not user-authored queue content.
+        if item.message.source != UserSource::Human
+            || item.message.kind != InboundKind::Message
+            || item.correlation.is_some()
+        {
+            return Ok(Outcome::InvalidItem);
+        }
+        if let Some(text) = text {
+            if text.trim().is_empty()
+                || !matches!(item.message.content.as_slice(), [UserContentBlock::Text(_)])
+            {
+                return Ok(Outcome::InvalidItem);
+            }
+            item.message.content =
+                vec![UserContentBlock::Text(crate::message::content::TextBlock {
+                    text: text.to_owned(),
+                })];
+            let revision = item
+                .revision
+                .checked_add(1)
+                .filter(|value| i64::try_from(*value).is_ok())
+                .ok_or(ConversationStoreError::SequenceExhausted)?;
+            transaction
+                .execute(
+                    "UPDATE pending_inbound SET message_json=?1, revision=?2 WHERE sequence=?3",
+                    params![
+                        encode(&item.message, "pending edit")?,
+                        revision,
+                        seq_to_i64(expected.sequence.get())?
+                    ],
+                )
+                .map_err(|error| storage(format!("pending edit: {error}")))?;
+        } else {
+            transaction
+                .execute(
+                    "DELETE FROM pending_inbound WHERE sequence=?1",
+                    [seq_to_i64(expected.sequence.get())?],
+                )
+                .map_err(|error| storage(format!("pending remove: {error}")))?;
+            transaction.execute("DELETE FROM transcript_order WHERE reference_kind='message' AND reference_id=?1", [item.message_id.as_str()])
+                .map_err(|error| storage(format!("pending transcript remove: {error}")))?;
+        }
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("pending mutation commit: {error}")))?;
+        Ok(Outcome::Applied)
+    }
+}
+
 impl ConversationStore for SqliteConversationStore {
     fn conversation_id(&self) -> &ConversationId {
         &self.conversation_id
@@ -1376,24 +1448,14 @@ impl ConversationStore for SqliteConversationStore {
     fn adopt_pending_batch(
         &self,
         watermark: InboundSequence,
-        adoption: RuntimeEventEnvelope,
-    ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
-        let RuntimeEvent::InboundTurnAdopted {
-            message_ids: obligation,
-        } = &adoption.event
-        else {
-            return Err(ConversationStoreError::InvalidReference(
-                "the adoption transaction accepts only an InboundTurnAdopted obligation".to_owned(),
-            ));
-        };
-        let obligation = obligation.clone();
+        attempt_id: Option<crate::runtime::identity::AttemptId>,
+    ) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("adopt transaction: {error}")))?;
         ensure_surface_head(&transaction)?;
         let items = load_pending_until(&transaction, watermark)?;
-        let mut adopted = Vec::with_capacity(items.len());
         for item in &items {
             let block = MessageBlock::User(item.message.clone());
             let cursor =
@@ -1404,7 +1466,6 @@ impl ConversationStore for SqliteConversationStore {
                     item.message_id, item.transcript_cursor, cursor
                 )));
             }
-            adopted.push(block);
         }
         transaction
             .execute(
@@ -1412,22 +1473,12 @@ impl ConversationStore for SqliteConversationStore {
                 [seq_to_i64(watermark.get())?],
             )
             .map_err(|error| storage(format!("adopt pending delete: {error}")))?;
-        // The obligation names exactly the adopted work, in adoption order.
-        // A mismatch is a contract violation, never a silently absorbed
-        // difference: the durable authority would otherwise hold an answer
-        // obligation for work it did not adopt, or adopt work it owes no
-        // answer for.
-        let adopted_ids: Vec<MessageId> =
-            items.iter().map(|item| item.message_id.clone()).collect();
-        if obligation != adopted_ids {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "the adoption obligation names {obligation:?}, but the transaction adopts \
-                 {adopted_ids:?}"
-            )));
-        }
-        // An empty (or already-adopted) watermark adopts nothing and
-        // therefore acquires no obligation.
-        if !adopted_ids.is_empty() {
+        if !items.is_empty() {
+            let adoption = crate::durable::inbox::inbound_adoption_event(
+                &self.conversation_id,
+                attempt_id,
+                items.iter().map(|item| item.message_id.clone()).collect(),
+            );
             persist_event_tx(&transaction, &self.conversation_id, adoption)?;
         }
         #[cfg(test)]
@@ -1441,7 +1492,21 @@ impl ConversationStore for SqliteConversationStore {
             .commit()
             .map_err(|error| storage(format!("adopt commit: {error}")))?;
         process_death::reach("after:adopt_pending_batch");
-        Ok(adopted)
+        Ok(items)
+    }
+
+    fn edit_pending(
+        &self,
+        expected: &crate::durable::inbox::PendingInboundRef,
+        text: &str,
+    ) -> Result<crate::durable::inbox::PendingMutationOutcome, ConversationStoreError> {
+        self.mutate_pending(expected, Some(text))
+    }
+    fn remove_pending(
+        &self,
+        expected: &crate::durable::inbox::PendingInboundRef,
+    ) -> Result<crate::durable::inbox::PendingMutationOutcome, ConversationStoreError> {
+        self.mutate_pending(expected, None)
     }
 
     fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
@@ -4785,6 +4850,7 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
                 snapshot_json TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS pending_inbound (
+                revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
                 sequence INTEGER PRIMARY KEY,
                 message_id TEXT NOT NULL UNIQUE,
                 message_json TEXT NOT NULL,
@@ -5684,7 +5750,7 @@ fn load_pending_rows(
 ) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
     let mut statement = connection
         .prepare(
-            "SELECT p.sequence,p.message_id,p.message_json,p.correlation,t.position
+            "SELECT p.sequence,p.message_id,p.message_json,p.correlation,t.position,p.revision
              FROM pending_inbound p
              LEFT JOIN transcript_order t
                ON t.reference_kind='message' AND t.reference_id=p.message_id
@@ -5704,6 +5770,7 @@ fn load_pending_rows(
                 )
             })?;
             Ok(PendingInboundItem {
+                revision: row.get::<_, u64>(5)?,
                 sequence: InboundSequence::new(read_sequence(sequence)?),
                 message_id,
                 message,
@@ -9128,16 +9195,7 @@ mod tests {
         }));
         assert_eq!(reader.load_head().unwrap(), writer.load_head().unwrap());
         let accepted = writer.accept_inbound(draft("after snapshot")).unwrap();
-        writer
-            .adopt_pending_batch(
-                accepted.sequence,
-                crate::durable::inbox::inbound_adoption_event(
-                    writer.conversation_id(),
-                    None,
-                    vec![accepted.message_id],
-                ),
-            )
-            .unwrap();
+        writer.adopt_pending_batch(accepted.sequence, None).unwrap();
         assert_eq!(reader.load_head().unwrap(), writer.load_head().unwrap());
         assert_eq!(reader.load_head().unwrap().active_message_ids.len(), 1);
     }
@@ -9146,16 +9204,7 @@ mod tests {
     fn acceptance_and_adoption_share_durable_identity() {
         let store = store();
         let accepted = store.accept_inbound(draft("hello")).unwrap();
-        let adopted = store
-            .adopt_pending_batch(
-                accepted.sequence,
-                crate::durable::inbox::inbound_adoption_event(
-                    store.conversation_id(),
-                    None,
-                    vec![accepted.message_id.clone()],
-                ),
-            )
-            .unwrap();
+        let adopted = store.adopt_pending_batch(accepted.sequence, None).unwrap();
         assert_eq!(adopted.len(), 1);
         assert!(store.load_pending().unwrap().is_empty());
         assert_eq!(store.load_head().unwrap().active_message_ids.len(), 1);
@@ -9180,16 +9229,7 @@ mod tests {
             "the acceptance commit advances the watermark"
         );
 
-        let adopted = store
-            .adopt_pending_batch(
-                accepted.sequence,
-                crate::durable::inbox::inbound_adoption_event(
-                    store.conversation_id(),
-                    None,
-                    vec![accepted.message_id.clone()],
-                ),
-            )
-            .unwrap();
+        let adopted = store.adopt_pending_batch(accepted.sequence, None).unwrap();
         assert_eq!(adopted.len(), 1);
         assert!(store.load_pending().unwrap().is_empty());
         assert!(
@@ -9497,18 +9537,7 @@ mod tests {
 
         let accepted = store.accept_inbound(draft("pending")).unwrap();
         store.arm_fail_next_adopt_commit();
-        assert!(
-            store
-                .adopt_pending_batch(
-                    accepted.sequence,
-                    crate::durable::inbox::inbound_adoption_event(
-                        store.conversation_id(),
-                        None,
-                        vec![accepted.message_id.clone()],
-                    ),
-                )
-                .is_err()
-        );
+        assert!(store.adopt_pending_batch(accepted.sequence, None,).is_err());
         assert_eq!(store.load_pending().unwrap().len(), 1);
         assert!(store.load_canonical().unwrap().is_empty());
         assert_eq!(
@@ -9516,16 +9545,7 @@ mod tests {
             SurfaceRevision::INITIAL
         );
 
-        let adopted = store
-            .adopt_pending_batch(
-                accepted.sequence,
-                crate::durable::inbox::inbound_adoption_event(
-                    store.conversation_id(),
-                    None,
-                    vec![accepted.message_id.clone()],
-                ),
-            )
-            .unwrap();
+        let adopted = store.adopt_pending_batch(accepted.sequence, None).unwrap();
         assert_eq!(adopted.len(), 1);
         assert!(store.load_pending().unwrap().is_empty());
         assert_eq!(store.load_head().unwrap().active_message_ids.len(), 1);
@@ -10388,7 +10408,7 @@ mod tests {
                 result,
                 Err(ConversationStoreError::SchemaVersionMismatch {
                     stored: 32,
-                    expected: 36
+                    expected: 37
                 })
             ));
         }
@@ -12862,7 +12882,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 36);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 37);
 
         // And the refusal is not ceremony: had the gate admitted the file,
         // these are the rows the typed decoder would have had to interpret,
@@ -12931,7 +12951,7 @@ mod tests {
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
-        assert_eq!(SQLITE_SCHEMA_VERSION, 36);
+        assert_eq!(SQLITE_SCHEMA_VERSION, 37);
 
         // And the refusal is not ceremony: the envelope framing is unchanged,
         // and the row the gate refused really is undecodable under the current
@@ -13107,7 +13127,7 @@ mod tests {
             SqliteConversationStore::open(id, &path),
             Err(ConversationStoreError::SchemaVersionMismatch {
                 stored: 34,
-                expected: 36
+                expected: 37
             })
         ));
     }
@@ -13130,7 +13150,7 @@ mod tests {
                 )
                 .unwrap()
         };
-        assert_eq!(stored, 36);
+        assert_eq!(stored, 37);
         assert_eq!(stored, SQLITE_SCHEMA_VERSION);
         SqliteConversationStore::open(conversation_id, &path).expect("a current store reopens");
     }

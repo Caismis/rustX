@@ -5,7 +5,7 @@
 // this card owns only its draft, action feedback and a lock pending authority.
 // There is no create, clear or complete control here.
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import type { GoalMutation, GoalRef } from '../../../../protocol/app-server/v4';
+import type { GoalMutation, GoalRef } from '../../../../protocol/app-server/v5';
 import type { GoalDockState } from '../../bindings/composer-context';
 import type { GoalControlOutcome } from '../../client/app-server';
 import {

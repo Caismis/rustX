@@ -1,7 +1,7 @@
 import {readFile, writeFile} from 'node:fs/promises';
 import {compile} from 'json-schema-to-typescript';
 
-const schema = JSON.parse(await readFile(new URL('v4.schema.json', import.meta.url), 'utf8'));
+const schema = JSON.parse(await readFile(new URL('v5.schema.json', import.meta.url), 'utf8'));
 // Schemars emits draft-2020-12 $ref siblings for internally tagged newtypes.
 // v16's ref resolver merges (and overwrites) their `properties`, losing the
 // referenced content. Express the same conjunction using supported allOf.
@@ -30,8 +30,8 @@ const types = await compile(normalizeRefSiblings(schema), 'ProtocolMessage', {
   additionalProperties: false,
   style: {singleQuote: true, printWidth: 100, tabWidth: 2},
 });
-await writeFile(new URL('v4.ts', import.meta.url), types);
+await writeFile(new URL('v5.ts', import.meta.url), types);
 const fixtures = await readFile(new URL('fixtures.json', import.meta.url), 'utf8');
 await writeFile(new URL('fixtures.ts', import.meta.url),
-  "// Generated from serialized Rust DTOs.\nimport type {ProtocolMessage} from './v4.js';\n" +
+  "// Generated from serialized Rust DTOs.\nimport type {ProtocolMessage} from './v5.js';\n" +
   `export const fixtures = ${fixtures.trim()} satisfies ProtocolMessage[];\n`);

@@ -2650,16 +2650,7 @@ async fn goal84_recovery_authorizes_pending_human_but_does_not_infer_continuatio
             })
             .unwrap();
         if already_adopted {
-            store
-                .adopt_pending_batch(
-                    accepted.sequence,
-                    rustx::durable::inbox::inbound_adoption_event(
-                        tools.conversation_id(),
-                        None,
-                        vec![accepted.message_id.clone()],
-                    ),
-                )
-                .unwrap();
+            store.adopt_pending_batch(accepted.sequence, None).unwrap();
         }
         // Crash prefix: either Pending Inbound, or adopted before model start.
         // The latter restores an answer obligation, not a fresh Human identity.

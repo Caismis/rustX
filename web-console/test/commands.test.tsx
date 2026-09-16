@@ -9,7 +9,7 @@ import { CommandSession, NavigationEpoch } from '../src/app/commands/native';
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
-import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v4';
+import type { MethodResult, Request, SessionNode, SessionUserMessageBoundary, UserInputBlock } from '../../protocol/app-server/v5';
 import { Server, snapshot } from './fixture';
 
 let server: Server;
@@ -203,7 +203,7 @@ describe('inbound transport frontier', () => {
     expect(view().inboundRequests).toBe(0);
     expect(view().submissions?.map(item => item.messageId)).toEqual(['accepted-user']);
     const message = { id: 'accepted-user', source: 'human' as const, content: [{ type: 'text' as const, text: 'accepted task' }] };
-    await server.update('A', { ...fixture.original, inbound: { pending: [{ sequence: '1', message }] } });
+    await server.update('A', { ...fixture.original, inbound: { pending: [{ revision: '0', sequence: '1', message }] } });
     expect(view().submissions).toEqual([]); expect(lineageSwitchSafe(view())).toBe(false);
     unsubscribe(); expect(states.length).toBeGreaterThan(1); expect(states.every(safe => !safe)).toBe(true);
     await server.update('A', { ...fixture.original, messages: [{ role: 'user', ...message }], inbound: {} });
@@ -232,7 +232,7 @@ describe('inbound transport frontier', () => {
     expect(server.client.getSnapshot().generation).toBeGreaterThan(generation);
     expect(lineageSwitchSafe(server.client.getSnapshot().views.A)).toBe(false);
     await expect(scope.transition('branch', selection)).rejects.toThrow('Obsolete');
-    const pending = { ...fixture.original, inbound: { pending: [{ sequence: '1', message: { id: 'accepted-user', source: 'human' as const, content: [{ type: 'text' as const, text: 'possibly accepted' }] } }] } };
+    const pending = { ...fixture.original, inbound: { pending: [{ revision: "0", sequence: '1', message: { id: 'accepted-user', source: 'human' as const, content: [{ type: 'text' as const, text: 'possibly accepted' }] } }] } };
     server.snapshots.set('A', pending); server.nodeSnapshots.set('node-A', pending);
     await server.connect();
     expect(server.client.getSnapshot().views.A.inboundRequests ?? 0).toBe(0);
@@ -312,7 +312,7 @@ describe('typed native operations and continuation fencing', () => {
     await server.update('A', history);
     localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', tabs: ['A'] }));
     render(<App client={server.client} />);
-    const pending = { sequence: '1', message: { id: 'accepted-user', source: 'human' as const, content: [{ type: 'text' as const, text: 'Accepted task' }] } };
+    const pending = { revision: "0", sequence: '1', message: { id: 'accepted-user', source: 'human' as const, content: [{ type: 'text' as const, text: 'Accepted task' }] } };
     if (source === 'acknowledgement') {
       server.held.add('turn/start');
       let work!: Promise<unknown>;

@@ -373,7 +373,7 @@ describe("footer", () => {
         inbound: {
           pending: [
             {
-              sequence: "1",
+              revision: "0", sequence: "1",
               message: {
                 id: "m1",
                 content: [{ type: "text", text: "queued" }],

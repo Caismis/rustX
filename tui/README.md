@@ -26,7 +26,7 @@ arguments (including `init` declarations). Streams and exit status are forwarded
 All [configuration semantics](../docs/configuration-diagnostics.md) stay in Rust.
 
 Foreground Workflow Tool cards expose expandable native execution details under
-App Server protocol v4. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
+App Server protocol v5. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
 execution settlement, business checks and human Review are separate. Responses
 use the root HITL queue and children expose authoritative subagent status. See the
 [native projection contract](../docs/workflow-run-projection.md).
@@ -180,7 +180,7 @@ model's own frozen registry. See the
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v4)
+  -> initialize (App Server protocol v5)
   -> session/create or choose a durable Session
   -> session/attach (authoritative snapshot, cursor, subscription)
   -> interactive

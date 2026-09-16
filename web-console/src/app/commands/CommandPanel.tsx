@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Rewritten from ui-commands/PopupSelectView.tsx; see PROVENANCE.md. */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { ApprovalMode, UserInputBlock, SessionSnapshot } from '../../../../protocol/app-server/v4';
+import type { ApprovalMode, UserInputBlock, SessionSnapshot } from '../../../../protocol/app-server/v5';
 import type { AppServerClient } from '../../client/app-server';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { Dialog } from '../../presentation/primitives/Dialog';

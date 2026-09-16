@@ -1,7 +1,7 @@
 import { Trajectory } from './Trajectory';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { AppServerClient } from '../client/app-server';
-import type { RuntimeClientSessionDeletePreview, UserInputBlock } from '../../../protocol/app-server/v4';
+import type { RuntimeClientSessionDeletePreview, UserInputBlock } from '../../../protocol/app-server/v5';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { NavigationEpoch, createSession } from './commands/native';
 import { available, commands } from './commands/registry';
@@ -111,7 +111,7 @@ export function App({ client }: { client: AppServerClient }) {
     else setError(`Delete preview: ${json(result.result)}`);
   });
   return <AppFrame navigation={<Sidebar footer={<>
-    <p className="muted">Native App Server · protocol v4</p><a href="https://github.com/Caismis/rustX" target="_blank" rel="noreferrer">rustX source</a>
+    <p className="muted">Native App Server · protocol v5</p><a href="https://github.com/Caismis/rustX" target="_blank" rel="noreferrer">rustX source</a>
     <p className="muted">UI source adapted from DeepSeek Harness. <a href="/LICENSE-DeepSeek-Harness.txt" target="_blank" rel="noreferrer">MIT notice</a></p>
   </>}>
     <section className="connection-form" aria-label="Connection">
@@ -189,7 +189,7 @@ export function App({ client }: { client: AppServerClient }) {
         todo={<TodoDock state={todoDock(view.snapshot)} />}
         goal={<GoalDock state={goalDock(view.snapshot)} observation={view.snapshot} disabled={composerDisabled}
           mutate={(expected, mutation) => client.controlGoal(view.id, expected, mutation)} />}
-        queue={<QueueDock rows={queueRows(view.snapshot)} submissions={view.submissions ?? []} running={activeAttempt(view.snapshot)} />}
+        queue={<QueueDock key={`${view.id}:${view.target?.attachment_id ?? state.generation}`} disabled={composerDisabled} observation={view.snapshot} edit={(expected, text) => client.editInbound(view.id, expected, text)} remove={expected => client.removeInbound(view.id, expected)} rows={queueRows(view.snapshot)} submissions={view.submissions ?? []} running={activeAttempt(view.snapshot)} />}
         composer={<InputBar key={`${view.snapshot?.conversation_id ?? view.id}:${restored?.conversation === view.snapshot?.conversation_id ? 'restored' : 'draft'}`} initialContent={restored?.conversation === view.snapshot?.conversation_id ? restored?.content : undefined}
           disabled={composerDisabled} busy={sending[view.id] === state.generation} active={activeAttempt(view.snapshot)}
           lineageSwitchSafe={lineageSwitchSafe(view)} hasGoal={!!goalDock(view.snapshot)} onCommand={id => invokeCommand({ id })}

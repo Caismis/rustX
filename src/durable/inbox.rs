@@ -149,9 +149,39 @@ pub struct AcceptedInbound {
     pub retried: bool,
 }
 
+/// Exact durable pending occurrence and compare-and-set revision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PendingInboundRef {
+    /// Durable sequence; never reused.
+    pub sequence: InboundSequence,
+    /// Canonical identity assigned at acceptance.
+    pub message_id: MessageId,
+    /// Expected native content revision.
+    pub revision: u64,
+}
+
+/// Typed pending mutation disposition; uncertainty requires authoritative reread.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PendingMutationOutcome {
+    /// Storage acknowledgement or post-commit readback failed; never replay.
+    DurabilityUncertain,
+    /// The transition committed; clients reread authority.
+    Applied,
+    /// This occurrence was removed or adopted.
+    NotPending,
+    /// Another mutation replaced the expected version.
+    Conflict,
+    /// Content or provenance cannot be edited by this user control.
+    InvalidItem,
+}
+
 /// One accepted-but-not-yet-adopted durable pending item.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingInboundItem {
+    /// Monotonic compare-and-set content revision.
+    pub revision: u64,
     /// The durable inbound sequence.
     pub sequence: InboundSequence,
     /// The stable message identity.
@@ -179,32 +209,13 @@ pub struct PendingBatch {
     pub items: Vec<PendingInboundItem>,
 }
 
-impl PendingBatch {
-    /// The durable answer obligation this batch acquires when it is adopted.
-    ///
-    /// `attempt_id` is the attempt that owns the adoption: the running attempt
-    /// of a safe-boundary drain, and `None` for the coordinator admission
-    /// path, where no attempt exists yet.
-    #[must_use]
-    pub fn adoption_event(&self, attempt_id: Option<AttemptId>) -> RuntimeEventEnvelope {
-        inbound_adoption_event(
-            &self.conversation_id,
-            attempt_id,
-            self.items
-                .iter()
-                .map(|item| item.message_id.clone())
-                .collect(),
-        )
-    }
-}
-
 /// Builds the [`RuntimeEvent::InboundTurnAdopted`] fact of one adoption.
 ///
 /// The adoption transaction commits this fact with the canonical messages it
 /// names, so the durable authority can never hold an adopted turn without the
 /// obligation to answer it, nor an obligation naming messages it did not adopt.
 #[must_use]
-pub fn inbound_adoption_event(
+pub(crate) fn inbound_adoption_event(
     conversation_id: &ConversationId,
     attempt_id: Option<AttemptId>,
     message_ids: Vec<MessageId>,
@@ -1170,10 +1181,22 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
     fn adopt_pending_batch(
         &self,
         watermark: InboundSequence,
-        adoption: RuntimeEventEnvelope,
-    ) -> Result<Vec<MessageBlock>, ConversationStoreError>;
+        attempt_id: Option<AttemptId>,
+    ) -> Result<Vec<PendingInboundItem>, ConversationStoreError>;
 
-    /// Reads pending items for bootstrap.
+    /// Edits exactly one pending text item using native compare-and-set.
+    fn edit_pending(
+        &self,
+        expected: &PendingInboundRef,
+        text: &str,
+    ) -> Result<PendingMutationOutcome, ConversationStoreError>;
+    /// Removes exactly one pending occurrence without cancelling execution.
+    fn remove_pending(
+        &self,
+        expected: &PendingInboundRef,
+    ) -> Result<PendingMutationOutcome, ConversationStoreError>;
+
+    /// Reads all committed pending rows in sequence order for repair/bootstrap.
     fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError>;
 }
 
@@ -1309,37 +1332,33 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// Returns [`ConversationStoreError::Storage`] on a backend read failure.
     fn select_pending_batch(&self) -> Result<Option<PendingBatch>, ConversationStoreError>;
 
-    /// Atomically adopts every pending item through `watermark` into the
-    /// durable canonical message ledger, in strict sequence order, returning
-    /// the adopted canonical messages.
-    ///
-    /// Adoption, pending removal, and the adopted turn's durable **answer
-    /// obligation** share one transaction: `adoption` must be a
-    /// [`RuntimeEvent::InboundTurnAdopted`] naming exactly the adopted
-    /// messages, in the same order. A crash can therefore never observe a
-    /// canonical `UserMessage` whose obligation is missing, an obligation
-    /// naming work that was not adopted, or a pending record whose canonical
-    /// message already exists. Adopting an empty (or already-adopted)
-    /// watermark returns an empty vector and commits no obligation.
+    /// Atomically claims current pending rows through the selected watermark.
+    /// The transaction constructs the answer obligation from those exact rows,
+    /// appends them to Ledger/Surface, removes pending entries, and returns the
+    /// committed receipt. Selection supplies only an upper bound: its payload
+    /// must never be installed or published. An empty receipt commits no event.
     ///
     /// # Errors
-    ///
-    /// Returns [`ConversationStoreError::InvalidReference`] when `adoption` is
-    /// not the obligation of exactly this adoption, and
-    /// [`ConversationStoreError::Storage`] when the adoption transaction
-    /// fails; on failure the selected items remain pending and recoverable.
+    /// Returns a storage failure if the atomic claim cannot commit.
     fn adopt_pending_batch(
         &self,
         watermark: InboundSequence,
-        adoption: RuntimeEventEnvelope,
-    ) -> Result<Vec<MessageBlock>, ConversationStoreError>;
+        attempt_id: Option<AttemptId>,
+    ) -> Result<Vec<PendingInboundItem>, ConversationStoreError>;
 
-    /// Loads every accepted-but-not-yet-adopted pending item in strict
-    /// sequence order (recovery/bootstrap seam).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ConversationStoreError::Storage`] on a backend read failure.
+    /// Edits exactly one pending text item using native compare-and-set.
+    fn edit_pending(
+        &self,
+        expected: &PendingInboundRef,
+        text: &str,
+    ) -> Result<PendingMutationOutcome, ConversationStoreError>;
+    /// Removes exactly one pending occurrence without cancelling execution.
+    fn remove_pending(
+        &self,
+        expected: &PendingInboundRef,
+    ) -> Result<PendingMutationOutcome, ConversationStoreError>;
+
+    /// Reads all committed pending rows in sequence order for repair/bootstrap.
     fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError>;
 
     /// Whether this conversation has ever committed one durable inbound
@@ -1952,9 +1971,23 @@ impl<T: ConversationStore + ?Sized> ConversationInboundCapability for T {
     fn adopt_pending_batch(
         &self,
         watermark: InboundSequence,
-        adoption: RuntimeEventEnvelope,
-    ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
-        ConversationStore::adopt_pending_batch(self, watermark, adoption)
+        attempt_id: Option<AttemptId>,
+    ) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
+        ConversationStore::adopt_pending_batch(self, watermark, attempt_id)
+    }
+
+    fn edit_pending(
+        &self,
+        expected: &PendingInboundRef,
+        text: &str,
+    ) -> Result<PendingMutationOutcome, ConversationStoreError> {
+        ConversationStore::edit_pending(self, expected, text)
+    }
+    fn remove_pending(
+        &self,
+        expected: &PendingInboundRef,
+    ) -> Result<PendingMutationOutcome, ConversationStoreError> {
+        ConversationStore::remove_pending(self, expected)
     }
 
     fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
@@ -2127,9 +2160,23 @@ impl ConversationInboundCapability for StoreInboundCapability {
     fn adopt_pending_batch(
         &self,
         watermark: InboundSequence,
-        adoption: RuntimeEventEnvelope,
-    ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
-        self.store.adopt_pending_batch(watermark, adoption)
+        attempt_id: Option<AttemptId>,
+    ) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
+        self.store.adopt_pending_batch(watermark, attempt_id)
+    }
+
+    fn edit_pending(
+        &self,
+        expected: &PendingInboundRef,
+        text: &str,
+    ) -> Result<PendingMutationOutcome, ConversationStoreError> {
+        self.store.edit_pending(expected, text)
+    }
+    fn remove_pending(
+        &self,
+        expected: &PendingInboundRef,
+    ) -> Result<PendingMutationOutcome, ConversationStoreError> {
+        self.store.remove_pending(expected)
     }
 
     fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {

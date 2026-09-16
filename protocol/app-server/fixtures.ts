@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v4.js';
+import type {ProtocolMessage} from './v5.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -50,7 +50,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 4,
+      "protocol_version": 5,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -67,7 +67,7 @@ export const fixtures = [
     "id": 7,
     "result": {
       "type": "initialized",
-      "protocol_version": 4,
+      "protocol_version": 5,
       "capabilities": {
         "multi_session": true,
         "single_writable_controller": true,
@@ -267,6 +267,43 @@ export const fixtures = [
   {
     "jsonrpc": "2.0",
     "id": "exact-u64",
+    "method": "inbound/edit",
+    "params": {
+      "target": {
+        "session_id": "session-fixture",
+        "conversation_id": "conversation-fixture",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "expected": {
+        "sequence": "9007199254740993",
+        "message_id": "message-fixture",
+        "revision": "9007199254740993"
+      },
+      "text": "edited pending input"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "inbound/remove",
+    "params": {
+      "target": {
+        "session_id": "session-fixture",
+        "conversation_id": "conversation-fixture",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "expected": {
+        "sequence": "9007199254740993",
+        "message_id": "message-fixture",
+        "revision": "9007199254740993"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
     "method": "goal/control",
     "params": {
       "target": {
@@ -284,6 +321,16 @@ export const fixtures = [
         "mutation": {
           "action": "pause"
         }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "result": {
+      "type": "inbound_mutation",
+      "outcome": {
+        "status": "conflict"
       }
     }
   },

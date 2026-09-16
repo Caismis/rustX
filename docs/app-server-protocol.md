@@ -1,4 +1,4 @@
-# App Server protocol v4
+# App Server protocol v5
 
 The App Server protocol is rustX's public client boundary for the TUI,
 Developer Web Console, future Web UI, and SDKs. Rust DTOs in
@@ -119,13 +119,13 @@ A browser can supply the credential in its handshake without arbitrary headers:
 
 ```js
 const socket = new WebSocket("ws://127.0.0.1:8080/", [
-  "rustx.app-server.v4",
+  "rustx.app-server.v5",
   `rustx-token.${dedicatedTransportToken}`,
 ]);
 ```
 
 The server requires both offers on path `/` without a query, rejects failed admission
-with HTTP 401, and selects only `rustx.app-server.v4` in its response. It never echoes
+with HTTP 401, and selects only `rustx.app-server.v5` in its response. It never echoes
 the credential. Admission completes before constructing `AppServerConnection`, so
 unauthenticated clients cannot initialize or invoke any method. This is a dedicated
 single-user transport secret, never a provider key, MCP secret, or runtime credential.
@@ -214,7 +214,7 @@ an ID does not deduplicate a mutation. Integer correlation IDs must fit the
 JavaScript safe integer range. String IDs are recommended for arbitrary IDs.
 
 ```json
-{"jsonrpc":"2.0","id":"init-1","method":"initialize","params":{"protocol_version":4,"client":{"name":"example","version":"1"},"presentation":{"images":true,"questionnaires":true,"reviews":true}}}
+{"jsonrpc":"2.0","id":"init-1","method":"initialize","params":{"protocol_version":5,"client":{"name":"example","version":"1"},"presentation":{"images":true,"questionnaires":true,"reviews":true}}}
 ```
 
 `APP_SERVER_PROTOCOL_VERSION` is independent of crate, manifest, journal,
@@ -230,7 +230,7 @@ Parse, envelope, method and parameter errors use JSON-RPC codes -32700,
 Internal storage/provider details are not reflected into arbitrary wire errors.
 Errors with unknown correlation use a null ID. Client notifications receive
 no response and cannot invoke request-only mutations. Batch requests are not
-supported in v4; pipeline individual requests instead. This limitation is
+supported in v5; pipeline individual requests instead. This limitation is
 explicitly rejected as an invalid request before any action occurs.
 
 ## Methods and native owners
@@ -322,7 +322,7 @@ cannot remove a newly installed route.
 
 ## Attachment and observation lifetime
 
-Protocol v4 admits at most one writable external controller per resident
+Protocol v5 admits at most one writable external controller per resident
 Conversation. A second controller gets a deterministic rejection and cannot
 steal the first. Detach and connection destruction release external admission
 only. They do not cancel a turn, settle a pending interaction, unload a runtime,
@@ -401,8 +401,8 @@ DTO's standalone serde/schema representation.
 
 Generated client-neutral artifacts are in `protocol/app-server/`:
 
-- `v4.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
-- `v4.ts`: TypeScript generated from that schema using pinned
+- `v5.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
+- `v5.ts`: TypeScript generated from that schema using pinned
   `json-schema-to-typescript` and its committed pnpm lockfile.
 - `fixtures.json`: serialized Rust messages, including nulls, string/numeric
   request IDs, timestamps, exact domains above 2^53 and lossless Questionnaire
@@ -664,7 +664,7 @@ commit receipt cannot publish it. Historical `session/trace` independently captu
 a represented semantic prefix and native lifecycle snapshot on live hosts, without
 folding observations or changing the live cursor. Inactive durable inspection
 captures its own SQLite frontier and has no live publication boundary.
-This remains mandatory protocol v4; no compatibility path is provided.
+This remains mandatory protocol v5; no compatibility path is provided.
 
 ### Fork editor input
 
@@ -677,3 +677,71 @@ product Retry may branch, attach the exact returned node/Conversation, then subm
 that content once through `turn/start`. It must stop after any uncertain mutation
 response, without repeating the branch or admission. No command interpreter or
 additional retry endpoint is involved. These are the merged #319 v4 semantics.
+
+## Exact pending inbound controls (WEB-06)
+
+Protocol v5 adds `inbound/edit { target, expected, text }` and
+`inbound/remove { target, expected }`. `target` is the ordinary exact Session,
+Conversation, runtime incarnation and controller attachment authority.
+`expected` contains the native `sequence`, `message_id` and `revision` from
+`snapshot.inbound.pending`. Exact integers use the existing decimal-string wire
+encoding. This is a mandatory vocabulary change; no v4 compatibility mode exists.
+
+Pending Inbound in `ConversationStore` owns mutation. Its SQLite transaction
+compares identity and revision and commits the replacement or removal atomically.
+Revisions begin at zero and edits increment them without changing occurrence
+identity. Removal and canonical adoption permanently invalidate the occurrence.
+Old sequences are never reused. A successful response is `inbound_mutation` with
+`outcome.status = applied`; known losing outcomes are `not_pending`, `conflict`
+and `invalid_item`. Storage acknowledgement/readback failures report
+`durability_uncertain`. Routing errors retain the existing typed attachment and
+runtime errors. Clients never substitute a newer revision or replay after loss.
+
+Edit currently supports one ordinary Human text block without producer
+correlation. Unsupported typed or multipart content is rejected atomically;
+QueueDock disables Edit for those shapes. In particular it never flattens or
+drops Session-owned upload references. Remove supports ordinary uncorrelated
+Human pending messages, including uploads. Runtime-authored work is not a user
+queue control target.
+
+Selection is a non-destructive finite watermark, not a payload reservation.
+Canonical adoption reads the current rows inside its own transaction and builds
+the `InboundTurnAdopted` obligation there. The committed receipt alone supplies
+canonical execution content and drain observations. Pre-commit memory checks
+validate stable identities; no selected payload is installed after the commit.
+If mutation wins, adoption sees edited content or excludes removed work. If
+adoption wins, mutation is `not_pending` and cannot change history or execution.
+An empty claim creates no answer obligation and admits no fresh turn.
+
+Editing updates the pending message body read through its original transcript
+cursor. Removal deletes only its pending transcript index entry, in the same
+transaction. Neither operation edits canonical history or cancels attempts,
+background executions, Subagents or Workflows. Queue/Steer submission converges
+on this same native domain; there is no per-row Steer/reclassification flag.
+
+The mailbox publishes a complete `pending_inbound_changed` projection only after
+the durable mutation check and readback. Its publication ordering is coordination,
+not mutation authority. The Event Journal remains execution facts and contains
+no queue mutation commands. Live observation and snapshot repair consume the
+same committed pending state. Web success waits for an authoritative reread;
+stale edits preserve drafts for conscious reconciliation. A lost response remains
+uncertain, is never replayed, and reconnect replaces transient state from the
+native snapshot. Pending mutation invalidates loaded Web transcript windows so
+removed entries cannot survive a historical-page merge. Recovery reconstructs
+only committed rows and revisions; no browser queue is persisted.
+
+The pending revision column advances the SQLite store schema to 37. As with the
+other pre-1.0 schema changes, older stores are refused explicitly; no migration
+or compatibility representation is introduced.
+
+Native Runtime Client version 37 carries the mandatory pending revision and
+`pending_inbound_changed` event; it also has no compatibility decoder.
+
+Snapshot/attachment reads also reconcile Pending Inbound directly from durable
+storage under the mailbox publication cut. This repairs a committed mutation
+whose immediate notification/readback was lost, without replaying the mutation.
+Repair drains older inbound notifications before folding the durable read and
+publishes a replacement only if the pending projection differs. A read concurrent
+with native publication retains the preceding complete observation cut rather
+than exposing a half-installed transition; subsequent observation/readback
+converges on the committed state.

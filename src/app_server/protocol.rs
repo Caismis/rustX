@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v4 envelope and method vocabulary.
+//! Rust authority for the App Server v5 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 4;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -251,6 +251,17 @@ pub enum Method {
         target: AttachmentTarget,
         content: Vec<UserInputBlock>,
     },
+    #[serde(rename = "inbound/edit")]
+    InboundEdit {
+        target: AttachmentTarget,
+        expected: crate::durable::inbox::PendingInboundRef,
+        text: String,
+    },
+    #[serde(rename = "inbound/remove")]
+    InboundRemove {
+        target: AttachmentTarget,
+        expected: crate::durable::inbox::PendingInboundRef,
+    },
     #[serde(rename = "turn/cancel")]
     TurnCancel { target: AttachmentTarget },
     #[serde(rename = "interaction/respond")]
@@ -352,6 +363,9 @@ pub struct Failure {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MethodResult {
+    InboundMutation {
+        outcome: crate::durable::inbox::PendingMutationOutcome,
+    },
     ArtifactBytes {
         data: String,
     },

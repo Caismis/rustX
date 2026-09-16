@@ -2733,7 +2733,6 @@ impl RuntimeInner {
                 // the new attempt sees the already-canonical unanswered turn
                 // in its context anyway, so the one-shot permission is
                 // consumed here rather than starting a second attempt later.
-                state.recovered_continuation = false;
                 batch
             }
             Ok(None) => {
@@ -2799,10 +2798,9 @@ impl RuntimeInner {
         };
         // Prepare the canonical transition **before** the durable adoption
         // commit: validate every fallible in-memory condition now, so the
-        // post-commit installation is infallible (Finding 2). The prepared
-        // values bind each exact drained message. On a validation failure
+        // post-commit installation is infallible (Finding 2). These checks
+        // validate stable identities; committed receipts supply the content. On a validation failure
         // nothing is durably adopted and the items remain pending.
-        let mut prepared_commits = Vec::with_capacity(batch.items().len());
         {
             let conversation = state
                 .conversation
@@ -2811,7 +2809,7 @@ impl RuntimeInner {
             for item in batch.items() {
                 let block = crate::durable::inbox::canonical_block(item.message());
                 match conversation.prepare_commit(&block) {
-                    Ok(prepared) => prepared_commits.push(prepared),
+                    Ok(_) => {}
                     Err(error) => {
                         // A semantic contract failure (the durable pending
                         // item conflicts with canonical memory), not a
@@ -2829,36 +2827,41 @@ impl RuntimeInner {
                 }
             }
         }
-        let fresh = match FreshInboundTurn::new(
-            prepared_commits
-                .iter()
-                .map(|commit| commit.message_id().clone())
-                .collect(),
-        ) {
-            Ok(fresh) => fresh,
+        let adopted = match self.mailbox.adopt_pending_batch(&batch, None) {
+            Ok(adopted) => adopted,
             Err(error) => {
                 self.record_durability_failure(
                     &mut state,
-                    DurableOperation::PrepareAdoption,
-                    format!("a selected inbound batch cannot form a fresh inbound turn: {error}"),
+                    DurableOperation::AdoptPendingBatch,
+                    error.to_string(),
                 );
                 return;
             }
         };
-        // Canonical adoption: the durable ledger append and the pending
-        // removal commit in one transaction. On failure the selected items
-        // remain durably pending and the failure is surfaced, never swallowed.
-        // No attempt exists yet at the admission boundary: the obligation this
-        // adoption opens is owned by the conversation until the attempt this
-        // cycle admits starts its first model request.
-        if let Err(error) = self.mailbox.adopt_pending_batch(&batch, None) {
-            self.record_durability_failure(
-                &mut state,
-                DurableOperation::AdoptPendingBatch,
-                error.to_string(),
-            );
+        if adopted.is_empty() {
+            Self::complete_admission_cycle(&mut state);
+            self.mailbox.wake().notify_one();
             return;
         }
+        state.recovered_continuation = false;
+        // Mutation preserves identity. Every committed row is a subset of the
+        // prevalidated identities; only the committed receipt supplies content.
+        let conversation = state.conversation.as_ref().expect("idle conversation");
+        let prepared_commits: Vec<_> = adopted
+            .iter()
+            .map(|item| {
+                conversation
+                    .prepare_commit(&crate::durable::inbox::canonical_block(item.message()))
+                    .expect("adopted identity was validated under exclusive ownership")
+            })
+            .collect();
+        let fresh = FreshInboundTurn::new(
+            adopted
+                .iter()
+                .map(|item| item.message().id.clone())
+                .collect(),
+        )
+        .expect("nonempty ordered committed identities");
         // Durable adoption completes this finite admission cycle. The next
         // cycle starts with a fresh select/adopt retry allowance.
         Self::complete_admission_cycle(&mut state);
@@ -2870,7 +2873,7 @@ impl RuntimeInner {
             .conversation
             .take()
             .expect("the coordinator owns the conversation state while idle");
-        for (prepared, item) in prepared_commits.into_iter().zip(batch.items()) {
+        for (prepared, item) in prepared_commits.into_iter().zip(&adopted) {
             // Infallible: every adopted identity was validated by
             // `prepare_commit` above under exclusive ownership.
             let block = prepared.message().clone();
@@ -6166,6 +6169,10 @@ impl InboundObserver for RuntimeObserver {
         self.push(ConversationObservation::InboundEnqueued(item.clone()));
     }
 
+    fn on_pending_changed(&self, items: Vec<InboundItem>) {
+        self.push(ConversationObservation::PendingInboundChanged(items));
+    }
+
     fn on_drained(&self, batch: &InboundBatch) {
         self.push(ConversationObservation::InboundDrained(batch.clone()));
     }
@@ -6513,14 +6520,7 @@ mod tests {
         accepted: &crate::durable::inbox::AcceptedInbound,
     ) {
         store
-            .adopt_pending_batch(
-                accepted.sequence,
-                crate::durable::inbox::inbound_adoption_event(
-                    store.conversation_id(),
-                    None,
-                    vec![accepted.message_id.clone()],
-                ),
-            )
+            .adopt_pending_batch(accepted.sequence, None)
             .expect("adopt");
     }
 
@@ -13575,6 +13575,56 @@ mod tests {
         admission_gate.release();
     }
 
+    // Shared native child invariant for ordinary Subagents and Workflow Agents.
+    // Parent admission is held solely to keep the fixture occurrence pending.
+    fn assert_pending_mutation_preserves_child(
+        runtime: &ConversationRuntime,
+        subagents: &crate::runtime::subagent::SubagentRegistry,
+        child_id: &crate::runtime::identity::SubagentId,
+    ) {
+        let _admission = runtime.inner.state.lock().expect("coordinator");
+        let before = subagents.snapshot(child_id).unwrap();
+        let item = runtime
+            .tool_runtime()
+            .durable_store()
+            .accept_inbound(crate::durable::InboundDraft {
+                message_id: None,
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                content: vec![crate::message::types::UserContentBlock::Text(TextBlock {
+                    text: "pending user control".into(),
+                })],
+                timestamp: chrono::Utc::now(),
+                correlation: None,
+            })
+            .unwrap();
+        let expected = crate::durable::inbox::PendingInboundRef {
+            sequence: item.sequence,
+            message_id: item.message_id,
+            revision: 0,
+        };
+        assert_eq!(
+            runtime
+                .tool_runtime()
+                .mailbox()
+                .edit_pending(&expected, "edited pending")
+                .unwrap(),
+            crate::durable::inbox::PendingMutationOutcome::Applied
+        );
+        assert_eq!(
+            runtime
+                .tool_runtime()
+                .mailbox()
+                .remove_pending(&crate::durable::inbox::PendingInboundRef {
+                    revision: 1,
+                    ..expected
+                })
+                .unwrap(),
+            crate::durable::inbox::PendingMutationOutcome::Applied
+        );
+        assert_eq!(subagents.snapshot(child_id).unwrap(), before);
+    }
+
     /// Ownership-first for subagents (Issue #60): a child whose ownership
     /// committed while the runtime was healthy survives a later
     /// `DurabilityFailed` commit — it is not retroactively reclaimed, and
@@ -13640,6 +13690,8 @@ mod tests {
             runtime.idle_epoch().is_err(),
             "an owned Subagent prevents idle residency even without a parent attempt"
         );
+
+        assert_pending_mutation_preserves_child(&runtime, &subagents, &accepted.subagent_id);
 
         // The runtime then commits DurabilityFailed; the already-owned
         // child is not retroactively reclaimed.
@@ -16988,6 +17040,8 @@ mod tests {
                 .expect("delegate frame"),
             Some(crate::runtime::subagent::ipc::ParentFrame::Delegate(_))
         ));
+
+        assert_pending_mutation_preserves_child(&runtime, &subagents, &accepted.subagent_id);
 
         let (done_tx, mut done_rx) = tokio::sync::oneshot::channel();
         let shutdown_runtime = runtime.clone();

@@ -116,7 +116,7 @@ function representative(): RuntimeClientSnapshot {
     inbound: {
       pending: [
         {
-          sequence: "7",
+          revision: "0", sequence: "7",
           message: {
             id: "m5",
             content: [{ type: "text", text: "queued" }],

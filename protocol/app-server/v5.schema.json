@@ -1204,6 +1204,68 @@
           "properties": {
             "method": {
               "type": "string",
+              "const": "inbound/edit"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "expected": {
+                  "$ref": "#/$defs/PendingInboundRef"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "expected",
+                "text"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "inbound/remove"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "expected": {
+                  "$ref": "#/$defs/PendingInboundRef"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "expected"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
               "const": "turn/cancel"
             },
             "params": {
@@ -1994,6 +2056,36 @@
         }
       ]
     },
+    "PendingInboundRef": {
+      "description": "Exact durable pending occurrence and compare-and-set revision.",
+      "type": "object",
+      "properties": {
+        "sequence": {
+          "description": "Durable sequence; never reused.",
+          "$ref": "#/$defs/InboundSequence"
+        },
+        "message_id": {
+          "description": "Canonical identity assigned at acceptance.",
+          "$ref": "#/$defs/MessageId"
+        },
+        "revision": {
+          "description": "Expected native content revision.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "sequence",
+        "message_id",
+        "revision"
+      ]
+    },
+    "InboundSequence": {
+      "description": "A conversation-scoped inbound sequence number.\n\nThe sequence identifies one item of the conversation's inbound ordering\ndomain. It is **not**\n[`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`\nand is never allocated from the Event Journal sequence; the durable\nPending Inbound Inbox owns allocation, and the first successful\nacceptance of a conversation receives `1`.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+    },
     "InteractionRef": {
       "description": "The root-facing address of a conversation-local interaction.\n\n`InteractionId` is allocated inside one conversation/attempt domain and is\nintentionally not globally unique. The pair is the only identity that\ncrosses a Runtime Client or parent/child routing boundary.",
       "type": "object",
@@ -2653,6 +2745,23 @@
     },
     "MethodResult": {
       "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "$ref": "#/$defs/PendingMutationOutcome"
+            },
+            "type": {
+              "type": "string",
+              "const": "inbound_mutation"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "outcome"
+          ]
+        },
         {
           "type": "object",
           "properties": {
@@ -3351,6 +3460,81 @@
             "resource_revision",
             "capability_revision"
           ]
+        }
+      ]
+    },
+    "PendingMutationOutcome": {
+      "description": "Typed pending mutation disposition; uncertainty requires authoritative reread.",
+      "oneOf": [
+        {
+          "description": "Storage acknowledgement or post-commit readback failed; never replay.",
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "durability_uncertain"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "The transition committed; clients reread authority.",
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "applied"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "This occurrence was removed or adopted.",
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "not_pending"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "Another mutation replaced the expected version.",
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "conflict"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "Content or provenance cannot be edited by this user control.",
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "invalid_item"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "additionalProperties": false
         }
       ]
     },
@@ -10849,6 +11033,11 @@
       "description": "One pending inbound item of the diagnostics view.",
       "type": "object",
       "properties": {
+        "revision": {
+          "description": "Native compare-and-set revision.",
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
         "sequence": {
           "description": "The mailbox-assigned inbound sequence.",
           "$ref": "#/$defs/InboundSequence"
@@ -10860,14 +11049,10 @@
       },
       "additionalProperties": false,
       "required": [
+        "revision",
         "sequence",
         "message"
       ]
-    },
-    "InboundSequence": {
-      "description": "A conversation-scoped inbound sequence number.\n\nThe sequence identifies one item of the conversation's inbound ordering\ndomain. It is **not**\n[`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`\nand is never allocated from the Event Journal sequence; the durable\nPending Inbound Inbox owns allocation, and the first successful\nacceptance of a conversation receives `1`.",
-      "type": "string",
-      "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
     },
     "InboundDrainView": {
       "description": "The latest observed finite drain boundary.",
@@ -14247,7 +14432,28 @@
           ]
         },
         {
-          "description": "An inbound message was enqueued into the conversation mailbox.\n\nHuman and runtime-originated producers share the one inbound\nordering domain; the event carries the authoritative mailbox\nsequence and the canonical message.",
+          "description": "An inbound message was enqueued into the conversation mailbox.\n\nHuman and runtime-originated producers share the one inbound\nordering domain; the event carries the authoritative mailbox\nsequence and the canonical message.\nPending authority changed; reread the snapshot and transcript.",
+          "type": "object",
+          "properties": {
+            "pending": {
+              "description": "Complete committed pending projection, in durable sequence order.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/InboundItemView"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "pending_inbound_changed"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "pending"
+          ]
+        },
+        {
           "type": "object",
           "properties": {
             "sequence": {

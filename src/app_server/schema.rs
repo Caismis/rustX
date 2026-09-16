@@ -185,6 +185,23 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             surface_revision: crate::conversation::surface::SurfaceRevision::new(EXACT),
             boundary: None,
         },
+        Method::InboundEdit {
+            target: target.clone(),
+            expected: crate::durable::inbox::PendingInboundRef {
+                sequence: crate::runtime::inbound::InboundSequence::new(EXACT),
+                message_id: crate::runtime::identity::MessageId::new("message-fixture"),
+                revision: EXACT,
+            },
+            text: "edited pending input".into(),
+        },
+        Method::InboundRemove {
+            target: target.clone(),
+            expected: crate::durable::inbox::PendingInboundRef {
+                sequence: crate::runtime::inbound::InboundSequence::new(EXACT),
+                message_id: crate::runtime::identity::MessageId::new("message-fixture"),
+                revision: EXACT,
+            },
+        },
         Method::Goal {
             target: target.clone(),
             control: crate::goal::GoalControl::Mutate {
@@ -203,6 +220,9 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         })));
     }
     for result in [
+        MethodResult::InboundMutation {
+            outcome: crate::durable::inbox::PendingMutationOutcome::Conflict,
+        },
         MethodResult::SettingsReplaced { revision: EXACT },
         MethodResult::ResourcesReloaded {
             resource_revision: EXACT,
@@ -454,7 +474,7 @@ mod tests {
     fn committed_rust_artifacts_are_current() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server");
         assert_eq!(
-            std::fs::read_to_string(root.join("v4.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v5.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

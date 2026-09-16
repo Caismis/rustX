@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { GoalSnapshot, RuntimeClientSnapshot, TodoTask } from '../../protocol/app-server/v4';
+import type { GoalSnapshot, RuntimeClientSnapshot, TodoTask } from '../../protocol/app-server/v5';
 import { App } from '../src/app/App';
 import { ComposerContextStack } from '../src/app/composer/ComposerContextStack';
 import { GoalDock } from '../src/app/composer/GoalDock';
@@ -21,7 +21,7 @@ const withTodos = (tasks: TodoTask[] | undefined, base = snapshot()): RuntimeCli
 const withGoal = (current: GoalSnapshot | null, armed = true, base = snapshot()): RuntimeClientSnapshot => ({ ...base, goal: { current, armed } });
 const running = (base = snapshot()): RuntimeClientSnapshot => ({ ...base, attempt: { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1 } });
 const inbound = (sequence: string, text: string, message: { id?: string; source?: 'human' | 'runtime'; kind?: { goal_continuation: { id: string; revision: string } } } = {}) =>
-  ({ sequence, message: { id: `message-${sequence}`, source: 'human' as const, content: [{ type: 'text' as const, text }], ...message } });
+  ({ revision: "0", sequence, message: { id: `message-${sequence}`, source: 'human' as const, content: [{ type: 'text' as const, text }], ...message } });
 const withQueue = (rows: ReturnType<typeof inbound>[], base = snapshot()): RuntimeClientSnapshot => ({ ...base, inbound: { pending: rows } });
 /** Historical execution facts only: a `todo` call and its committed result. */
 const withTodoHistory = (base = snapshot()): RuntimeClientSnapshot => {
@@ -356,11 +356,11 @@ describe('Queue dock binds the native inbound mailbox', () => {
     const rows = within(dock('Queue')).getAllByRole('listitem');
     expect(rows.map(row => row.getAttribute('data-inbound-sequence'))).toEqual(['7', '8']);
     expect(rows[1].textContent).toContain('Goal continuation');
-    // Basic dock only: no edit, remove or per-row steer (WEB-06).
-    expect(within(dock('Queue')).getAllByRole('button')).toHaveLength(1);
+    // Only human authoritative rows expose native Edit/Remove; no per-row Steer.
+    expect(within(dock('Queue')).getAllByRole('button')).toHaveLength(3);
     expect(Object.getOwnPropertyNames(AppServerClient.prototype).filter(name => /queue|inbox/i.test(name))).toEqual([]);
     await update(running(withQueue([inbound('8', 'Continue')])));
-    expect(within(dock('Queue')).queryByRole('button')).toBeNull();
+    expect(within(dock('Queue')).queryByRole('button', { expanded: false })).toBeNull();
     expect(dock('Queue').textContent).toContain('#8');
     await update(running());
     expect(region('Queue')).toBeNull();
@@ -396,7 +396,7 @@ describe('Queue dock binds the native inbound mailbox', () => {
     const turn = await server.waitFor('turn/start', 1);
     expect(screen.getByRole('button', { name: 'Awaiting acknowledgement…' })).toBeTruthy();
     // No count header: the in-flight request is not counted as queued.
-    expect(within(dock('Queue')).queryByRole('button')).toBeNull();
+    expect(within(dock('Queue')).queryByRole('button', { expanded: false })).toBeNull();
     expect(dock('Queue').querySelectorAll('li')).toHaveLength(1);
     expect(dock('Queue').querySelector('[data-submission-echo]')).toBeNull();
     expect(dock('Queue').textContent).not.toContain('Queued draft');
@@ -510,5 +510,61 @@ describe('Composer context stack lifecycle', () => {
       expect(source).not.toMatch(/position:\s*(fixed|sticky)/);
     }
     expect(composer('ComposerContextStack.module.css')).toContain('--dsh-composer-dock-inset: 8px;');
+  });
+});
+
+describe('exact pending QueueDock mutations', () => {
+  const row = () => inbound('7', 'before');
+  it('edits an authoritative occurrence with its original revision and waits for readback', async () => {
+    let finish!: (value: import('../src/client/app-server').InboundControlOutcome) => void;
+    const edit = vi.fn(() => new Promise<import('../src/client/app-server').InboundControlOutcome>(resolve => { finish = resolve; }));
+    const ui = render(<QueueDock rows={[row()]} submissions={[]} running edit={edit} remove={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Edit queued message' }), { target: { value: 'after' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(edit).toHaveBeenCalledWith({ sequence: '7', message_id: 'message-7', revision: '0' }, 'after');
+    expect(screen.getByRole('button', { name: 'Remove' })).toHaveProperty('disabled', true);
+    await act(async () => finish({ status: 'known', outcome: { status: 'applied' }, observed: false }));
+    expect(screen.getByText('before')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
+    ui.rerender(<QueueDock rows={[{ ...row(), revision: '1', message: { ...row().message, content: [{ type: 'text', text: 'after' }] } }]} observation={snapshot()} submissions={[]} running edit={edit} remove={vi.fn()} />);
+    expect(screen.getByText('after')).toBeTruthy();
+    expect(edit).toHaveBeenCalledTimes(1);
+  });
+  it('preserves stale drafts and requires deliberate reconciliation', async () => {
+    const edit = vi.fn(async () => ({ status: 'known' as const, outcome: { status: 'conflict' as const }, observed: true }));
+    const ui = render(<QueueDock rows={[row()]} submissions={[]} running edit={edit} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Edit queued message' }), { target: { value: 'my draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await screen.findByText(/This item changed/);
+    ui.rerender(<QueueDock rows={[{ ...row(), revision: '1' }]} submissions={[]} running edit={edit} />);
+    expect(screen.getByRole('textbox')).toHaveProperty('value', 'my draft');
+    expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
+    fireEvent.click(screen.getByRole('button', { name: 'Use current revision' }));
+    expect(edit).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', false);
+    ui.rerender(<QueueDock rows={[]} submissions={[]} running edit={edit} />);
+    expect(screen.getByRole('textbox')).toHaveProperty('value', 'my draft');
+    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
+  });
+  it('keeps an uncertain remove locked without inventing or replaying a snapshot', async () => {
+    const remove = vi.fn(async () => ({ status: 'uncertain' as const }));
+    const ui = render(<QueueDock rows={[row()]} submissions={[]} running remove={remove} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    await screen.findByText(/Outcome uncertain/);
+    expect(screen.getByText('before')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Remove' })).toHaveProperty('disabled', true);
+    ui.rerender(<QueueDock rows={[]} observation={snapshot()} submissions={[]} running remove={remove} />);
+    expect(screen.queryByText('before')).toBeNull();
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
+  it('omits provisional controls and disables unsafe typed-content editing', () => {
+    const mixed = { ...row(), message: { ...row().message, content: [{ type: 'text' as const, text: 'one' }, { type: 'uploaded_file' as const, batch_id: 'owned-batch', name: 'report.pdf' }] } };
+    const ui = render(<QueueDock rows={[]} submissions={[{ messageId: 'echo', content: [{ type: 'text', text: 'provisional' }] }]} running edit={vi.fn()} remove={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    ui.rerender(<QueueDock rows={[mixed]} submissions={[]} running edit={vi.fn()} remove={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Edit' })).toHaveProperty('disabled', true);
+    expect(screen.getByRole('button', { name: 'Remove' })).toHaveProperty('disabled', false);
   });
 });

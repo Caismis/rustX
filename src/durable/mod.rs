@@ -49,14 +49,18 @@
 //! the same observable contract. The abstraction level is deliberately the
 //! rustX domain transitions — never a generic repository/queue/CRUD frame.
 //!
-//! # Two linearization points
+//! # Pending inbound linearization points
 //!
 //! 1. **Acceptance**: [`ConversationStore::accept_inbound`] commits the sequence
 //!    allocation, the pending record, and any correlation/idempotency state
 //!    in one transaction. Success is reported only after that commit.
 //! 2. **Adoption**: [`ConversationStore::adopt_pending_batch`] atomically
-//!    appends the selected pending messages to the durable canonical Message
-//!    Ledger, advances the Surface/checkpoint, and removes pending records.
+//!    reads current rows through the watermark, appends them to the canonical
+//!    Ledger/Surface, constructs their exact answer obligation, and removes
+//!    pending records. Its committed receipt is the only post-claim payload.
+//! 3. **Mutation**: exact pending edit/remove compare occurrence and revision
+//!    inside a durable transaction ordered against adoption. Removal also
+//!    retires the pending transcript reference; canonical history is immutable.
 //!
 //! The publication plane adds its own three (Issue #108): the provider outcome
 //! **P**, the publication terminal **U**
