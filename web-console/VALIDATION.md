@@ -671,10 +671,13 @@ consumed, so no unexpected continuation round was admitted.
 
 ### Commands (Linux, rebased feature worktree)
 
-Every row below is a rebased-head run. The Rust rows are new for this slice: #320
-brought substantial Rust, runtime and protocol change into the base, so the contract
-and boundary suites were run here rather than deferred to CI on the grounds that
-this slice's own diff is Web-only.
+Every row below is a rebased-head run. The Rust rows are not optional for this
+slice: #320 brought substantial Rust, runtime and protocol change into the base,
+and this branch now carries a Rust change of its own — the managed MCP handshake
+fix recorded in
+[pr-321-mcp-handshake-flake.md](../docs/pr-321-mcp-handshake-flake.md). The
+`--lib` count below includes that fix's new regression test, so it is one higher
+than the pre-fix figure quoted in the contention note above.
 
 | Directory | Exact command | Result |
 | --- | --- | --- |
@@ -682,7 +685,7 @@ this slice's own diff is Web-only.
 | root | `git diff --check` | Passed |
 | root | `cargo clippy --all-targets --all-features -- -D warnings` | Passed |
 | root | `cargo build --bins` | Passed |
-| root | `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 2,849 passed; 0 failed; 1 ignored; 226 boundary tests filtered out |
+| root | `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 2,850 passed; 0 failed; 1 ignored; 226 boundary tests filtered out |
 | root | `cargo test --test contracts --test provider --all-features` | 25 contracts + 166 provider passed; five opt-in live-provider tests ignored |
 | root | `cargo test --lib --all-features -- boundary_suites::` | 226 passed, 0 failed |
 | root | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance` | 401 passed, 0 failed: durable 116, process 52, subagent 53, tools 157, conformance 23 |
@@ -741,6 +744,9 @@ including the two `retained_dependencies` records in `source-inventory.json`, wh
 builds. No v3/v4 or old/new upload compatibility path exists.
 
 Because #320 carries substantial Rust, runtime and protocol change, the full Rust
-contract and boundary suites were run locally on the rebased head rather than skipped
-on the grounds that this slice's own diff is Web-only: the diff is, but its base is
-not.
+contract and boundary suites were run locally on the rebased head rather than
+skipped. That proved necessary: CI's macOS lane then exposed a real handshake
+defect on the managed MCP path, so this branch also carries a Rust fix and its
+diff is no longer Web-only. The defect, its root cause in rmcp's `Auto`
+lifecycle, the fix and its residual risk are recorded in
+[pr-321-mcp-handshake-flake.md](../docs/pr-321-mcp-handshake-flake.md).

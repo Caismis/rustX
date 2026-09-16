@@ -25,6 +25,13 @@
 //! - a peer that silently ignores the probe hits rmcp's bounded discover
 //!   timeout and takes the same legacy fallback.
 //!
+//! That negotiation exists for peers whose revision rustX does not know. A
+//! rustX-materialized managed Python package is pinned to a `FastMCP` build
+//! that always speaks the inline lifecycle, so it is offered
+//! [`rmcp::ClientLifecycleMode::Discover`] instead: exactly one handshake
+//! request and no probe deadline, so a slow cold start can never produce a
+//! late-probe/fallback request-id collision. See `handshake_lifecycle`.
+//!
 //! # Stdio protocol corruption
 //!
 //! Stdout of a stdio server is protocol-owned; stderr is the diagnostics
@@ -180,6 +187,58 @@ fn legacy_handshake_version() -> ProtocolVersion {
         .into_iter()
         .find(|version| !uses_inline_lifecycle(version))
         .unwrap_or(ProtocolVersion::LATEST)
+}
+
+/// The handshake lifecycle rustX offers one server.
+///
+/// # Why managed servers do not use `Auto`
+///
+/// `Auto` probes `server/discover` and, when the peer does not answer inside
+/// rmcp's bounded ten-second probe window, falls back to `initialize` **on the
+/// same transport without draining the abandoned probe**
+/// (`serve_client_with_ct_inner`, rmcp 3.2.0 through 3.4.0). A probe response
+/// that arrives after the window therefore carries the abandoned request id
+/// while the client is awaiting the fallback's id, and rmcp's
+/// `expect_response` treats that mismatch as fatal
+/// (`ConflictInitResponseId`) instead of discarding a stale response:
+///
+/// ```text
+/// server/discover (id 0)   -> (peer still starting)
+/// probe window elapses     -> fall back on the same transport
+/// initialize      (id 1)   -> awaiting id 1
+///                          <- late response for id 0
+///                          => ConflictInitResponseId { expected: 1, got: 0 }
+/// ```
+///
+/// Any server whose cold start can exceed the probe window is exposed to
+/// that race, and it surfaces only as an intermittent connection failure.
+///
+/// rustX materializes managed Python packages itself against the pinned
+/// [`MANAGED_FASTMCP_VERSION`](crate::tools::python::MANAGED_FASTMCP_VERSION),
+/// which always speaks the inline lifecycle, so those servers never need the
+/// legacy fallback at all. Offering `Discover` sends exactly one handshake
+/// request and imposes no probe deadline, which makes the collision
+/// structurally impossible rather than merely rarer. The
+/// [`MANAGED_MCP_NAMESPACE`](crate::tools::python::MANAGED_MCP_NAMESPACE) is
+/// reserved by the session configuration parser, so only a rustX-materialized
+/// package can ever present such an id.
+///
+/// Externally configured servers keep `Auto`: their revision is genuinely
+/// unknown, and the legacy fallback is exactly the point.
+fn handshake_lifecycle(server_id: &McpServerId) -> rmcp::ClientLifecycleMode {
+    if server_id
+        .as_str()
+        .starts_with(crate::tools::python::MANAGED_MCP_NAMESPACE)
+    {
+        rmcp::ClientLifecycleMode::Discover {
+            preferred_versions: supported_protocol_versions(),
+        }
+    } else {
+        rmcp::ClientLifecycleMode::Auto {
+            preferred_versions: supported_protocol_versions(),
+            legacy_version: Some(legacy_handshake_version()),
+        }
+    }
 }
 
 /// The one shared `tools/list_changed` invalidation synchronization boundary
@@ -2527,7 +2586,7 @@ impl McpServerRuntime {
                     () = cancellation.cancelled() => Err(McpError::Discovery(
                         "MCP connection cancelled during the handshake".to_owned(),
                     )),
-                    started = start_client_service(handler.clone(), transport) => started,
+                    started = start_client_service(handler.clone(), transport, handshake_lifecycle(server_id)) => started,
                 };
                 let service = match started {
                     Ok(service) => {
@@ -2615,7 +2674,7 @@ impl McpServerRuntime {
                     () = cancellation.cancelled() => Err(McpError::Discovery(
                         "MCP connection cancelled during the handshake".to_owned(),
                     )),
-                    started = start_client_service(handler.clone(), transport) => started,
+                    started = start_client_service(handler.clone(), transport, handshake_lifecycle(server_id)) => started,
                 }?;
                 (service, None)
             }
@@ -6352,26 +6411,21 @@ fn protocol_violation_call_diagnostic(server_id: &McpServerId, violation: &str) 
 async fn start_client_service<T, E, A>(
     handler: McpClientHandler,
     transport: T,
+    // Chosen per server by `handshake_lifecycle`: `Auto` runs the real
+    // negotiation for an unknown peer (probing the inline `server/discover`
+    // lifecycle, walking the offered revisions down on
+    // `UNSUPPORTED_PROTOCOL_VERSION`, and falling back to the legacy
+    // `initialize` handshake when the peer proves it is pre-2026), while a
+    // rustX-materialized managed package uses `Discover` and never issues a
+    // second, collidable handshake request.
+    lifecycle: rmcp::ClientLifecycleMode,
 ) -> Result<RunningService<RoleClient, McpClientHandler>, McpError>
 where
     T: rmcp::transport::IntoTransport<RoleClient, E, A>,
     E: std::error::Error + Send + Sync + 'static,
 {
     let service = handler
-        .serve_with_lifecycle(
-            transport,
-            // `Auto` runs the real negotiation: it probes the inline
-            // `server/discover` lifecycle, walks the offered revisions down
-            // whenever the peer answers `UNSUPPORTED_PROTOCOL_VERSION`, and
-            // falls back to the legacy `initialize` handshake when the peer
-            // proves it is pre-2026 — a correlated non-modern JSON-RPC
-            // error (`METHOD_NOT_FOUND`, `INVALID_REQUEST`, session
-            // middleware rejections, …) or a bounded probe timeout.
-            rmcp::ClientLifecycleMode::Auto {
-                preferred_versions: supported_protocol_versions(),
-                legacy_version: Some(legacy_handshake_version()),
-            },
-        )
+        .serve_with_lifecycle(transport, lifecycle)
         .await
         .map_err(|error| match error {
             rmcp::service::ClientInitializeError::NoCompatibleProtocolVersion {
@@ -7460,14 +7514,67 @@ mod tests {
     use rmcp::model::{CallToolResult, ContentBlock};
 
     use super::{
-        McpServerId, RemoteCancellation, mcp_empty_terminal, mcp_tool_id,
-        post_dispatch_cancellation_status, translate_result,
+        McpServerId, RemoteCancellation, handshake_lifecycle, legacy_handshake_version,
+        mcp_empty_terminal, mcp_tool_id, post_dispatch_cancellation_status,
+        supported_protocol_versions, translate_result,
     };
     use crate::runtime::identity::{ConversationId, ToolExecutionId};
     use crate::runtime::types::CancellationReason;
     use crate::runtime::{CancellationSignal, ExecutionCancellation};
     use crate::tools::executor::{ProgressReporter, ToolExecutionContext};
     use crate::tools::types::{ManagedOutputContinuation, ToolExecutionStatus, ToolResultContent};
+
+    /// **The handshake request-id collision regression.** `Auto` falls back
+    /// to `initialize` on the same transport without draining the abandoned
+    /// `server/discover` probe, so a peer that answers the probe after rmcp's
+    /// bounded window collides that late id with the fallback's id and fails
+    /// an otherwise healthy connection:
+    ///
+    /// ```text
+    /// server/discover (id 0) -> (peer still starting)
+    /// probe window elapses   -> initialize (id 1) on the same transport
+    ///                        <- late response for id 0
+    ///                        => ConflictInitResponseId { expected: 1, got: 0 }
+    /// ```
+    ///
+    /// A rustX-materialized managed package is pinned to an inline-lifecycle
+    /// `FastMCP`, so it is offered `Discover`: exactly one handshake request,
+    /// no probe deadline, and therefore no second id to collide with. Every
+    /// other peer keeps the real negotiation, because its revision is
+    /// genuinely unknown and the legacy fallback is the point.
+    #[test]
+    fn a_managed_package_is_offered_discover_while_unknown_peers_keep_auto() {
+        // The synthesized id proves `python_server_id` lands in the namespace;
+        // the literal proves the rule is the namespace itself, not one folder.
+        let synthesized = crate::tools::python::python_server_id("tasks-tool");
+        for managed in [synthesized.as_str(), "python:anything"] {
+            assert_eq!(
+                handshake_lifecycle(&McpServerId::new(managed)),
+                rmcp::ClientLifecycleMode::Discover {
+                    preferred_versions: supported_protocol_versions(),
+                },
+                "{managed}: a managed package must issue exactly one handshake request"
+            );
+        }
+
+        // Only the reserved `python:` namespace is managed; near-misses are
+        // ordinary configured servers and keep the negotiation.
+        for external in [
+            "vendor-server",
+            "python",
+            "pythonish",
+            "not-python:tasks-tool",
+        ] {
+            assert_eq!(
+                handshake_lifecycle(&McpServerId::new(external)),
+                rmcp::ClientLifecycleMode::Auto {
+                    preferred_versions: supported_protocol_versions(),
+                    legacy_version: Some(legacy_handshake_version()),
+                },
+                "{external}: an unknown peer keeps the legacy fallback"
+            );
+        }
+    }
 
     struct NoProgress;
 

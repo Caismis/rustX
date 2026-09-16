@@ -3942,7 +3942,17 @@ A package rewrite is observed only at the next quiescent re-discovery.
   `INVALID_REQUEST`, or session-middleware errors — as a legacy peer,
   falling back to the `initialize` handshake on the same connection with
   the newest pre-inline revision; a probe the peer silently ignores hits a
-  bounded timeout and takes the same fallback. rustX validates the
+  bounded timeout and takes the same fallback. **That negotiation is for
+  peers whose revision rustX does not know.** A managed MCP server — any id
+  in the reserved `python:` namespace — instead uses the explicit
+  `ClientLifecycleMode::Discover` lifecycle: rustX materialized it itself
+  against a pinned inline-lifecycle FastMCP, so its revision is already
+  known, exactly one handshake request is issued, and no probe window
+  applies. Every other peer retains `Auto` unchanged. (Choosing `Discover`
+  also removes exposure to a current rmcp probe/fallback defect; that is
+  rationale, not contract — see
+  [pr-321-mcp-handshake-flake.md](pr-321-mcp-handshake-flake.md).) rustX
+  validates the
   negotiated revision against that offered set, because the legacy
   `initialize` handshake lets a server echo any revision; a peer sharing no
   revision fails with a bounded `McpError::ProtocolCompatibility`, which
@@ -4058,8 +4068,9 @@ A package rewrite is observed only at the next quiescent re-discovery.
   reused nor mutated in place. There is no FastMCP mode, compatibility
   fallback, or dual prepared environment; ownership ends at materialization
   and launch, and the protocol revision a managed child speaks is negotiated
-  by the generic MCP runtime (FastMCP 4 answers `server/discover`, so it
-  negotiates MCP `2026-07-28`).
+  by the generic MCP runtime (FastMCP 4 answers `server/discover`, so the
+  managed namespace is offered `ClientLifecycleMode::Discover` and
+  negotiates MCP `2026-07-28` with a single handshake request).
 - **A dependency-resolution failure is package-scoped.** uv remains the
   resolution authority; rustX only attributes the failure. A package whose
   declared dependencies cannot be satisfied against the managed FastMCP
