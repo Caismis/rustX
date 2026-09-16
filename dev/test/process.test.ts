@@ -34,10 +34,10 @@ const server=createServer(); server.listen(0,'127.0.0.1',()=>console.error('rust
 process.on('SIGTERM',()=>server.close(()=>writeFileSync(${JSON.stringify(marker)},'reaped')));`);
   const pids: number[] = [];
   let scratch = '';
-  const launcher = new Launcher(root, (spec, exited) => {
+  const launcher = new Launcher(root, (spec, exited, ownerShutdown) => {
     if (spec.component === 'app-server') scratch = dirname(spec.args.at(-1)!);
     const child = spawnOwned({ ...spec, command: process.execPath,
-      args: spec.component === 'app-server' ? [native] : ['-e', 'console.error("carrier boot refused: original cause"); process.exit(37)'] }, exited, () => { void launcher.settle(0); });
+      args: spec.component === 'app-server' ? [native] : ['-e', 'console.error("carrier boot refused: original cause"); process.exit(37)'] }, exited, ownerShutdown);
     pids.push(child.pid!);
     return child;
   });

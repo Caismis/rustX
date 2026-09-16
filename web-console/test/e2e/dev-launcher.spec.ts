@@ -27,8 +27,8 @@ compat = { chat_reasoning_replay = "omit" }
 `);
   const marker = join(workspace, 'user-owned'); writeFileSync(marker, 'keep');
   const pids: number[] = [];
-  const launcher = new Launcher(root, (spec, exited) => {
-    const child = spawnOwned(spec, exited); pids.push(child.pid!); return child;
+  const launcher = new Launcher(root, (spec, exited, ownerShutdown) => {
+    const child = spawnOwned(spec, exited, ownerShutdown); pids.push(child.pid!); return child;
   });
   let scratch: string | undefined;
   try {
