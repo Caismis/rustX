@@ -233,8 +233,15 @@ The CI jobs (`.github/workflows/ci.yml`) mirror the semantic classes:
   `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::`
   and `cargo test --test contracts --test provider --all-features`.
   A `cargo build --bins` step comes first: the bash tool's unit tests exec
-  `target/debug/bash-supervisor`, and `cargo test --bins` builds the bin
-  test harnesses but does not place the executable there.
+  `target/debug/bash-supervisor` and the interactive-process unit tests exec
+  `target/debug/interactive-supervisor`, and `cargo test --bins` builds the
+  bin test harnesses but does not place either executable there.
+  `--bins` and `--examples` currently select six harnesses that each report
+  "0 passed" — no binary and no example defines a `#[test]` today. They stay
+  in the selector anyway: bin and example test harnesses are part of the
+  automatic Rust coverage boundary, and letting Cargo's own target discovery
+  pick up a future test is simpler than a standing policy that those targets
+  must remain test-free.
 - **rust-boundaries** (ubuntu) — in-crate boundary suites + external
   boundary targets + the provider emulator's pytest suite:
   `cargo build --bins` (the text_spill suite execs `bash-supervisor`),
@@ -242,14 +249,43 @@ The CI jobs (`.github/workflows/ci.yml`) mirror the semantic classes:
   `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable
   --test process --test subagent --test tools --test conformance`.
 - **rust-platform-boundaries** (macos) — only platform-sensitive classes:
-  `cargo test --lib --bins --all-features -- --skip scripted_suites::`
+  `cargo test --lib --bins --all-features -- --skip scripted_suites::
+  --skip local_runtime::session_runtime_manager::tests::`
   (unit tests — including the boundary-owning bash/uv modules, whose
   primitives differ across OSes — plus the in-crate boundary suites; the
   deterministic scripted contract majority is *not* rerun on macOS) plus
   the five external boundary targets with the emulator mandatory.
   `contracts`/`provider` are Linux-only: deterministic JSON/SSE translation
   with no process or filesystem semantics.
-- **tui** — Node/pnpm, independent of the Rust jobs.
+- **tui** — independent Node/pnpm lane with its own native rustX build for
+  real-child integration coverage. The `cargo build --bin rustx` there exists
+  only because the TUI integration tests drive the real binary over the real
+  stdio transport; the lane is not an owner of Rust semantic validation.
+
+Every Rust-bearing lane restores a `Swatinem/rust-cache@v2` lineage of its
+own before its first cargo command, named by a per-lane `shared-key`. Two
+properties keep that an optimization rather than a semantic input:
+
+- the cache holds the **dependency graph only** — workspace crates are
+  excluded, so rustX itself and all of its test code are compiled from the
+  checked-out source on every run;
+- a cold, stale, or evicted cache changes how much dependency compilation is
+  repeated and nothing else. It can never decide which tests are selected or
+  what they prove, and a completely cold runner remains a supported CI state.
+
+Sibling lanes deliberately do not share one key: GitHub cache entries are
+immutable and the lanes start concurrently, so a single shared key would let
+whichever lane finishes first freeze its own smallest `target/` as the entry
+every other lane then restores and could never correct.
+
+Cache *ownership* is separate from cache *use*: every lane may restore a
+compatible cache, but only a trusted push to `main` publishes one. Each cache
+step carries
+`save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}`,
+so pull requests — including those from forks — are consumers only. The
+reuse path is `main` cache → a later run with a compatible key, which keeps
+the repository's shared cache budget owned by one trusted publisher instead
+of every PR.
 
 ## Where does a new test belong?
 
@@ -323,7 +359,7 @@ feature suite.
 
 ```bash
 # Unit tests + in-crate deterministic contracts (CI: rust-contracts):
-cargo build --bins   # the bash tool's unit tests exec target/debug/bash-supervisor
+cargo build --bins   # unit tests exec target/debug/{bash,interactive}-supervisor
 cargo test --lib --bins --examples --all-features -- --skip boundary_suites::
 cargo test --test contracts --test provider --all-features
 
@@ -337,7 +373,9 @@ RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features \
 
 # Platform-sensitive classes on macOS (CI: rust-platform-boundaries):
 cargo build --bins
-cargo test --lib --bins --all-features -- --skip scripted_suites::
+cargo test --lib --bins --all-features -- \
+  --skip scripted_suites:: \
+  --skip local_runtime::session_runtime_manager::tests::
 # plus the five external boundary targets above.
 
 # Everything, the safety net:
