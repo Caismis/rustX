@@ -13,14 +13,21 @@ export async function forwardConfigurationCommand(command: { binary: string; arg
     // Wait for Rust's owned settlement even when the launcher is interrupted.
     const interrupt = () => { child.kill("SIGINT"); };
     const terminate = () => { child.kill("SIGTERM"); };
+    const message = (value: unknown) => {
+      if (typeof value === "object" && value !== null && "stop" in value && value.stop === true) terminate();
+    };
+    process.on("message", message);
+    process.on("disconnect", terminate);
     process.on("SIGINT", interrupt);
     process.on("SIGTERM", terminate);
     const finish = (code: number) => {
+      process.off("message", message);
+      process.off("disconnect", terminate);
       process.off("SIGINT", interrupt);
       process.off("SIGTERM", terminate);
       resolve(code);
     };
     child.once("error", () => finish(1));
-    child.once("exit", (code) => finish(code ?? 1));
+    child.once("close", (code) => finish(code ?? 1));
   });
 }

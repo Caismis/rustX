@@ -1,8 +1,9 @@
 # rustX Developer Web Console
 
 The rustX Full Web client: a Vite/React product over the native App Server.
-Start with the [Full Web dogfooding guide](DOGFOODING.md) and
-[conformance map](CONFORMANCE.md).
+Start with the canonical [local development launchers](../DEVELOPMENT.md).
+The [Full Web dogfooding guide](DOGFOODING.md) and [conformance map](CONFORMANCE.md)
+cover strict acceptance fixtures.
 **Reuse the UI; keep runtime and protocol authority in rustX.**
 
 Selected DeepSeek Harness source is checked in under `src/presentation/`, pinned to
@@ -32,29 +33,27 @@ strict TypeScript, deterministic tests and production build are the frontend che
 The separate CI job also runs the real-browser integration below. Rust-only jobs do
 not depend on Node; generated protocol and TUI checks have their own jobs.
 
-## Connect to your App Server
+## Normal local development
 
-Build the binaries from the repository root and use your canonical rustX model
-catalog/user settings (see the root README and [configuration](../docs/launch-configuration.md)):
+Use the [canonical development launcher](../DEVELOPMENT.md):
 
 ```sh
-cargo build --bins
-# Generate a dedicated socket credential, independent of provider credentials.
-python3 -c 'import os,secrets; p="/tmp/rustx-console-token"; fd=os.open(p,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600); os.write(fd,secrets.token_urlsafe(32).encode()); os.close(fd)'
-target/debug/rustx app-server \
+pnpm --dir dev web -- \
   --user-settings /absolute/path/settings.toml \
   --runtime-root /absolute/path/runtime \
-  --listen ws://127.0.0.1:8080 \
-  --token-file /tmp/rustx-console-token
+  --workspace /absolute/path/workspace
 ```
 
-Read the token file locally. Enter `ws://127.0.0.1:8080/` and that token in the
-console, then **Connect**. The client sends `initialize` protocol v5, checks native
-capabilities, lists Sessions, and attaches saved open views. Initialization failures
-and missing capabilities are visible. Configure the [Product Host Workspace adapter](WORKSPACES.md),
-choose an authorized Workspace, and create a Session, or open a listed native Session.
-The former arbitrary browser cwd field has been removed. Host authorization is
-independent of native project trust; this UI cannot grant trust.
+It owns the real App Server, ephemeral transport credential, exact-root Product
+Host configuration, and Vite carrier. Open the printed browser URL and enter the
+printed endpoint plus the contents of the private token file in **Connect**.
+The native settings resolver remains authoritative; no fake provider starts.
+Choose an authorized Workspace or open a listed native Session. The browser never
+supplies arbitrary cwd authority or grants native project trust.
+
+Direct `pnpm dev`/`preview` remain component-only commands for focused UI work or
+an independently managed runtime/Host. The [Host contract](WORKSPACES.md) describes
+that operator-owned integration. Use the launcher for complete local composition.
 
 Authentication is #36's **local/trusted, single writable controller** boundary.
 The browser sends subprotocols `rustx.app-server.v5` and `rustx-token.<token>` in its

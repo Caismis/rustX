@@ -17,7 +17,7 @@ import { FakeTransport, paramsOf, tick } from "./support/app-server-peer.ts";
 import { SERVER_CAPABILITIES } from "./support/app-server-harness.ts";
 import { snapshot, sessionView } from "./support/fixtures.ts";
 
-const parsedResume = () => parseArguments(["--binary", "rustx", "--resume", "--cwd", "/server/work"]);
+const parsedResume = () => parseArguments(["--binary", "rustx", "--resume", "--workspace", "/server/work"]);
 const rows = ["A", "B"].map((id) => ({ id, name: `Session ${id}`, cwd: "/server/work", active_node: `node-${id}`, updated_at: "2026-09-14T00:00:00Z" }));
 const diagnostics = fixtures.flatMap((f) => "result" in f && f.result?.type === "diagnostics" ? [f.result] : [])[0]!;
 
@@ -95,7 +95,7 @@ it("remote missing cwd fails at argument parsing before token reading or connect
   const result = spawnSync(process.execPath, [fileURLToPath(new URL("../src/main.ts", import.meta.url)),
     "--connect", "ws://127.0.0.1:1", "--token-file", "/nonexistent/token"], { encoding: "utf8" });
   assert.equal(result.status, 2);
-  assert.match(result.stderr, /remote Session cwd requires an explicit --cwd/);
+  assert.match(result.stderr, /remote Session cwd requires an explicit --workspace/);
   assert.doesNotMatch(result.stderr, /ENOENT|ECONNREFUSED/);
 });
 
@@ -151,7 +151,7 @@ it("a controlled A does not block browsing; its conflict occurs only on selectio
 for (const resume of [true, false]) {
   it(`${resume ? "empty-catalog resume" : "ordinary startup"} creates and attaches exactly one Session with unchanged remote cwd`, async () => {
     const { host, transport } = await connected();
-    const parsed = parseArguments(["--connect", "wss://server.test", "--token-file", "/client/token", "--cwd", "/server/work/../project", ...(resume ? ["--resume"] : [])]);
+    const parsed = parseArguments(["--connect", "wss://server.test", "--token-file", "/client/token", "--workspace", "/server/work/../project", ...(resume ? ["--resume"] : [])]);
     const starting = prepareStartup(host, parsed);
     if (resume) await catalog(transport, []);
     const [create] = await transport.log.awaitMethod("session/create");

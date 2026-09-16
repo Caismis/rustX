@@ -445,7 +445,7 @@ describe("existing/remote mode: WebSocket to an externally managed App Server", 
       const attachments: string[] = [];
       const attach = browser.attach.bind(browser);
       t.mock.method(browser, "attach", (id: string, node?: string) => { attachments.push(id); return attach(id, node); });
-      const parsed = parseArguments(["--connect", external.endpoint, "--token-file", server.fixture.path("token"), "--cwd", settings.cwd, "--resume"]);
+      const parsed = parseArguments(["--connect", external.endpoint, "--token-file", server.fixture.path("token"), "--workspace", settings.cwd, "--resume"]);
       const focus = await prepareStartup(browser, parsed);
       assert.equal(focus.session, undefined);
       assert.deepEqual(attachments, []);

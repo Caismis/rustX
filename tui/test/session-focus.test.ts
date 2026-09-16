@@ -26,6 +26,7 @@ import {
   APP_SERVER_PROTOCOL_VERSION,
   AppServerClient,
 } from "../src/app-server/client.ts";
+import type { AppServerChild, ChildExit } from "../src/app-server/child-process.ts";
 import { AppServerHost } from "../src/app-server/host.ts";
 import type { AppServerSession } from "../src/app-server/session.ts";
 import type { AttachmentTarget } from "../src/protocol/app-server.ts";
@@ -286,4 +287,27 @@ describe("process ownership", () => {
       /owned App Server host has a child process/,
     );
   });
+});
+
+
+it("concurrent owned-host shutdown callers await the same child settlement", async () => {
+  const connected = await host();
+  const calls: string[] = [];
+  let reap!: (exit: ChildExit) => void;
+  const reaped = new Promise<ChildExit>(resolve => { reap = resolve; });
+  const child = {
+    requestShutdown: () => calls.push("signal"),
+    closeStdin: () => calls.push("eof"),
+    wait: () => reaped,
+  } as unknown as AppServerChild;
+  const owned = new AppServerHost({ client: connected.host.client, ownership: "owned_child", child });
+  const first = owned.shutdown();
+  assert.equal(owned.shutdown(), first);
+  await Promise.resolve();
+  assert.deepEqual(calls, ["signal", "eof"]);
+  assert.ok(!connected.host.client.closed);
+  reap({ code: 0, signal: null });
+  assert.deepEqual(await first, { code: 0, signal: null });
+  assert.ok(connected.host.client.closed);
+  assert.equal(owned.shutdown(), first);
 });

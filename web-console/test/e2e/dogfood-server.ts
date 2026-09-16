@@ -1,3 +1,4 @@
+import { appServerEndpoint } from '../../../dev/src/app-server-readiness.ts';
 import { startWorkspaceHost } from './workspace-host.ts';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
@@ -78,7 +79,7 @@ enabled = true
     const tokenFile = join(directory, 'socket-token'); writeFileSync(tokenFile, token, { mode: 0o600 });
     app = spawn(binary, ['app-server', '--user-settings', settings, '--runtime-root', join(directory, 'runtime'), '--listen', 'ws://127.0.0.1:0', '--token-file', tokenFile], { env, stdio: ['pipe', 'pipe', 'pipe'] });
     let appErrors = ''; app.stderr!.on('data', chunk => { appErrors = (appErrors + String(chunk)).slice(-16_384); });
-    const endpoint = await readiness(app, 'stderr', line => /listening (ws:\/\/\S+)/.exec(line)?.[1]);
+    const endpoint = await readiness(app, 'stderr', appServerEndpoint);
     const control = async (path: string, method = 'GET') => {
       const response = await fetch(`${providerUrl}/__control/${path}`, { method });
       if (!response.ok) throw new Error(`Provider barrier failed: ${await response.text()}`);

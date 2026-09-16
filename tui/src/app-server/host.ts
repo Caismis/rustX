@@ -77,6 +77,8 @@ export interface SessionTransition {
 export interface LocalAppServerOptions
   extends Omit<AppServerChildOptions, "launch"> {
   launch: AppServerChildOptions["launch"];
+  /** Startup cancellation belongs to the composition root, not transport semantics. */
+  signal?: AbortSignal;
   /** How long the owned child gets to exit after the shutdown sequence. */
   terminationGraceMs?: number;
 }
@@ -101,7 +103,7 @@ export class AppServerHost {
   readonly ownership: ProcessOwnership;
   readonly #child: AppServerChild | undefined;
   readonly #sessions = new Map<string, AppServerSession>();
-  #shuttingDown = false;
+  #shutdown: Promise<ChildExit | undefined> | undefined;
 
   constructor(composition: AppServerHostComposition) {
     const { client, ownership, child } = composition;
@@ -130,7 +132,10 @@ export class AppServerHost {
    * navigation spawns another.
    */
   static async spawnLocal(options: LocalAppServerOptions): Promise<AppServerHost> {
+    options.signal?.throwIfAborted();
     const child = AppServerChild.spawn(options);
+    const abort = () => { child.requestShutdown(); child.closeStdin(); };
+    options.signal?.addEventListener("abort", abort, { once: true });
     const transport = new StdioTransport({
       input: child.stdout,
       output: child.stdin,
@@ -144,6 +149,7 @@ export class AppServerHost {
 
     try {
       const client = await AppServerClient.initialize({ transport });
+      options.signal?.throwIfAborted();
       return new AppServerHost({
         client,
         ownership: "owned_child",
@@ -153,12 +159,15 @@ export class AppServerHost {
     } catch (error) {
       // The child is ours, so a failed handshake must not leave it running.
       const stderr = child.stderrTail().text.trim();
+      child.requestShutdown();
       child.closeStdin();
       await child.waitOrTerminate(options.terminationGraceMs);
       throw new Error(
         `could not start the App Server: ${(error as Error).message}${stderr.length > 0 ? `\n${stderr}` : ""}`,
         { cause: error },
       );
+    } finally {
+      options.signal?.removeEventListener("abort", abort);
     }
   }
 
@@ -474,22 +483,21 @@ export class AppServerHost {
    * executing and pending interactions stay pending. Another client — or this
    * one, later — attaches and reads authoritative state.
    */
-  async shutdown(): Promise<ChildExit | undefined> {
-    if (this.#shuttingDown) {
-      return this.#child?.exited;
-    }
-    this.#shuttingDown = true;
-    this.#sessions.clear();
+  shutdown(): Promise<ChildExit | undefined> {
+    // Publish the shared promise before closing transports can call listeners.
+    return this.#shutdown ??= Promise.resolve().then(() => this.#settle());
+  }
 
+  async #settle(): Promise<ChildExit | undefined> {
+    this.#sessions.clear();
     if (this.ownership === "external" || this.#child === undefined) {
       await this.client.close();
       return undefined;
     }
-
     this.#child.requestShutdown();
     this.#child.closeStdin();
     const exit = await this.#child.wait();
-    this.client.close();
+    await this.client.close();
     return exit;
   }
 }

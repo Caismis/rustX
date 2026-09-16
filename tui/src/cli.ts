@@ -26,7 +26,7 @@
  *   A remote App Server was launched by someone else and already has its own;
  *   accepting them against `--connect` would be a flag that pretends to
  *   configure a server it cannot reach.
- * - **Session settings** (`--cwd`, `--config`, `--model`, `--skill`, the tool
+ * - **Session settings** (`--workspace`, `--config`, `--model`, `--skill`, the tool
  *   and Skill switches): these are `session/create` inputs. A Session's cwd is
  *   a Session selection, never the App Server's launch directory, and the two
  *   are never substituted for one another. In remote mode these paths are
@@ -48,10 +48,10 @@ export const USAGE = `usage:
               [--runtime-root <dir>] [session options] [routing options]
 
   existing / remote App Server (WebSocket):
-    rustx-tui --connect <ws://host:port> --token-file <path> --cwd <server-absolute-dir> [session options] [routing options]
+    rustx-tui --connect <ws://host:port> --token-file <path> --workspace <server-absolute-dir> [session options] [routing options]
 
   session options (applied to Sessions this launch creates; paths resolve on the App Server host):
-    [--cwd <dir>] [--config <rustx.toml>] [--model <provider/model>] [--name <text>]
+    [--workspace <dir>] [--config <rustx.toml>] [--model <provider/model>] [--name <text>]
     [--skill <path>] [--no-automatic-skills] [--no-builtin-tools] [--no-direct-tools]
     [--tools <a,b,c>] [--exclude-tools <a,b,c>]
 
@@ -105,7 +105,7 @@ const VALUE_FLAGS = [
   "--user-settings",
   "--models",
   "--runtime-root",
-  "--cwd",
+  "--workspace",
   "--config",
   "--model",
   "--name",
@@ -209,14 +209,14 @@ export function parseArguments(argv: readonly string[]): TuiArguments {
   // resolve, normalize, or default a remote path against the client machine.
   let cwd: string;
   if (mode.kind === "local") {
-    cwd = values.get("--cwd") ?? process.cwd();
+    cwd = values.get("--workspace") ?? process.cwd();
   } else {
-    const explicit = values.get("--cwd");
+    const explicit = values.get("--workspace");
     if (explicit === undefined || !(
       posix.isAbsolute(explicit) ||
       (win32.isAbsolute(explicit) && win32.parse(explicit).root.length > 1)
     )) {
-      throw new ArgumentError("remote Session cwd requires an explicit --cwd absolute path on the App Server host");
+      throw new ArgumentError("remote Session cwd requires an explicit --workspace absolute path on the App Server host");
     }
     cwd = explicit;
   }
