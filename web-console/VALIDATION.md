@@ -1056,3 +1056,102 @@ waived checks. Current CI configuration was inspected; native binaries, provider
 and Chromium installations were reused because those sources/dependencies did not
 change. Full platform CI remains GitHub-owned. Browser plugin was unavailable, so
 the repository Playwright workflow was used at `127.0.0.1:5174`.
+
+## WEB-07 / issue #310 (2026-09-16)
+
+Base: `5e5359cd0687944e0a40ee83b47be77e2d018385` (latest `origin/main` after
+fetch). Prerequisites #292/#304/#308/#309 were closed. Work used the dedicated
+`rustX-issue-310` worktree and `issue-310-workspace-manager` branch. The original
+`rustX` checkout remained clean on main. The issue and parent Epic #303, repository
+instructions, current CI, and pinned Harness sources were inspected before editing.
+See [WORKSPACES.md](WORKSPACES.md) for the concrete Host contract and source-trust
+lifetime, and [PROVENANCE.md](PROVENANCE.md) for inspected/adapted/excluded sources.
+
+### Coverage and evidence
+
+- Host filesystem/HTTP tests prove finite authorized handles, exact canonical cwd
+  grouping, metadata persistence/order/rename/unregister, disabled picker,
+  unauthorized path rejection, endpoint binding and cross-origin refusal. Host
+  metadata has no Session IDs or trust flags.
+- Component/client tests cover cold listing without attach, separate selected
+  Workspace/Session, no cancellation/unload on navigation, unknown/untrusted Settings
+  refusal, capability-gated picking, exact Host cwd creation, typed native rename
+  and exact-boundary Fork. Deferred resolution and manually delivered wire replies
+  fence late search, rename refresh, cold open and committed Fork responses. No
+  sleeps synchronize these races. Existing command races continue to pass.
+- Native tests cover bounded durable cwd projection after cold catalog reopen and
+  metadata/settings changes, unloaded residency without composition, read-only
+  trust projection, and untrusted composition/reload ignoring malformed project
+  config/resources. A later external grant cannot widen a loaded generation.
+- Playwright runs against actual rustX child processes and HTTP Product Hosts.
+  Two independent fixtures reject foreign handles/endpoints, keep registrations
+  separate and resolve identical process-local Session IDs to different durable
+  cwd values. An untrusted cold Session remains listed with zero runtimes, resumes
+  through App Server, retains native history/settings, and cannot activate project
+  instructions through reload. Host rename/order/unregister leave its native state
+  unchanged. This proves process/Host separation, not OS filesystem sandboxing.
+- Real browser checks cover grouped/flat views, collapse, narrow/wide layouts,
+  no horizontal overflow, and the existing chat/commands/composer/connection flows.
+  Desktop/mobile evidence is in the ignored `test-results/workspaces-*.png` artifacts;
+  both were visually inspected. The Browser plugin was unavailable, so the existing
+  repository Playwright workflow was used.
+
+### Commands and final results
+
+Commands run from the feature worktree unless a working directory is stated.
+
+| Command | Result |
+| --- | --- |
+| `pnpm --dir web-console install --frozen-lockfile` | Passed |
+| `pnpm --dir tui install --frozen-lockfile` | Passed |
+| `pnpm --dir protocol/app-server install --frozen-lockfile` | Passed |
+| `pnpm --dir web-console typecheck` | Passed |
+| `pnpm --dir web-console test` | 259 passed, 18 files |
+| `pnpm --dir web-console check:provenance` | 70 source records and 100 notices passed |
+| `pnpm --dir web-console build` | Passed; existing bundle-size advisory |
+| `pnpm --dir web-console test:e2e` | 9 passed |
+| `cargo fmt --all -- --check` | Passed |
+| `cargo build --bins` | Passed |
+| `cargo clippy --all-targets --all-features -- -D warnings` | Passed |
+| `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 2,861 passed, 1 existing ignored; bin/example targets passed |
+| `cargo test --test contracts --test provider --all-features` | 25 contracts + 166 provider passed; 5 opt-in live tests ignored |
+| `cargo test --lib --all-features -- boundary_suites::` | 226 passed |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance` | 127 durable + 52 process + 53 subagent + 157 tools + 23 conformance passed |
+| `uv sync --frozen --project test-support/fake-provider` | Passed |
+| `uv run --frozen pytest` (in `test-support/fake-provider`) | 51 passed |
+| `pnpm --dir protocol/app-server generate` | Generated Rust-owned schema/TypeScript |
+| `pnpm --dir protocol/app-server check` | Passed; no generated drift |
+| `pnpm --dir protocol/app-server typecheck` | Passed |
+| `pnpm --dir tui typecheck` | Passed |
+| `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm --dir tui test` | 816 passed |
+| `git diff --check` | Passed |
+
+During implementation, old native tests expecting all untrusted cwd admission to
+fail were updated to assert inactive project sources instead. TUI fixtures needed
+the newly required summary fields; an initial fixture-invalid TUI run was stopped
+and rerun successfully after the typed fixtures were updated. Browser deletion
+coverage was updated for the new native Session action menu. One external-boundary
+run exposed an existing extension-reload history test's incomplete-publication
+race (`ext256_reload_cannot_recompose_extensions_but_the_next_launch_does`); the
+complete external lane passed on repeat without changing that unrelated test.
+No required Linux check was waived. The macOS CI lane cannot run on this Linux host
+and remains GitHub CI coverage.
+
+### Architectural audit
+
+1. Removing a Workspace registration leaves its Sessions untouched: **yes**.
+2. Authorized but untrusted cwd is usable with project sources inactive: **yes**.
+3. Workspace navigation can mutate project trust: **no**.
+4. Typing a path in the browser can authorize it: **no**; the old cwd form and
+   alternate `/new` creation path were removed/replaced.
+5. Cold Sessions can be grouped without starting runtimes: **yes**.
+6. Switching Workspace/Session cancels or unloads unrelated work: **no**.
+7. There is one authoritative durable Session cwd: **yes**, `SessionPersistentState`.
+8. Workspace authorization belongs outside App Server: **yes**, Node Product Host.
+9. Host metadata and native project trust are separate facts: **yes**.
+10. Stale async search/navigation can reopen an obsolete Session: **no**.
+
+The adapter deliberately supports an operator-configured finite root set, exact
+canonical root grouping and one writer per metadata file. It is a local/trusted
+adapter, without OS directory browsing, remote authentication or a filesystem
+sandbox. These boundaries are explicit in the Host contract and deployment docs.
