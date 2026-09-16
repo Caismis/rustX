@@ -19,12 +19,14 @@ it('Host metadata groups exact native cwd without owning Session state; unregist
   const sessions = Object.freeze([{ id: 'cold', cwd: a }, { id: 'other', cwd: b }]);
   const before = JSON.stringify(sessions);
   symlinkSync(a, join(directory, 'alias'));
-  expect(await host.groupSessions([a, b, join(directory, 'alias'), a + '-outside'], endpoint)).toEqual([alpha.id, beta.id, alpha.id, null]);
+  mkdirSync(join(a, 'descendant'));
+  expect(await host.classifyLocations([join(a, 'descendant')], endpoint)).toEqual([{ authorized: false }]);
+  expect(await host.classifyLocations([a, b, join(directory, 'alias'), a + '-outside'], endpoint)).toEqual([{ authorized: true, workspaceId: alpha.id }, { authorized: true, workspaceId: beta.id }, { authorized: true, workspaceId: alpha.id }, { authorized: false }]);
   await host.renameWorkspace(alpha.id, 'Renamed'); await host.reorderWorkspace(beta.id, alpha.id);
   expect((await host.listWorkspaces()).workspaces.map(row => row.displayName)).toEqual(['Beta', 'Renamed']);
   expect(await host.resolveWorkspace(alpha.id, endpoint)).toEqual({ cwd: a });
   await host.removeWorkspace(alpha.id);
-  expect(await host.groupSessions(sessions.map(row => row.cwd), endpoint)).toEqual([null, beta.id]);
+  expect(await host.classifyLocations(sessions.map(row => row.cwd), endpoint)).toEqual([{ authorized: true }, { authorized: true, workspaceId: beta.id }]);
   expect(JSON.stringify(sessions)).toBe(before);
   expect((await new LocalWorkspaceHost(config).listWorkspaces()).workspaces.map(row => row.id)).toEqual([beta.id]);
   expect(readFileSync(config.metadataFile, 'utf8')).not.toMatch(/cwd|session|trust|config/i);
@@ -38,7 +40,7 @@ it('only configured opaque handles authorize locations; no path fallback, disabl
   await expect(two.host.adoptWorkspace(one.a)).rejects.toThrow('unavailable');
   await expect(two.host.resolveWorkspace(a.id, two.endpoint)).rejects.toThrow('Unknown');
   await expect(one.host.resolveWorkspace(a.id, two.endpoint)).rejects.toThrow('different rustX process');
-  await expect(one.host.groupSessions(Array(33).fill(one.a), one.endpoint)).rejects.toThrow('bounded');
+  await expect(one.host.classifyLocations(Array(33).fill(one.a), one.endpoint)).rejects.toThrow('bounded');
 });
 it('HTTP carrier refuses path adoption and cross-origin mutations', async () => {
   const f = fixture(); const service = await startWorkspaceHost(f.config);
@@ -48,4 +50,12 @@ it('HTTP carrier refuses path adoption and cross-origin mutations', async () => 
     const foreign = await fetch(`${service.url}/product-host/list`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://foreign.example' }, body: '{}' });
     expect(foreign.status).toBe(400);
   } finally { await service.stop(); }
+});
+
+it('canonical endpoint identity accepts URL equivalence and rejects different hosts/ports', async () => {
+  const f = fixture(true, 'ws://LOCALHOST:80'), id = (await f.host.listWorkspaces()).workspaces[0].id;
+  expect(await f.host.resolveWorkspace(id, 'ws://localhost/')).toEqual({ cwd: f.a });
+  expect(await f.host.classifyLocations([f.a], 'ws://localhost:80/./')).toEqual([{ authorized: true, workspaceId: id }]);
+  await expect(f.host.resolveWorkspace(id, 'ws://localhost:81/')).rejects.toThrow('different rustX process');
+  await expect(f.host.resolveWorkspace(id, 'ws://example.test/')).rejects.toThrow('different rustX process');
 });

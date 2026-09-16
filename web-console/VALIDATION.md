@@ -1155,3 +1155,65 @@ The adapter deliberately supports an operator-configured finite root set, exact
 canonical root grouping and one writer per metadata file. It is a local/trusted
 adapter, without OS directory browsing, remote authentication or a filesystem
 sandbox. These boundaries are explicit in the Host contract and deployment docs.
+
+## PR #324 review repair (2026-09-16)
+
+Reviewed/start head: `d42bdab1feb604c40e69f8df070f3162ef5aed5e`. The worktree
+was clean on `issue-310-workspace-manager`; the complete reviews and unresolved
+endpoint thread were read. `origin/main` remained
+`5e5359cd0687944e0a40ee83b47be77e2d018385`, so no integration/rebase was needed.
+This repair changes only Web Host/navigation code, its consumers/tests and docs.
+Rust, native trust/configuration and generated protocol artifacts are unchanged.
+
+`classifyLocations` separates operator-root authorization from Workspace
+registration. The Web admission owner reads current native durable settings and
+asks the Host before the client's single new-attachment entry sends `session/attach`.
+Missing admission policy refuses. Saved views/reconnect, toolbar attach, sidebar
+Open/Fork and command transitions use that entry; Fork also authorizes its source
+before creating a child. Active focus is a single Session/Workspace pair populated
+by `focusSession`, with an empty Workspace while classification is pending or the
+Session is unregistered. Endpoint binding and routing share URL identity.
+
+Deterministic coverage includes registered authorized open exactly once, authorized
+unregistered cold open without registration recreation, unauthorized current cwd
+(including trusted native project state), stale summaries, saved hints/reconnect,
+toolbar resume, sidebar Fork and attached-source Fork refusal, missing admission
+owner, late authorization across navigation/connection generations, and repeated
+Open after supersession. The top-tab A/B `/new` regression checks exact Host
+Workspace resolution and native create cwd; unregistered A cannot reuse B. Host
+tests cover canonical aliases, actual descendant refusal, URL slash/host casing/
+default-port/dot normalization and rejection of different hosts/ports. No sleeps
+synchronize new tests.
+
+Playwright extends the two-process fixture with an outside-root native Session and
+saved tab: it remains visible and unchanged with zero loaded runtimes after denied
+restoration/open. An unregistered authorized Session still resumes through the
+toolbar without recreating its registration. Existing untrusted-source inactivity,
+Fork/retry/native uploads, reconnect, and narrow/wide layouts remain covered.
+Browser plugin not available; the existing Playwright workflow was used.
+
+| Command | Final result |
+| --- | --- |
+| `pnpm --dir web-console exec vitest run test/workspaces.test.tsx test/workspace-host.test.ts test/client.test.ts` | 59 passed |
+| `pnpm --dir web-console typecheck` | Passed |
+| `pnpm --dir web-console test` | 273 passed, 18 files |
+| `pnpm --dir web-console check:provenance` | 70 records / 100 notices passed |
+| `pnpm --dir web-console build` | Passed; existing bundle-size advisory |
+| `pnpm --dir web-console test:e2e` | 9 passed |
+| `git diff --check` | Passed |
+
+Current CI was reread. No Rust/protocol changes require additional native suites.
+During repair, existing presentation tests were updated to permit the new read-only
+cwd check during focus changes. The provenance check caught the endpoint import
+until its inventory was updated. Browser validation caught a restored Fork draft
+being cleared by reconnect reclassification; the common focus transition now
+preserves that draft. The new browser refusal assertion was made exact because
+both the row and the refusal notice legitimately display authorization status.
+All final checks passed after those fixes.
+
+Final invariant audit, in review order: **no, no, no, no, yes, no, no, no, yes,
+yes, yes, no**. New Web attachments cannot bypass Host admission; registration
+remains separate from authorization, authorization remains separate from trust,
+and native Session cwd remains the sole durable authority. No Workspace authority
+was added to App Server. The adapter's finite exact roots, single metadata writer,
+and lack of OS sandbox/remote authentication remain its explicit boundaries.

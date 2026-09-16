@@ -1103,6 +1103,7 @@
         "../presentation/primitives/Input",
         "../presentation/primitives/StateDot",
         "./WorkspaceNavigation.module.css",
+        "./endpoint",
         "./host",
         "react"
       ],

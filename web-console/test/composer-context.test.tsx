@@ -37,7 +37,7 @@ async function mount(initial: RuntimeClientSnapshot, ...others: string[]) {
   server.snapshots.set('A', initial);
   await server.attached('A', ...others);
   localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', tabs: ['A', ...others] }));
-  return render(<App client={server.client} />);
+  return render(<App client={server.client} workspaceHost={server.workspaceHost} />);
 }
 const region = (name: 'To-dos' | 'Goal' | 'Queue') => screen.queryByRole('region', { name });
 const dock = (name: 'To-dos' | 'Goal' | 'Queue') => screen.getByRole('region', { name });

@@ -1,3 +1,4 @@
+import type { ProductHostWorkspaces } from '../src/workspaces/host';
 import type { AttachmentTarget, MethodResult, Notification, Request, Response, RoutedInteraction, RuntimeClientSnapshot, SessionSummary, ServerCapabilities } from '../../protocol/app-server/v5';
 import { fixtures } from '../../protocol/app-server/fixtures';
 import { AppServerClient, RpcFailure, sameTarget, type Socket } from '../src/client/app-server';
@@ -47,6 +48,13 @@ export class FakeSocket implements Socket {
   close() { if (!this.closed) { this.closed = true; this.releaseClaims(); this.onclose?.(new CloseEvent('close')); } }
 }
 export class Server {
+  readonly workspaceHost: ProductHostWorkspaces = {
+    listWorkspaces: async () => ({ endpoint, workspaces: [], picker: { kind: 'unavailable', reason: 'Test Host has no picker' } }),
+    classifyLocations: async cwds => cwds.map(cwd => ({ authorized: ['/workspace/A', '/workspace/B', '/workspace/child', '/workspace/created', '/workspace/fork-child'].includes(cwd) })),
+    resolveWorkspace: async () => { throw new Error('No test registration'); },
+    adoptWorkspace: async () => {}, renameWorkspace: async () => {}, reorderWorkspace: async () => {}, removeWorkspace: async () => {},
+  };
+
   handlers = new Map<Request['method'], (request: Request) => MethodResult>();
   sockets: FakeSocket[] = [];
   snapshots = new Map<string, RuntimeClientSnapshot>([['A', snapshot('A')], ['B', snapshot('B')]]);
@@ -69,6 +77,7 @@ export class Server {
     const socket = new FakeSocket((request, source) => this.receive(request, source), () => { this.targets.get(socket)?.clear(); this.reservations.get(socket)?.clear(); }); this.sockets.push(socket);
     queueMicrotask(() => socket.open()); return socket;
   });
+  constructor() { this.client.setAttachmentAdmission(async () => true); } // Protocol-only fixture; App installs real Host admission.
   get socket() { return this.sockets[this.sockets.length - 1]; }
   target(id: string, socket = this.socket): AttachmentTarget {
     return this.targets.get(socket)!.get(id)!;

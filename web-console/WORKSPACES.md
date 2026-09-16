@@ -45,14 +45,18 @@ referring to removed locations must be removed from the operator-owned metadata.
 With `picker: true`, **Add Workspace** offers only configured authorized locations,
 including roots previously unregistered. With `picker: false`, Add is absent and the
 UI explains capability absence. Without a configured Host, native existing Sessions
-remain navigable as ungrouped, creation is unavailable, and Host absence is visible.
+remain listable as ungrouped, new attachments and creation are unavailable, and
+Host absence is visible.
 There is no arbitrary path field or localStorage authorization fallback.
 
 `HttpWorkspaceHost` is injectable into `App`. A remote Product Host can implement
 this same concrete contract behind its authenticated same-origin deployment route.
 This local adapter supplies no remote authentication, multi-user ACL, OS picker,
-recursive directory browser or OS filesystem sandbox. A Host endpoint must match
-the rustX connection before its registrations resolve. Per-user deployments retain
+recursive directory browser or OS filesystem sandbox. Host routing and browser
+binding share `endpointIdentity` / `sameEndpoint`, based
+on `URL.href`; equivalent URL spellings identify the same process endpoint.
+Authorization uses the endpoint captured by the current native connection, not an
+uncommitted browser connection field. Per-user deployments retain
 `user A -> Host A + rustX A` and `user B -> Host B + rustX B`.
 
 ## Native projections and lifetimes
@@ -65,17 +69,42 @@ are replaceable, not execution authority; unloaded, detached, loaded/attached,
 running, pending inbound and disconnected/stale observations have distinct labels.
 Only a current attached native snapshot supplies running/pending markers.
 
-The Host groups a bounded page by exact canonical root identity. Aliases resolve
-on the Host; descendants are not silently allocated to a parent registration.
-Unavailable/unregistered roots produce **Ungrouped Sessions**. No second durable
+The Host's `classifyLocations` classifies a bounded page by exact canonical root
+identity. `config.roots` is authorization; registrations are navigation metadata
+covering some of those roots. An authorized root without a registration produces
+`{ authorized: true }`: its Session is ungrouped and may still be opened. Outside
+or unavailable roots produce `{ authorized: false }`: their Sessions remain durable
+and listable, but this Web Product Host refuses new attachment/cold resume. Aliases
+resolve on the Host; descendants are not implicitly authorized. No second durable
 Session-to-Workspace map exists. Search uses the native bounded summary query;
 query/navigation epochs suppress obsolete responses. There is no transcript index.
 
 Workspace selection only changes navigation. It does not attach every Session,
 unload, cancel, change cwd, rewrite history or alter trust. Session opening attaches
-only that Session, including cold resume. Switching focus leaves unrelated work
+only that Session, including cold resume, after current Host admission. Switching
+focus leaves unrelated work
 alone. Unregister removes metadata only; its Sessions remain durable and visible
 ungrouped. Session deletion, detach and unload remain separate explicit operations.
+`WorkspaceSessionNavigation` owns the Web admission policy. The client's single
+attachment entry point calls this injected policy for every new attachment,
+including saved-tab restoration/reconnect, sidebar Open/Fork, toolbar Attach,
+creation and Fork/branch/retry/tree continuations. No policy means refusal. Before
+attach, it reads `settings/read` from the native durable owner, classifies that
+current cwd through the Host for the current connection endpoint, and checks
+navigation/generation fences. Summary classifications only describe the list;
+they never authorize attachment. Saved localStorage tabs are hints, not admission.
+Already-attached focus does not require a new runtime claim or hot revocation.
+Fork additionally checks its source's current cwd before creating a child; its
+result still passes normal attachment admission.
+
+App's `focusSession` transition publishes one Session/Workspace pair. Every Session
+focus path, including top tabs, restored focus, command results, close/deletion
+fallback and reconnect, clears the previous Workspace while reading current native
+cwd and Host classification. Only its current continuation publishes the matching
+registration. Authorized-unregistered focus has no Workspace. `/new` consumes this
+explicit focus context and refuses when it is empty; it never falls back to Session
+cwd or a previously selected Workspace.
+
 Native `session/name` owns renaming. Sidebar Fork opens the existing native exact
 boundary chooser and `session/fork`; TypeScript never clones Session/history state.
 

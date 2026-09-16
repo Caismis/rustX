@@ -20,9 +20,9 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
         case 'reorder': value = await host.reorderWorkspace(string('id'), body.before === undefined ? undefined : string('before')); break;
         case 'remove': value = await host.removeWorkspace(string('id')); break;
         case 'resolve': value = await host.resolveWorkspace(string('id'), string('endpoint')); break;
-        case 'group': {
+        case 'classify': {
           if (!Array.isArray(body.cwds) || body.cwds.some((cwd: unknown) => typeof cwd !== 'string')) throw new Error('Expected bounded cwds');
-          value = await host.groupSessions(body.cwds, string('endpoint')); break;
+          value = await host.classifyLocations(body.cwds, string('endpoint')); break;
         }
         default: throw new Error('Unknown Host operation');
       }

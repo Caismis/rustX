@@ -22,7 +22,7 @@ export async function createSession(client: AppServerClient, cwd: string, naviga
   const result = await client.request({ method: 'session/create', params: { settings: { cwd } } }, 'session_transition');
   if (!current()) return;
   if (result.durability_diagnostic) throw new Error(`Session ${result.session.id} committed with durability uncertainty: ${result.durability_diagnostic}. Inspect Sessions; do not repeat creation.`);
-  await client.attach(result.session.id, result.session.active_node);
+  await client.attach(result.session.id, result.session.active_node, current);
   if (!current()) return;
   const target = client.target(result.session.id);
   if (target.conversation_id !== result.session.active_conversation_id) throw new Error('Created Session attached a different Conversation.');
@@ -86,6 +86,10 @@ export class CommandSession {
     if (!sameTarget(selection.target, this.target)) throw new Error('Historical selection belongs to another attachment.');
     if (action !== 'fork' && !lineageSwitchSafe(this.client.getSnapshot().views[this.sessionId])) throw new Error('Wait for unresolved requests, accepted inbound and the current attempt to settle before switching lineage.');
     const params = { session_id: this.sessionId, node_id: selection.nodeId, surface_revision: selection.boundary.surface_revision, boundary: selection.boundary.message.id };
+    // Fork copies native settings: authorize the source before creating a child,
+    // even when its existing attachment needs no new admission.
+    if (action === 'fork' && !await this.client.admitAttachment(this.sessionId, this.current)) return;
+    this.requireCurrent();
     // Never substitute a newer revision, retry on refusal, or copy browser history.
     const result = await this.client.request(action === 'fork' ? { method: 'session/fork', params } : { method: 'session/branch', params }, 'session_transition');
     if (!this.current()) return;
@@ -97,7 +101,7 @@ export class CommandSession {
     if (action !== 'fork') await this.client.release(this.sessionId, true);
     const continuing = () => this.navigationCurrent() && this.client.getSnapshot().generation === this.generation;
     if (!continuing()) return;
-    await this.client.attach(session.id, session.active_node);
+    await this.client.attach(session.id, session.active_node, continuing);
     if (!continuing()) return;
     const target = this.client.target(session.id);
     if (target.conversation_id !== session.active_conversation_id) throw new Error('Transition attached a different Conversation; execution refused.');
@@ -139,7 +143,7 @@ export class CommandSession {
       if (!lineageSwitchSafe(this.client.getSnapshot().views[this.sessionId])) throw new Error('Wait for unresolved requests, accepted inbound and the current attempt to settle before switching lineage.');
       await this.client.release(this.sessionId, true);
       if (!this.navigationCurrent() || this.client.getSnapshot().generation !== this.generation) return;
-      await this.client.attach(this.sessionId, nodeId);
+      await this.client.attach(this.sessionId, nodeId, () => this.navigationCurrent() && this.client.getSnapshot().generation === this.generation);
     }
     if (!this.navigationCurrent() || this.client.getSnapshot().generation !== this.generation) return;
     if (this.client.target(this.sessionId).conversation_id !== conversationId) throw new Error('Different Conversation attached; inspect native state.');

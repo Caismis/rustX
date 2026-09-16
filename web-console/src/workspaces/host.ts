@@ -5,6 +5,7 @@ export interface WorkspaceCatalog {
   workspaces: ProductHostWorkspace[];
   picker: { kind: 'configured'; locations: { id: string; displayName: string }[] } | { kind: 'unavailable'; reason: string };
 }
+export type SessionLocation = { authorized: false } | { authorized: true; workspaceId?: string };
 export interface ProductHostWorkspaces {
   listWorkspaces(): Promise<WorkspaceCatalog>;
   adoptWorkspace(location: string): Promise<void>;
@@ -12,8 +13,8 @@ export interface ProductHostWorkspaces {
   reorderWorkspace(id: string, before?: string): Promise<void>;
   removeWorkspace(id: string): Promise<void>;
   resolveWorkspace(id: string, endpoint: string): Promise<{ cwd: string }>;
-  /** Host resolves membership; no browser path-prefix authorization. Bounded to a page. */
-  groupSessions(cwds: readonly string[], endpoint: string): Promise<(string | null)[]>;
+  /** Authorization is independent of registration. Exact Host-owned classification, bounded to a page. */
+  classifyLocations(cwds: readonly string[], endpoint: string): Promise<SessionLocation[]>;
 }
 export class HttpWorkspaceHost implements ProductHostWorkspaces {
   constructor(private readonly base = '/product-host') {}
@@ -28,5 +29,5 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
   reorderWorkspace = (id: string, before?: string) => this.call<void>('reorder', { id, before });
   removeWorkspace = (id: string) => this.call<void>('remove', { id });
   resolveWorkspace = (id: string, endpoint: string) => this.call<{ cwd: string }>('resolve', { id, endpoint });
-  groupSessions = (cwds: readonly string[], endpoint: string) => this.call<(string | null)[]>('group', { cwds, endpoint });
+  classifyLocations = (cwds: readonly string[], endpoint: string) => this.call<SessionLocation[]>('classify', { cwds, endpoint });
 }

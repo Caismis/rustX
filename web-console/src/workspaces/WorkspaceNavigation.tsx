@@ -7,7 +7,8 @@ import { Button } from '../presentation/primitives/Button';
 import { Input } from '../presentation/primitives/Input';
 import { Dialog } from '../presentation/primitives/Dialog';
 import { StateDot } from '../presentation/primitives/StateDot';
-import type { ProductHostWorkspaces, WorkspaceCatalog } from './host';
+import { sameEndpoint } from './endpoint';
+import type { ProductHostWorkspaces, WorkspaceCatalog, SessionLocation } from './host';
 import css from './WorkspaceNavigation.module.css';
 
 /** Activity requires a current attachment; cached snapshots cannot claim execution. */
@@ -22,14 +23,14 @@ export function sessionObservation(view: SessionView | undefined, connected: boo
   if (activeAttempt(view.snapshot)) return 'Running';
   return 'Loaded / attached';
 }
-export function WorkspaceNavigation({ host, client, state, endpoint, navigation, workspace, selected, selectWorkspace, openSession, createSession, forkSession, deleteSession, creating, registrationRemoved }: {
+export function WorkspaceNavigation({ host, client, state, endpoint, navigation, workspace, selected, selectWorkspace, openSession, createSession, forkSession, deleteSession, creating, metadataChanged }: {
   host: ProductHostWorkspaces; client: AppServerClient; state: ClientView; endpoint: string; navigation: NavigationEpoch;
-  creating: boolean; registrationRemoved: (id: string) => void;
+  creating: boolean; metadataChanged: (removed?: string) => void;
   workspace?: string; selected?: string; selectWorkspace: (id?: string) => void;
   openSession: (id: string) => void; createSession: (id: string) => void; forkSession: (id: string) => void; deleteSession: (id: string) => void;
 }) {
   const [catalog, setCatalog] = useState<WorkspaceCatalog>();
-  const [groups, setGroups] = useState<(string | null)[]>([]);
+  const [groups, setGroups] = useState<SessionLocation[]>([]);
   const [grouped, setGrouped] = useState(true), [collapsed, setCollapsed] = useState<string[]>([]);
   const [query, setQuery] = useState(''), [offset, setOffset] = useState(0);
   const [hostError, setHostError] = useState('');
@@ -37,7 +38,8 @@ export function WorkspaceNavigation({ host, client, state, endpoint, navigation,
   const [dialog, setDialog] = useState<{ kind: 'workspace' | 'session' | 'remove' | 'add' | 'settings'; id: string; name: string }>();
   const [name, setName] = useState('');
   const connected = state.connection === 'connected';
-  const bound = catalog?.endpoint === endpoint || catalog?.endpoint === `${endpoint}/`;
+  const route = state.endpoint ?? endpoint;
+  const bound = sameEndpoint(catalog?.endpoint, route);
   useEffect(() => {
     let current = true;
     void host.listWorkspaces().then(value => { if (current) { setCatalog(value); setHostError(''); } }, cause => { if (current) { setCatalog(undefined); setHostError(String(cause)); } });
@@ -46,30 +48,31 @@ export function WorkspaceNavigation({ host, client, state, endpoint, navigation,
   useEffect(() => {
     let alive = true;
     setGroups([]);
-    if (bound && connected) void host.groupSessions(state.sessions.map(row => row.cwd), endpoint).then(value => { if (alive) setGroups(value); }, cause => { if (alive) setError(String(cause)); });
+    if (bound && connected) void host.classifyLocations(state.sessions.map(row => row.cwd), route).then(value => { if (alive) setGroups(value); }, cause => { if (alive) setError(String(cause)); });
     return () => { alive = false; };
-  }, [host, catalog, state.sessions, endpoint, connected, bound]);
+  }, [host, catalog, state.sessions, route, connected, bound]);
   const search = (text: string, page = 0) => {
     navigation.invalidate(); const current = navigation.capture();
     setQuery(text); setOffset(page); setError('');
     void client.listSessions(page, text, current).catch(cause => { if (current()) setError(String(cause)); });
   };
   const edit = (kind: 'workspace' | 'session' | 'remove', id: string, title: string) => { setName(title); setDialog({ kind, id, name: title }); };
-  const mutate = async (action: () => Promise<unknown>) => {
+  const mutate = async (action: () => Promise<unknown>, metadata: boolean | string = true) => {
+    const current = navigation.capture();
     if (busy) return;
     setBusy(true); setError('');
-    try { await action(); setReload(value => value + 1); setDialog(undefined); }
+    try { await action(); setReload(value => value + 1); setDialog(undefined); if (metadata && current()) metadataChanged(typeof metadata === 'string' ? metadata : undefined); }
     catch (cause) { setError(String(cause)); }
     finally { setBusy(false); }
   };
-  const rows = state.sessions.map((session, index) => ({ session, group: groups[index] ?? null }));
+  const rows = state.sessions.map((session, index) => ({ session, location: groups[index], group: groups[index]?.authorized ? groups[index].workspaceId ?? null : null }));
   const trustView = selected && rows.some(row => row.session.id === selected && row.group === workspace) ? state.views[selected] : undefined;
   const trust = connected && trustView?.attachment === 'attached' && trustView.attachmentIntent === 'wanted' ? trustView.projectTrusted : undefined;
   const trustLabel = trust === true ? 'Trusted project source' : trust === false ? 'Untrusted project source · project resources inactive on cold resolution' : 'Project trust unknown · open a Session to read native status';
-  const sessionRows = (group?: string | null) => rows.filter(row => group === undefined || row.group === group).map(({ session }) => <div className={css.sessionRow} key={session.id} data-selected={selected === session.id}>
+  const sessionRows = (group?: string | null) => rows.filter(row => group === undefined || row.group === group).map(({ session, location }) => <div className={css.sessionRow} key={session.id} data-selected={selected === session.id}>
     <StateDot state={connected && state.views[session.id]?.attachment === 'attached' && state.views[session.id]?.attachmentIntent === 'wanted' ? state.views[session.id]?.snapshot?.inbound.pending?.length ? 'warning' : activeAttempt(state.views[session.id]?.snapshot) ? 'ongoing' : 'idle' : 'idle'} />
-    <button className={`session-open ${css.open}`} aria-label={`Open ${session.name ?? session.id}`} aria-current={selected === session.id ? 'page' : undefined} disabled={!connected} onClick={() => { selectWorkspace(rows.find(row => row.session.id === session.id)?.group ?? undefined); openSession(session.id); }}>
-      <strong>{session.name ?? session.preview ?? session.id}</strong><small>{sessionObservation(state.views[session.id], connected, state.sessionResidencies?.[session.id])}</small>
+    <button className={`session-open ${css.open}`} aria-label={`Open ${session.name ?? session.id}`} aria-current={selected === session.id ? 'page' : undefined} disabled={!connected} onClick={() => openSession(session.id)}>
+      <strong>{session.name ?? session.preview ?? session.id}</strong><small>{location?.authorized ? location.workspaceId ? 'Host authorized · registered' : 'Host authorized · ungrouped' : location ? 'Not authorized by this Product Host' : 'Host authorization not observed'}</small><small>{sessionObservation(state.views[session.id], connected, state.sessionResidencies?.[session.id])}</small>
     </button>
     <details className={css.actions}><summary aria-label={`Actions ${session.name ?? session.id}`}>···</summary><div>
       <Button size="sm" disabled={!connected} onClick={() => edit('session', session.id, session.name ?? '')}>Rename Session</Button>
@@ -110,11 +113,11 @@ export function WorkspaceNavigation({ host, client, state, endpoint, navigation,
     {dialog && <Dialog open title={dialog.kind === 'add' ? 'Add Workspace' : dialog.kind === 'remove' ? `Unregister ${dialog.name}?` : dialog.kind === 'settings' ? 'Workspace source status' : `Rename ${dialog.kind}`} onClose={() => setDialog(undefined)}>
       {dialog.kind === 'settings' ? <p>Native current source trust: {trustLabel}. Loaded resource activation belongs to its admitted native generation; inspect Resources for effective state.</p>
         : dialog.kind === 'add' ? <><p>Choose a location authorized by this Product Host.</p>{catalog?.picker.kind === 'configured' && catalog.picker.locations.map(location => <Button key={location.id} disabled={busy} onClick={() => void mutate(() => host.adoptWorkspace(location.id))}>{location.displayName}</Button>)}</>
-          : dialog.kind === 'remove' ? <><p>Only the navigation registration is removed. Sessions, cwd, history, project trust, and running work remain untouched.</p><Button disabled={busy} onClick={() => void mutate(async () => { await host.removeWorkspace(dialog.id); registrationRemoved(dialog.id); })}>Unregister</Button></>
+          : dialog.kind === 'remove' ? <><p>Only the navigation registration is removed. Sessions, cwd, history, project trust, and running work remain untouched.</p><Button disabled={busy} onClick={() => void mutate(() => host.removeWorkspace(dialog.id), dialog.id)}>Unregister</Button></>
             : <form onSubmit={event => { event.preventDefault(); const current = navigation.capture(); void mutate(async () => {
               if (dialog.kind === 'workspace') await host.renameWorkspace(dialog.id, name);
               else { await client.request({ method: 'session/name', params: { session_id: dialog.id, name } }, 'session'); if (current()) await client.listSessions(offset, query, current); }
-            }); }}><Input autoFocus aria-label="Name" value={name} onChange={event => setName(event.target.value)} /><Button type="submit" disabled={busy || !name.trim()}>Save name</Button></form>}
+            }, dialog.kind === 'workspace'); }}><Input autoFocus aria-label="Name" value={name} onChange={event => setName(event.target.value)} /><Button type="submit" disabled={busy || !name.trim()}>Save name</Button></form>}
     </Dialog>}
   </section>;
 }

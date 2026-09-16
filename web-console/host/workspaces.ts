@@ -2,7 +2,8 @@
 import { readFileSync, writeFileSync, renameSync, realpathSync, statSync, existsSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { ProductHostWorkspaces, WorkspaceCatalog } from '../src/workspaces/host.ts';
+import { sameEndpoint } from '../src/workspaces/endpoint.ts';
+import type { ProductHostWorkspaces, WorkspaceCatalog, SessionLocation } from '../src/workspaces/host.ts';
 
 export interface LocalHostConfig {
   endpoint: string;
@@ -44,7 +45,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     return root.cwd;
   }
   private route(endpoint: string) {
-    if (new URL(endpoint).href !== new URL(this.config.endpoint).href) throw new Error('Workspace Host belongs to a different rustX process');
+    if (!sameEndpoint(endpoint, this.config.endpoint)) throw new Error('Workspace Host belongs to a different rustX process');
   }
   async listWorkspaces(): Promise<WorkspaceCatalog> {
     return { endpoint: this.config.endpoint,
@@ -73,13 +74,20 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   }
   async removeWorkspace(id: string) { this.registered(id); this.commit(this.registrations.filter(row => row.id !== id)); }
   async resolveWorkspace(id: string, endpoint: string) { this.route(endpoint); return { cwd: this.cwd(this.registered(id).location) }; }
-  async groupSessions(cwds: readonly string[], endpoint: string) {
+  async classifyLocations(cwds: readonly string[], endpoint: string): Promise<SessionLocation[]> {
     this.route(endpoint);
-    if (cwds.length > 32) throw new Error('Host grouping is bounded to 32 summaries');
+    if (cwds.length > 32) throw new Error('Host classification is bounded to 32 summaries');
     // Exact canonical root membership is deliberate. No recursive allocation or
     // filesystem sandbox is implied; missing directories remain ungrouped.
     const roots = new Map<string, string>();
-    for (const row of this.registrations) { try { roots.set(this.cwd(row.location), row.id); } catch { /* unavailable */ } }
-    return cwds.map(cwd => { try { return isAbsolute(cwd) ? roots.get(realpathSync(cwd)) ?? null : null; } catch { return null; } });
+    for (const root of this.roots) { try { roots.set(this.cwd(root.id), root.id); } catch { /* unavailable */ } }
+    return cwds.map(cwd => {
+      try {
+        const location = isAbsolute(cwd) ? roots.get(realpathSync(cwd)) : undefined;
+        if (location === undefined) return { authorized: false };
+        const workspaceId = this.registrations.find(row => row.location === location)?.id;
+        return { authorized: true, ...(workspaceId ? { workspaceId } : {}) };
+      } catch { return { authorized: false }; }
+    });
   }
 }

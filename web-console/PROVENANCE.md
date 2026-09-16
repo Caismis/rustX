@@ -308,3 +308,9 @@ archive/subagent/schedule policies, content-search service, native OS directory
 allocation and browser filesystem browsing. Product Host owns finite authorized
 roots and metadata; native rustX owns Session cwd, history, trust, runtime and Fork.
 There is no build/runtime dependency on the external checkout.
+
+PR #324 review repair retains the same Harness presentation sources. The updated
+Workspace rows display Host classification independently of registration;
+`endpoint.ts` and the shared admission/focus bindings are rustX-authored. No new
+Harness authority or source was imported. The inventory records the new local
+endpoint helper dependency.
