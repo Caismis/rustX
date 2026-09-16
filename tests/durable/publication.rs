@@ -1547,6 +1547,60 @@ fn recovery_consolidates_many_frames_into_one_bounded_audit() {
 // Crash-boundary classification (regressions 8, 10, 11, 13, 19)
 // ---------------------------------------------------------------------------
 
+/// A restart can extend the transcript with a noncanonical audit while leaving
+/// canonical history byte-identical. A configuration/restart preservation test
+/// must compare the Ledger, not equate this broader read model with history.
+#[test]
+fn recovery_audit_extends_transcript_without_rewriting_canonical_history() {
+    let durable = Durable::new();
+    let canonical = vec![assistant(
+        &MessageId::new("earlier-answer"),
+        "canonical work",
+    )];
+    let (before, stream_id) = {
+        let store = durable.open();
+        store.initialize(&canonical).expect("initialize");
+        let request_id = start_request(&store, "1");
+        let start = stream_start(&request_id, "1", "unfinished-answer");
+        store.open_publication_stream(&start).expect("open");
+        // Exact durable prefix: a started publication without frames or U/C,
+        // matching the empty incomplete audit observed in the macOS failure.
+        (
+            store.load_transcript_page(None, 64).expect("before"),
+            start.stream_id,
+        )
+    };
+    assert_eq!(before.entries.len(), 1);
+
+    let report = recover_reopened(&durable);
+    assert_eq!(report.publication_classes().len(), 1);
+    let store = durable.open();
+    let after = store.load_transcript_page(None, 64).expect("after");
+    assert_eq!(after.entries.len(), 2);
+    assert_eq!(after.entries[0], before.entries[0]);
+    assert!(matches!(
+        &after.entries[1].item,
+        rustx::durable::TranscriptItem::PublicationAudit { audit }
+            if audit.stream_id == stream_id
+                && audit.kind == PublicationAuditKind::Incomplete
+                && audit.content.is_empty()
+    ));
+    assert_eq!(
+        serde_json::to_vec(&store.load_canonical().expect("canonical history")).unwrap(),
+        serde_json::to_vec(&canonical).unwrap(),
+    );
+    drop(store);
+    assert!(recover_reopened(&durable).publication_classes().is_empty());
+    assert_eq!(
+        durable
+            .open()
+            .load_transcript_page(None, 64)
+            .expect("repeated restart")
+            .entries,
+        after.entries,
+    );
+}
+
 /// **Regressions 8 and 10.** Publication that never reached its own durable
 /// terminal is Incomplete, whether or not the provider outcome is durably
 /// known. The definition is on the publication boundary, never the provider
