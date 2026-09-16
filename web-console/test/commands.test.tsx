@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { commands, discoveryQuery, parseCommand } from '../src/app/commands/registry';
+import { commands, discoveryQuery, parseCommand, available } from '../src/app/commands/registry';
+import { activeAttempt, executionIdle } from '../src/bindings/projection';
 import { matchCommands } from '../src/app/commands/matching';
 import { InputBar } from '../src/app/components/InputBar';
 import { CommandSession, NavigationEpoch } from '../src/app/commands/native';
@@ -113,7 +114,125 @@ async function subject() {
   const selection = (await scope.boundaries()).selections[0];
   return { fixture, navigation, scope, selection };
 }
+describe('restored native editor content', () => {
+  const uploads: UserInputBlock[] = ['one', 'two'].map(token => ({ type: 'upload', session_id: 'A', batch_id: 'same-batch', token }));
+  it.each([0, 1])('same-batch receipts have independent stable identities; remove index %s', async index => {
+    const errors = vi.spyOn(console, 'error');
+    await server.attached('A');
+    const send = vi.fn(async (text, receipts, delivery) => { await server.client.send('A', text, receipts, delivery); return true; });
+    render(<InputBar disabled={false} busy={false} active={false} initialContent={[...uploads, { type: 'text', text: 'unchanged text' }]} onSend={send} onUpload={async () => []} onCancel={() => {}} />);
+    expect(screen.getAllByText('Native restored upload batch same-batch')).toHaveLength(2);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Remove draft upload' })[index]);
+    expect(screen.getAllByText('Native restored upload batch same-batch')).toHaveLength(1);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+    const request = await server.waitFor('turn/start', 1);
+    expect(request.params).toMatchObject({ content: [uploads[1 - index], { type: 'text', text: 'unchanged text' }] });
+    expect(errors).not.toHaveBeenCalled();
+  });
+  it('supported restored input round-trips exact native order without changes', async () => {
+    await server.attached('A');
+    const content: UserInputBlock[] = [...uploads, { type: 'text', text: 'original\ntext' }];
+    render(<InputBar disabled={false} busy={false} active={false} initialContent={content} onSend={async (text, receipts, delivery) => { await server.client.send('A', text, receipts, delivery); return true; }} onUpload={async () => []} onCancel={() => {}} />);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+    expect((await server.waitFor('turn/start', 1)).params).toMatchObject({ content });
+  });
+  it.each([
+    [{ type: 'text', text: 'before' }, uploads[0], { type: 'text', text: 'after' }],
+    [{ type: 'text', text: 'one' }, { type: 'text', text: 'two' }],
+    [uploads[0], { type: 'text', text: '' }],
+  ] as UserInputBlock[][])('refuses an unrepresentable native shape without reordering: %j', async (...content) => {
+    const original = structuredClone(content), send = vi.fn(async () => true);
+    render(<InputBar disabled={false} busy={false} active={false} initialContent={content} onSend={send} onUpload={async () => []} onCancel={() => {}} />);
+    expect(screen.getByRole('alert').textContent).toContain('Cannot restore this ordered native input');
+    expect(screen.getByLabelText('Message')).toHaveProperty('disabled', true);
+    expect(screen.queryByRole('button', { name: 'Remove draft upload' })).toBeNull();
+    await act(async () => fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' }));
+    expect(send).not.toHaveBeenCalled(); expect(content).toEqual(original);
+  });
+});
+
 describe('typed native operations and continuation fencing', () => {
+  it.each(['acknowledgement', 'pending', 'pending-settled'] as const)('%s without an active Attempt blocks lineage until authoritative reconciliation reaches genuine idle', async source => {
+    const { scope, selection, fixture } = await subject();
+    const history = structuredClone(fixture.original);
+    if (source === 'pending-settled') history.attempt = { attempt_id: 'settled-attempt', turn: 1, phase: { type: 'settled', outcome: { type: 'completed', finish_reason: { type: 'stop' } } } };
+    history.transcript.entries!.unshift({ cursor: '0', item: { type: 'message', message: { role: 'user', source: 'human', id: 'user-cut', content: [{ type: 'text', text: 'Try this' }] } } });
+    await server.update('A', history);
+    localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', tabs: ['A'] }));
+    render(<App client={server.client} />);
+    const pending = { sequence: '1', message: { id: 'accepted-user', source: 'human' as const, content: [{ type: 'text' as const, text: 'Accepted task' }] } };
+    if (source === 'acknowledgement') {
+      server.held.add('turn/start');
+      const work = server.client.send('A', 'Accepted task');
+      const request = await server.waitFor('turn/start', 1);
+      expect(server.client.getSnapshot().views.A.submissions ?? []).toEqual([]);
+      await act(async () => { server.reply(request); await work; });
+      expect(server.client.getSnapshot().views.A.submissions?.map(item => item.messageId)).toEqual(['accepted-user']);
+      expect(server.client.getSnapshot().views.A.snapshot?.inbound.pending ?? []).toEqual([]);
+    } else await act(() => server.update('A', { ...history, inbound: { pending: [pending] } }));
+    const view = () => server.client.getSnapshot().views.A;
+    expect(activeAttempt(view().snapshot)).toBe(false);
+    expect(executionIdle(view())).toBe(false);
+    if (source !== 'acknowledgement') expect(view().submissions ?? []).toEqual([]);
+    for (const name of ['Branch', 'Retry / Regenerate', 'Session tree']) expect(screen.getByRole('button', { name })).toHaveProperty('disabled', true);
+    expect(screen.getByRole('button', { name: 'Fork' })).toHaveProperty('disabled', false);
+    const input = screen.getByLabelText('Message');
+    fireEvent.change(input, { target: { value: '/branch' } });
+    expect(screen.queryByRole('option', { name: /Branch within/ })).toBeNull();
+    await act(async () => fireEvent.keyDown(input, { key: 'Enter' }));
+    expect(screen.getByRole('alert').textContent).toContain('unavailable');
+    await expect(scope.transition('branch', selection)).rejects.toThrow('accepted inbound');
+    await expect(scope.transition('retry', selection)).rejects.toThrow('accepted inbound');
+    await expect(scope.openNode('other-node', 'other-conversation')).rejects.toThrow('accepted inbound');
+    expect(methods()).not.toContain('session/branch'); expect(methods()).not.toContain('session/unload');
+    expect(available(commands.find(command => command.id === 'compact')!, false, false, executionIdle(view()))).toBe(true);
+    await act(() => scope.compact()); // native maintenance permits pending inbound
+    expect(methods().filter(method => method === 'context/compact')).toHaveLength(1);
+    await act(() => server.update('A', { ...history, inbound: { pending: [pending] } }));
+    expect(view().submissions ?? []).toEqual([]); // exact MessageId reconciliation, not browser removal
+    expect(executionIdle(view())).toBe(false); // authority now owns the blocking fact
+    await act(() => server.update('A', { ...history, messages: [{ role: 'user', ...pending.message }], inbound: {} }));
+    expect(executionIdle(view())).toBe(true);
+    for (const name of ['Branch', 'Retry / Regenerate', 'Session tree']) expect(screen.getByRole('button', { name })).toHaveProperty('disabled', false);
+    fireEvent.change(input, { target: { value: '/' } });
+    expect(screen.getByRole('option', { name: /Branch within/ })).toBeTruthy();
+  });
+  it.each(['branch', 'retry'] as const)('%s committed before concurrent acknowledgement remains discoverable without unloading accepted work', async action => {
+    const { scope, selection, fixture } = await subject();
+    server.held.add('session/branch');
+    const work = scope.transition(action, selection);
+    const rejection = expect(work).rejects.toThrow('Branch branch-A committed');
+    const request = await server.waitFor('session/branch', 1), response = server.commit(request);
+    await server.client.send('A', 'Concurrent accepted task');
+    expect(activeAttempt(server.client.getSnapshot().views.A.snapshot)).toBe(false);
+    server.socket.deliver(response); await rejection;
+    expect(fixture.committed).toHaveLength(1);
+    expect((await scope.tree()).nodes.some(node => node.id === 'branch-A')).toBe(true);
+    expect(methods().filter(method => method === 'session/branch')).toHaveLength(1);
+    expect(methods()).not.toContain('session/unload');
+    expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
+    expect(server.client.target('A').conversation_id).toBe('conversation-A');
+  });
+  it('independent Fork remains safe with accepted source work', async () => {
+    const { scope, selection } = await subject();
+    await server.client.send('A', 'Accepted task');
+    expect(executionIdle(server.client.getSnapshot().views.A)).toBe(false);
+    expect((await scope.transition('fork', selection))?.session.id).toBe('child');
+    expect(methods()).not.toContain('session/unload');
+    expect(server.client.getSnapshot().views.A.submissions?.[0].messageId).toBe('accepted-user');
+  });
+  it.each(['branch', 'retry', 'tree'] as const)('an already open %s selector tracks acknowledgement and authoritative reconciliation', async id => {
+    const { navigation, fixture } = await subject();
+    render(<CommandPanel request={{ id }} client={server.client} sessionId="A" current={navigation.capture()} close={() => {}} completed={() => {}} opened={() => {}} />);
+    const row = await screen.findByRole('option');
+    expect(row).toHaveProperty('disabled', false);
+    await act(() => server.client.send('A', 'accepted'));
+    expect(row).toHaveProperty('disabled', true);
+    fireEvent.click(row);
+    expect(methods()).not.toContain('session/branch'); expect(methods()).not.toContain('session/unload');
+    await act(() => server.update('A', { ...fixture.original, messages: [{ role: 'user', source: 'human', id: 'accepted-user', content: [{ type: 'text', text: 'accepted' }] }] }));
+    expect(row).toHaveProperty('disabled', false);
+  });
   it('selects native model identities and approval modes without any command-string RPC', async () => {
     const { scope, fixture } = await subject();
     expect((await scope.models()).catalog.models?.map(model => model.model)).toEqual(['fixture/first', 'fixture/second']);

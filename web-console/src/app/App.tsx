@@ -5,7 +5,7 @@ import type { RuntimeClientSessionDeletePreview, UserInputBlock } from '../../..
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { NavigationEpoch, createSession } from './commands/native';
 import { available, commands } from './commands/registry';
-import { activeAttempt, json } from '../bindings/projection';
+import { activeAttempt, executionIdle, json } from '../bindings/projection';
 import { goalDock, queueRows, todoDock } from '../bindings/composer-context';
 import { ComposerContextStack } from './composer/ComposerContextStack';
 import { GoalDock } from './composer/GoalDock';
@@ -70,7 +70,7 @@ export function App({ client }: { client: AppServerClient }) {
   const invokeCommand = (request: CommandRequest) => {
     if (!view || composerDisabled) return;
     const definition = commands.find(item => item.id === request.id);
-    if (definition && !available(definition, activeAttempt(view.snapshot), !!goalDock(view.snapshot))) return;
+    if (definition && !available(definition, activeAttempt(view.snapshot), !!goalDock(view.snapshot), executionIdle(view))) return;
     if (request.id === 'goal') {
       document.querySelector<HTMLElement>('[aria-label="Goal"] button')?.focus();
       setConsumed(previous => ({ id: 'goal', sequence: (previous?.sequence ?? 0) + 1 }));
@@ -171,7 +171,7 @@ export function App({ client }: { client: AppServerClient }) {
     {view ? <>
       <section className="session-toolbar"><div><strong>{view.id}</strong><small>{view.settings?.cwd ?? 'cwd unavailable'} · {view.attachment}</small></div>
         <div className="row"><Button size="sm" disabled={!connected} onClick={() => run(() => client.attach(view.id))}>{view.target && view.attachmentIntent === 'wanted' ? 'Resync' : 'Attach / cold resume'}</Button>
-          <Button size="sm" disabled={!attached || commandOpen || activeAttempt(view.snapshot)} onClick={() => invokeCommand({ id: 'tree' })}>Session tree</Button>
+          <Button size="sm" disabled={!attached || commandOpen || !executionIdle(view)} onClick={() => invokeCommand({ id: 'tree' })}>Session tree</Button>
           <Button size="sm" disabled={!attached} onClick={() => run(() => client.release(view.id, false))}>Detach</Button>
           <Button size="sm" disabled={!attached} onClick={() => run(() => client.release(view.id, true))}>Unload runtime</Button></div>
       </section>
@@ -179,7 +179,7 @@ export function App({ client }: { client: AppServerClient }) {
       <div className="row" role="tablist" aria-label="Conversation view"><Button role="tab" aria-selected={conversationMode === 'chat'} onClick={() => setConversationMode('chat')}>Chat</Button><Button role="tab" aria-selected={conversationMode === 'trajectory'} onClick={() => setConversationMode('trajectory')}>Trajectory</Button></div>
       <ArtifactContext.Provider value={artifacts}>{conversationMode === 'trajectory' && view.trace ? <Trajectory key={view.id} cache={view.trace} onSelect={id => client.selectTrace(view.id, id)} loadEarlier={() => run(() => client.loadEarlierTrace(view.id))} latest={() => client.latestTrace(view.id)} /> : <ChatViewport key={`${view.id}:${view.target?.attachment_id ?? state.generation}`}>
         {view.snapshot && <><Conversation snapshot={view.snapshot} history={view.history} loadEarlier={() => run(() => client.loadEarlier(view.id))} latest={() => client.latestTranscript(view.id)}
-          historicalDisabled={composerDisabled || commandOpen} onHistorical={(id, messageId) => invokeCommand({ id, messageId })} /><RuntimeFacts snapshot={view.snapshot} />
+          executionIdle={executionIdle(view)} historicalDisabled={composerDisabled || commandOpen} onHistorical={(id, messageId) => invokeCommand({ id, messageId })} /><RuntimeFacts snapshot={view.snapshot} />
           <div className="attempt-status" role="status">Attempt: {view.snapshot.attempt ? `${view.snapshot.attempt.attempt_id} · ${view.snapshot.attempt.phase.type}` : 'none observed'}{view.snapshot.attempt?.phase.type === 'settled' && ` · ${view.snapshot.attempt.phase.outcome.type}`}</div>
           <Interactions client={client} state={state} view={view} run={run} />
         </>}
@@ -192,7 +192,7 @@ export function App({ client }: { client: AppServerClient }) {
         queue={<QueueDock rows={queueRows(view.snapshot)} submissions={view.submissions ?? []} running={activeAttempt(view.snapshot)} />}
         composer={<InputBar key={`${view.snapshot?.conversation_id ?? view.id}:${restored?.conversation === view.snapshot?.conversation_id ? 'restored' : 'draft'}`} initialContent={restored?.conversation === view.snapshot?.conversation_id ? restored?.content : undefined}
           disabled={composerDisabled} busy={sending[view.id] === state.generation} active={activeAttempt(view.snapshot)}
-          hasGoal={!!goalDock(view.snapshot)} onCommand={id => invokeCommand({ id })}
+          executionIdle={executionIdle(view)} hasGoal={!!goalDock(view.snapshot)} onCommand={id => invokeCommand({ id })}
           consumed={consumed}
           onCancel={() => run(() => client.cancelTurn(view.id))} onUpload={files => client.upload(view.id, files)} onSend={async (text, receipts, delivery) => {
             const generation = state.generation; setSending(current => ({ ...current, [view.id]: generation })); setError('');

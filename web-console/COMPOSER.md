@@ -197,14 +197,26 @@ only a matching command draft; dismissal keeps it.
 | --- | --- |
 | `/model` | `settings/model` + `settings/models`, then `settings/setModel` with an exact catalog model reference and native defaults |
 | `/permission` (`/approval`) | Native `policy` / `full_access`, `settings/setApprovalMode`, authoritative snapshot reread |
-| `/compact` | Native `context/compact`, available while idle |
+| `/compact` | Native `context/compact`, available with no active Attempt; pending inbound alone is permitted by native maintenance |
 | `/new` | `session/create` using native Session cwd; attach/open only after success |
 | `/fork` | Native exact user-boundary selection and independent `session/fork` |
-| `/branch` | Native exact user-boundary selection and in-Session `session/branch`, idle only |
+| `/branch` | Native exact user-boundary selection and in-Session `session/branch`, stable execution-idle only |
 | `/goal` | Focus existing GoalDomain-backed dock controls when a current Goal is visible |
 | `/tools` | Read-only `resources/read` capability inspection |
 
 `/settings` is omitted: there is no current product settings editor to navigate to.
+Stable execution-idle means no active Attempt, no authoritative pending inbound,
+and no acknowledged MessageId still awaiting projection reconciliation. This shared
+guard also covers historical Branch/Retry and Session-tree switches. Acknowledged
+submissions remain reconciliation evidence, not a browser queue. Compact intentionally
+uses a different native precondition: the coordinator can perform maintenance while
+inbound awaits adoption; concurrent Attempt/maintenance/resource-reload conflicts
+remain native refusals. Fork does not replace the source and is not idle-gated.
+
+The flat editor fails closed on restored input outside `Upload* + nonempty Text?`;
+it never combines/reorders arbitrary native `editor_content`. See CHAT.md for the
+explicit editable limitation. Retry submits native blocks directly without it.
+
 No provider, Workspace, resource or MCP editor is introduced. The Goal command does
 not invent user authority to create or complete a Goal.
 

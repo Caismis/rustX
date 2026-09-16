@@ -7,17 +7,20 @@ import type { UploadReceipt, UploadedFile, UserInputBlock } from '../../../../pr
 import { commands, available, discoveryQuery, parseCommand, type CommandId } from '../commands/registry';
 import { matchCommands } from '../commands/matching';
 import { CommandMenu } from '../commands/CommandMenu';
+import { editableContent } from '../composer/editor-content';
 import { isOutcomeUncertain } from '../../client/app-server';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { Button } from '../../presentation/primitives/Button';
 import css from './InputBar.module.css';
-export function InputBar({ disabled, busy, active, onSend, onUpload, onCancel, onCommand, hasGoal = false, initialContent = [], consumed }: {
+export function InputBar({ disabled, busy, active, onSend, onUpload, onCancel, onCommand, hasGoal = false, executionIdle = false, initialContent = [], consumed }: {
   disabled: boolean; busy: boolean; active: boolean;
   onSend: (text: string, receipts: readonly UploadReceipt[], delivery: 'send' | 'steer') => Promise<boolean>;
   onUpload: (files: readonly File[]) => Promise<UploadedFile[]>; onCancel: () => void;
-  onCommand?: (id: CommandId) => void; hasGoal?: boolean; initialContent?: UserInputBlock[];
+  onCommand?: (id: CommandId) => void; hasGoal?: boolean; executionIdle?: boolean; initialContent?: UserInputBlock[];
   consumed?: { id: string; sequence: number };
 }) {
+  const [restoreSupported] = useState(() => editableContent(initialContent));
+  disabled = disabled || !restoreSupported;
   type DraftFile = { id: number; file: File; status: 'uploading' | 'complete' | 'failed' | 'uncertain'; receipt?: UploadReceipt; error?: string };
   const [files, setFiles] = useState<DraftFile[]>([]);
   const nextId = useRef(0);
@@ -44,23 +47,23 @@ export function InputBar({ disabled, busy, active, onSend, onUpload, onCancel, o
         ? { ...file, status: isOutcomeUncertain(cause) ? 'uncertain' : 'failed', error: String(cause) } : file));
     }).finally(() => { transferring.current = false; });
   };
-  const [draft, setDraft] = useState(() => initialContent.flatMap(block => block.type === 'text' ? [block.text] : []).join(''));
+  const [draft, setDraft] = useState(() => restoreSupported ? initialContent.flatMap(block => block.type === 'text' ? [block.text] : []).join('') : '');
   useEffect(() => {
     if (!consumed) return;
     setDraft(current => { const parsed = parseCommand(current); return parsed.type === 'command' && parsed.id === consumed.id ? '' : current; });
   }, [consumed]);
-  const [restored, setRestored] = useState(() => initialContent.flatMap(block => block.type === 'upload' ? [block] : []));
+  const [restored, setRestored] = useState(() => restoreSupported ? initialContent.flatMap(block => block.type === 'upload' ? [block] : []) : []);
   const [dismissed, setDismissed] = useState(false), [highlight, setHighlight] = useState(0);
   const [delivery, setDelivery] = useState<'send' | 'steer'>('send');
   const input = useRef<HTMLTextAreaElement>(null), root = useRef<HTMLDivElement>(null);
   const query = discoveryQuery(draft);
   const menu = onCommand && query !== undefined && !dismissed && !disabled && !busy;
-  const rows = matchCommands(query ?? '', commands.filter(command => available(command, active, hasGoal)));
+  const rows = matchCommands(query ?? '', commands.filter(command => available(command, active, hasGoal, executionIdle)));
   const invoke = (id: CommandId) => {
     if (disabled || busy) return;
     if (files.length || restored.length) { setError('Remove draft attachments before invoking a command.'); return; }
     const definition = commands.find(command => command.id === id)!;
-    if (!onCommand || !available(definition, active, hasGoal)) { setError('Command unavailable in the current Session state.'); return; }
+    if (!onCommand || !available(definition, active, hasGoal, executionIdle)) { setError('Command unavailable in the current Session state.'); return; }
     setDismissed(true); setError(''); input.current?.focus(); onCommand(id);
   };
   useEffect(() => {
@@ -85,7 +88,8 @@ export function InputBar({ disabled, busy, active, onSend, onUpload, onCancel, o
     onDrop={event => { event.preventDefault(); setDragging(false); if (!disabled && !busy) pick(Array.from(event.dataTransfer.files)); }}>
     {dragging && <div className="attachment-drop" role="status">Drop attachments · 8 files · 256 KiB each</div>}
     {error && <p role="alert">{error}</p>}
-    {restored.map((receipt, index) => <div key={receipt.batch_id}><span>Native restored upload batch {receipt.batch_id}</span><Button onClick={() => setRestored(current => current.filter((_, at) => at !== index))}>Remove draft upload</Button></div>)}
+    {!restoreSupported && <p role="alert">Cannot restore this ordered native input in the flat Web editor. Only uploads followed by at most one nonempty text block are editable. No input was reordered or sent; use an ordered-block client for this history.</p>}
+    {restored.map((receipt, index) => <div key={JSON.stringify([receipt.batch_id, receipt.token])}><span>Native restored upload batch {receipt.batch_id}</span><Button onClick={() => setRestored(current => current.filter((_, at) => at !== index))}>Remove draft upload</Button></div>)}
     <div className="attachment-rail" aria-label="Draft attachments">{files.map(item => <div key={item.id}><DraftAttachment file={item.file} remove={() => setFiles(current => current.filter(file => file.id !== item.id))} /><small role="status">{item.status === 'complete' ? 'Uploaded' : item.status === 'uploading' ? 'Uploading…' : item.status === 'uncertain' ? 'Upload outcome uncertain. Reconnect and inspect authoritative state; do not replay.' : item.error}</small></div>)}</div>
     <div className={css.card} data-composer-card>
       {menu && <CommandMenu rows={rows} active={highlight} select={invoke} highlight={setHighlight} />}

@@ -70,9 +70,26 @@ source runtime → attach the exact new node → `turn/start` with the returned
 the copied prefix. Original Assistant responses remain canonical in the original
 node; no response text is replaced and no browser alternate-response store exists.
 The Session tree button reads native nodes and can reopen the original lineage.
-Branch, Retry and tree switching require an idle authoritative attempt because the
-native manager allows one resident Conversation per Session. Fork does not unload
-the independent source. Native admission and shutdown remain the final authority.
+Branch, Retry and tree switching require `executionIdle(view)`: an observed
+snapshot with no active Attempt, no authoritative `inbound.pending`, and no
+acknowledged-but-not-yet-projected `view.submissions`. The native manager allows
+one resident Conversation per Session. An accepted MessageId is evidence of native
+ownership even before an Attempt appears; it is not browser queue authority.
+Existing exact-MessageId reconciliation removes that evidence when native pending
+or canonical history names it. No timer or local send-request flag declares idle.
+The guard is checked again after branch publication, before unload: if work arrived,
+the committed node remains discoverable in Session tree, but no switch/retry occurs.
+Fork does not unload the independent source and remains available during execution.
+Native admission and shutdown remain the final authority; this product guard does
+not turn an observation into a server-side idle reservation.
+
+Editable Fork/Branch restore accepts only `Upload*` followed by at most one
+**nonempty** Text block. Other ordered native shapes (interleaving, multiple Text
+blocks, or an empty Text block that the flat sender would drop) produce a visible
+refusal and disabled composer before decomposition. No blocks are reordered or
+sent; the committed lineage is unaffected. Use an ordered-block client for those
+inputs. Retry is not restricted by this editor: it sends returned blocks directly.
+Restored upload rows use `(batch_id, token)`, not batch alone, as React identity.
 
 Live model/approval settings belong to the Conversation. A cold new lineage uses
 native Session/launch settings, which can differ from the source's live selections.

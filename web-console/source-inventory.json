@@ -43,6 +43,7 @@
       "upstream_sha256": "c6a89ae2771f36ff6da26886fbc6719369f41f9eae004e52561644c788df153f",
       "retained_dependencies": [
         "../../../../protocol/app-server/v4",
+        "../../bindings/projection",
         "../../client/app-server",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/Dialog",
@@ -356,6 +357,7 @@
         "../commands/CommandMenu",
         "../commands/matching",
         "../commands/registry",
+        "../composer/editor-content",
         "./InputBar.module.css",
         "react"
       ],

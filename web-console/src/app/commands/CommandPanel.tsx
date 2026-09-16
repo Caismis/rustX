@@ -1,7 +1,8 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Rewritten from ui-commands/PopupSelectView.tsx; see PROVENANCE.md. */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ApprovalMode, UserInputBlock, SessionSnapshot } from '../../../../protocol/app-server/v4';
 import type { AppServerClient } from '../../client/app-server';
+import { activeAttempt, executionIdle } from '../../bindings/projection';
 import { Dialog } from '../../presentation/primitives/Dialog';
 import { Button } from '../../presentation/primitives/Button';
 import { CommandSession, type HistoricalSelection, type HistoryAction } from './native';
@@ -22,6 +23,9 @@ export function CommandPanel({ request, client, sessionId, current, close, compl
   const alive = useRef(true), selecting = useRef(false);
   const options = useRef<HTMLDivElement>(null);
   const [scope] = useState(() => new CommandSession(client, sessionId, () => alive.current && current()));
+  const view = useSyncExternalStore(client.subscribe, client.getSnapshot).views[sessionId];
+  const blocked = request.id === 'compact' ? activeAttempt(view?.snapshot)
+    : ['branch', 'retry', 'tree'].includes(request.id) && !executionIdle(view);
   const valid = () => alive.current && current();
   const historical = request.id === 'fork' || request.id === 'branch' || request.id === 'retry';
   const loadBoundaries = async (offset: number) => {
@@ -76,7 +80,7 @@ export function CommandPanel({ request, client, sessionId, current, close, compl
     return () => { alive.current = false; };
   }, []);
   const choose = async (choice: Choice) => {
-    if (selecting.current || busy || stopped || !valid()) return;
+    if (selecting.current || busy || stopped || blocked || !valid()) return;
     selecting.current = true; setBusy(true); setError('');
     try {
       switch (choice.kind) {
@@ -93,7 +97,7 @@ export function CommandPanel({ request, client, sessionId, current, close, compl
     finally { selecting.current = false; if (valid()) setBusy(false); }
   };
   const perform = async () => {
-    if (selecting.current || busy || stopped || !valid()) return;
+    if (selecting.current || busy || stopped || blocked || !valid()) return;
     selecting.current = true; setBusy(true); setError('');
     try {
       if (request.id === 'compact') { await scope.compact(); if (valid() && scope.current()) completed(); }
@@ -107,17 +111,18 @@ export function CommandPanel({ request, client, sessionId, current, close, compl
   return <Dialog open title={request.id === 'tree' ? 'Session tree' : request.id === 'retry' ? 'Retry / Regenerate' : `/${request.id}`} onClose={close}>
     <p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{detail}</p>
     {error && <p role="alert">{error}</p>}
+    {blocked && <p role="status">Waiting for native execution and accepted inbound to settle.</p>}
     {!busy && stale && <p role="status">Attachment changed. Close and reopen to read current native state.</p>}
     {busy && <p role="status">Waiting for native acknowledgement…</p>}
     {!busy && !error && !rows.length && (historical || request.id === 'tree' || request.id === 'model') && <p role="status">No native choices available.</p>}
-    {(request.id === 'compact' || request.id === 'new') && <Button disabled={busy || stopped || stale} onClick={() => void perform()}>{request.id === 'compact' ? 'Compact context' : 'Create Session'}</Button>}
+    {(request.id === 'compact' || request.id === 'new') && <Button disabled={busy || stopped || stale || blocked} onClick={() => void perform()}>{request.id === 'compact' ? 'Compact context' : 'Create Session'}</Button>}
     {!!rows.length && <><input autoFocus className={css.search} aria-label="Filter options" value={query} disabled={busy}
       onChange={event => { setQuery(event.target.value); setActive(0); }} aria-controls="command-options" aria-activedescendant={filtered[active] ? `choice-${active}` : undefined}
       onKeyDown={event => {
         if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && filtered.length) { event.preventDefault(); setActive(index => (index + (event.key === 'ArrowDown' ? 1 : filtered.length - 1)) % filtered.length); }
         if (event.key === 'Enter' && filtered[active] && !event.nativeEvent.isComposing) { event.preventDefault(); void choose(filtered[active].choice); }
       }} />
-      <div ref={options} className={css.options} id="command-options" role="listbox" aria-label={historical ? 'Historical boundaries' : 'Native choices'}>{filtered.map((row, index) => <button type="button" role="option" id={`choice-${index}`} aria-selected={active === index} disabled={busy || stopped || stale} key={row.id} className={css.row} onClick={() => void choose(row.choice)}>
+      <div ref={options} className={css.options} id="command-options" role="listbox" aria-label={historical ? 'Historical boundaries' : 'Native choices'}>{filtered.map((row, index) => <button type="button" role="option" id={`choice-${index}`} aria-selected={active === index} disabled={busy || stopped || stale || blocked} key={row.id} className={css.row} onClick={() => void choose(row.choice)}>
         <span>{row.label}</span><small>{row.detail}</small>
       </button>)}</div></>}
     {(historical || request.id === 'tree') && next != null && !request.messageId && <Button disabled={busy} onClick={() => { setBusy(true); void (request.id === 'tree' ? loadTree(next) : loadBoundaries(next)).catch(cause => { if (valid()) setError(String(cause)); }).finally(() => { if (valid()) setBusy(false); }); }}>More {historical ? 'boundaries' : 'nodes'}</Button>}

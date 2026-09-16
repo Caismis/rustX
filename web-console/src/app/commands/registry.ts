@@ -4,20 +4,25 @@ export interface CommandDefinition {
   id: CommandId;
   label: string;
   aliases: readonly string[];
-  availability: 'attached' | 'idle' | 'goal';
+  availability: 'attached' | 'idle' | 'no-attempt' | 'goal';
 }
 export const commands: readonly CommandDefinition[] = [
   { id: 'model', label: 'Choose model', aliases: ['模型'], availability: 'attached' },
   { id: 'permission', label: 'Approval mode', aliases: ['approval', '权限'], availability: 'attached' },
-  { id: 'compact', label: 'Compact context', aliases: ['压缩'], availability: 'idle' },
+  { id: 'compact', label: 'Compact context', aliases: ['压缩'], availability: 'no-attempt' },
   { id: 'new', label: 'New Session', aliases: ['新建'], availability: 'attached' },
   { id: 'fork', label: 'Fork independent Session', aliases: ['分叉'], availability: 'attached' },
   { id: 'branch', label: 'Branch within Session', aliases: ['分支'], availability: 'idle' },
   { id: 'goal', label: 'Goal controls', aliases: ['目标'], availability: 'goal' },
   { id: 'tools', label: 'Inspect capabilities', aliases: ['工具'], availability: 'attached' },
 ];
-export function available(command: CommandDefinition, running: boolean, goal: boolean) {
-  return command.availability === 'goal' ? goal : command.availability !== 'idle' || !running;
+export function available(command: CommandDefinition, running: boolean, goal: boolean, executionIdle: boolean) {
+  switch (command.availability) {
+    case 'goal': return goal;
+    case 'idle': return executionIdle;
+    case 'no-attempt': return !running;
+    case 'attached': return true;
+  }
 }
 export type ParsedCommand = { type: 'text' } | { type: 'command'; id: CommandId } | { type: 'unsupported' };
 /** Deliberately only a leading slash token; no arguments, shell, or interpolation.
