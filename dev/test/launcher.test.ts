@@ -14,10 +14,10 @@ import { parseArguments as parseTui } from '../../tui/src/cli.ts';
 const root = fileURLToPath(new URL('../../', import.meta.url));
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (error: Error) => void; const promise = new Promise<T>((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
 function harness() {
-  const calls: { spec: ChildSpec; ready: ReturnType<typeof deferred<string>>; reap: ReturnType<typeof deferred<void>>; exit: (code: number) => void; stops: number }[] = [];
+  const calls: { spec: ChildSpec; ready: ReturnType<typeof deferred<string>>; reap: ReturnType<typeof deferred<void>>; exit: (code: number) => void; ownerShutdown: () => void; stops: number }[] = [];
   const changes: (() => void)[] = [];
-  const spawn: Spawn = (spec, exit) => {
-    const call = { spec, ready: deferred<string>(), reap: deferred<void>(), exit, stops: 0 };
+  const spawn: Spawn = (spec, exit, ownerShutdown) => {
+    const call = { spec, ready: deferred<string>(), reap: deferred<void>(), exit, ownerShutdown, stops: 0 };
     calls.push(call); changes.splice(0).forEach(resolve => resolve());
     return { ready: call.ready.promise, stop: () => { call.stops++; return call.reap.promise; } };
   };
@@ -123,13 +123,14 @@ test('partial startup failure: A ready, B starts/fails, A reaped before scratch 
   app.ready.resolve('ws://127.0.0.1:4444/');
   await h.count(2);
   const web = h.calls[1];
-  web.exit(42); web.ready.reject(new Error('Vite startup failed')); web.reap.resolve();
+  web.exit(42); const terminal = launcher.settle(129); web.ready.reject(new Error('Vite startup failed')); web.reap.resolve();
   await Promise.resolve();
   assert.ok(existsSync(scratch));
   assert.equal(app.stops, 1);
   app.reap.resolve();
   await starting;
   assert.equal(await launcher.done, 42);
+  assert.equal(await terminal, 42);
   assert.equal(existsSync(scratch), false);
   assert.equal(readFileSync(join(f.a, 'user-owned'), 'utf8'), 'keep');
 });
@@ -139,14 +140,14 @@ test('signal fence wins over late readiness: no Host config or second child afte
   const h = harness(), launcher = new Launcher(root, h.spawn);
   const starting = launcher.start(f.args), app = h.calls[0];
   const scratch = dirname(app.spec.args.at(-1)!);
-  const terminal = launcher.settle(143);
+  const terminal = launcher.settle(129);
   app.ready.resolve('ws://127.0.0.1:4444/');
   await Promise.resolve();
   assert.equal(h.calls.length, 1);
   assert.deepEqual(readdirSync(scratch), ['transport-token']);
   app.exit(0); app.reap.resolve();
   await starting;
-  assert.equal(await terminal, 143);
+  assert.equal(await terminal, 129);
   assert.equal(existsSync(scratch), false);
   assert.equal(h.calls.length, 1);
 });
@@ -194,4 +195,37 @@ test('spawn exception after scratch allocation converges on cleanup without star
 test('native readiness parser accepts only the bounded bound-loopback announcement', () => {
   assert.equal(appServerEndpoint('rustx app-server listening ws://127.0.0.1:1234'), 'ws://127.0.0.1:1234');
   for (const line of ['listening ws://127.0.0.1:1234', 'rustx app-server listening ws://0.0.0.0:1234', 'rustx app-server listening ws://127.0.0.1:12 unexpected', 'x'.repeat(513)]) assert.equal(appServerEndpoint(line), undefined);
+});
+
+for (const [forwarded, expected] of [
+  [[], 'shutdown-on-eof'],
+  [['--listen', 'stdio'], 'shutdown-on-eof'],
+  [['--listen', 'ws://127.0.0.1:8080'], undefined],
+  [['--help'], undefined],
+  [['--models', '--listen'], 'shutdown-on-eof'],
+] as const) test(`standalone transport ownership is explicit for ${JSON.stringify(forwarded)}`, async () => {
+  const h = harness(), launcher = new Launcher(root, h.spawn);
+  await launcher.start(parseArguments(['app-server', '--binary', process.execPath, ...forwarded], root));
+  assert.equal(h.calls[0].spec.ownerStdin, expected);
+  assert.equal(h.calls[0].spec.protocolStdio, true);
+  if (forwarded.length === 0) assert.deepEqual(h.calls[0].spec.args, ['app-server', '--listen', 'stdio']);
+  const terminal = launcher.settle(0); h.calls[0].reap.resolve(); await terminal;
+});
+
+for (const first of ['eof', 'child', 'SIGINT', 'SIGHUP', 'SIGTERM'] as const) test(`standalone terminal race preserves ${first} and reaps once`, async () => {
+  const h = harness(), launcher = new Launcher(root, h.spawn);
+  await launcher.start(parseArguments(['app-server', '--binary', process.execPath], root));
+  const child = h.calls[0];
+  const codes = { eof: 0, child: 27, SIGINT: 130, SIGHUP: 129, SIGTERM: 143 };
+  if (first === 'eof') child.ownerShutdown();
+  else if (first === 'child') child.exit(27);
+  else void launcher.settle(codes[first]);
+  child.ownerShutdown(); child.exit(27);
+  const terminal = launcher.settle(129);
+  assert.equal(launcher.settle(130), terminal);
+  assert.equal(launcher.settle(143), terminal);
+  child.reap.resolve();
+  assert.equal(await terminal, codes[first]);
+  assert.equal(await launcher.done, codes[first]);
+  assert.equal(child.stops, 1);
 });

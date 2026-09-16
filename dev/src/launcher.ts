@@ -37,7 +37,7 @@ export class Launcher {
   }
   #child(spec: ChildSpec, standalone = false) {
     this.#active();
-    const child = this.#spawn(spec, code => { void this.settle(standalone ? code : code || 1); });
+    const child = this.#spawn(spec, code => { void this.settle(standalone ? code : code || 1); }, () => { void this.settle(0); });
     this.#children.push(child);
     return child;
   }
@@ -65,8 +65,13 @@ export class Launcher {
       }
       if (args.mode === 'app-server') {
         const native = [...args.forwarded];
-        if (!native.some((argument, index) => index % 2 === 0 && argument === '--listen')) native.push('--listen', 'stdio');
-        this.#child({ component: 'app-server', command: args.binary, args: ['app-server', ...native], cwd: process.cwd(), protocolStdio: true }, true);
+        // Native owns command-only behavior; its only such form is exact --help.
+        const commandOnly = native.length === 1 && native[0] === '--help';
+        const listen = native.findIndex((argument, index) => index % 2 === 0 && argument === '--listen');
+        if (!commandOnly && listen === -1) native.push('--listen', 'stdio');
+        const ownerStdin = !commandOnly && (listen === -1 || native[listen + 1] === 'stdio')
+          ? 'shutdown-on-eof' : undefined;
+        this.#child({ component: 'app-server', command: args.binary, args: ['app-server', ...native], cwd: process.cwd(), protocolStdio: true, ownerStdin }, true);
         return;
       }
       for (const workspace of args.workspaces) if (!statSync(workspace).isDirectory()) throw new Error(`Workspace is not a directory: ${workspace}`);

@@ -31,9 +31,13 @@ pnpm --dir dev app-server -- \
 ```
 
 This defaults to `--listen stdio`, with owned pipes and unmodified protocol stdout.
-It stays in the foreground until stdin closes or the owner stops it. For an external
+Launcher stdin EOF is an owner shutdown request: the launcher explicitly requests
+native shutdown and waits for settlement (exit 0 if EOF wins). For an external
 WebSocket client, pass native `--listen ws://127.0.0.1:8080 --token-file /private/token`.
-The native parser validates these arguments and the native exit status propagates.
+In explicit WebSocket mode, stdin is not the ownership lifetime; process signals
+and child exit govern launcher lifetime. Exact `app-server -- --help` delegates
+to native help without adding transport arguments. The native parser validates
+these arguments and the native exit status propagates.
 For headless/integration use without pnpm, use `target/debug/rustx app-server`
 with an explicit native transport; see [App Server](docs/app-server-protocol.md).
 
@@ -86,8 +90,8 @@ root. `web-console/scripts/dev-carrier.ts` adapts Vite's listening/close APIs to
 owner IPC; it never starts an App Server or supplies a second composition.
 
 The first terminal cause synchronously fences every subsequent spawn and scratch
-allocation. SIGINT, SIGTERM, startup failures and unexpected child exits converge
-on the same settlement promise. Cleanup stops and waits for all children before
+allocation. SIGINT, SIGHUP, SIGTERM, stdio owner EOF, startup failures and unexpected
+child exits converge on the same settlement promise. Cleanup stops and waits for all children before
 removing scratch, then reports one exit status. Direct executables avoid package
 manager grandchildren. Each child gets an owned process group; graceful native
 shutdown or carrier/TUI IPC comes first, followed by bounded escalation for a stuck
@@ -99,7 +103,8 @@ delivering a kill signal alone is not treated as settlement.
 Scratch contains one random transport token (0600), one Host config (0600), and the
 Host's ephemeral registration metadata, beneath a private temporary directory
 (0700). User settings, runtime roots, Workspace files and persistent Host metadata
-are never launcher scratch and are never removed. Launcher SIGINT/SIGTERM return 130/143;
+are never launcher scratch and are never removed. Launcher SIGINT/SIGHUP/SIGTERM
+return 130/129/143;
 the TUI retains its own raw-key Ctrl+C behavior and ordinary clean exit status.
 A native standalone/TUI exit preserves its status. A Web child exiting unexpectedly,
 even successfully, ends the composition with a failure status.

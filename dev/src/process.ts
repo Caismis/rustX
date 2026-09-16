@@ -12,16 +12,18 @@ export interface ChildSpec {
   readiness?: 'app-server' | 'web';
   terminal?: boolean;
   protocolStdio?: boolean;
+  /** Owner lifetime, independent of protocol stream forwarding. */
+  ownerStdin?: 'shutdown-on-eof';
 }
 export interface OwnedChild {
   readonly pid?: number;
   ready: Promise<string>;
   stop(): Promise<void>;
 }
-export type Spawn = (spec: ChildSpec, exited: (code: number) => void) => OwnedChild;
+export type Spawn = (spec: ChildSpec, exited: (code: number) => void, ownerShutdown: () => void) => OwnedChild;
 
 /** Direct executables only: no pnpm/shell wrapper between us and the owner. */
-export const spawnOwned: Spawn = (spec, exited) => {
+export const spawnOwned: Spawn = (spec, exited, ownerShutdown) => {
   if (process.platform === 'win32') throw new Error('The native rustX runtime currently requires Unix (Linux/macOS); use WSL on Windows.');
   const child = spawn(spec.command, spec.args, {
     cwd: spec.cwd, env: spec.env ?? process.env, shell: false,
@@ -77,12 +79,21 @@ export const spawnOwned: Spawn = (spec, exited) => {
     else process.stdout.write(`[${spec.component}] ${chunk.toString()}`);
   });
   child.stdin?.on('error', () => {});
+  let observingStdin = spec.ownerStdin === 'shutdown-on-eof';
+  const stdinEnded = () => { if (observingStdin) ownerShutdown(); };
+  if (observingStdin) {
+    process.stdin.once('end', stdinEnded);
+    // Defer until the composition has registered this child's ownership.
+    if (process.stdin.readableEnded) queueMicrotask(stdinEnded);
+  }
   if (spec.protocolStdio) process.stdin.pipe(child.stdin!);
 
   let stopping: Promise<void> | undefined;
   return { ready, pid: child.pid, stop() {
     return stopping ??= (async () => {
       finishReady(new Error(`[${spec.component}] stopping`));
+      observingStdin = false;
+      process.stdin.off('end', stdinEnded);
       if (spec.protocolStdio) { process.stdin.unpipe(child.stdin!); process.stdin.pause(); }
       child.stdin?.end();
       const signalGroup = (signal: NodeJS.Signals) => {
