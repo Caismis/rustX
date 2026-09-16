@@ -13,8 +13,10 @@ import { Feedback } from '../presentation/primitives/Surface';
 import { Content, Message } from './components/ChatMessage';
 import { entryIdentity, HISTORY_LIMIT, type TranscriptCache } from '../client/transcript';
 import { useState } from 'react';
+import { activeAttempt } from '../bindings/projection';
+import type { HistoryAction } from './commands/native';
 
-export function Conversation({ snapshot, history, loadEarlier, latest }: { snapshot: RuntimeClientSnapshot; history?: TranscriptCache; loadEarlier?: () => void; latest?: () => void }) {
+export function Conversation({ snapshot, history, loadEarlier, latest, onHistorical, historicalDisabled }: { snapshot: RuntimeClientSnapshot; history?: TranscriptCache; loadEarlier?: () => void; latest?: () => void; onHistorical?: (action: HistoryAction, messageId: string) => void; historicalDisabled?: boolean }) {
   const { messages, streaming } = conversation(snapshot);
   const entries = history?.page.entries ?? snapshot.transcript.entries ?? [];
   const durableIds = new Set(entries.flatMap(entry => entry.item.type === 'message' ? [entry.item.message.id] : []));
@@ -28,6 +30,10 @@ export function Conversation({ snapshot, history, loadEarlier, latest }: { snaps
         <summary>{entry.item.type === 'publication_audit' ? 'Assistant publication / recovery' : `Historical interaction · ${entry.item.interaction_id}`}</summary>
         <pre>{json(entry.item)}</pre>
       </details>}
+      {onHistorical && entry.item.type === 'message' && entry.item.message.role === 'user' && (!entry.item.message.kind || entry.item.message.kind === 'message') && <div className="row" aria-label={`History actions ${entry.item.message.id}`}>
+        {(['fork', 'branch', 'retry'] as const).map(action => <Button size="sm" key={action} disabled={historicalDisabled || (action !== 'fork' && activeAttempt(snapshot))}
+          onClick={() => { if (entry.item.type === 'message') onHistorical(action, entry.item.message.id); }}>{action === 'fork' ? 'Fork' : action === 'branch' ? 'Branch' : 'Retry / Regenerate'}</Button>)}
+      </div>}
     </div>)}
     {messages.some(message => message.role === 'user' && message.kind && message.kind !== 'message' && !durableIds.has(message.id)) && <details><summary>Current context</summary>{messages.filter(message => message.role === 'user' && message.kind && message.kind !== 'message' && !durableIds.has(message.id)).map(message => <Message key={message.id} message={message} />)}</details>}
     {streaming && !durableIds.has(streaming.message_id) && <div data-chat-anchor-key={`message:${streaming.message_id}`}><MessageItem user={false} label={`Streaming · ${streaming.message_id}`}><Content blocks={streaming.blocks ?? []} markdown streaming /></MessageItem></div>}

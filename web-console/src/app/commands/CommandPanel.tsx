@@ -1,0 +1,125 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Rewritten from ui-commands/PopupSelectView.tsx; see PROVENANCE.md. */
+import { useEffect, useRef, useState } from 'react';
+import type { ApprovalMode, UserInputBlock, SessionSnapshot } from '../../../../protocol/app-server/v4';
+import type { AppServerClient } from '../../client/app-server';
+import { Dialog } from '../../presentation/primitives/Dialog';
+import { Button } from '../../presentation/primitives/Button';
+import { CommandSession, type HistoricalSelection, type HistoryAction } from './native';
+import type { CommandId } from './registry';
+import css from './Commands.module.css';
+
+type Choice = { kind: 'model'; model: string } | { kind: 'approval'; mode: ApprovalMode } | { kind: 'history'; action: HistoryAction; selection: HistoricalSelection } | { kind: 'node'; nodeId: string; conversationId: string };
+interface Row { id: string; label: string; detail?: string; choice: Choice }
+export interface CommandRequest { id: CommandId | 'retry' | 'tree'; messageId?: string }
+export function CommandPanel({ request, client, sessionId, current, close, completed, opened }: {
+  request: CommandRequest; client: AppServerClient; sessionId: string; current: () => boolean;
+  close: () => void; completed: () => void; opened: (result: { session: SessionSnapshot; content: UserInputBlock[] }) => void;
+}) {
+  const [rows, setRows] = useState<Row[]>([]), [query, setQuery] = useState(''), [active, setActive] = useState(0);
+  const [busy, setBusy] = useState(true), [error, setError] = useState(''), [detail, setDetail] = useState('');
+  const [stopped, setStopped] = useState(false);
+  const [next, setNext] = useState<number | null | undefined>();
+  const alive = useRef(true), selecting = useRef(false);
+  const options = useRef<HTMLDivElement>(null);
+  const [scope] = useState(() => new CommandSession(client, sessionId, () => alive.current && current()));
+  const valid = () => alive.current && current();
+  const historical = request.id === 'fork' || request.id === 'branch' || request.id === 'retry';
+  const loadBoundaries = async (offset: number) => {
+    const action = request.id;
+    if (action !== 'fork' && action !== 'branch' && action !== 'retry') throw new Error('Not a historical command.');
+    setRows([]);
+    const page = await scope.boundaries(offset);
+    if (!valid()) return;
+    setRows(page.selections.filter(selection => !request.messageId || selection.boundary.message.id === request.messageId).map(selection => ({ id: selection.boundary.message.id,
+      label: selection.boundary.message.content.map(block => block.type === 'text' ? block.text : block.type === 'uploaded_file' ? block.name : `[${block.type}]`).join(' ').slice(0, 240),
+      detail: `${selection.boundary.message.id} · Surface ${selection.boundary.surface_revision}`,
+      choice: { kind: 'history', action, selection } })));
+    setNext(page.nextOffset); setActive(0);
+    if (request.messageId && !page.selections.some(item => item.boundary.message.id === request.messageId)) {
+      if (page.nextOffset != null) return loadBoundaries(page.nextOffset);
+      throw new Error('This message is not an available native user boundary. No mutation was sent.');
+    }
+  };
+  const loadTree = async (offset: number) => {
+    setRows([]);
+    const tree = await scope.tree(offset); if (!valid()) return;
+    setRows(tree.nodes.map(node => ({ id: node.id, label: node.id, detail: `${node.conversation_id} · ${node.origin.type}${node.parent ? ` · parent ${node.parent}` : ''}`, choice: { kind: 'node', nodeId: node.id, conversationId: node.conversation_id } })));
+    setNext(tree.next_offset); setActive(0);
+  };
+  useEffect(() => {
+    alive.current = true;
+    const load = async () => {
+      switch (request.id) {
+        case 'model': {
+          const result = await scope.models(); if (!valid()) return;
+          setDetail(`Current: ${result.current.configured.model}. Choosing a model uses its native defaults.`);
+          setRows((result.catalog.models ?? []).map(model => ({ id: model.model, label: model.model, detail: model.model === result.current.configured.model ? 'Current' : undefined, choice: { kind: 'model', model: model.model } }))); break;
+        }
+        case 'permission': {
+          await client.refresh(sessionId); if (!valid()) return;
+          const snapshot = client.getSnapshot().views[sessionId]?.snapshot;
+          setDetail(`Effective: ${snapshot?.effective_approval_mode ?? 'unavailable'}${snapshot?.pending_approval_mode ? ` · Pending: ${snapshot.pending_approval_mode}` : ''}. Full access bypasses approval policy.`);
+          setRows((['policy', 'full_access'] as const).map(mode => ({ id: mode, label: mode === 'policy' ? 'Policy' : 'Full access', choice: { kind: 'approval', mode } }))); break;
+        }
+        case 'fork': case 'branch': case 'retry':
+          setDetail(request.id === 'fork' ? 'Independent Session. Choose the exact User boundary; its prompt returns to the composer.' : request.id === 'retry' ? 'Create a native branch, switch the idle Session to it, and execute the selected prompt once. The original response remains in its original node.' : 'Create a native branch and switch the idle Session to it. The selected prompt returns to the composer.');
+          await loadBoundaries(0); break;
+        case 'tools': { const result = await scope.tools(); if (valid()) setDetail(JSON.stringify(result, null, 2)); break; }
+        case 'compact': setDetail('Compact this Session through the native context owner.'); break;
+        case 'new': setDetail('Create an independent blank Session using this Session’s native cwd.'); break;
+        case 'tree': setDetail('Native Session lineage. Opening another node switches the idle resident runtime; the original history is preserved.'); await loadTree(0); break;
+        case 'goal': throw new Error('Goal controls are in the Goal dock.');
+        default: { const exhaustive: never = request.id; throw new Error(String(exhaustive)); }
+      }
+    };
+    void load().catch(cause => { if (valid()) setError(String(cause)); }).finally(() => { if (valid()) setBusy(false); });
+    return () => { alive.current = false; };
+  }, []);
+  const choose = async (choice: Choice) => {
+    if (selecting.current || busy || stopped || !valid()) return;
+    selecting.current = true; setBusy(true); setError('');
+    try {
+      switch (choice.kind) {
+        case 'model': await scope.setModel(choice.model); if (valid() && scope.current()) completed(); break;
+        case 'approval': await scope.setApproval(choice.mode); if (valid() && scope.current()) completed(); break;
+        case 'node': if (await scope.openNode(choice.nodeId, choice.conversationId) && valid()) close(); break;
+        case 'history': {
+          const result = await scope.transition(choice.action, choice.selection);
+          if (valid() && result) opened(result); break;
+        }
+        default: { const exhaustive: never = choice; throw new Error(String(exhaustive)); }
+      }
+    } catch (cause) { if (valid()) { setError(`${String(cause)} Close and reread authoritative state before another mutation.`); setStopped(true); } }
+    finally { selecting.current = false; if (valid()) setBusy(false); }
+  };
+  const perform = async () => {
+    if (selecting.current || busy || stopped || !valid()) return;
+    selecting.current = true; setBusy(true); setError('');
+    try {
+      if (request.id === 'compact') { await scope.compact(); if (valid() && scope.current()) completed(); }
+      else if (request.id === 'new') { const result = await scope.create(); if (valid() && result) opened(result); }
+    } catch (cause) { if (valid()) { setError(`${String(cause)} Close and reread authoritative state before another mutation.`); setStopped(true); } }
+    finally { selecting.current = false; if (valid()) setBusy(false); }
+  };
+  const filtered = rows.filter(row => `${row.label} ${row.detail ?? ''}`.toLowerCase().includes(query.toLowerCase()));
+  useEffect(() => { options.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' }); }, [active, query]);
+  const stale = !scope.current();
+  return <Dialog open title={request.id === 'tree' ? 'Session tree' : request.id === 'retry' ? 'Retry / Regenerate' : `/${request.id}`} onClose={close}>
+    <p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{detail}</p>
+    {error && <p role="alert">{error}</p>}
+    {!busy && stale && <p role="status">Attachment changed. Close and reopen to read current native state.</p>}
+    {busy && <p role="status">Waiting for native acknowledgement…</p>}
+    {!busy && !error && !rows.length && (historical || request.id === 'tree' || request.id === 'model') && <p role="status">No native choices available.</p>}
+    {(request.id === 'compact' || request.id === 'new') && <Button disabled={busy || stopped || stale} onClick={() => void perform()}>{request.id === 'compact' ? 'Compact context' : 'Create Session'}</Button>}
+    {!!rows.length && <><input autoFocus className={css.search} aria-label="Filter options" value={query} disabled={busy}
+      onChange={event => { setQuery(event.target.value); setActive(0); }} aria-controls="command-options" aria-activedescendant={filtered[active] ? `choice-${active}` : undefined}
+      onKeyDown={event => {
+        if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && filtered.length) { event.preventDefault(); setActive(index => (index + (event.key === 'ArrowDown' ? 1 : filtered.length - 1)) % filtered.length); }
+        if (event.key === 'Enter' && filtered[active] && !event.nativeEvent.isComposing) { event.preventDefault(); void choose(filtered[active].choice); }
+      }} />
+      <div ref={options} className={css.options} id="command-options" role="listbox" aria-label={historical ? 'Historical boundaries' : 'Native choices'}>{filtered.map((row, index) => <button type="button" role="option" id={`choice-${index}`} aria-selected={active === index} disabled={busy || stopped || stale} key={row.id} className={css.row} onClick={() => void choose(row.choice)}>
+        <span>{row.label}</span><small>{row.detail}</small>
+      </button>)}</div></>}
+    {(historical || request.id === 'tree') && next != null && !request.messageId && <Button disabled={busy} onClick={() => { setBusy(true); void (request.id === 'tree' ? loadTree(next) : loadBoundaries(next)).catch(cause => { if (valid()) setError(String(cause)); }).finally(() => { if (valid()) setBusy(false); }); }}>More {historical ? 'boundaries' : 'nodes'}</Button>}
+  </Dialog>;
+}

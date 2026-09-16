@@ -16,6 +16,8 @@ export interface SessionView {
   // Last server observation, independent of tab visibility and local intent.
   attachment: 'detached' | 'attaching' | 'attached' | 'resynchronizing' | 'stale' | 'unloaded' | 'error';
   target?: AttachmentTarget;
+  /** Exact native node explicitly opened by this view; retained across reconnect. */
+  nodeId?: string;
   snapshot?: RuntimeClientSnapshot;
   trace?: TraceCache;
   cursor?: RuntimeClientCursor;
@@ -99,7 +101,7 @@ function goalRefusal(error: unknown) {
 const READS = new Set<Request1['method']>([
   'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/tree', 'session/deletePreview',
   'session/snapshot', 'session/transcript', 'session/trace', 'settings/read', 'settings/model', 'settings/models',
-  'resources/read', 'background/status', 'subagent/status', 'settings/defaults',
+  'resources/read', 'background/status', 'subagent/status', 'settings/defaults', 'session/boundaries',
 ]);
 export const interactionKey = (ref: InteractionRef) => JSON.stringify([ref.conversation_id, ref.interaction_id]);
 export const sameTarget = (a?: AttachmentTarget, b?: AttachmentTarget) => !!a && !!b &&
@@ -311,15 +313,6 @@ export class AppServerClient {
     const result = await this.request({ method: 'session/list', params: { offset, limit: 32 } }, 'sessions');
     if (this.current(generation)) this.publish({ sessions: result.sessions, nextOffset: result.next_offset });
   }
-  async createSession(cwd: string) {
-    const generation = this.state.generation;
-    const result = await this.request({ method: 'session/create', params: { settings: { cwd } } }, 'session_transition');
-    if (!this.current(generation)) return;
-    if (result.durability_diagnostic) this.publish({ error: `Session create durability diagnostic: ${result.durability_diagnostic}` });
-    await this.listSessions();
-    if (this.current(generation)) await this.attach(result.session.id);
-    return result.session.id;
-  }
   async deleteSession(id: string, expectedRevision: string) {
     const generation = this.state.generation;
     const result = await this.request({ method: 'session/delete', params: { session_id: id, expected_target_revision: expectedRevision } }, 'deletion');
@@ -334,8 +327,9 @@ export class AppServerClient {
     if (this.current(generation)) return result.result;
   }
   /** Explicit Open / Attach gesture. Visibility itself does not acquire a claim. */
-  attach(id: string): Promise<void> {
-    this.setSession(id, { attachmentIntent: 'wanted' });
+  attach(id: string, nodeId?: string): Promise<void> {
+    if (nodeId && this.state.views[id]?.target && this.state.views[id]?.nodeId !== nodeId) return Promise.reject(new Error('Unload the resident Session before opening another node.'));
+    this.setSession(id, { attachmentIntent: 'wanted', ...(nodeId ? { nodeId } : {}) });
     return this.acquireAttachment(id);
   }
   private acquireAttachment(id: string): Promise<void> {
@@ -373,7 +367,7 @@ export class AppServerClient {
     const current = () => this.current(generation) && this.attachmentEpochs.get(id) === epoch;
     let target: AttachmentTarget | undefined;
     try {
-      const result = await this.request({ method: 'session/attach', params: { session_id: id } }, 'attached');
+      const result = await this.request({ method: 'session/attach', params: { session_id: id, node_id: this.state.views[id]?.nodeId } }, 'attached');
       if (!current()) return;
       target = result.target;
       if (result.target.session_id !== id || result.target.conversation_id !== result.snapshot.conversation_id) throw new Error('Mismatched attachment identity.');
@@ -497,6 +491,11 @@ export class AppServerClient {
     if (!this.initialized || view?.attachment !== 'attached' || !view.target) throw new Error('Session is not authoritatively attached. Refresh or reconnect.');
     return view.target;
   }
+  /** Retain an observed tree identity as navigation intent, never infer it from
+   * the Session's mutable default. Reconnect then opens the same lineage. */
+  rememberNode(target: AttachmentTarget, nodeId: string) {
+    if (sameTarget(this.state.views[target.session_id]?.target, target)) this.setSession(target.session_id, { nodeId });
+  }
   async upload(id: string, files: readonly File[]): Promise<UploadedFile[]> {
     const target = this.target(id);
     const generation = this.state.generation;
@@ -514,20 +513,23 @@ export class AppServerClient {
     if (!this.current(generation) || !sameTarget(this.state.views[id]?.target, target)) throw new Error('Upload outcome belongs to an obsolete view. Remove this draft selection; do not replay it.');
     return uploaded.files;
   }
-  async send(id: string, text: string, receipts: readonly UploadReceipt[] = []) {
-    const target = this.target(id);
-    const generation = this.state.generation;
-    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
+  async send(id: string, text: string, receipts: readonly UploadReceipt[] = [], delivery: 'send' | 'steer' = 'send') {
     if (receipts.length > DRAFT_MAX_FILES || receipts.some(receipt => receipt.session_id !== id)) throw new Error('Invalid Session upload receipts.');
     const content: UserInputBlock[] = [
       ...receipts.map(receipt => ({ type: 'upload' as const, ...receipt })),
       ...(text ? [{ type: 'text' as const, text }] : []),
     ];
+    return this.sendContent(id, content, delivery);
+  }
+  async sendContent(id: string, content: UserInputBlock[], delivery: 'send' | 'steer' = 'send') {
+    const target = this.target(id);
+    const generation = this.state.generation;
+    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
     // `turn/start` and `turn/steer` share one native inbound owner: an idle runtime
     // admits a fresh attempt, a running one drains the mailbox at a safe boundary.
     // Until acknowledged, the request is composer transport state only (and a lost
     // response stays an uncertain diagnostic): it has no identity to queue under.
-    const accepted = await this.request({ method: 'turn/start', params: { target, content } }, 'inbound_accepted');
+    const accepted = await this.request({ method: delivery === 'steer' ? 'turn/steer' : 'turn/start', params: { target, content } }, 'inbound_accepted');
     if (current() && !this.state.views[id].submissions?.some(item => item.messageId === accepted.message_id)) {
       this.setSession(id, { submissions: [...(this.state.views[id].submissions ?? []), { messageId: accepted.message_id, content }] });
       this.settleSubmissions(id);

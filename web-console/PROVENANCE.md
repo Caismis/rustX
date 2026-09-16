@@ -1,5 +1,31 @@
 # Pinned Harness presentation provenance
 
+## WEB-05 command and historical-action inspection
+
+Verified external reference HEAD again before editing for #308:
+`c291e7961a515f6d7af9304e7fd1d257929aef26`. The shared JSON inventory contains the
+individual inspected paths, source hashes, local destinations and retained imports.
+
+| Inspected upstream implementation/tests/styles/docs | Local treatment |
+| --- | --- |
+| `ui-commands`: directory, resolution, presentation, service, popup controller, PopupSelectView, README and popup/view tests | One rustX registry replaces the Host directory. `CommandPanel.tsx` rewrites selector filtering, arrows/Enter, loading/errors and dismissal. Native Dialog supplies focus containment/restoration rather than Harness slots. No popup controller or generic execution is imported. |
+| `ui-input-trigger`: detect/menu core, MenuView and styles, README | `CommandMenu.tsx` rewrites textarea-focused discovery, highlight, mouse-down selection and outside dismissal. Leading bare-token grammar is deliberately narrower than upstream inline trigger/claim/reference grammar. |
+| `ui-primitives/src/rank-by-name.ts` and its tests | `matching.ts` adapts prefix/alignment/source-order ranking to one stable identity and multiple aliases. |
+| `ui-commands/PopupSelectView.module.css`, `ui-input-trigger/MenuView.module.css` | `Commands.module.css` adapts rounded elevated bounded menu/row chrome to existing tokens. |
+| `ui-conversation`: InputBar, PermissionSelect, composer styles, apply wiring, keymap tests and README | Existing InputBar extraction gains typed command integration, retaining the #307 dock stack and #319 receipt lifecycle. No Lexical claims, submit machine, queue store or permission presets are imported. |
+| `ui-workspace`: navigation, index wiring, apply tests and README | Inspected fork-after-success and navigation supersession; rustX `NavigationEpoch` revokes only continuations, with native Session operations in `CommandSession`. |
+| `ui-chat`: MessageItem, MessageIconActions, branch-tail tests and README | Historical User-row actions are rustX-authored native-boundary controls. No event assembler or browser response alternatives. |
+| `ui-model-selection`: catalog, ModelSelect/styles, catalog tests and README; `ui-permission-presets` README/styles and actual `ui-conversation/PermissionSelect` consumer | Inspected shared catalog generation, exact selection, popup composition and policy presentation. rustX reads generated native model DTOs and its two ApprovalMode values. Provider grouping, Host presets and string `/permission` execution excluded. |
+
+The four new source-derived destinations carry MIT headers. `registry.ts`,
+`native.ts`, native integration tests and browser/provider fixtures are rustX-owned
+rewrites of the product contract, not copied Harness runtime code. React and existing
+CSS tokens/primitives are retained; no dependencies were added. The inventory records
+the updated InputBar import closure. Authority deliberately excluded throughout:
+Host/Remote lifecycle, Session Controller, conversation/events, Cordis/plugins,
+generic command execution, queue ownership, retry policy, persistence and upload
+ownership. No second provenance mechanism is introduced.
+
 **UI source reuse does not transfer semantic ownership.**
 
 Repository: https://github.com/deepseek-ai/deepseek-harness
@@ -54,9 +80,10 @@ The exact paths are in `inspected`. Important inspected-only inputs include:
 - `ui-chat/src/client/chat/AssistantMarkdown.tsx`: actual Web Markdown path and
   its Host `/api/file` rewrite, attachment slots and file-mention owners. None of
   that adapter was copied. Assistant text is supplied by rustX `Conversation`.
-- `ui-commands/src/client/PopupSelectView.tsx`: focus/outside interaction contract
-  inspected; Session-aware popup controller, command directory and Remote actions
-  excluded. The generic menu is derived from Menu, not this command subsystem.
+- `ui-commands/src/client/PopupSelectView.tsx`: initially inspected only in #304;
+  WEB-05 now rewrites its selector interaction in `app/commands/CommandPanel.tsx`.
+  Its Session-aware popup controller, Host directory and Remote actions remain
+  excluded. The generic primitive Menu still derives from ui-primitives/Menu.
 - `ui-primitives/src/clipboard.ts`: inspected; deprecated execCommand fallback
   excluded. The small rustX helper reports browser permission failure accurately.
 - `ui-primitives/tests/markdown.client.spec.tsx`: semantic/security examples

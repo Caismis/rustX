@@ -750,3 +750,101 @@ defect on the managed MCP path, so this branch also carries a Rust fix and its
 diff is no longer Web-only. The defect, its root cause in rmcp's `Auto`
 lifecycle, the fix and its residual risk are recorded in
 [pr-321-mcp-handshake-flake.md](../docs/pr-321-mcp-handshake-flake.md).
+
+## WEB-05 / #308 validation (2026-09-16)
+
+Base: `5537d1e27240c0b239ea0ba8403e784e54bd3117`, including #304, #292,
+#319 (native Session uploads), and #307. Work was isolated in the
+`rustX-issue-308` worktree. The original checkout was not edited.
+Harness HEAD was verified as `c291e7961a515f6d7af9304e7fd1d257929aef26`;
+the shared provenance inventory records inspected and adapted sources.
+
+### Commands and results
+
+Commands below are from the repository root unless a directory is indicated.
+The final diff changes Web source/docs and one deterministic provider scenario;
+it changes no Rust source, protocol DTO, dependency manifest, or lockfile.
+
+| Command | Result |
+| --- | --- |
+| `pnpm --dir web-console install --frozen-lockfile` | Passed |
+| `pnpm --dir tui install --frozen-lockfile` | Passed; shared TUI dependency for Web checks |
+| `uv sync --frozen` (test-support/fake-provider) | Passed |
+| `cargo build --bins` | Passed; real App Server and supervisors |
+| `uv run --frozen pytest` (test-support/fake-provider) | 51 passed |
+| `pnpm --dir web-console typecheck` | Passed |
+| `pnpm --dir web-console test` | 208 passed, 16 files |
+| `pnpm --dir web-console exec vitest run test/commands.test.tsx` | Passed during focused development; included in the full run above |
+| `pnpm --dir web-console check:provenance` | 68 source records, 100 production package notices passed |
+| `pnpm --dir web-console build` | Passed; existing non-fatal bundle-size advisory |
+| `pnpm --dir web-console exec playwright test test/e2e/commands.spec.ts` | Passed against the real App Server |
+| `pnpm --dir web-console test:e2e` | 8 passed against the real App Server |
+| `git diff --check` | Passed |
+
+The current CI workflow was inspected. All applicable Web-lane checks and the
+changed fake-provider suite ran locally. Rust-wide clippy/test/format and protocol
+regeneration checks were not rerun for this Web-only implementation; neither Rust
+nor generated bindings changed. No applicable validation was skipped for an
+environment limitation. Chromium was already installed. GitHub Actions still
+owns the full platform matrix, including macOS.
+
+### Deterministic evidence
+
+- Registry tests cover `/`, exact identities, localized/alternate aliases, fuzzy
+  subsequences, stable tie ordering, keyboard selection/Escape, unsupported slash
+  refusal, and ordinary prompt submission.
+- Typed selector tests assert native catalog/current/setModel and approval
+  requests, filtering/Enter, and stale Session/attachment completion fences.
+- Historical tests assert exact target/node/message/revision, explicit rejection
+  with no revision substitution, authoritative Fork-before-open, in-Session
+  Branch, and upload receipts without browser file copies. An unavailable
+  historical message cannot substitute another displayed boundary.
+- Retry tests assert branch -> unload -> exact attach -> one native editor input
+  submission; no previous Assistant replacement or browser history copying.
+- Deferred response barriers commit and hold Fork/Branch/Retry, navigate, then
+  release. The mutation remains committed but the continuation does not redirect.
+  App-level tests exercise dismissal and navigation to Session B as well.
+- Queue/Steer tests use authoritative running snapshots and assert `turn/start`
+  versus `turn/steer` requests; idle always uses `turn/start`. Accepted queue
+  edit/remove/reorder remains absent and deferred to #309.
+- Lost responses for settings, lineage, create/compact, and each retry step stop
+  continuation and never replay. Reconnect rereads native settings/Session state;
+  old generation/socket callbacks cannot alter the new view.
+- `commands.spec.ts` uses the real App Server and controlled provider to select
+  model/approval, restore focus on Escape, reject unsupported slash input, retry
+  upload-bearing history, reopen the original native node, independently Fork,
+  verify destination upload bytes, and reconnect. Provider assertions require a
+  fresh execution with no old Assistant response in its context.
+- Desktop retry and mobile selector screenshots were visually inspected; the
+  mobile test also asserts no horizontal overflow and no browser errors. Evidence
+  lives in ignored `test-results/commands-*.png`, collected by CI.
+
+No sleeps establish ordering: barriers, native acknowledgements/projections, and
+Playwright assertions do; timeouts only guard liveness.
+
+### Findings and corrections during development
+
+Initial unit failures exposed fixture wait-count and selector ambiguity, plus
+old callback/queue-label expectations; these were corrected without weakening
+native request assertions. Initial provenance checks identified the new derived
+sources and imports; the existing inventory was extended, not bypassed.
+The first browser run found focus restoration blocked by disabling the composer
+behind the modal; native modal inertness now handles that. A later provider
+assertion incorrectly expected live model selection to persist into a cold branch:
+native semantics correctly use Session/launch defaults on cold resume. The fixture
+and documentation now state this lifetime explicitly. All final checks pass.
+
+Native historical Surface revisions are immutable cuts: an older valid revision
+is not inherently stale. Tests reject invalid revisions/boundaries and prove the
+browser never replaces the selected cut with a freshly fetched one.
+
+### Final architecture audit
+
+One registry/grammar feeds explicit closed typed dispatch. No command interpreter,
+arbitrary command string RPC, compatibility upload path, Harness runtime authority,
+or second composer/queue/history state machine was introduced. `/settings` has no
+current legitimate surface and is omitted. Goal navigation uses the existing dock.
+Native branch/fork cuts and #319 upload ownership remain unchanged. Reconnect and
+navigation invalidate UI continuations, never pretend to cancel committed native
+mutations. Lost mutation responses remain uncertain; no browser idempotency or
+automatic replay was added. Todo -> Goal -> Queue -> Composer is preserved.

@@ -54,6 +54,20 @@ def web_chat_history() -> Scenario:
 SCENARIOS["web_chat_history"] = web_chat_history
 
 
+def web_commands() -> Scenario:
+    """Real native retry consumes the returned boundary input, never old output."""
+    def expected(model: str) -> Expect:
+        return Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=model,
+                      body_contains=("Regenerate my uploaded note", "user_uploaded_files", "note.txt", ".agents/uploads/"),
+                      body_excludes=("Original native answer", "Regenerated native answer"))
+    return Scenario("web_commands",
+                    Step(expected("second-model"), Stream(Text("Original native answer"), Finish())),
+                    Step(expected("console-model"), Stream(Text("Regenerated native answer"), Finish())))
+
+
+SCENARIOS["web_commands"] = web_commands
+
+
 def web_composer_context() -> Scenario:
     """Native Todo and Goal owners feed the composer docks; one Human input waits in the mailbox.
 
