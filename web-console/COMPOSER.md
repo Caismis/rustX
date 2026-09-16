@@ -29,7 +29,7 @@ as history; they never feed a dock.
 | --- | --- | --- | --- |
 | Todo | Conversation-owned `ConversationTodoList` | `snapshot.todos` | none |
 | Goal | `GoalDomain` (durable) + process-local activation | `snapshot.goal` (`GoalView`) | `goal/control` pause, resume, edit objective, edit budget |
-| Queue | Conversation inbound mailbox | `snapshot.inbound.pending`, `snapshot.attempt` | none |
+| Queue | Conversation inbound mailbox | `snapshot.inbound.pending`, `snapshot.attempt` | exact pending edit/remove (WEB-06) |
 
 No App Server protocol change was needed: all three facts were already typed in
 the common snapshot.

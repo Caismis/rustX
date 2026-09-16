@@ -89,3 +89,16 @@ it('discard abandons the pinned policy draft and uses current User authority for
   fireEvent.change(screen.getByLabelText('Approval · native'), { target: { value: 'always' } });
   expect(screen.getByText(/Draft revision: u2/)).toBeTruthy();
 });
+
+it('a new HTTP definition omits unauthored stdio fields instead of sending an empty command', async () => {
+  const save = vi.fn().mockResolvedValue(true);
+  render(<Integrations source={source()} busy={false} save={save} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Add User MCP server' }));
+  fireEvent.change(screen.getByLabelText('Server identity'), { target: { value: 'network' } });
+  fireEvent.change(screen.getByLabelText('Transport'), { target: { value: 'http' } });
+  fireEvent.change(screen.getByLabelText('URL'), { target: { value: 'http://127.0.0.1:1/mcp' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save MCP' }));
+  await waitFor(() => expect(save).toHaveBeenCalledWith('user', expect.objectContaining({
+    kind: 'mcp', id: 'network', authored: expect.objectContaining({ transport: 'http', command: null, args: [], cwd: null, url: 'http://127.0.0.1:1/mcp' }),
+  }), 'u1'));
+});

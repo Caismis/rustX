@@ -113,7 +113,7 @@ Added exact versions matching the selected upstream manifest baseline:
 
 Development types: `@types/mdast` 4.0.4 and `micromark-util-types` 2.0.2.
 KaTeX supplies its own types. Exact direct and transitive resolution is in pnpm-lock.yaml.
-All retained package license texts (98 production-install packages, including
+All retained package license texts (100 production-install packages, including
 MIT/ISC/Apache/BSD notices) are reproduced in THIRD-PARTY-NOTICES.txt. KaTeX's
 shipped MIT notice covers its distribution. System fonts remain unbundled references.
 The build reports an approximately 1 MB minified main chunk from React + parser +
@@ -344,3 +344,39 @@ Excluded: Harness namespace/schema engine, Cordis services, dynamic plugin loade
 plugin activation/runtime, configuration merge, credential store and MCP client.
 The browser uses rustX Settings CAS and native inventory. There is no secret input,
 source content editor, browser-direct MCP connection or plugin backend.
+
+
+## WEB-10 final audit
+
+The external clean checkout was verified at the exact pin above. All **74** source
+records, including every `additional_sources` hash, match the reference. All 201
+inspected paths exist. The mapped package closure is ui-primitives, ui-theme,
+ui-layout, ui-sidebar, ui-chat, ui-conversation, ui-tool, ui-approval,
+ui-user-questions, ui-attachment, ui-goal, ui-commands, ui-input-trigger,
+ui-trajectory, ui-workspace, ui-settings-general, ui-settings-models and
+ui-settings-plugin-inventory. Exact files/treatments remain in the same inventory.
+
+Run the optional maintainer audit without downloading anything:
+
+```sh
+node scripts/provenance.ts --reference /absolute/path/deepseek-harness-reference
+```
+
+This checks clean reference HEAD and original-byte hashes in addition to the
+ordinary inventory/import/header gate. Normal CI/build neither needs that checkout
+nor fetches upstream. Existing notices cover 100 installed production packages;
+production artifact checks compare both notice files byte-for-byte.
+
+No new Harness source is imported. Existing derived `Trajectory.tsx` gains native
+browser tab keyboard behavior/panel labelling; `Integrations.tsx` fixes absent
+command draft encoding. Both retain their original attribution; the inventory
+records the added Trajectory import and amended treatments. The icon treatment
+now correctly says eleven glyphs (the earlier four-only text predated WEB-04).
+The keyboard helper, fault probe, new acceptance tests and launcher repairs are
+rustX-authored. There are no new dependencies or lockfile changes.
+
+Review of actual source/imports, Host metadata and browser persistence found no
+Harness Host/Remote/Cordis/Session runtime owner, source-fetch build step, hidden
+config store or branding assets. `artifact/read` remains exclusively Tool managed
+output; typed Session upload receipts/files have no ArtifactStore compatibility
+path. No second provenance mechanism has been introduced.

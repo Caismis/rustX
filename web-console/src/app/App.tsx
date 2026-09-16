@@ -1,3 +1,4 @@
+import { navigateTabs } from '../presentation/primitives/tabs';
 import { Settings } from './settings/Settings';
 import { HttpWorkspaceHost, type ProductHostWorkspaces } from '../workspaces/host';
 import { WorkspaceNavigation } from '../workspaces/WorkspaceNavigation';
@@ -179,8 +180,8 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
       })} />
   </Sidebar>} dockLabel="Developer inspector" dock={<Inspector client={client} state={state} view={view} />}>
     <header className="console-header"><div><div className="eyebrow">DEVELOPER WEB CONSOLE</div><h1>Sessions, in motion.</h1></div><Pill>{state.connection}</Pill></header>
-    <nav className="tabs" aria-label="Open Session views">{tabs.map(id => <div className="tab" key={id}>
-      <Pill role="tab" active={selected === id} aria-selected={selected === id} onClick={() => focusSession(id)}>{state.sessions.find(item => item.id === id)?.name ?? id.slice(0, 16)}</Pill>
+    <nav className="tabs" role="tablist" aria-label="Open Session views" onKeyDown={navigateTabs}>{tabs.map(id => <div className="tab" key={id}>
+      <Pill role="tab" id={`session-tab-${id}`} aria-controls="session-view" tabIndex={selected === id ? 0 : -1} active={selected === id} aria-selected={selected === id} onClick={() => focusSession(id)}>{state.sessions.find(item => item.id === id)?.name ?? id.slice(0, 16)}</Pill>
       <button className="close-tab" aria-label={`Close view ${id}`} onClick={() => {
         const remaining = tabs.filter(item => item !== id); setTabs(remaining); if (selected === id) focusSession(remaining[0]);
         run(() => client.release(id, false));
@@ -203,7 +204,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
         setError(`Deletion result: ${json(result)}`); setPreview(undefined);
       })}>Confirm delete</Button></div>
     </section>}
-    {view ? <>
+    {view ? <section className="session-panel" id="session-view" role="tabpanel" aria-labelledby={`session-tab-${view.id}`}>
       <section className="session-toolbar"><div><strong>{view.id}</strong><small>{view.settings?.cwd ?? 'cwd unavailable'} · {view.attachment}</small></div>
         <div className="row"><Button size="sm" disabled={!connected} onClick={() => focusSession(view.id, { attach: true, preserveDraft: true })}>{view.target && view.attachmentIntent === 'wanted' ? 'Resync' : 'Attach / cold resume'}</Button>
           <Button size="sm" disabled={!attached || commandOpen || !lineageSwitchSafe(view)} onClick={() => invokeCommand({ id: 'tree' })}>Session tree</Button>
@@ -211,7 +212,8 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
           <Button size="sm" disabled={!attached} onClick={() => run(() => client.release(view.id, true))}>Unload runtime</Button></div>
       </section>
       {view.attachment !== 'attached' && <p className="notice">{view.attachment}: last observed values may be stale. Execution and pending interactions remain server-owned. {view.error}</p>}
-      <div className="row" role="tablist" aria-label="Conversation view"><Button role="tab" aria-selected={conversationMode === 'chat'} onClick={() => setConversationMode('chat')}>Chat</Button><Button role="tab" aria-selected={conversationMode === 'trajectory'} onClick={() => setConversationMode('trajectory')}>Trajectory</Button><Button role="tab" aria-selected={conversationMode === 'settings'} onClick={() => setConversationMode('settings')}>Settings</Button></div>
+      <div className="row" role="tablist" aria-label="Conversation view" onKeyDown={navigateTabs}>{(['chat', 'trajectory', 'settings'] as const).map(mode => <Button key={mode} role="tab" id={`view-tab-${mode}`} aria-controls="conversation-view" tabIndex={conversationMode === mode ? 0 : -1} aria-selected={conversationMode === mode} onClick={() => setConversationMode(mode)}>{mode === 'chat' ? 'Chat' : mode === 'trajectory' ? 'Trajectory' : 'Settings'}</Button>)}</div>
+      <section className="conversation-panel" id="conversation-view" role="tabpanel" aria-labelledby={`view-tab-${conversationMode}`} tabIndex={0}>
       <ArtifactContext.Provider value={artifacts}>{conversationMode === 'settings' ? <Settings key={view.id} client={client} sessionId={view.id} /> : conversationMode === 'trajectory' && view.trace ? <Trajectory key={view.id} cache={view.trace} onSelect={id => client.selectTrace(view.id, id)} loadEarlier={() => run(() => client.loadEarlierTrace(view.id))} latest={() => client.latestTrace(view.id)} /> : <ChatViewport key={`${view.id}:${view.target?.attachment_id ?? state.generation}`}>
         {view.snapshot && <><Conversation snapshot={view.snapshot} history={view.history} loadEarlier={() => run(() => client.loadEarlier(view.id))} latest={() => client.latestTranscript(view.id)}
           lineageSwitchSafe={lineageSwitchSafe(view)} historicalDisabled={composerDisabled || commandOpen} onHistorical={(id, messageId) => invokeCommand({ id, messageId })} /><RuntimeFacts snapshot={view.snapshot} />
@@ -235,6 +237,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
             catch (cause) { if (generation === client.getSnapshot().generation) setError(String(cause)); return false; }
             finally { if (generation === client.getSnapshot().generation) setSending(current => { const next = { ...current }; delete next[view.id]; return next; }); }
           }} />} />}
+      </section>
       {commandOpen && <CommandPanel key={`${command.generation}:${command.sessionId}:${command.request.id}:${command.request.messageId ?? ''}`} request={command.request} client={client} sessionId={command.sessionId} current={() => command.current() && client.getSnapshot().generation === command.generation}
         succeeded={() => { setConsumed(previous => ({ id: command.request.id, sequence: (previous?.sequence ?? 0) + 1 })); }}
         close={() => {
@@ -246,6 +249,6 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
           setTabs(current => current.includes(result.session.id) ? current : [...current, result.session.id]);
         }} />}
 
-    </> : <div className="empty"><h2>One runtime. Many Sessions.</h2><p>Choose a Host-authorized Workspace in the sidebar, then create a Session. Project trust is resolved independently by rustX.</p><p>Switching or closing views never cancels work.</p></div>}
+    </section> : <div className="empty"><h2>One runtime. Many Sessions.</h2><p>Choose a Host-authorized Workspace in the sidebar, then create a Session. Project trust is resolved independently by rustX.</p><p>Switching or closing views never cancels work.</p></div>}
   </AppFrame>;
 }

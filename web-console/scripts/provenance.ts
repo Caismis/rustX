@@ -2,20 +2,39 @@ import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { resolve, relative, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import ts from 'typescript';
+import { execFileSync } from 'node:child_process';
 const web = resolve(import.meta.dirname, '..');
 const repository = resolve(web, '..');
 const inventory = JSON.parse(readFileSync(resolve(web, 'source-inventory.json'), 'utf8'));
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message); }
 assert(inventory.commit === 'c291e7961a515f6d7af9304e7fd1d257929aef26', 'Unreviewed Harness revision');
 assert(inventory.repository === 'https://github.com/deepseek-ai/deepseek-harness', 'Wrong upstream');
+// Optional maintainer audit against the external checkout. Ordinary build/CI
+// remains offline and never downloads or executes upstream source.
+const referenceIndex = process.argv.indexOf('--reference');
+const reference = referenceIndex < 0 ? undefined : process.argv[referenceIndex + 1];
+if (referenceIndex >= 0) {
+  assert(reference && !reference.startsWith('--'), '--reference requires a checkout path');
+  assert(execFileSync('git', ['-C', reference, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() === inventory.commit, 'Reference HEAD differs from pinned Harness');
+  assert(execFileSync('git', ['-C', reference, 'status', '--porcelain'], { encoding: 'utf8' }).trim() === '', 'Reference checkout is dirty');
+}
+function verifyReference(source: { upstream: string; upstream_sha256: string }) {
+  if (!reference) return;
+  assert(!source.upstream.includes('..') && !source.upstream.startsWith('/'), 'Invalid upstream path');
+  assert(createHash('sha256').update(readFileSync(resolve(reference, source.upstream))).digest('hex') === source.upstream_sha256, `Upstream hash mismatch: ${source.upstream}`);
+}
 const destinations = new Set<string>();
 for (const entry of inventory.files) {
   assert(!destinations.has(entry.destination), `Duplicate destination ${entry.destination}`);
   destinations.add(entry.destination);
   assert(entry.destination.startsWith('web-console/') && !entry.destination.includes('..'), 'Invalid destination');
   assert(entry.upstream && entry.treatment && /^[a-f0-9]{64}$/.test(entry.upstream_sha256), 'Incomplete provenance');
+  verifyReference(entry);
   assert(entry.license.includes('DeepSeek') && Array.isArray(entry.retained_dependencies) && Array.isArray(entry.excluded_dependencies), 'Missing closure/license');
-  for (const source of entry.additional_sources ?? []) assert(source.upstream && source.treatment && /^[a-f0-9]{64}$/.test(source.upstream_sha256), 'Incomplete additional source provenance');
+  for (const source of entry.additional_sources ?? []) {
+    assert(source.upstream && source.treatment && /^[a-f0-9]{64}$/.test(source.upstream_sha256), 'Incomplete additional source provenance');
+    verifyReference(source);
+  }
   const file = resolve(repository, entry.destination);
   assert(existsSync(file), `Missing destination ${entry.destination}`);
   if (/\.(tsx?|css)$/.test(file)) assert(readFileSync(file, 'utf8').includes('Copyright (c) 2026 DeepSeek'), `Missing header ${file}`);

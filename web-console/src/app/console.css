@@ -48,3 +48,5 @@ label { display: grid; gap: 5px; font-size: 12px; }
 .activity-card header { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .activity-card small { opacity: .7; }
 .activity-card p { margin-block: 8px 0; white-space: pre-wrap; }
+
+.session-panel, .conversation-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }

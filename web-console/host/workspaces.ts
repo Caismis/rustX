@@ -16,7 +16,9 @@ type Registration = { id: string; location: string; displayName: string };
 export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private registrations: Registration[];
   private readonly roots: LocalHostConfig['roots'];
-  constructor(private readonly config: LocalHostConfig) {
+  private readonly config: LocalHostConfig;
+  constructor(config: LocalHostConfig) {
+    this.config = config;
     if (!isAbsolute(config.metadataFile)) throw new Error('Host metadataFile must be absolute');
     this.roots = config.roots.map(root => {
       if (!isAbsolute(root.cwd) || !statSync(root.cwd).isDirectory()) throw new Error('Host roots must be absolute existing directories');

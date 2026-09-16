@@ -8,7 +8,7 @@ export async function startWorkspaceHost(config: LocalHostConfig) {
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Host address missing');
-  return { host, url: `http://127.0.0.1:${address.port}`, stop: () => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) };
+  return { host, url: `http://127.0.0.1:${address.port}`, stop: () => !server.listening ? Promise.resolve() : new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) };
 }
 /** Same-origin deployment proxy to the actual isolated Node Product Host fixture. */
 export async function routeWorkspaceHost(page: Page, fixture: { workspaceHostUrl: string }) {

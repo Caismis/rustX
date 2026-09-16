@@ -98,3 +98,42 @@ def web_composer_context() -> Scenario:
 
 
 SCENARIOS["web_composer_context"] = web_composer_context
+
+
+def web_upload_conformance() -> Scenario:
+    """The model requests ordinary workspace Tool IO, before/after source deletion.
+
+    The glob only discovers the server-chosen batch name. The browser separately
+    asserts the model request's exact absolute path against the upload receipt.
+    No ArtifactStore or emulator filesystem reads participate.
+    """
+    command = "for f in .agents/uploads/*/*/acceptance.txt; do printf '%s\\n' \"$PWD/$f\"; cat \"$f\"; done"
+    steps = []
+    for phase in ("Source", "Destination"):
+        steps.extend([
+            Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                        body_contains=("Use my uploaded files", "<user_uploaded_files>", "acceptance.txt")),
+                 Stream(ToolCall(f"upload-{phase.lower()}", "bash", json.dumps({
+                     "command": command, "execution_mode": "foreground",
+                 })), Finish("tool_calls"))),
+            Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                        body_contains=("UPLOAD_NATIVE_SENTINEL", ".agents/uploads/")),
+                 Stream(Text(f"{phase} upload read through native Tool."), Finish())),
+        ])
+    return Scenario("web_upload_conformance", *steps)
+
+
+SCENARIOS["web_upload_conformance"] = web_upload_conformance
+
+
+def web_workflow_conformance() -> Scenario:
+    # Reuse the native conformance script, including its child-admission gate.
+    from dataclasses import replace
+    from .conformance import workflow_output
+    return Scenario("web_workflow_conformance", *(
+        replace(step, expect=replace(step.expect, model="console-model"))
+        for step in workflow_output().steps
+    ))
+
+
+SCENARIOS["web_workflow_conformance"] = web_workflow_conformance

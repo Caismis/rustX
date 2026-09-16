@@ -5,6 +5,14 @@ import { AppServerHost } from '../../../tui/src/app-server/host';
 
 test('native history, rich settlement, real image decode/lightbox, reconnect and native upload receipts', async ({ page }) => {
   const fixture = await startDogfood('web_chat_history');
+  await page.addInitScript(() => {
+    const urls = new Set<string>();
+    const create = URL.createObjectURL.bind(URL), revoke = URL.revokeObjectURL.bind(URL);
+    URL.createObjectURL = value => { const url = create(value); urls.add(url); return url; };
+    URL.revokeObjectURL = url => { urls.delete(url); revoke(url); };
+    Object.defineProperty(window, 'acceptanceObjectUrls', { get: () => urls.size });
+  });
+  const urlCount = () => page.evaluate(() => (window as unknown as { acceptanceObjectUrls: number }).acceptanceObjectUrls);
   let passed = false;
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -44,7 +52,7 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     expect(Math.abs(await anchor.evaluate(el => el.getBoundingClientRect().top) - anchorTop)).toBeLessThan(2);
     // WEB-03 uses this same native Session, transcript and provider scenario.
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
-    const trajectory = page.getByLabel('Trajectory', { exact: true });
+    const trajectory = page.getByRole('region', { name: 'Trajectory', exact: true });
     const ledger = trajectory.getByRole('table', { name: 'Trace ledger' });
     await expect(ledger).toHaveAttribute('aria-rowcount', '32');
     await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(2);
@@ -54,6 +62,7 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     const traceAnchorTop = await traceAnchor.evaluate(el => el.getBoundingClientRect().top);
     await trajectory.getByRole('button', { name: 'Load older Trace', exact: true }).click();
     await expect(ledger).toHaveAttribute('aria-rowcount', '64');
+    expect(await trajectory.locator('[data-trace-id]').count()).toBeLessThan(64);
     await expect.poll(async () => Math.abs(await trajectory.locator(`[data-trace-id="${traceAnchorId}"]`).evaluate(el => el.getBoundingClientRect().top) - traceAnchorTop)).toBeLessThan(2);
     const requestRecord = traceBeforeBrowser.entries.find(entry => entry.request)!;
     await trajectory.getByLabel('Search loaded Trace').fill(requestRecord.request!.request_id);
@@ -71,6 +80,14 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await fixture.gate('settle-chat');
     await expect(page.getByRole('heading', { name: 'Rich reply' })).toHaveCount(1);
+    // Reconstruct a bounded latest window while the same native attempt is
+    // held mid-stream, then page its history without changing live ownership.
+    await page.getByRole('button', { name: 'Reconnect', exact: true }).click();
+    await expect(page.locator('.status strong')).toHaveText('connected');
+    await page.getByRole('button', { name: 'Load earlier', exact: true }).click();
+    await expect(page.getByText('Answer 0', { exact: true })).toHaveCount(1);
+    await expect(page.locator('.attempt-status')).toContainText('running');
+
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     await expect.poll(() => ledger.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(2);
     await expect(trajectory.getByRole('table')).toContainText('running');
@@ -121,11 +138,15 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
       await page.keyboard.press('Escape');
     };
     await decode();
+    expect(await urlCount()).toBe(1);
     await page.getByRole('button', { name: 'Reconnect', exact: true }).click();
     await expect(page.locator('.status strong')).toHaveText('connected');
     await expect(load).toHaveCount(1);
+    expect(await urlCount()).toBe(0);
     await decode();
+    expect(await urlCount()).toBe(1);
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
+    await expect.poll(urlCount).toBe(0);
     await trajectory.getByLabel('Search loaded Trace').fill('chat-image');
     await trajectory.getByLabel('Trace category').selectOption('tool');
     const tool = trajectory.locator('[data-trace-id]');

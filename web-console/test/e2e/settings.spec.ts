@@ -1,4 +1,6 @@
 import { expect, test } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 
@@ -40,6 +42,39 @@ test('native Settings source save, reset, catalog edit and responsive projection
     await expect(settings.getByRole('status')).toContainText('Source committed');
     await settings.getByRole('button', { name: 'Reload / discard draft' }).click();
     await expect(settings.getByLabel('Context window').first()).toHaveValue('256000');
+    // Complete the User-only structured catalog lifecycle, with no provider IO.
+    await settings.getByLabel('New Provider identity').fill('acceptance');
+    await settings.getByRole('button', { name: 'Add Provider', exact: true }).click();
+    const provider = settings.locator('article').filter({ has: page.getByRole('heading', { name: 'acceptance', exact: true }) });
+    await provider.getByLabel('Endpoint · acceptance').fill('http://127.0.0.1:1/v1');
+    await provider.getByLabel('Credential environment reference · acceptance').fill('RUSTX_CONSOLE_FIXTURE_KEY');
+    await provider.getByRole('button', { name: 'Add model to acceptance' }).click();
+    await provider.getByLabel('Model identity', { exact: true }).fill('explicit-model');
+    await provider.getByLabel('Context window').fill('64000');
+    await provider.getByLabel('Maximum output tokens').fill('1024');
+    await provider.getByRole('checkbox', { name: 'text', exact: true }).nth(0).check();
+    await provider.getByRole('checkbox', { name: 'text', exact: true }).nth(1).check();
+    const catalogPath = join(dirname(fixture.settings), 'models.toml');
+    const beforeInvalid = readFileSync(catalogPath, 'utf8');
+    await settings.getByRole('button', { name: 'Save User catalog', exact: true }).click();
+    await expect(settings.getByRole('alert')).toContainText('invalid_params');
+    expect(readFileSync(catalogPath, 'utf8')).toBe(beforeInvalid);
+    await provider.getByText('Request defaults and protocol compatibility', { exact: true }).click();
+    await provider.getByLabel('Chat reasoning replay').selectOption('omit');
+    await settings.getByRole('button', { name: 'Save User catalog', exact: true }).click();
+    await expect(settings.getByRole('status')).toContainText('Source committed');
+    await settings.getByRole('button', { name: 'Reload / discard draft' }).click();
+    await expect(provider.getByLabel('Model identity', { exact: true })).toHaveValue('explicit-model');
+    await provider.getByLabel('Endpoint · acceptance').fill('http://127.0.0.1:2/v1');
+    await settings.getByRole('button', { name: 'Save User catalog', exact: true }).click();
+    await expect(settings.getByRole('status')).toContainText('Source committed');
+    await settings.getByRole('button', { name: 'Reload / discard draft' }).click();
+    await expect(provider.getByLabel('Endpoint · acceptance')).toHaveValue('http://127.0.0.1:2/v1');
+    await provider.getByRole('button', { name: 'Delete Provider acceptance' }).click();
+    await settings.getByRole('button', { name: 'Save User catalog', exact: true }).click();
+    await expect(settings.getByRole('status')).toContainText('Source committed');
+    await settings.getByRole('button', { name: 'Reload / discard draft' }).click();
+    await expect(provider).toHaveCount(0);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     await page.screenshot({ path: 'test-results/settings-desktop.png', fullPage: true });
     await settings.getByText('User Provider / model catalog', { exact: true }).scrollIntoViewIfNeeded();

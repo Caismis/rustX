@@ -1,4 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Rewritten from ui-trajectory; see PROVENANCE.md. */
+import { navigateTabs } from '../presentation/primitives/tabs';
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { TraceEntry, TraceKind, TraceText } from '../../../protocol/app-server/v5';
@@ -52,8 +53,8 @@ function Inspector({ entry, close }: { entry: TraceEntry; close: () => void }) {
   const tabs = ['Summary', ...(entry.request || entry.tool ? ['Input'] : []), ...(entry.output.length || entry.reasoning.length ? ['Output'] : []), ...(entry.request ? ['Schema', 'Usage'] : []), 'Timing', ...(entry.artifacts.length ? ['Attachments'] : [])];
   const active = tabs.includes(tab) ? tab : 'Summary';
   return <aside className={css.inspector} aria-label="Trace record inspector"><header><strong>{label(entry)}</strong><Button size="sm" onClick={close}>Close record</Button></header>
-    <div role="tablist" aria-label="Record sections">{tabs.map(name => <Button size="sm" key={name} role="tab" aria-selected={active === name} onClick={() => setTab(name)}>{name}</Button>)}</div>
-    <div role="tabpanel">
+    <div role="tablist" aria-label="Record sections" onKeyDown={navigateTabs}>{tabs.map(name => <Button size="sm" key={name} role="tab" id={`trace-tab-${name}`} aria-controls="trace-section" tabIndex={active === name ? 0 : -1} aria-selected={active === name} onClick={() => setTab(name)}>{name}</Button>)}</div>
+    <div role="tabpanel" id="trace-section" aria-labelledby={`trace-tab-${active}`} tabIndex={0}>
       {active === 'Summary' && <dl><dt>State</dt><dd>{entry.state}</dd><dt>Trace identity</dt><dd>{entry.id}</dd><dt>Attempt</dt><dd>{entry.location.attempt_id ?? 'Unavailable'}</dd><dt>Logical Step</dt><dd>{entry.location.step_id ?? 'Unavailable'}</dd>
         {entry.request && <><dt>Actual request</dt><dd>{entry.request.request_id}</dd><dt>Request ordinal</dt><dd>{entry.request.retry_number} {entry.request.retry_number > 0 ? '· retry / recovery within this Step' : '· initial'}</dd><dt>Previous request failure</dt><dd>{entry.request.previous_failure_kind ?? 'Unavailable'}</dd><dt>Failure class</dt><dd>{entry.request.failure_kind ?? 'None recorded'}</dd></>}
         {entry.tool && <><dt>ToolCall</dt><dd>{entry.tool.call_id}</dd><dt>Tool</dt><dd>{entry.tool.tool_id}</dd></>}

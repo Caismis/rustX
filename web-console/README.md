@@ -1,6 +1,8 @@
 # rustX Developer Web Console
 
-A separate Vite/React browser application for App Server dogfooding (#289).
+The rustX Full Web client: a Vite/React product over the native App Server.
+Start with the [Full Web dogfooding guide](DOGFOODING.md) and
+[conformance map](CONFORMANCE.md).
 **Reuse the UI; keep runtime and protocol authority in rustX.**
 
 Selected DeepSeek Harness source is checked in under `src/presentation/`, pinned to
@@ -192,13 +194,14 @@ is refused without prompt fallback. Retry creates a native branch and executes i
 returned input once; original canonical history remains unchanged. Fork relies on
 #319 for independent destination upload ownership. Lost mutation responses remain
 uncertain and are never replayed; navigation/reconnect fences late continuations.
-Queue and Steer truthfully expose the shared native inbound mailbox, with exact
-accepted queue edits/removal/reordering deferred to #309.
+Queue and Steer expose the shared native inbound mailbox. Exact pending edits
+and removal use WEB-06 revisioned operations; native semantics provide no reorder action.
 
 See [COMPOSER.md](COMPOSER.md) for the catalog and interaction contract and
 [CHAT.md](CHAT.md) for historical boundaries, cold-lineage settings and retry order.
-No Workspace manager, provider/model configuration editor, MCP/resource editor,
-terminal, browser canonical history or Harness runtime authority is introduced.
+Workspace navigation uses the Product Host. Provider/model and MCP definitions
+have native typed structured editors. Skill/Agent/Workflow content, terminal,
+browser canonical history and Harness runtime authority are outside Web v1.
 Assistant text uses the incremental Markdown foundation; reasoning/Tool/other
 blocks retain disclosures. Native transcript paging and typed attachment cards
 are described in CHAT.md.
@@ -219,7 +222,7 @@ pnpm test:e2e
 ```
 
 `pnpm test:e2e` builds the frontend and serves its production output on port 5173
-(which must be free). One focused Playwright scenario drives concurrent Sessions, streaming, browser loss,
+(which must be free). The shared Playwright acceptance suite drives concurrent Sessions, streaming, browser loss,
 interactions, detached publication, cold settings resolution and the wire inspector.
 Named provider gates and explicit observations establish ordering; there are no
 race-proof sleeps. The provider scenario's final report **and exit status** must
@@ -228,53 +231,13 @@ Desktop/mobile screenshots and failure traces go to ignored `test-results/`.
 
 ## Manual dogfooding procedure
 
-Run `pnpm dogfood:server` after building binaries and syncing the emulator as above.
-In a second terminal run `pnpm dev`. The fixture prints endpoint, token-file path,
-explicit workspaces A/B, user-settings path, and provider-control URL. Read the
-transport token file, enter it in the browser and connect. The fixture's private
-configuration uses only a fake provider key and sets bash approval to `always`.
-It grants trust for its two temporary workspaces using the public rustX CLI.
+Follow [DOGFOODING.md](DOGFOODING.md). It supplies the Product Host configuration,
+named local provider scenarios, exact prompts/gates, editor/trust checks, and
+keyboard/responsive checks. The fixture must be paired with its printed Host
+configuration; running an unconfigured Web server intentionally fails closed.
 
-Follow this exact order because the provider is scripted:
-
-1. Create A and B using their printed absolute cwds. Keep both tabs open.
-2. In A send **Long action in A**. Wait for **A is running.** and inspect the native
-   active attempt. The provider is held at `finish-a`.
-3. In B send **Use B while A runs** and observe **B stayed responsive.** Return to A.
-4. Disconnect, reconnect, then reload the page. Re-enter the transport token and
-   connect. The active A projection and both tab IDs return from authoritative state.
-5. Close A's tab and verify its Session-list row says detached. Release the provider
-   gate (replace `<control>` with the printed URL):
-   `curl -X POST <control>/gates/finish-a/release`.
-   Reopen A from the Session list and observe **A is running. A finished.** once in
-   committed conversation. Closing the view released its controller, not its work.
-   Repeat close/open on A and B; each closed row should become detached.
-6. Send **Approval please** in A. Disconnect/reload while **Allow once** is pending,
-   reconnect, then allow. The real bash Tool returns `console-approved`, followed by
-   **Approval completed.** Open its Tool card and inspect the IN/OUT values.
-7. Send **Questionnaire please**. Reload/reconnect, choose **Keep native**, submit,
-   and observe **Questionnaire completed.**
-8. Send **Publish while detached**. Wait for **Preparing a question.**, then explicitly
-   Detach A. Release `<control>/gates/publish-question/release` via POST. Await
-   `<control>/observations/await?kind=response_completed&count=7&timeoutMs=30000`.
-   Attach A; the question created with no attached browser must appear. Answer
-   **Keep native** and observe **Detached question completed.**
-9. Filter/copy actual `session/attach`, `interaction/respond` and snapshot traffic;
-   exercise pause/resume and clear. Observe attachment IDs and connection generations.
-10. Edit only the printed **server** settings file: change `fixture/console-model` to
-    `fixture/second-model`. Resync while loaded; the safe model still says
-    `console-model`. Explicitly unload, then cold attach. It now says `second-model`,
-    and canonical history/cwd are still present. The browser did not author settings.
-11. Optionally unload B and exercise its native delete preview/confirmation. Session
-    deletion may report native blockers, stale revision or durability diagnostics;
-    those are shown without converting them into success.
-12. Ctrl+C the fixture terminal. It reports whether all eight required provider
-    requests matched and finished and then removes its temporary state. An early
-    stop intentionally returns an unsuccessful report.
-
-See [VALIDATION.md](VALIDATION.md) for the exact checks and separately recorded
-browser dogfooding actually performed for this implementation.
-
+See [VALIDATION.md](VALIDATION.md) for executed checks, environment limits and
+which observations were automated versus manually inspected.
 
 ## WEB-01 reusable foundation
 

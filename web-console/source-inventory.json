@@ -221,7 +221,7 @@
     {
       "upstream": "packages/client/ui-primitives/src/icons/index.tsx",
       "destination": "web-console/src/presentation/primitives/icons/index.tsx",
-      "treatment": "adapted: four generic glyphs only",
+      "treatment": "adapted: eleven generic glyphs (four foundation and seven composer dock glyphs); no branding assets",
       "upstream_sha256": "c0035537e5c3ffe75614daeca9d3b163d70048023e897a670cfa6fb70238df80",
       "retained_dependencies": [
         "./props.ts"
@@ -876,7 +876,7 @@
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
-      "treatment": "inspected and rewritten for native Trace props",
+      "treatment": "inspected and rewritten for native Trace props; WEB-10 adds rustX keyboard tabs and labelled inspector panels",
       "upstream_sha256": "8761d0bbd471440ce331db1e4537e42cc630969244290f8b66cab090457ac70f",
       "destination": "web-console/src/app/Trajectory.tsx",
       "retained_dependencies": [
@@ -884,6 +884,7 @@
         "../client/trace",
         "../presentation/primitives/Button",
         "../presentation/primitives/Input",
+        "../presentation/primitives/tabs",
         "./Trajectory.module.css",
         "./components/Artifact",
         "@tanstack/react-virtual",
@@ -1226,7 +1227,7 @@
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
       "destination": "web-console/src/app/settings/Integrations.tsx",
-      "treatment": "adapted scope-bound disclosure cards, independent authored drafts, provenance and runtime facts; native Rust owns semantics",
+      "treatment": "adapted scope-bound disclosure cards, independent authored drafts, provenance and runtime facts; native Rust owns semantics; WEB-10 represents an unauthored command as null so a new HTTP draft has no stdio command",
       "upstream_sha256": "0437a264aa8a9806fabc5f3691420a01d379782a20417fb5a3abe9defba0a174",
       "retained_dependencies": [
         "../../../../protocol/app-server/v5",

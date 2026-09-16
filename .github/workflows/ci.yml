@@ -314,7 +314,7 @@ jobs:
         run: pnpm typecheck
 
   web-console:
-    name: Developer Web Console
+    name: Full Web conformance
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -360,7 +360,7 @@ jobs:
       - name: Install Chromium
         working-directory: web-console
         run: pnpm exec playwright install --with-deps chromium
-      - name: Browser integration against the real App Server
+      - name: Full product browser acceptance against the real App Server and Product Host
         working-directory: web-console
         run: pnpm test:e2e
       - name: Browser evidence
