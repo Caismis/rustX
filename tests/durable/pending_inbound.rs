@@ -973,8 +973,10 @@ fn recovery_safety_fails_closed_on_incomplete_or_compacted_prefixes() {
         .expect("durable Surface history makes compaction restart-safe");
 }
 
-// WEB-06: test the durable linearization seam, including separate SQLite
-// connections. No mailbox, transport, or browser mutex decides these winners.
+// WEB-06: sequential claim/mutation outcomes and concurrent mutation CAS.
+// Forced concurrent claim/mutation writer orders live in
+// durable::sqlite::pending_transaction_tests; these public-contract tests
+// require no test hooks. No mailbox, transport, or browser mutex is involved.
 fn pending_ref(item: &AcceptedInbound) -> rustx::durable::inbox::PendingInboundRef {
     rustx::durable::inbox::PendingInboundRef {
         sequence: item.sequence,

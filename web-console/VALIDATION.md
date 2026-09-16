@@ -584,7 +584,7 @@ COMMIT/publication distinction enforced by the production cut contract.
 ## WEB-04 composer context docks (#307) — 2026-09-15; rebased 2026-09-16
 
 Base: `origin/main` `289bd22e`. PR #320 (#319) is merged, so this slice sits on
-Session-owned workspace uploads and **App Server v5**. It was first validated on
+Session-owned workspace uploads and **App Server v4**. It was first validated on
 `e256998f` (WEB-03), then rebased onto `289bd22e` and revalidated end to end; every
 command below is the rebased-head run, not the pre-rebase one. The Harness checkout
 was reverified at `c291e7961a515f6d7af9304e7fd1d257929aef26`. Ownership is recorded
@@ -720,7 +720,7 @@ scenario — so the transient failure was host contention, not a branch regressi
 Nothing was retried until green, no test was skipped, weakened or excluded, and no
 sleep was added; GitHub Actions on the pushed head remains the authoritative gate.
 
-### Rebase onto App Server v5 `main`
+### Rebase onto App Server v4 `main`
 
 This branch was rebased onto `289bd22e` (PR #320 merged), and every row above is the
 rebased-head run, not the pre-rebase one. Conflicts were resolved by ownership rather

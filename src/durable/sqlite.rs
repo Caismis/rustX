@@ -310,6 +310,11 @@ pub struct SqliteConversationStore {
     pub(crate) fail_accept_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
     head_read_probe: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    // Park only after SQLite has granted the writer, before reading pending rows.
+    #[cfg(test)]
+    pending_mutation_transaction_probe: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    #[cfg(test)]
+    pending_adoption_transaction_probe: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
     pub(crate) fail_adopt_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
@@ -599,6 +604,10 @@ impl SqliteConversationStore {
             lifecycle: None,
             #[cfg(test)]
             head_read_probe: Mutex::new(None),
+            #[cfg(test)]
+            pending_mutation_transaction_probe: Mutex::new(None),
+            #[cfg(test)]
+            pending_adoption_transaction_probe: Mutex::new(None),
             #[cfg(test)]
             fail_accept_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
@@ -1066,6 +1075,15 @@ impl SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("pending mutation: {error}")))?;
+        #[cfg(test)]
+        if let Some(probe) = self
+            .pending_mutation_transaction_probe
+            .lock()
+            .unwrap()
+            .take()
+        {
+            probe();
+        }
         let Some(mut item) = load_pending_until(&transaction, expected.sequence)?
             .into_iter()
             .find(|item| {
@@ -1454,6 +1472,15 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("adopt transaction: {error}")))?;
+        #[cfg(test)]
+        if let Some(probe) = self
+            .pending_adoption_transaction_probe
+            .lock()
+            .unwrap()
+            .take()
+        {
+            probe();
+        }
         ensure_surface_head(&transaction)?;
         let items = load_pending_until(&transaction, watermark)?;
         for item in &items {
@@ -8950,6 +8977,9 @@ fn is_constraint_violation(error: &rusqlite::Error) -> bool {
             if code.code == rusqlite::ErrorCode::ConstraintViolation
     )
 }
+
+#[cfg(test)]
+mod pending_transaction_tests;
 
 #[cfg(test)]
 mod tests {
