@@ -13,13 +13,25 @@ and named profiles/limits are explicit. Saving an unrelated field preserves all
 other omissions. `None` removes only the chosen model layer (or Session selection),
 never materializes effective state, and preserves unrelated TOML settings.
 
-`resolve_configuration_candidate` is the single native source merge/default and
-provenance phase. It applies authorized source layers, the whole Session input,
-model catalog semantics and canonical context-budget validation. Full
-`resolve_session` reuses this result before `resolve_resources` prepares Skills,
-Workflows, Subagents and other launch resources. Settings does not prepare those
-resources. An intentionally invalid trusted Workflow cannot hide otherwise-valid
-model provenance or block a Workspace model save.
+`UserConfigManager::capture_sources` owns strict canonical parsing, source
+path/authority selection, trusted Workspace activation, path rebasing, overlay,
+Session whole-state application and provenance in `SourceCapture`. Structural
+`RuntimeLayer::resolve` lowering performs no runtime-domain semantic validation.
+`resolve_model_candidate` consumes that capture and validates the bound catalog,
+canonical `analyze_session_model_config` result, context policy and model/context
+budgets. Settings source reads/staged mutations and `resolve_model_configuration`
+for Session selection use this same seam, with the already-captured trust decision.
+
+Full `resolve_session` additionally calls `resolve_runtime_configuration`:
+`CurrentRuntimeConfig::validate`, Tool deadline lowering and Tool environment
+validation still enforce MCP, timeout, Agent, Workflow, Subagent and Skill policy
+semantics. Only then does `resolve_resources` prepare launch resources. No runtime
+checks are ignored or weakened, and no second merge/provenance engine exists.
+
+Successful WEB-08 model projection means model/source configuration is valid for
+the model domain. It does not claim the entire runtime configuration is admissible.
+Full Session resolution remains the authority that validates the remaining runtime
+domains before admission.
 
 `TrustEpoch` coordinates the existing membership-directory trust store through a
 persistent per-workspace lock beside the User state directory. Read-only analysis
@@ -150,35 +162,44 @@ and protocol generation drift/typecheck. Focused owner and App Server race tests
 are rerun independently. Browser plugin is unavailable; the repository Playwright
 workflow exercises the real App Server and local fixture Provider.
 
-## Executed validation inventory (review fix)
+## Executed validation inventory (model-domain review fix)
 
-All commands below passed on the corrected implementation. Development failures in
-trust-lock placement, one new provenance assertion, compilation/linting, and a
-browser locator were fixed before the final complete runs; existing regression
-expectations were not weakened.
+All commands below were rerun on the final model-domain correction. Existing
+regression expectations were not weakened.
 
 | Working directory | Command | Result |
 | --- | --- | --- |
 | Root | `cargo fmt --all -- --check` | Passed |
 | Root | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Passed |
 | Root | `cargo build --bins` | Passed |
-| Root | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --workspace --all-targets --all-features` | 3,707 passed; 6 existing ignored |
+| Root | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --workspace --all-targets --all-features` | 3,708 passed; 6 existing ignored |
 | Root | `cargo test --doc --workspace --all-features` | 9 passed |
 | Root | `cargo check --all-targets --all-features` | Passed |
-| Root | `cargo test --lib configuration::settings --all-features` | 12 passed |
-| Root | `cargo test --lib web08 --all-features` | 5 passed |
-| Root | `cargo test --lib cfg235_minimal_init_validates --all-features` | 1 passed |
-| Root | `cargo test --lib dangling_optional_files --all-features` | 1 passed |
-| Root | `cargo run --example generate_app_server_protocol` | Generated schema/fixtures; repeated by protocol check |
+| Root | `cargo test --lib configuration::settings --all-features` | 13 passed |
+| Root | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib web08_ --all-features` | 5 passed |
+| Root | `cargo test --lib model_domain_remains_usable --all-features` | 1 passed |
 | Root | `git diff --check` | Passed |
 | `test-support/fake-provider` | `uv sync --frozen`; `uv run --frozen pytest` | Passed; 51 tests |
 | Web, TUI, protocol packages | `pnpm install --frozen-lockfile` | Passed in each package |
 | `web-console` | `pnpm typecheck`; `pnpm test` | Passed; 282 tests |
-| `web-console` | `pnpm exec vitest run test/settings.test.tsx` | 9 focused tests passed |
 | `web-console` | `pnpm check:provenance`; `pnpm build` | Passed; 73 source records, 100 notices |
 | `web-console` | `pnpm test:e2e` | 10 passed; real server; desktop/mobile |
 | `tui` | `pnpm typecheck`; `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test` | Passed; 816 tests |
-| `protocol/app-server` | `node generate.mjs`; `pnpm check`; `pnpm typecheck` | Passed; no generated drift |
+| `protocol/app-server` | `pnpm check`; `pnpm typecheck` | Passed; no generated drift |
 
 No environmental validation blocker. Local tests ran on Linux; macOS coverage is
 provided by repository CI. The existing Vite large-bundle advisory is unchanged.
+
+## Model-domain semantic isolation regression
+
+`model_domain_remains_usable_with_invalid_runtime_workflow_semantics` uses
+canonical authorized Workspace TOML with `agent.workflows = ['check', 'check']`.
+Settings returns the User model, Workspace output limit and correct provenance.
+A CAS Workspace output-only edit publishes without gaining a model identity or
+other defaults. Whole Session selection validates through the model seam, while
+full `resolve_session` still rejects duplicate Workflow identity before resource
+preparation. `web08_source_and_session_cas_cross_the_real_protocol_boundary` now
+runs with the same semantic error: real typed source reads/writes and whole Session
+selection succeed, stale revisions still fail, and full resolution still rejects
+it. This supplements the existing invalid Workflow resource regression; it does
+not substitute malformed resources for a semantic configuration failure.

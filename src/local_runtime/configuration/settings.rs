@@ -203,9 +203,7 @@ impl UserConfigManager {
                 )
             })
             .collect();
-        let resolved = self
-            .resolve_configuration_candidate(input, None, trusted)
-            .ok();
+        let resolved = self.resolve_model_candidate(input, None, trusted).ok();
         // A noncooperating editor may change a source while it is being resolved.
         // Do not return a mixed projection assembled from different content.
         for (index, captured, scope) in [
@@ -371,7 +369,7 @@ impl UserConfigManager {
         if selecting {
             let mut prospective = input.clone();
             prospective.model = None;
-            if let Err(error) = self.resolve_configuration_candidate(
+            if let Err(error) = self.resolve_model_candidate(
                 &prospective,
                 Some((target, &bytes)),
                 trusted && scope == SourceScope::Workspace,
@@ -971,6 +969,71 @@ mod roundtrip_tests {
             reset.provenance["agent.model.model"],
             Origin::User { .. }
         ));
+    }
+
+    #[test]
+    fn model_domain_remains_usable_with_invalid_runtime_workflow_semantics() {
+        let (_root, owner, mut input) = fixture();
+        trust(&owner, &input);
+        let path = input.cwd.join("rustx.toml");
+        std::fs::write(&path, "[agent]\nworkflows = ['check', 'check']\n[agent.model]\nmax_output_tokens = { mode = 'limit', tokens = 1024 }\n").unwrap();
+        let first = owner.read_source_settings(&input).unwrap();
+        assert!(first.resolution_available);
+        assert_eq!(
+            first.effective.as_ref().unwrap().model.to_string(),
+            "example/demo-model"
+        );
+        assert_eq!(
+            first.effective_request.as_ref().unwrap().max_output_tokens,
+            1024
+        );
+        assert!(matches!(
+            first.provenance["agent.model.model"],
+            Origin::User { .. }
+        ));
+        assert!(matches!(
+            first.provenance["agent.model.max_output_tokens"],
+            Origin::Project { .. }
+        ));
+        assert_eq!(first.user.authored, Some(authored("example/demo-model")));
+        assert!(first.workspace.authored.as_ref().unwrap().model.is_none());
+        let partial = AuthoredModelSelection {
+            max_output_tokens: Some(crate::local_runtime::authoring::ModelOutput::Limit {
+                tokens: 2048,
+            }),
+            ..Default::default()
+        };
+        let saved = owner
+            .write_source_settings(
+                &input,
+                &first.workspace.revision,
+                SourceMutation::WorkspaceModel {
+                    authored: Some(partial.clone()),
+                },
+            )
+            .unwrap();
+        assert!(saved.resolution_available);
+        assert_eq!(saved.workspace.authored, Some(partial));
+        assert_eq!(saved.effective_request.unwrap().max_output_tokens, 2048);
+        let bytes = std::fs::read(&path).unwrap();
+        let parsed = super::super::parse_layer(&path, &bytes, true).unwrap();
+        assert!(parsed.agent.unwrap().model.unwrap().model.is_none());
+        let error = owner.resolve_session(&input).err().unwrap().to_string();
+        assert!(error.contains("duplicate"), "{error}");
+        input.model = Some(selected("example/second"));
+        let selected = owner.resolve_model_configuration(&input).unwrap();
+        assert_eq!(
+            selected.config.initial_model(),
+            input.model.as_ref().unwrap()
+        );
+        assert!(
+            owner
+                .resolve_session(&input)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("duplicate")
+        );
     }
 
     #[test]

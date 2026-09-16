@@ -2147,6 +2147,12 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
     use crate::model::{catalog::ModelRef, session::SessionModelConfig};
     bounded(async {
         let f = Fixture::new().await;
+        // Authorized, canonical TOML; only full-runtime Workflow semantics fail.
+        std::fs::write(
+            f.workspaces[0].join("rustx.toml"),
+            "[agent]\nworkflows = ['check', 'check']\n",
+        )
+        .unwrap();
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
         let id = f.sessions[0].id.clone();
@@ -2165,6 +2171,7 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
         else {
             panic!()
         };
+        assert!(projection.resolution_available);
         assert!(projection.workspace.active);
         assert!(
             projection
@@ -2288,6 +2295,18 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
             },
         )
         .await;
+        let error = f
+            .manager
+            .configuration
+            .resolve_session(
+                &crate::local_runtime::configuration::SessionConfigInput::new(
+                    f.workspaces[0].clone(),
+                ),
+            )
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("duplicate"), "{error}");
         assert!(f.provider.request_bodies().is_empty());
         f.close().await;
     })

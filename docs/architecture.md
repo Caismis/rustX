@@ -9525,12 +9525,25 @@ markers retain their native meanings. Session alone selects a whole
 reset removes only that source's `agent.model`, preserving unrelated TOML fields.
 Session reset removes its whole selection. No reset copies effective values.
 
-`resolve_configuration_candidate` is the shared bounded native source/configuration
-phase: authorized parsing, canonical merge/defaults/provenance, catalog validation,
-Session whole-state application and context-budget validation. `resolve_session`
-uses that result before `resolve_resources` loads Skills, Workflows, Subagents and
-other launch resources. Source reads and staged source/Session validation use the
-same configuration phase, so a broken unrelated Workflow cannot block Settings.
+`UserConfigManager::capture_sources` owns strict canonical parsing, source
+path/authority selection, trusted Workspace activation, path rebasing, overlay,
+Session whole-state application and provenance in `SourceCapture`. Structural
+`RuntimeLayer::resolve` lowering performs no runtime-domain semantic validation.
+`resolve_model_candidate` consumes that capture and validates the bound catalog,
+canonical `analyze_session_model_config` result, context policy and model/context
+budgets. Settings source reads/staged mutations and `resolve_model_configuration`
+for Session selection use this same seam, with the already-captured trust decision.
+
+Full `resolve_session` additionally calls `resolve_runtime_configuration`:
+`CurrentRuntimeConfig::validate`, Tool deadline lowering and Tool environment
+validation still enforce MCP, timeout, Agent, Workflow, Subagent and Skill policy
+semantics. Only then does `resolve_resources` prepare launch resources. No runtime
+checks are ignored or weakened, and no second merge/provenance engine exists.
+
+Successful WEB-08 model projection means model/source configuration is valid for
+the model domain. It does not claim the entire runtime configuration is admissible.
+Full Session resolution remains the authority that validates the remaining runtime
+domains before admission.
 The canonical `ModelCatalog::view` serves both source authoring and live bindings.
 Provider authority remains User-only; source bindings are bootstrap-owned.
 

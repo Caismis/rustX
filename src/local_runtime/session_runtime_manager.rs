@@ -911,7 +911,7 @@ impl SessionRuntimeManager {
             if input.model.is_none() {
                 return Ok(());
             }
-            owner.resolve_configuration(&input).map(|_| ())
+            owner.resolve_model_configuration(&input).map(|_| ())
         })
         .await
         .map_err(|_| {

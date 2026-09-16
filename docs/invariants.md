@@ -8276,8 +8276,10 @@ See [Agent Profiles](agent-profiles.md) for the exact scope and ownership rules.
   explicit catalog-default/profile/limit. Session alone selects whole state.
 - Reset removes the chosen source model layer or Session selection. It never copies
   Effective and never changes unrelated TOML settings.
-- One bounded native configuration phase owns merge, provenance, catalog validation
-  and context budgets; full Session resolution reuses it before resource preparation.
+- One native source capture owns strict parsing, authority, overlay and provenance.
+  Model resolution validates catalog/request/summary/context semantics only. Full
+  Session resolution reuses it, then validates all runtime domains before resource
+  preparation. Valid Settings model state does not imply runtime admissibility.
 - Workspace publication is authorized by trust at atomic rename. Grant/revoke and
   source projection/publication share one per-workspace native trust epoch. Reads
   cannot mix inactive Workspace status with Project-derived provenance.

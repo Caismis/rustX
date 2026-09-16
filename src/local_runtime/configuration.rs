@@ -378,7 +378,7 @@ pub struct AdmittedSessionConfig {
 }
 
 /// Canonical source/configuration capture before any launch resource preparation.
-pub(crate) struct ResolvedConfiguration {
+pub(crate) struct SourceCapture {
     locations: SessionLocations,
     identity: String,
     trusted: bool,
@@ -618,27 +618,76 @@ impl UserConfigManager {
         request: &SessionConfigInput,
     ) -> Result<ProspectiveSessionConfig, LaunchFailure> {
         let trusted = self.project_trusted(request)?;
-        let resolved = self.resolve_configuration_candidate(request, None, trusted)?;
+        let resolved = self.resolve_model_candidate(request, None, trusted)?;
+        let resolved = Self::resolve_runtime_configuration(resolved)?;
         self.resolve_resources(request, resolved)
     }
 
-    pub(crate) fn resolve_configuration(
+    pub(crate) fn resolve_model_configuration(
         &self,
         request: &SessionConfigInput,
-    ) -> Result<ResolvedConfiguration, LaunchFailure> {
+    ) -> Result<SourceCapture, LaunchFailure> {
         #[cfg(test)]
         self.test_hooks.reach("validation_started");
         let trusted = self.project_trusted(request)?;
-        self.resolve_configuration_candidate(request, None, trusted)
+        self.resolve_model_candidate(request, None, trusted)
     }
 
-    // One source merge/provenance phase, shared by launch and staged authoring.
-    fn resolve_configuration_candidate(
+    fn resolve_model_candidate(
         &self,
         request: &SessionConfigInput,
         candidate: Option<(&Path, &[u8])>,
         trusted: bool,
-    ) -> Result<ResolvedConfiguration, LaunchFailure> {
+    ) -> Result<SourceCapture, LaunchFailure> {
+        let capture = self.capture_sources(request, candidate, trusted)?;
+        let config = &capture.config;
+        config.context.validate().map_err(|e| e.to_string())?;
+        let (primary, summary) = crate::model::session::analyze_session_model_config(
+            &capture.models,
+            config.initial_model(),
+        )
+        .map_err(|e| e.to_string())?;
+        let summary = summary.as_ref().unwrap_or(&primary);
+        config
+            .context_policy()
+            .validate_budgets(
+                (primary.context_window, primary.max_output_tokens),
+                (summary.context_window, summary.max_output_tokens),
+            )
+            .map_err(|error| {
+                LaunchFailure::at(
+                    Some(self.sources.settings.clone()),
+                    "context",
+                    "context budgets cannot fit the selected models",
+                    "correct reserves, recent-history budget, or explicit model limits",
+                    error.message,
+                )
+            })?;
+        Ok(capture)
+    }
+
+    // Execution-domain validation belongs only to full Session resolution.
+    fn resolve_runtime_configuration(
+        capture: SourceCapture,
+    ) -> Result<SourceCapture, LaunchFailure> {
+        let config = &capture.config;
+        config.validate().map_err(|e| e.to_string())?;
+        config
+            .tool_deadline_policy
+            .to_policy()
+            .map_err(|e| e.clone())?;
+        config.tool_environment().map_err(|e| e.to_string())?;
+        Ok(capture)
+    }
+
+    // One strict source parse, authority, overlay and provenance owner. Lowering
+    // is structural; semantic validation belongs to the consuming domain.
+    fn capture_sources(
+        &self,
+        request: &SessionConfigInput,
+        candidate: Option<(&Path, &[u8])>,
+        trusted: bool,
+    ) -> Result<SourceCapture, LaunchFailure> {
         let read = |path: &Path, required, project| match candidate {
             Some((target, bytes))
                 if normalize_missing(path).is_ok_and(|canonical| canonical == target) =>
@@ -804,31 +853,6 @@ impl UserConfigManager {
         if let Some(model) = &request.model {
             config.agent.model = Some(model.clone());
         }
-        config.validate().map_err(|e| e.to_string())?;
-        config
-            .tool_deadline_policy
-            .to_policy()
-            .map_err(|e| e.clone())?;
-        config.tool_environment().map_err(|e| e.to_string())?;
-        let (primary, summary) =
-            crate::model::session::analyze_session_model_config(&models, config.initial_model())
-                .map_err(|e| e.to_string())?;
-        let summary = summary.as_ref().unwrap_or(&primary);
-        config
-            .context_policy()
-            .validate_budgets(
-                (primary.context_window, primary.max_output_tokens),
-                (summary.context_window, summary.max_output_tokens),
-            )
-            .map_err(|error| {
-                LaunchFailure::at(
-                    Some(user_path.clone()),
-                    "context",
-                    "context budgets cannot fit the selected models",
-                    "correct reserves, recent-history budget, or explicit model limits",
-                    error.message,
-                )
-            })?;
         RuntimeLayer::record_default_origins(&config, &mut provenance);
         for (key, present) in [
             ("skills.cli", !request.skill_paths.is_empty()),
@@ -857,7 +881,7 @@ impl UserConfigManager {
         );
         provenance.insert("runtime_root".into(), self.runtime_root_origin.clone());
         provenance.insert("models".into(), self.models_origin.clone());
-        Ok(ResolvedConfiguration {
+        Ok(SourceCapture {
             locations,
             identity,
             trusted,
@@ -872,9 +896,9 @@ impl UserConfigManager {
     fn resolve_resources(
         &self,
         request: &SessionConfigInput,
-        resolved: ResolvedConfiguration,
+        resolved: SourceCapture,
     ) -> Result<ProspectiveSessionConfig, LaunchFailure> {
-        let ResolvedConfiguration {
+        let SourceCapture {
             locations,
             identity,
             trusted,
