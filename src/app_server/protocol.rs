@@ -275,6 +275,20 @@ pub enum Method {
         target: AttachmentTarget,
         interaction: InteractionRef,
     },
+    #[serde(rename = "settings/selectModel")]
+    SelectModel {
+        session_id: SessionId,
+        expected_revision: u64,
+        selection: Option<crate::model::session::SessionModelConfig>,
+    },
+    #[serde(rename = "settings/sourcesRead")]
+    SourcesRead { session_id: SessionId },
+    #[serde(rename = "settings/sourcesWrite")]
+    SourcesWrite {
+        session_id: SessionId,
+        expected_revision: String,
+        mutation: crate::local_runtime::configuration::settings::SourceMutation,
+    },
     #[serde(rename = "settings/read")]
     SettingsRead { session_id: SessionId },
     #[serde(rename = "settings/replace")]
@@ -301,6 +315,12 @@ pub enum ErrorData {
         session_id: SessionId,
         node_id: SessionNodeId,
     },
+    SourceConflict {
+        scope: crate::local_runtime::configuration::settings::SourceScope,
+        expected: String,
+        actual: String,
+    },
+    UntrustedWorkspace,
     StaleSettings {
         expected: u64,
         actual: u64,
@@ -478,6 +498,11 @@ pub enum MethodResult {
     },
     InteractionSettled {
         interaction: InteractionRef,
+    },
+    SourceSettings {
+        projection: Box<crate::local_runtime::configuration::settings::SourceSettings>,
+        session_revision: u64,
+        session_selection: Option<crate::model::session::SessionModelConfig>,
     },
     Settings {
         /// Current native project source trust; unresolved is never trusted.

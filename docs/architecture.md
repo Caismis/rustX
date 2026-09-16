@@ -9514,3 +9514,41 @@ selection may yield an empty receipt, without admitting an empty turn or losing 
 recovered continuation. The mailbox orders post-commit publication but owns no
 accepted queue. Removing pending work does not cancel execution or delete
 canonical history.
+
+### Structured Settings source authoring (WEB-08)
+
+`UserConfigManager` owns the bound User catalog and User/trusted-project source
+selection authoring. `configuration::settings` is an extension of that native
+owner, not an App Server configuration engine. It reuses canonical TOML parsing,
+`ModelLayer`, catalog validation and `resolve_session` provenance. The canonical
+`ModelCatalog::view` serves both source authoring and live binding registries.
+Credential values never enter source projections; a literal credential marker
+means retain the native value, and environment references carry names only.
+
+`settings/sourcesRead` projects authored layers, source revisions, native trust,
+prospective resolved model/request policy, and provenance alongside the exact
+Session selection/revision used to resolve it. `settings/sourcesWrite` accepts
+only a User catalog replacement or User/Workspace whole-model selection/reset.
+User settings, project settings and catalog each retain their own SHA-256 content
+identity (with a distinct missing identity). The persistent document locks shared
+with the default writer span revision verification, validation, staging and atomic
+rename. Cooperating native writers therefore have one publication winner. Changes
+observed from external editors invalidate an older revision. External editors that
+ignore the native lock can race the final fingerprint check and rename; these
+locks do not claim filesystem transactions against arbitrary uncooperative writes.
+
+`settings/selectModel` validates and persists a whole Session selection or omission
+under the existing Session catalog mutex and revision check. It changes prospective
+Session authoring; loaded runtimes retain their admitted configuration, and the
+existing live model command continues through the live model/persistence owner.
+The UI separately labels prospective source values, current desired runtime model,
+and frozen attempt model. Source saves never automatically reload a runtime.
+Session omission exposes the next authorized source on fresh/cold resolution;
+no effective selection is copied into an unset source.
+
+The Web Console edits structured drafts and sends generated protocol commands.
+On a conflict it preserves the draft, rereads authoritative state and requires an
+explicit retry. An uncertain response is repaired by read, never replay. Provider
+probe/discovery and secret entry are absent because no bounded Product Host API
+owns them. The pinned Harness reuse is presentation-only and recorded in the
+shared Web source inventory.

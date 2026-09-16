@@ -8269,3 +8269,18 @@ See [Agent Profiles](agent-profiles.md) for the exact scope and ownership rules.
   entry may receive native lifecycle repairs without becoming a history segment.
 - Trace is read-only. Removing Web Trajectory changes no execution, canonical
   history, cancellation, settlement or recovery semantics.
+
+### Settings source authoring
+
+- User-only Provider/catalog definitions cannot be introduced by Workspace or
+  Session selection. Native project trust is required independently of Host cwd
+  authorization; Settings reads never grant trust.
+- Native resolution owns both effective model/request policy and provenance.
+  Authored partial source fields remain distinguishable from resolved defaults.
+- Source revisions are per bound document; Session revisions remain in their
+  existing durable domain. Revision validation and native publication share the
+  same lock. Failed CAS publishes nothing, including for concurrent writers.
+- Source publication affects fresh/cold resolution. Loaded runtime and frozen
+  attempt observations are separate facts and are never fabricated from sources.
+- Web drafts contain credential references/retention markers, never credential
+  values. The native writer alone can retain a literal credential.

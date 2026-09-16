@@ -314,3 +314,13 @@ Workspace rows display Host classification independently of registration;
 `endpoint.ts` and the shared admission/focus bindings are rustX-authored. No new
 Harness authority or source was imported. The inventory records the new local
 endpoint helper dependency.
+
+## WEB-08 Settings
+
+Pinned reference HEAD verified as `c291e7961a515f6d7af9304e7fd1d257929aef26` before edits.
+Settings adapts the general Settings panel, Provider editor cards, model-selection
+controls and explicit save footer. The inventory records inspected source, tests,
+CSS, docs and excluded dependencies. rustX uses its existing React shell/primitives;
+no Harness settings mirror, source merge, credentials service or catalog is imported.
+Native typed projections replace all upstream configuration authority. There is no
+secret input because the Product Host has no write-only credential API.

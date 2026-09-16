@@ -247,6 +247,8 @@ impl AppServerConnection {
                 | Method::SessionBranch { .. }
                 | Method::SessionRecoverDeletion { .. }
                 | Method::SettingsReplace { .. }
+                | Method::SourcesWrite { .. }
+                | Method::SelectModel { .. }
         ) {
             let connection = self.clone();
             tokio::spawn(async move { Box::pin(connection.dispatch(request.call)).await })
@@ -481,6 +483,49 @@ impl AppServerConnection {
             }
             Method::SessionRecoverDeletion { session_id } => {
                 Ok(deletion(self.sessions.recover_deletion(&session_id).await))
+            }
+            Method::SourcesRead { session_id } => {
+                let (projection, session_revision, session_selection) = self
+                    .host
+                    .manager()
+                    .source_settings(&session_id, None)
+                    .await
+                    .map_err(source_settings_error)?;
+                Ok(MethodResult::SourceSettings {
+                    projection: Box::new(projection),
+                    session_revision,
+                    session_selection,
+                })
+            }
+            Method::SourcesWrite {
+                session_id,
+                expected_revision,
+                mutation,
+            } => {
+                let (projection, session_revision, session_selection) = self
+                    .host
+                    .manager()
+                    .source_settings(&session_id, Some((expected_revision, mutation)))
+                    .await
+                    .map_err(source_settings_error)?;
+                Ok(MethodResult::SourceSettings {
+                    projection: Box::new(projection),
+                    session_revision,
+                    session_selection,
+                })
+            }
+            Method::SelectModel {
+                session_id,
+                expected_revision,
+                selection,
+            } => {
+                let revision = self
+                    .host
+                    .manager()
+                    .select_model(&session_id, expected_revision, selection)
+                    .await
+                    .map_err(source_settings_error)?;
+                Ok(MethodResult::SettingsReplaced { revision })
             }
             Method::SettingsRead { session_id } => {
                 let (revision, settings) = self
@@ -1040,4 +1085,36 @@ fn host_error(error: HostAdmissionError) -> RpcError {
         HostAdmissionError::RequestCapacity => ErrorData::RequestCapacity,
         HostAdmissionError::AttachmentCapacity => ErrorData::AttachmentCapacity,
     })
+}
+
+fn source_error(error: crate::local_runtime::configuration::settings::SettingsError) -> RpcError {
+    use crate::local_runtime::configuration::settings::SettingsError;
+    domain(match error {
+        SettingsError::Conflict {
+            scope,
+            expected,
+            actual,
+        } => ErrorData::SourceConflict {
+            scope,
+            expected,
+            actual,
+        },
+        SettingsError::UntrustedWorkspace => ErrorData::UntrustedWorkspace,
+        SettingsError::Invalid => ErrorData::InvalidParams,
+        SettingsError::Io => ErrorData::OperationFailed,
+        SettingsError::Committed => ErrorData::CommittedDurabilityUncertain,
+    })
+}
+
+fn source_settings_error(
+    error: crate::local_runtime::session_runtime_manager::SourceSettingsError,
+) -> RpcError {
+    match error {
+        crate::local_runtime::session_runtime_manager::SourceSettingsError::Session(error) => {
+            session_error(error)
+        }
+        crate::local_runtime::session_runtime_manager::SourceSettingsError::Source(error) => {
+            source_error(error)
+        }
+    }
 }

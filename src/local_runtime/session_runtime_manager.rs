@@ -809,6 +809,74 @@ impl SessionRuntimeManager {
             clock: Arc::new(SystemMonotonicClock::new()),
         })
     }
+    /// Read source provenance while retaining the Session revision it resolves.
+    /// # Errors
+    /// Session lookup, source validation and exact source conflicts are typed.
+    pub async fn source_settings(
+        &self,
+        id: &super::session::SessionId,
+        mutation: Option<(String, super::configuration::settings::SourceMutation)>,
+    ) -> Result<
+        (
+            super::configuration::settings::SourceSettings,
+            u64,
+            Option<crate::model::session::SessionModelConfig>,
+        ),
+        SourceSettingsError,
+    > {
+        let catalog = self.sessions.catalog.lock().await;
+        let revision = catalog
+            .settings_revision(id)
+            .map_err(SourceSettingsError::Session)?;
+        let (_, settings) = catalog
+            .lineage(id, None)
+            .map_err(SourceSettingsError::Session)?;
+        let owner = self.configuration.clone();
+        let input = settings.input();
+        let projection = tokio::task::spawn_blocking(move || match mutation {
+            Some((expected, mutation)) => owner.write_source_settings(&input, &expected, mutation),
+            None => owner.read_source_settings(&input),
+        })
+        .await
+        .map_err(|_| {
+            SourceSettingsError::Source(super::configuration::settings::SettingsError::Io)
+        })?
+        .map_err(SourceSettingsError::Source)?;
+        Ok((projection, revision, settings.model))
+    }
+    /// Author a whole Session selection (or omission) using its durable CAS owner.
+    /// This is prospective; already loaded runtimes retain their admitted state.
+    /// # Errors
+    /// Stale revisions and invalid native model selections do not mutate state.
+    pub async fn select_model(
+        &self,
+        id: &super::session::SessionId,
+        expected: u64,
+        selection: Option<crate::model::session::SessionModelConfig>,
+    ) -> Result<u64, SourceSettingsError> {
+        let mut catalog = self.sessions.catalog.lock().await;
+        let actual = catalog
+            .settings_revision(id)
+            .map_err(SourceSettingsError::Session)?;
+        if expected != actual {
+            return Err(SourceSettingsError::Session(
+                super::session::SessionError::StaleSettings { expected, actual },
+            ));
+        }
+        let (_, mut settings) = catalog
+            .lineage(id, None)
+            .map_err(SourceSettingsError::Session)?;
+        settings.model = selection;
+        self.configuration
+            .resolve_session(&settings.input())
+            .map_err(|_| {
+                SourceSettingsError::Source(super::configuration::settings::SettingsError::Invalid)
+            })?;
+        catalog
+            .replace_settings(id, expected, settings)
+            .map_err(SourceSettingsError::Session)
+    }
+
     /// Current source trust, independent of runtime residency and Host authorization.
     /// # Errors
     /// Invalid native configuration locations are rejected.
@@ -1307,3 +1375,9 @@ impl SessionRuntimeManager {
 #[cfg(test)]
 #[path = "../../tests/scripted/app_server/mod.rs"]
 mod tests;
+
+#[derive(Debug)]
+pub enum SourceSettingsError {
+    Session(super::session::SessionError),
+    Source(super::configuration::settings::SettingsError),
+}

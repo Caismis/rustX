@@ -2,6 +2,8 @@
 //! No provider, Session runtime, or external source is prepared here.
 //! Source content is reread per call; admitted configurations own their capture.
 
+pub mod settings;
+
 use crate::bounded_file::read_bounded;
 use crate::capabilities::activation::{SourceActivation, SourceEnablement};
 use std::collections::BTreeMap;
@@ -331,7 +333,7 @@ impl UserConfigManager {
 }
 
 /// Values are never included: provenance cannot expose credentials or environment values.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Origin {
     Builtin,
@@ -573,6 +575,23 @@ impl UserConfigManager {
         &self,
         request: &SessionConfigInput,
     ) -> Result<ProspectiveSessionConfig, LaunchFailure> {
+        self.resolve_session_candidate(request, None)
+    }
+
+    // Validate a staged source through the same resolver before publishing bytes.
+    fn resolve_session_candidate(
+        &self,
+        request: &SessionConfigInput,
+        candidate: Option<(&Path, &[u8])>,
+    ) -> Result<ProspectiveSessionConfig, LaunchFailure> {
+        let read = |path: &Path, required, project| match candidate {
+            Some((target, bytes))
+                if normalize_missing(path).is_ok_and(|canonical| canonical == target) =>
+            {
+                parse_layer(path, bytes, project)
+            }
+            _ => read_layer(path, required, project),
+        };
         let host = &self.sources;
         let (locations, identity) = self.resolve_locations(request)?;
         let launch = locations.workspace.clone();
@@ -581,13 +600,13 @@ impl UserConfigManager {
             || locations.workspace.join("rustx.toml"),
             |p| absolute(&launch, p),
         );
-        let mut user = read_layer(&user_path, false, false)?;
+        let mut user = read(&user_path, false, false)?;
 
         // Even an empty project needs trust for project activation. Later file
         // creation or reload cannot widen the captured source authority.
         let trusted = self.location_trusted(&locations.workspace, &identity)?;
         let project = if trusted {
-            read_layer(&project_path, request.config.is_some(), true)?
+            read(&project_path, request.config.is_some(), true)?
         } else {
             RuntimeLayer::default()
         };

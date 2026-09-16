@@ -2140,3 +2140,217 @@ async fn exact_pending_mutations_are_routed_cas_bound_and_do_not_cancel_attempts
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
+    use crate::local_runtime::configuration::settings::{SourceMutation, SourceScope};
+    use crate::model::{catalog::ModelRef, session::SessionModelConfig};
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let id = f.sessions[0].id.clone();
+        let MethodResult::SourceSettings {
+            projection,
+            session_revision,
+            ..
+        } = call(
+            &connection,
+            1,
+            Method::SourcesRead {
+                session_id: id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!()
+        };
+        assert!(projection.workspace.active);
+        assert!(
+            projection
+                .catalog
+                .models
+                .models
+                .iter()
+                .any(|m| m.model.to_string() == "local/b")
+        );
+        let expected = projection.user.revision.clone();
+        let selection = Some(SessionModelConfig::of(ModelRef::parse("local/b").unwrap()));
+        let MethodResult::SourceSettings {
+            projection: saved, ..
+        } = call(
+            &connection,
+            2,
+            Method::SourcesWrite {
+                session_id: id.clone(),
+                expected_revision: expected.clone(),
+                mutation: SourceMutation::UserModel {
+                    selection: selection.clone(),
+                },
+            },
+        )
+        .await
+        else {
+            panic!()
+        };
+        assert_ne!(saved.user.revision, expected);
+        assert_eq!(saved.user.selection, selection);
+        assert!(matches!(
+            rejected(
+                &connection,
+                Method::SourcesWrite {
+                    session_id: id.clone(),
+                    expected_revision: expected,
+                    mutation: SourceMutation::UserModel { selection: None }
+                }
+            )
+            .await,
+            ErrorData::SourceConflict {
+                scope: SourceScope::User,
+                ..
+            }
+        ));
+        let MethodResult::SourceSettings {
+            projection: fresh, ..
+        } = call(
+            &connection,
+            3,
+            Method::SourcesRead {
+                session_id: id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!()
+        };
+        assert_eq!(fresh.user, saved.user);
+        let MethodResult::SettingsReplaced { revision } = call(
+            &connection,
+            4,
+            Method::SelectModel {
+                session_id: id.clone(),
+                expected_revision: session_revision,
+                selection: selection.clone(),
+            },
+        )
+        .await
+        else {
+            panic!()
+        };
+        assert!(revision > session_revision);
+        assert!(matches!(
+            rejected(
+                &connection,
+                Method::SelectModel {
+                    session_id: id.clone(),
+                    expected_revision: session_revision,
+                    selection: None
+                }
+            )
+            .await,
+            ErrorData::StaleSettings { .. }
+        ));
+        let MethodResult::SourceSettings {
+            session_selection,
+            projection,
+            ..
+        } = call(
+            &connection,
+            5,
+            Method::SourcesRead {
+                session_id: id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!()
+        };
+        assert_eq!(session_selection, selection);
+        assert!(matches!(
+            projection.provenance["agent.model.model"],
+            crate::local_runtime::configuration::Origin::Explicit { .. }
+        ));
+        call(
+            &connection,
+            6,
+            Method::SelectModel {
+                session_id: id,
+                expected_revision: revision,
+                selection: None,
+            },
+        )
+        .await;
+        assert!(f.provider.request_bodies().is_empty());
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolution() {
+    use crate::local_runtime::configuration::settings::SourceMutation;
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        call(
+            &connection,
+            101,
+            Method::TurnStart {
+                target: target.clone(),
+                content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
+                    text: "request-A".into(),
+                })],
+            },
+        )
+        .await;
+        f.gates[0].wait_entered().await;
+        let runtime = f.manager.load(&target.session_id, None).await.unwrap();
+        let before = runtime.client().snapshot().unwrap().0;
+        let MethodResult::SourceSettings { projection, .. } = call(
+            &connection,
+            102,
+            Method::SourcesRead {
+                session_id: target.session_id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!()
+        };
+        let mut providers = projection.catalog.providers;
+        providers.get_mut("local").unwrap().models[0].max_output_tokens = 2048;
+        call(
+            &connection,
+            103,
+            Method::SourcesWrite {
+                session_id: target.session_id.clone(),
+                expected_revision: projection.catalog.revision,
+                mutation: SourceMutation::Catalog { providers },
+            },
+        )
+        .await;
+        let after = runtime.client().snapshot().unwrap().0;
+        assert_eq!(before.model, after.model);
+        assert_eq!(before.attempt.unwrap().model, after.attempt.unwrap().model);
+        let cold = attach(&connection, &f, 1).await;
+        let MethodResult::Models { catalog } =
+            call(&connection, 104, Method::ModelCatalog { target: cold }).await
+        else {
+            panic!()
+        };
+        assert_eq!(
+            catalog
+                .models
+                .iter()
+                .find(|m| m.model.to_string() == "local/a")
+                .unwrap()
+                .max_output_tokens,
+            2048
+        );
+        f.gates[0].release();
+        f.close().await;
+    })
+    .await;
+}

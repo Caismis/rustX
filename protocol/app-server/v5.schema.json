@@ -1353,6 +1353,104 @@
           "properties": {
             "method": {
               "type": "string",
+              "const": "settings/selectModel"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "expected_revision": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+                },
+                "selection": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionModelConfig"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "expected_revision"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "settings/sourcesRead"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "settings/sourcesWrite"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "expected_revision": {
+                  "type": "string"
+                },
+                "mutation": {
+                  "$ref": "#/$defs/SourceMutation"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "expected_revision",
+                "mutation"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
               "const": "settings/read"
             },
             "params": {
@@ -2712,6 +2810,465 @@
         "answer"
       ]
     },
+    "SourceMutation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "providers": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/ProviderDraft"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "catalog"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "providers"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "selection": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SessionModelConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "user_model"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "selection": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SessionModelConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "workspace_model"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "ProviderDraft": {
+      "type": "object",
+      "properties": {
+        "base_url": {
+          "type": "string"
+        },
+        "credential": {
+          "description": "Literal means retain the existing native secret, never supply/read one.",
+          "$ref": "#/$defs/CredentialSourceView"
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Model"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "base_url",
+        "credential",
+        "models"
+      ]
+    },
+    "CredentialSourceView": {
+      "description": "The redacted client-facing description of a credential source.\n\nThis is safe to place in Runtime Client results: it carries the source\n*kind* and, for an environment reference, the variable *name*. It never\ncarries a credential value.",
+      "oneOf": [
+        {
+          "description": "The credential is a literal catalog value.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "literal"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "The credential is read from the named environment variable.",
+          "type": "object",
+          "properties": {
+            "variable": {
+              "description": "The environment variable name (never its value).",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "environment"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "variable"
+          ]
+        }
+      ]
+    },
+    "Model": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/$defs/ModelProtocol"
+        },
+        "context_window": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "capabilities": {
+          "$ref": "#/$defs/Capabilities"
+        },
+        "request_params": {
+          "$ref": "#/$defs/RequestParamsToml",
+          "default": {}
+        },
+        "reasoning": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Reasoning"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "compat": {
+          "$ref": "#/$defs/Compat",
+          "default": {}
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "protocol",
+        "context_window",
+        "max_output_tokens",
+        "capabilities"
+      ]
+    },
+    "ModelProtocol": {
+      "description": "The model interaction protocol an adapter must speak.",
+      "oneOf": [
+        {
+          "description": "`OpenAI` Chat Completions API.",
+          "type": "string",
+          "const": "openai_chat_completions"
+        },
+        {
+          "description": "`OpenAI` Responses API.",
+          "type": "string",
+          "const": "openai_responses"
+        },
+        {
+          "description": "`Anthropic` Messages API.",
+          "type": "string",
+          "const": "anthropic_messages"
+        }
+      ]
+    },
+    "Capabilities": {
+      "type": "object",
+      "properties": {
+        "input_modalities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/Modality"
+          }
+        },
+        "output_modalities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/Modality"
+          }
+        },
+        "tool_calls": {
+          "type": "boolean"
+        },
+        "reasoning": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "input_modalities",
+        "output_modalities",
+        "tool_calls",
+        "reasoning"
+      ]
+    },
+    "Modality": {
+      "description": "One semantic content modality of a model capability set.",
+      "oneOf": [
+        {
+          "description": "Textual content.",
+          "type": "string",
+          "const": "text"
+        },
+        {
+          "description": "Image content.",
+          "type": "string",
+          "const": "image"
+        },
+        {
+          "description": "File/document content.",
+          "type": "string",
+          "const": "file"
+        }
+      ]
+    },
+    "RequestParamsToml": {
+      "description": "Opaque provider-native structured TOML. Strings, integers, finite floats, booleans, arrays and tables only; no dates, times, datetimes, non-finite floats or explicit null. Protected wire keys are checked during model resolution.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/RequestParamsToml/$defs/value"
+      },
+      "$defs": {
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/RequestParamsToml/$defs/value"
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/RequestParamsToml/$defs/value"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "Reasoning": {
+      "type": "object",
+      "properties": {
+        "default_profile": {
+          "$ref": "#/$defs/ReasoningProfileId"
+        },
+        "profiles": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Profile"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "default_profile",
+        "profiles"
+      ]
+    },
+    "Profile": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "request_params": {
+          "$ref": "#/$defs/RequestParamsToml",
+          "default": {}
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "enabled"
+      ]
+    },
+    "Compat": {
+      "type": "object",
+      "properties": {
+        "chat_max_tokens_field": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatMaxTokensField"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "chat_stream_usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatStreamUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "chat_reasoning_replay": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatReasoningReplay"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "chat_tool_protocol": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatToolProtocol"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "responses_storage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResponsesStorageMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ChatMaxTokensField": {
+      "description": "Which max-token field spelling a Chat Completions service accepts.\n\nThis is a real structural translation difference between\nOpenAI-compatible services, not a provider wire value: the two spellings\nare mutually exclusive and both are runtime-protected.",
+      "oneOf": [
+        {
+          "description": "The current `max_completion_tokens` field.",
+          "type": "string",
+          "const": "max_completion_tokens"
+        },
+        {
+          "description": "The legacy `max_tokens` field.",
+          "type": "string",
+          "const": "max_tokens"
+        }
+      ]
+    },
+    "ChatStreamUsage": {
+      "description": "Whether a Chat Completions service supports streaming usage options.",
+      "oneOf": [
+        {
+          "description": "`stream_options.include_usage` is supported and requested.",
+          "type": "string",
+          "const": "supported"
+        },
+        {
+          "description": "The service rejects `stream_options`; the field is omitted.",
+          "type": "string",
+          "const": "unsupported"
+        }
+      ]
+    },
+    "ChatReasoningReplay": {
+      "description": "Assistant-message field used to replay canonical reasoning through an\nOpenAI-compatible Chat Completions dialect.",
+      "oneOf": [
+        {
+          "description": "vLLM and `OpenRouter`'s plaintext reasoning field.",
+          "type": "string",
+          "const": "reasoning"
+        },
+        {
+          "description": "`DeepSeek` V4, GLM, Qwen, and compatible preserved-thinking APIs.",
+          "type": "string",
+          "const": "reasoning_content"
+        },
+        {
+          "description": "Do not replay historical canonical reasoning to the provider.",
+          "type": "string",
+          "const": "omit"
+        }
+      ]
+    },
+    "ChatToolProtocol": {
+      "description": "The in-band tool protocol a Chat Completions model speaks.\n\nThis is a real protocol difference between OpenAI-compatible services,\nnot a provider wire value. Most services emit tool calls only through the\nstructured `tool_calls` field. Some model families additionally have a\n*reserved in-band* tool syntax that the serving stack is supposed to parse\nout of the generated text; when that parse fails, the reserved markup\nleaks into ordinary content or reasoning and the request terminates as if\nthe model had simply answered.\n\nDeclaring the dialect is what allows the adapter to recognize such a leak\nas malformed tool intent instead of guessing from arbitrary text. Nothing\nis ever inferred from a provider name or a base URL hostname.",
+      "oneOf": [
+        {
+          "description": "Tool calls exist only as structured `tool_calls`. Generated text is\nnever inspected for tool-protocol markup.",
+          "type": "string",
+          "const": "native"
+        },
+        {
+          "description": "The Qwen XML tool dialect (`<tool_call>`, `<function=…>`,\n`<parameter=…>`), as served by vLLM and compatible stacks.",
+          "type": "string",
+          "const": "qwen_xml"
+        }
+      ]
+    },
+    "ResponsesStorageMode": {
+      "description": "How the `OpenAI` Responses protocol operates with provider storage.\n\nThis is continuation *structure*, not a wire value: Stored continues by\n`previous_response_id`, Stateless continues by preserved output items and\nrequires the encrypted-reasoning `include` value.",
+      "oneOf": [
+        {
+          "description": "Provider-side storage enabled (`store: true`).",
+          "type": "string",
+          "const": "stored"
+        },
+        {
+          "description": "Zero provider retention (`store: false`).",
+          "type": "string",
+          "const": "stateless"
+        }
+      ]
+    },
     "Response": {
       "description": "Success and failure are exclusive, including on deserialization.",
       "anyOf": [
@@ -3405,6 +3962,38 @@
           "required": [
             "type",
             "interaction"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "projection": {
+              "$ref": "#/$defs/SourceSettings"
+            },
+            "session_revision": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+            },
+            "session_selection": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SessionModelConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "source_settings"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "projection",
+            "session_revision"
           ]
         },
         {
@@ -4126,26 +4715,6 @@
         "declaredCapabilities"
       ]
     },
-    "ModelProtocol": {
-      "description": "The model interaction protocol an adapter must speak.",
-      "oneOf": [
-        {
-          "description": "`OpenAI` Chat Completions API.",
-          "type": "string",
-          "const": "openai_chat_completions"
-        },
-        {
-          "description": "`OpenAI` Responses API.",
-          "type": "string",
-          "const": "openai_responses"
-        },
-        {
-          "description": "`Anthropic` Messages API.",
-          "type": "string",
-          "const": "anthropic_messages"
-        }
-      ]
-    },
     "ModelCapabilities": {
       "description": "The semantic capability set of a model, an adapter/protocol, or the\nruntime.\n\nModalities are structured sets rather than one boolean per modality, so\nadding a modality never reshapes the contract. The client-visible\ncapability is always an [`intersection`](ModelCapabilities::intersect) of\nthe model claim, the adapter/protocol capability, and the current runtime\ncapability — a raw catalog claim is never advertised.",
       "type": "object",
@@ -4181,26 +4750,6 @@
         "outputModalities",
         "toolCalls",
         "reasoning"
-      ]
-    },
-    "Modality": {
-      "description": "One semantic content modality of a model capability set.",
-      "oneOf": [
-        {
-          "description": "Textual content.",
-          "type": "string",
-          "const": "text"
-        },
-        {
-          "description": "Image content.",
-          "type": "string",
-          "const": "image"
-        },
-        {
-          "description": "File/document content.",
-          "type": "string",
-          "const": "file"
-        }
       ]
     },
     "SummaryModelView": {
@@ -4403,44 +4952,6 @@
       "required": [
         "id",
         "enabled"
-      ]
-    },
-    "CredentialSourceView": {
-      "description": "The redacted client-facing description of a credential source.\n\nThis is safe to place in Runtime Client results: it carries the source\n*kind* and, for an environment reference, the variable *name*. It never\ncarries a credential value.",
-      "oneOf": [
-        {
-          "description": "The credential is a literal catalog value.",
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string",
-              "const": "literal"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "additionalProperties": false
-        },
-        {
-          "description": "The credential is read from the named environment variable.",
-          "type": "object",
-          "properties": {
-            "variable": {
-              "description": "The environment variable name (never its value).",
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "const": "environment"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "type",
-            "variable"
-          ]
-        }
       ]
     },
     "CapabilityView": {
@@ -13129,6 +13640,380 @@
         "status"
       ]
     },
+    "SourceSettings": {
+      "type": "object",
+      "properties": {
+        "catalog": {
+          "$ref": "#/$defs/CatalogSettings"
+        },
+        "user": {
+          "$ref": "#/$defs/SelectionSource"
+        },
+        "workspace": {
+          "$ref": "#/$defs/SelectionSource"
+        },
+        "effective": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionModelConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "effective_request": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelInvocationView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Origin"
+          }
+        },
+        "resolution_available": {
+          "description": "Invalid/incomplete current sources do not prevent repairing the catalog.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "catalog",
+        "user",
+        "workspace",
+        "provenance",
+        "resolution_available"
+      ]
+    },
+    "CatalogSettings": {
+      "type": "object",
+      "properties": {
+        "document": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "providers": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ProviderDraft"
+          }
+        },
+        "models": {
+          "$ref": "#/$defs/ModelCatalogView"
+        }
+      },
+      "required": [
+        "document",
+        "revision",
+        "providers",
+        "models"
+      ]
+    },
+    "SelectionSource": {
+      "type": "object",
+      "properties": {
+        "document": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "selection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionModelConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "authored": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelLayer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "document",
+        "revision",
+        "active"
+      ]
+    },
+    "ModelLayer": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reasoning_profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningSelection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_params": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequestParamsToml"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max_output_tokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelOutput"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary_model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SummaryAuthoring"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReasoningSelection": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "catalog_default"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/ReasoningProfileId"
+            },
+            "mode": {
+              "type": "string",
+              "const": "profile"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "name"
+          ]
+        }
+      ]
+    },
+    "ModelOutput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "catalog_default"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "tokens": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "mode": {
+              "type": "string",
+              "const": "limit"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "tokens"
+          ]
+        }
+      ]
+    },
+    "SummaryAuthoring": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "session"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "model": {
+              "$ref": "#/$defs/ModelRef"
+            },
+            "reasoning_profile": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ReasoningSelection"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "request_params": {
+              "$ref": "#/$defs/RequestParamsToml",
+              "default": {}
+            },
+            "max_output_tokens": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelOutput"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "mode": {
+              "type": "string",
+              "const": "explicit"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "model"
+          ]
+        }
+      ]
+    },
+    "Origin": {
+      "description": "Values are never included: provenance cannot expose credentials or environment values.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "builtin"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "document": {
+              "type": "string"
+            },
+            "base": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "user"
+            }
+          },
+          "required": [
+            "kind",
+            "document",
+            "base"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "document": {
+              "type": "string"
+            },
+            "base": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "project"
+            }
+          },
+          "required": [
+            "kind",
+            "document",
+            "base"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "base": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "explicit"
+            }
+          },
+          "required": [
+            "kind",
+            "base"
+          ]
+        }
+      ]
+    },
     "Failure": {
       "type": "object",
       "properties": {
@@ -13275,6 +14160,44 @@
             "session_id",
             "node_id"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/SourceScope"
+            },
+            "expected": {
+              "type": "string"
+            },
+            "actual": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "source_conflict"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "scope",
+            "expected",
+            "actual"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "untrusted_workspace"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
         },
         {
           "type": "object",
@@ -13490,6 +14413,14 @@
           ],
           "additionalProperties": false
         }
+      ]
+    },
+    "SourceScope": {
+      "type": "string",
+      "enum": [
+        "user",
+        "workspace",
+        "catalog"
       ]
     },
     "Notification": {

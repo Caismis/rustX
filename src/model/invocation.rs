@@ -66,8 +66,8 @@ use crate::model::adapter::ModelAdapter;
 #[cfg(test)]
 use crate::model::catalog::ResolvedProvider;
 use crate::model::catalog::{
-    CatalogModelView, Modality, ModelCapabilities, ModelCatalogView, ModelCompat, ModelDefinition,
-    ModelRef, ProviderId, ReasoningProfileId, ReasoningProfileView, ResolvedModelCatalog,
+    Modality, ModelCapabilities, ModelCatalogView, ModelCompat, ModelDefinition, ModelRef,
+    ProviderId, ReasoningProfileId, ResolvedModelCatalog,
 };
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::generation::GenerationSafetyPolicy;
@@ -1089,37 +1089,7 @@ impl ModelBindingRegistry {
     /// The safe public catalog view served to Runtime Clients.
     #[must_use]
     pub fn catalog_view(&self) -> ModelCatalogView {
-        let mut models = Vec::new();
-        for reference in self.catalog.model_refs() {
-            let Ok((provider, model)) = self.catalog.binding(&reference) else {
-                continue;
-            };
-            models.push(CatalogModelView {
-                model: reference,
-                protocol: model.protocol,
-                context_window: model.context_window,
-                max_output_tokens: model.max_output_tokens,
-                declared_capabilities: model.capabilities.clone(),
-                effective_capabilities: effective_capabilities(&model.capabilities, model.protocol),
-                reasoning_profiles: model
-                    .reasoning
-                    .as_ref()
-                    .map(|reasoning| {
-                        reasoning
-                            .profiles
-                            .iter()
-                            .map(|(id, profile)| ReasoningProfileView {
-                                id: id.clone(),
-                                enabled: profile.enabled,
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-                default_reasoning_profile: model.default_reasoning_profile().cloned(),
-                credential_source: provider.credential_source(),
-            });
-        }
-        ModelCatalogView { models }
+        self.catalog.catalog().view()
     }
 }
 

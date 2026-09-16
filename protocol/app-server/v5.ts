@@ -324,6 +324,28 @@ export type Request1 =
       };
     }
   | {
+      method: 'settings/selectModel';
+      params: {
+        session_id: SessionId;
+        expected_revision: string;
+        selection?: SessionModelConfig | null;
+      };
+    }
+  | {
+      method: 'settings/sourcesRead';
+      params: {
+        session_id: SessionId;
+      };
+    }
+  | {
+      method: 'settings/sourcesWrite';
+      params: {
+        session_id: SessionId;
+        expected_revision: string;
+        mutation: SourceMutation;
+      };
+    }
+  | {
       method: 'settings/read';
       params: {
         session_id: SessionId;
@@ -582,6 +604,82 @@ export type ReviewDecision =
       feedback: string;
       type: 'rejected';
     };
+export type SourceMutation =
+  | {
+      providers: {
+        [k: string]: ProviderDraft;
+      };
+      kind: 'catalog';
+    }
+  | {
+      selection?: SessionModelConfig | null;
+      kind: 'user_model';
+    }
+  | {
+      selection?: SessionModelConfig | null;
+      kind: 'workspace_model';
+    };
+/**
+ * The model interaction protocol an adapter must speak.
+ */
+export type ModelProtocol = 'openai_chat_completions' | 'openai_responses' | 'anthropic_messages';
+/**
+ * One semantic content modality of a model capability set.
+ */
+export type Modality = 'text' | 'image' | 'file';
+/**
+ * This interface was referenced by `RequestParamsToml`'s JSON-Schema
+ * via the `definition` "value".
+ */
+export type Value =
+  | string
+  | number
+  | boolean
+  | Value[]
+  | {
+      [k: string]: Value;
+    };
+/**
+ * Which max-token field spelling a Chat Completions service accepts.
+ *
+ * This is a real structural translation difference between
+ * OpenAI-compatible services, not a provider wire value: the two spellings
+ * are mutually exclusive and both are runtime-protected.
+ */
+export type ChatMaxTokensField = 'max_completion_tokens' | 'max_tokens';
+/**
+ * Whether a Chat Completions service supports streaming usage options.
+ */
+export type ChatStreamUsage = 'supported' | 'unsupported';
+/**
+ * Assistant-message field used to replay canonical reasoning through an
+ * OpenAI-compatible Chat Completions dialect.
+ */
+export type ChatReasoningReplay = 'reasoning' | 'reasoning_content' | 'omit';
+/**
+ * The in-band tool protocol a Chat Completions model speaks.
+ *
+ * This is a real protocol difference between OpenAI-compatible services,
+ * not a provider wire value. Most services emit tool calls only through the
+ * structured `tool_calls` field. Some model families additionally have a
+ * *reserved in-band* tool syntax that the serving stack is supposed to parse
+ * out of the generated text; when that parse fails, the reserved markup
+ * leaks into ordinary content or reasoning and the request terminates as if
+ * the model had simply answered.
+ *
+ * Declaring the dialect is what allows the adapter to recognize such a leak
+ * as malformed tool intent instead of guessing from arbitrary text. Nothing
+ * is ever inferred from a provider name or a base URL hostname.
+ */
+export type ChatToolProtocol = 'native' | 'qwen_xml';
+/**
+ * How the `OpenAI` Responses protocol operates with provider storage.
+ *
+ * This is continuation *structure*, not a wire value: Stored continues by
+ * `previous_response_id`, Stateless continues by preserved output items and
+ * requires the encrypted-reasoning `include` value.
+ */
+export type ResponsesStorageMode = 'stored' | 'stateless';
 /**
  * Success and failure are exclusive, including on deserialization.
  */
@@ -752,6 +850,12 @@ export type MethodResult =
       type: 'interaction_settled';
     }
   | {
+      projection: SourceSettings;
+      session_revision: string;
+      session_selection?: SessionModelConfig | null;
+      type: 'source_settings';
+    }
+  | {
       /**
        * Current native project source trust; unresolved is never trusted.
        * Loaded resources retain their admitted generation independently.
@@ -827,10 +931,6 @@ export type SettingsBoundary =
   | 'frozen_admission'
   | 'client_local'
   | 'next_launch';
-/**
- * One semantic content modality of a model capability set.
- */
-export type Modality = 'text' | 'image' | 'file';
 /**
  * Identifies an MCP server bound to the runtime.
  */
@@ -1945,6 +2045,54 @@ export type SkillDiagnostic =
  * acceptance of a conversation receives `1`.
  */
 export type InboundSequence = string;
+export type ReasoningSelection =
+  | {
+      mode: 'catalog_default';
+    }
+  | {
+      name: ReasoningProfileId;
+      mode: 'profile';
+    };
+export type ModelOutput =
+  | {
+      mode: 'catalog_default';
+    }
+  | {
+      tokens: number;
+      mode: 'limit';
+    };
+export type SummaryAuthoring =
+  | {
+      mode: 'session';
+    }
+  | {
+      model: ModelRef;
+      reasoning_profile?: ReasoningSelection | null;
+      request_params?: RequestParamsToml;
+      max_output_tokens?: ModelOutput | null;
+      mode: 'explicit';
+    };
+/**
+ * Values are never included: provenance cannot expose credentials or environment values.
+ */
+export type Origin =
+  | {
+      kind: 'builtin';
+    }
+  | {
+      document: string;
+      base: string;
+      kind: 'user';
+    }
+  | {
+      document: string;
+      base: string;
+      kind: 'project';
+    }
+  | {
+      base: string;
+      kind: 'explicit';
+    };
 /**
  * A monotonic revision counter for the capability set observed by an attempt.
  *
@@ -1975,6 +2123,15 @@ export type ErrorData =
       session_id: SessionId;
       node_id: SessionNodeId;
       kind: 'unknown_node';
+    }
+  | {
+      scope: SourceScope;
+      expected: string;
+      actual: string;
+      kind: 'source_conflict';
+    }
+  | {
+      kind: 'untrusted_workspace';
     }
   | {
       expected: string;
@@ -2024,6 +2181,7 @@ export type ErrorData =
   | {
       kind: 'operation_failed';
     };
+export type SourceScope = 'user' | 'workspace' | 'catalog';
 export type Notification = {
   jsonrpc: JsonRpcVersion;
 } & Notification1;
@@ -3085,6 +3243,63 @@ export interface CustomAnswer {
    */
   answer: string;
 }
+export interface ProviderDraft {
+  base_url: string;
+  /**
+   * Literal means retain the existing native secret, never supply/read one.
+   */
+  credential:
+    | {
+        type: 'literal';
+      }
+    | {
+        /**
+         * The environment variable name (never its value).
+         */
+        variable: string;
+        type: 'environment';
+      };
+  models: Model[];
+}
+export interface Model {
+  id: string;
+  protocol: ModelProtocol;
+  context_window: string;
+  max_output_tokens: number;
+  capabilities: Capabilities;
+  request_params?: RequestParamsToml;
+  reasoning?: Reasoning | null;
+  compat?: Compat;
+}
+export interface Capabilities {
+  input_modalities: Modality[];
+  output_modalities: Modality[];
+  tool_calls: boolean;
+  reasoning: boolean;
+}
+/**
+ * Opaque provider-native structured TOML. Strings, integers, finite floats, booleans, arrays and tables only; no dates, times, datetimes, non-finite floats or explicit null. Protected wire keys are checked during model resolution.
+ */
+export interface RequestParamsToml {
+  [k: string]: Value;
+}
+export interface Reasoning {
+  default_profile: ReasoningProfileId;
+  profiles: {
+    [k: string]: Profile;
+  };
+}
+export interface Profile {
+  enabled: boolean;
+  request_params?: RequestParamsToml;
+}
+export interface Compat {
+  chat_max_tokens_field?: ChatMaxTokensField | null;
+  chat_stream_usage?: ChatStreamUsage | null;
+  chat_reasoning_replay?: ChatReasoningReplay | null;
+  chat_tool_protocol?: ChatToolProtocol | null;
+  responses_storage?: ResponsesStorageMode | null;
+}
 export interface Success {
   jsonrpc: JsonRpcVersion;
   id: RequestId;
@@ -3213,7 +3428,7 @@ export interface SessionModelView {
          */
         model: string;
         /**
-         * The protocol of the binding.
+         * The model interaction protocol an adapter must speak.
          */
         protocol: 'openai_chat_completions' | 'openai_responses' | 'anthropic_messages';
         /**
@@ -3323,7 +3538,7 @@ export interface ModelInvocationView {
    */
   model: string;
   /**
-   * The protocol of the binding.
+   * The model interaction protocol an adapter must speak.
    */
   protocol: 'openai_chat_completions' | 'openai_responses' | 'anthropic_messages';
   /**
@@ -3471,7 +3686,7 @@ export interface CatalogModelView {
    */
   model: string;
   /**
-   * The protocol an adapter speaks to this model.
+   * The model interaction protocol an adapter must speak.
    */
   protocol: 'openai_chat_completions' | 'openai_responses' | 'anthropic_messages';
   /**
@@ -6360,7 +6575,7 @@ export interface AttemptModelView {
          */
         model: string;
         /**
-         * The protocol of the binding.
+         * The model interaction protocol an adapter must speak.
          */
         protocol: 'openai_chat_completions' | 'openai_responses' | 'anthropic_messages';
         /**
@@ -6411,7 +6626,7 @@ export interface ModelInvocationView1 {
    */
   model: string;
   /**
-   * The protocol of the binding.
+   * The model interaction protocol an adapter must speak.
    */
   protocol: 'openai_chat_completions' | 'openai_responses' | 'anthropic_messages';
   /**
@@ -7129,6 +7344,97 @@ export interface TodoTask {
   metadata?: {
     [k: string]: unknown;
   } | null;
+}
+export interface SourceSettings {
+  catalog: CatalogSettings;
+  user: SelectionSource;
+  workspace: SelectionSource;
+  effective?: SessionModelConfig | null;
+  effective_request?: ModelInvocationView2 | null;
+  provenance: {
+    [k: string]: Origin;
+  };
+  /**
+   * Invalid/incomplete current sources do not prevent repairing the catalog.
+   */
+  resolution_available: boolean;
+}
+export interface CatalogSettings {
+  document: string;
+  revision: string;
+  providers: {
+    [k: string]: ProviderDraft;
+  };
+  models: ModelCatalogView;
+}
+export interface SelectionSource {
+  document: string;
+  revision: string;
+  active: boolean;
+  selection?: SessionModelConfig | null;
+  authored?: ModelLayer | null;
+}
+export interface ModelLayer {
+  model?: ModelRef | null;
+  reasoning_profile?: ReasoningSelection | null;
+  request_params?: RequestParamsToml | null;
+  max_output_tokens?: ModelOutput | null;
+  summary_model?: SummaryAuthoring | null;
+}
+/**
+ * The redacted client-facing projection of one resolved model invocation.
+ *
+ * It carries no credential, no adapter object, no provider HTTP client, and
+ * no synchronization identity. The effective request parameters *are*
+ * exposed: they are provider-owned configuration a model-control client
+ * needs, and they can never contain credential material because a
+ * credential is never a request parameter.
+ */
+export interface ModelInvocationView2 {
+  /**
+   * A fully qualified catalog model reference: `provider-id/model-id`.
+   *
+   * The first `/` separates the provider from the model. The model ID itself
+   * may contain additional `/` characters, as is common for Hugging Face
+   * identities such as `Qwen/Qwen3`, but no model-ID segment may be empty.
+   *
+   * This is the explicit model-identity domain of the runtime. Concatenated
+   * strings never travel through the runtime in its place: a reference either
+   * resolves to exactly one catalog model or it fails.
+   */
+  model: string;
+  /**
+   * The model interaction protocol an adapter must speak.
+   */
+  protocol: 'openai_chat_completions' | 'openai_responses' | 'anthropic_messages';
+  /**
+   * The model's context window in tokens.
+   */
+  contextWindow: number;
+  /**
+   * The model's configured maximum output tokens.
+   */
+  modelMaxOutputTokens: number;
+  /**
+   * The effective output budget.
+   */
+  maxOutputTokens: number;
+  /**
+   * The selected reasoning profile, when the model declares any.
+   */
+  reasoningProfile?: ReasoningProfileId | null;
+  /**
+   * Whether reasoning is semantically enabled.
+   */
+  reasoningEnabled: boolean;
+  /**
+   * The effective opaque provider request parameters.
+   */
+  requestParams?: {
+    [k: string]: unknown;
+  };
+  capabilities: ModelCapabilities;
+  declaredCapabilities: ModelCapabilities1;
 }
 export interface Failure {
   jsonrpc: JsonRpcVersion;
@@ -8008,7 +8314,7 @@ export interface SessionModelView1 {
          */
         model: string;
         /**
-         * The protocol of the binding.
+         * The model interaction protocol an adapter must speak.
          */
         protocol: 'openai_chat_completions' | 'openai_responses' | 'anthropic_messages';
         /**

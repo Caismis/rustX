@@ -1152,6 +1152,73 @@
           "upstream_sha256": "1aca37fb6c3409d638ea5dad4627b43f89056dae2a18d24dc487154a665a078d"
         }
       ]
+    },
+    {
+      "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
+      "destination": "web-console/src/app/settings/Settings.tsx",
+      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority",
+      "upstream_sha256": "e99a8749b502626fcd766cffc7dd07d1434ebf2f62478b2aea57405b5ef56b68",
+      "retained_dependencies": [
+        "../../../../protocol/app-server/v5",
+        "../../client/app-server",
+        "../../presentation/primitives/Button",
+        "./CatalogEditor",
+        "./RequestPolicy",
+        "./Settings.module.css",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host/Remote settings and credentials",
+        "Cordis plugin runtime",
+        "Harness source merge and model catalog authority"
+      ],
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-model-selection/src/client/ModelSelect.tsx",
+          "upstream_sha256": "65d857471275ac833d3f87613d2996b4e5f9a651ebe332756f31c3d1409111b6",
+          "treatment": "adapted presentation only"
+        }
+      ]
+    },
+    {
+      "upstream": "packages/client/ui-settings-models/src/client/ProviderEditor.tsx",
+      "destination": "web-console/src/app/settings/CatalogEditor.tsx",
+      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority",
+      "upstream_sha256": "46f98375c76035f50f80e70090a60396560318b54b3ec83d2d2a659489382e1c",
+      "retained_dependencies": [
+        "../../../../protocol/app-server/v5",
+        "../../presentation/primitives/Button",
+        "./RequestPolicy",
+        "./Settings.module.css",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host/Remote settings and credentials",
+        "Cordis plugin runtime",
+        "Harness source merge and model catalog authority"
+      ],
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-settings-models/src/client/EditorFooter.tsx",
+          "upstream_sha256": "20b6c0bfc6b4b387c4d4a98605007362077206867393eec1562a5af56e39e283",
+          "treatment": "adapted presentation only"
+        }
+      ]
+    },
+    {
+      "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
+      "destination": "web-console/src/app/settings/Settings.module.css",
+      "treatment": "adapted settings cards, scoped selection controls and explicit save footer; native rustX projections and CAS replace Harness settings authority",
+      "upstream_sha256": "db6217c722001b0871e035f325b7fc2999fd91c0b5f2e311b07fae1eab047b5e",
+      "retained_dependencies": [],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host/Remote settings and credentials",
+        "Cordis plugin runtime",
+        "Harness source merge and model catalog authority"
+      ]
     }
   ],
   "inspected": [
@@ -1321,6 +1388,18 @@
     "packages/client/ui-directory-picker-browse/tests/client-flow.client.spec.tsx",
     "packages/client/ui-directory-picker-browse/src/client/DirectoryBrowser.module.css",
     "packages/client/ui-sidebar/README.md",
-    "packages/api/workspace-controller/src/commands.ts"
+    "packages/api/workspace-controller/src/commands.ts",
+    "packages/client/ui-settings/README.md",
+    "packages/client/ui-settings/src/client/settings-scope.ts",
+    "packages/client/ui-settings/tests/settings-scope.client.spec.ts",
+    "packages/client/ui-settings-general/README.md",
+    "packages/client/ui-settings-general/src/client/SettingsRoot.module.css",
+    "packages/client/ui-settings-models/README.md",
+    "packages/client/ui-settings-models/tests/apply.client.spec.ts",
+    "packages/client/ui-model-selection/src/client/directory.ts",
+    "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
+    "packages/client/ui-settings-models/src/client/ProviderEditor.tsx",
+    "packages/client/ui-settings-models/src/client/EditorFooter.tsx",
+    "packages/client/ui-settings-models/src/client/ModelsSection.module.css"
   ]
 }
