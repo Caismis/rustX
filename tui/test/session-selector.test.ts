@@ -21,14 +21,14 @@ const sessions = [
     id: "session-1",
     name: "current work",
     updated_at: "2026-08-21T00:00:00Z",
-    active_node: "node-1",
+    cwd: "/server/work", active_node: "node-1",
     active: true,
   },
   {
     id: "session-2",
     name: "saved review",
     updated_at: "2026-08-20T00:00:00Z",
-    active_node: "node-2",
+    cwd: "/server/work", active_node: "node-2",
     active: false,
   },
 ];
@@ -71,13 +71,13 @@ describe("native Session selectors", () => {
           id: "session-3",
           preview: "restore the auth module",
           updated_at: "2026-08-19T00:00:00Z",
-          active_node: "node-3",
+          cwd: "/server/work", active_node: "node-3",
 
         },
         {
           id: "session-4",
           updated_at: "2026-08-18T00:00:00Z",
-          active_node: "node-4",
+          cwd: "/server/work", active_node: "node-4",
 
         },
       ],
@@ -325,7 +325,7 @@ describe("finite viewports (issue #161)", () => {
       id: `session-${index}`,
       name: `work ${index}`,
       updated_at: "2026-08-21T00:00:00Z",
-      active_node: `node-${index}`,
+      cwd: "/server/work", active_node: `node-${index}`,
       active: false,
     }));
     const selector = new SessionSelector({ sessions: many });

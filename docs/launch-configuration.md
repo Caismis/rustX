@@ -59,7 +59,7 @@ user/process source bindings (UserConfigManager)
     + current user and project source files
     + explicit SessionConfigInput
         -> ProspectiveSessionConfig (static validation, no external effects)
-        -> admit (trust check, then credential snapshot)
+        -> admit (source authority validation, then User credential snapshot)
         -> AdmittedSessionConfig
         -> native preparation and resource-generation publication
         -> frozen attempts / Tools / children / Workflows / model requests
@@ -83,7 +83,7 @@ Initial composition consumes captured project guidance, root `agent.agents_md.fi
 well as settings/catalogs/profiles/programs. It rechecks physical resource
 authority before preparation; it does not reinterpret changed configuration.
 Explicit resource reload retains its existing generation owner and pinned source
-slots. Runtime admission requires real host trust before capturing credentials.
+slots. Project sources require native trust; cwd use and User credential capture do not grant project authority.
 Native composition consumes the admitted snapshot; it does not reopen settings
 or model catalogs to resolve startup.
 
@@ -340,9 +340,10 @@ resources; project package roots are checked before materialization.
 
 ## Trust
 
-Every workspace must be explicitly trusted before ordinary composition, even
-when its current directory is empty. This prevents later file creation from
-silently enabling project content. Grant and revoke work without settings,
+Project configuration/resources require explicit native trust, even when the current
+directory is empty. An untrusted cwd remains usable with User/built-in configuration
+and explicit Session selections. Later file creation cannot widen admitted authority.
+Grant and revoke work without settings,
 models, credentials, Python, MCP, or a Session:
 
 ```sh
@@ -359,13 +360,14 @@ Unrelated identities cannot lose updates through whole-store rewrites.
 Projects cannot redirect the store, declare trust, or inherit another
 worktree's decision. The trust store itself cannot live under the workspace.
 
-Untrusted launch exits with an actionable grant command before model, child,
-Workflow, MCP or Python/resource activation. Inert document inspection may
-produce syntax/authority diagnostics first. Trust permits project-authored
-configuration and resources; it does not grant OS sandboxing, tool approval,
-business approval, provider credentials or external-source lifecycle approval.
-Revoke affects subsequent launches; it does not cancel a running runtime or
-change already-admitted attempts. Restart to apply a changed trust decision.
+Untrusted cold resolution skips project documents and automatic project resources
+without parsing them. User settings/resources remain independently authorized.
+Trust permits project-authored configuration and resources; it does not grant OS
+sandboxing, Tool approval, provider credentials or external-source lifecycle approval.
+Grant/revoke affect subsequent cold resolution. Resource reload retains the captured
+project authority and cannot enable previously untrusted sources; neither operation
+cancels work or changes already-admitted attempts. Product Host Workspace registration
+and navigation cannot grant native trust.
 Project instructions load only from the resolved workspace, with first-match
 precedence `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`.
 Instructions from unrelated ancestor directories are not activated.

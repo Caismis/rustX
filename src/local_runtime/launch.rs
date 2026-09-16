@@ -187,7 +187,8 @@ pub fn resolve_locations(
 }
 /// Resolve and admit CLI input through the shared Session configuration owner.
 /// # Errors
-/// Invalid configuration or absent trust prevents credential capture.
+/// Invalid configuration or resource authority prevents credential capture.
+/// Untrusted projects use only User/built-in and explicit Session sources.
 pub fn resolve(
     request: &LaunchRequest,
     host: &HostEnvironment,

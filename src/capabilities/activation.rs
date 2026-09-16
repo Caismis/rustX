@@ -31,9 +31,8 @@ pub enum SourceActivation {
 
 impl SourceActivation {
     /// Evaluate declared intent against the host's trust/resource decision.
-    /// CFG-01 rejects untrusted launches before composition. Embedded hosts may
-    /// represent that rejection as inert availability instead. Neither discovery
-    /// nor a capability consumer supplies authority here.
+    /// Project trust gates project-owned sources, independently of cwd use.
+    /// Neither discovery nor a capability consumer supplies authority here.
     #[must_use]
     pub const fn evaluate(intent: Option<SourceEnablement>, authority_accepted: bool) -> Self {
         match intent {

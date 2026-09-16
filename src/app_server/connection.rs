@@ -402,7 +402,14 @@ impl AppServerConnection {
                     .list_sessions(query.as_deref(), offset, limit)
                     .await
                     .map_err(session_error)?;
+                let resident = self.host.manager().diagnostics();
+                let residencies = page.sessions.iter().map(|session| {
+                    let state = resident.sessions.iter().find(|row| row.session_id == session.id)
+                        .map_or(crate::local_runtime::session_runtime_manager::ResidencyState::Unloaded, |row| row.residency);
+                    (session.id.clone(), state)
+                }).collect();
                 Ok(MethodResult::Sessions {
+                    residencies,
                     sessions: page.sessions,
                     next_offset: page.next_offset,
                 })
@@ -481,7 +488,11 @@ impl AppServerConnection {
                     .read_settings(&session_id)
                     .await
                     .map_err(session_error)?;
-                Ok(MethodResult::Settings { revision, settings })
+                Ok(MethodResult::Settings {
+                    project_trusted: self.host.manager().project_trusted(&settings).ok(),
+                    revision,
+                    settings,
+                })
             }
             Method::SettingsReplace {
                 session_id,

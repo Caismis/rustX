@@ -74,12 +74,17 @@ fn candidates(
     Ok(result)
 }
 
-pub(crate) fn load(
+pub(crate) fn load_authorized(
     workspace: &Path,
     user_root: &Path,
+    project_trusted: bool,
 ) -> Result<(AgentCatalog, BTreeMap<SubagentName, AgentSource>), RuntimeResourceLoadError> {
     let users = candidates(user_root, user_root)?;
-    let projects = candidates(workspace, &workspace.join(".agents/agents"))?;
+    let projects = if project_trusted {
+        candidates(workspace, &workspace.join(".agents/agents"))?
+    } else {
+        BTreeMap::new()
+    };
     let mut selected = users.clone();
     selected.extend(projects.clone());
     if selected.len() > crate::runtime::subagent::MAX_SUBAGENT_DEFINITIONS {
@@ -227,7 +232,7 @@ mod tests {
                 "alpha",
                 "description = 'project'\ninstructions = 'project instructions'",
             );
-            let (catalog, sources) = load(&workspace, &user).unwrap();
+            let (catalog, sources) = load_authorized(&workspace, &user, true).unwrap();
             assert_eq!(
                 catalog
                     .definitions()
@@ -248,7 +253,7 @@ mod tests {
                 "project instructions"
             );
             assert_eq!(
-                load(&workspace, &user)
+                load_authorized(&workspace, &user, true)
                     .unwrap()
                     .0
                     .get(&alpha)
@@ -272,11 +277,11 @@ mod tests {
         let root = workspace.join(".agents/agents");
         write(&root, "zeta", "broken");
         write(&root, "alpha", "broken");
-        let first = load(&workspace, &workspace.join("user")).unwrap_err();
+        let first = load_authorized(&workspace, &workspace.join("user"), true).unwrap_err();
         assert_eq!(first.source_file, Some(root.join("alpha.toml")));
         assert_eq!(
             first,
-            load(&workspace, &workspace.join("user")).unwrap_err()
+            load_authorized(&workspace, &workspace.join("user"), true).unwrap_err()
         );
     }
     #[test]
@@ -289,7 +294,7 @@ mod tests {
             root.join("alpha.toml"),
             "description = 'Alpha'\ninstructions = 'Inspect'\n[agents_md]\nfiles = ['../outside.md']\n",
         ).unwrap();
-        let error = load(&workspace, &workspace.join("user")).unwrap_err();
+        let error = load_authorized(&workspace, &workspace.join("user"), true).unwrap_err();
         assert_eq!(
             error.field_path.as_deref(),
             Some("agents.alpha.agents_md.files")
@@ -304,6 +309,6 @@ mod tests {
         let root = workspace.join(".agents/agents");
         std::fs::create_dir_all(&root).unwrap();
         std::os::unix::fs::symlink("/etc/passwd", root.join("alpha.toml")).unwrap();
-        assert!(load(&workspace, &workspace.join("user")).is_err());
+        assert!(load_authorized(&workspace, &workspace.join("user"), true).is_err());
     }
 }

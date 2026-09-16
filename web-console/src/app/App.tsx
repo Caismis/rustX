@@ -1,9 +1,12 @@
+import { HttpWorkspaceHost, type ProductHostWorkspaces } from '../workspaces/host';
+import { WorkspaceNavigation } from '../workspaces/WorkspaceNavigation';
+import { createWorkspaceSession, WorkspaceSessionNavigation } from '../workspaces/navigation';
 import { Trajectory } from './Trajectory';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { AppServerClient } from '../client/app-server';
 import type { RuntimeClientSessionDeletePreview, UserInputBlock } from '../../../protocol/app-server/v5';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
-import { NavigationEpoch, createSession } from './commands/native';
+import { NavigationEpoch } from './commands/native';
 import { available, commands } from './commands/registry';
 import { activeAttempt, lineageSwitchSafe, json } from '../bindings/projection';
 import { goalDock, queueRows, todoDock } from '../bindings/composer-context';
@@ -37,29 +40,32 @@ function readPreferences(): { endpoint: string; tabs: string[] } {
   } catch { /* Preferences are optional presentation, never recovery input. */ }
   return { endpoint: 'ws://127.0.0.1:8080/', tabs: [] };
 }
-export function App({ client }: { client: AppServerClient }) {
+const defaultWorkspaceHost = new HttpWorkspaceHost();
+export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: AppServerClient; workspaceHost?: ProductHostWorkspaces }) {
   const state = useSyncExternalStore(client.subscribe, client.getSnapshot);
   const [conversationMode, setConversationMode] = useState<'chat' | 'trajectory'>('chat');
   const [preferences] = useState(readPreferences);
   const [endpoint, setEndpoint] = useState(preferences.endpoint);
   const [token, setToken] = useState('');
   const [tabs, setTabs] = useState<string[]>(preferences.tabs);
-  const [selected, selectSession] = useState<string | undefined>(preferences.tabs[0]);
+  const [focus, setFocus] = useState<{ sessionId?: string; workspaceId?: string; generation?: number }>({ sessionId: preferences.tabs[0] });
+  const selected = focus.sessionId;
+  const workspace = focus.generation === state.generation && state.connection === 'connected' ? focus.workspaceId : undefined;
   const [navigation] = useState(() => new NavigationEpoch());
   const [command, setCommand] = useState<{ request: CommandRequest; current: () => boolean; generation: number; sessionId: string; conversationId?: string }>();
   const [restored, setRestored] = useState<{ conversation: string; content: UserInputBlock[] }>();
   const [consumed, setConsumed] = useState<{ id: string; sequence: number }>();
-  const setSelected = (id: string | undefined) => { navigation.invalidate(); setCommand(undefined); setRestored(undefined); selectSession(id); };
+  const workspaceNavigation = useMemo(() => new WorkspaceSessionNavigation(workspaceHost, client, navigation), [workspaceHost, client, navigation]);
+  useEffect(() => client.setAttachmentAdmission(workspaceNavigation.admit), [client, workspaceNavigation]);
   // Existing navigation hints may restore wanted views, never a released claim.
   // A detached tab stays visible on this page but is no longer a resume hint.
   const resumeTabs = JSON.stringify(tabs.filter(id => state.views[id]?.attachmentIntent !== 'released'));
-  const [cwd, setCwd] = useState('');
   const [error, setError] = useState('');
   const [creating, setCreating] = useState<number>();
   const busy = creating === state.generation || ['connecting', 'reconnecting', 'resynchronizing'].includes(state.connection);
   const [sending, setSending] = useState<Record<string, number>>({});
   const [preview, setPreview] = useState<RuntimeClientSessionDeletePreview>();
-  const [offset, setOffset] = useState(0);
+
   const view = selected ? state.views[selected] : undefined;
   const artifacts = useMemo(() => selected && view?.target ? new ArtifactResources(client, selected) : undefined, [client, selected, view?.target, state.generation]);
   useEffect(() => () => artifacts?.dispose(), [artifacts]);
@@ -67,10 +73,11 @@ export function App({ client }: { client: AppServerClient }) {
   const attached = connected && view?.attachmentIntent === 'wanted' && view.attachment === 'attached';
   const composerDisabled = !attached || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
   const commandOpen = !!command && command.sessionId === selected && command.generation === state.generation && command.current();
-  const invokeCommand = (request: CommandRequest) => {
+  const invokeCommand = (request: CommandRequest | { id: 'new' }) => {
     if (!view || composerDisabled) return;
     const definition = commands.find(item => item.id === request.id);
     if (definition && !available(definition, activeAttempt(view.snapshot), !!goalDock(view.snapshot), lineageSwitchSafe(view))) return;
+    if (request.id === 'new') { if (workspace) createInWorkspace(workspace); else setError('Select a Host-authorized Workspace first.'); return; }
     if (request.id === 'goal') {
       document.querySelector<HTMLElement>('[aria-label="Goal"] button')?.focus();
       setConsumed(previous => ({ id: 'goal', sequence: (previous?.sequence ?? 0) + 1 }));
@@ -92,13 +99,50 @@ export function App({ client }: { client: AppServerClient }) {
       if (['ws:', 'wss:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash && url.pathname === '/') localStorage.setItem(PREFERENCES, json({ endpoint, tabs: JSON.parse(resumeTabs) }));
     } catch { /* Storage may be disabled in a trusted browser. */ }
   }, [endpoint, resumeTabs]);
-  const open = (id: string) => {
+  // Every Session focus path publishes the same pair. Until native cwd has been
+  // classified, its Workspace is explicitly empty rather than inherited.
+  const focusSession = (id?: string, options: { attach?: boolean; ready?: () => void; preserveDraft?: boolean } = {}) => {
+    navigation.invalidate(); const current = navigation.capture();
+    const generation = state.generation;
+    setCommand(undefined); if (!options.preserveDraft) setRestored(undefined); setFocus({ sessionId: id });
+    if (!id) return;
+    client.restoreViews([id]);
+    if (!connected) return;
+    run(async () => {
+      try {
+        if (options.attach) await client.attach(id, undefined, current);
+        if (!current() || generation !== client.getSnapshot().generation) return;
+        const location = await workspaceNavigation.classifySession(id, current);
+        if (!current() || generation !== client.getSnapshot().generation || !location) return;
+        setFocus({ sessionId: id, workspaceId: location.authorized ? location.workspaceId : undefined, generation });
+        options.ready?.();
+      } catch (cause) { if (current() && generation === client.getSnapshot().generation) throw cause; }
+    });
+  };
+  useEffect(() => {
+    if (connected && selected) focusSession(selected, { preserveDraft: true });
+  }, [state.connection, state.generation]);
+  const open = (id: string, ready?: () => void) => {
     if (!tabs.includes(id) && tabs.length >= 32) { setError('Close a view before opening more than 32 tabs. Explicit detach releases an attachment.'); return; }
-    setSelected(id); setTabs(current => current.includes(id) ? current : [...current, id]);
-    run(() => client.attach(id));
+    setTabs(current => current.includes(id) ? current : [...current, id]);
+    focusSession(id, { attach: true, ready });
+  };
+  const createInWorkspace = (id: string) => {
+    if (creating === state.generation) return;
+    navigation.invalidate(); const current = navigation.capture(); const generation = state.generation;
+    setCommand(undefined); setCreating(generation);
+    run(async () => {
+      try {
+        const result = await createWorkspaceSession(workspaceHost, id, client, current);
+        if (result && current() && generation === client.getSnapshot().generation) {
+          focusSession(result.session.id); setTabs(value => value.includes(result.session.id) ? value : [...value, result.session.id]);
+        }
+      } catch (cause) { if (current()) throw cause; }
+      finally { if (generation === client.getSnapshot().generation) setCreating(undefined); }
+    });
   };
   const connect = (reconnect: boolean) => {
-    setError('');
+    navigation.invalidate(); setError('');
     const work = client.connect(endpoint, token, reconnect);
     const generation = client.getSnapshot().generation;
     void work.catch(cause => { if (generation === client.getSnapshot().generation) setError(String(cause)); });
@@ -116,39 +160,28 @@ export function App({ client }: { client: AppServerClient }) {
   </>}>
     <section className="connection-form" aria-label="Connection">
       <div className="status"><StateDot state={connected ? 'done' : state.connection === 'error' || state.connection === 'incompatible' ? 'error' : state.connection === 'disconnected' ? 'idle' : 'warning'} /><strong>{state.connection}</strong><small>g{state.generation}</small></div>
+      <details open={!connected}><summary>Connection settings</summary>
       <label>WebSocket endpoint<Input aria-label="WebSocket endpoint" value={endpoint} disabled={busy || connected} onChange={event => setEndpoint(event.target.value)} /></label>
       <label>Transport token<Input type="password" autoComplete="off" aria-label="Transport token" value={token} onChange={event => setToken(event.target.value)} /></label>
       <small className="muted">Dedicated socket token; kept in page memory only.</small>
-      <div className="row"><Button variant="primary" disabled={busy || connected || !token} onClick={() => connect(false)}>Connect</Button>
-        <Button variant="outline" disabled={state.connection === 'disconnected'} onClick={() => client.disconnect()}>Disconnect</Button></div>
+      <Button variant="primary" disabled={busy || connected || !token} onClick={() => connect(false)}>Connect</Button>
+      </details>
+      <Button variant="outline" disabled={state.connection === 'disconnected'} onClick={() => { navigation.invalidate(); client.disconnect(); }}>Disconnect</Button>
       <Button variant="outline" disabled={busy || !token} onClick={() => connect(true)}>Reconnect</Button>
     </section>
-    <section className="session-list" aria-label="Sessions">
-      <div className="section-head"><h2>Sessions</h2><Button size="sm" disabled={!connected} onClick={() => run(() => client.listSessions(offset))}>Refresh list</Button></div>
-      <form onSubmit={event => { event.preventDefault(); const generation = state.generation; const current = navigation.capture(); setCreating(generation); run(async () => {
-        try { const result = await createSession(client, cwd, current); if (result && current() && generation === client.getSnapshot().generation) { const id = result.session.id; setSelected(id); setTabs(current => current.includes(id) ? current : [...current, id]); } }
-        catch (cause) { if (current()) throw cause; }
-        finally { if (generation === client.getSnapshot().generation) setCreating(undefined); }
-      }); }}>
-        <label>Explicit Session cwd<Input aria-label="Session cwd" placeholder="/absolute/path/to/project" value={cwd} onChange={event => setCwd(event.target.value)} /></label>
-        <Button type="submit" variant="outline" disabled={!connected || busy || !cwd.trim()}>Create Session</Button>
-      </form>
-      {state.sessions.map(session => <div className="session-row" key={session.id}>
-        <button className="session-open" aria-label={`Open ${session.name ?? session.id}`} disabled={!connected} onClick={() => open(session.id)}>
-          <strong>{session.name ?? session.preview ?? session.id}</strong><small>{session.id}</small>
-          <small>durable · {state.views[session.id]?.attachment ?? 'not attached'}</small>
-        </button>
-        <Button size="sm" aria-label={`Delete ${session.name ?? session.id}`} disabled={!connected} onClick={() => deletePreview(session.id)}>Delete</Button>
-      </div>)}
-      <div className="row"><Button size="sm" disabled={!connected || offset === 0} onClick={() => { const next = Math.max(0, offset - 32); setOffset(next); run(() => client.listSessions(next)); }}>Previous</Button>
-        <Button size="sm" disabled={!connected || state.nextOffset == null} onClick={() => { const next = state.nextOffset!; setOffset(next); run(() => client.listSessions(next)); }}>Next</Button></div>
-    </section>
+    <WorkspaceNavigation host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
+      creating={creating === state.generation} metadataChanged={removed => { if (selected) focusSession(selected, { preserveDraft: true }); else if (removed) setFocus(value => value.workspaceId === removed ? {} : value); }}
+      workspace={workspace} selected={selected} selectWorkspace={id => { navigation.invalidate(); setCommand(undefined); setRestored(undefined); setFocus({ workspaceId: id, generation: state.generation }); }}
+      openSession={open} createSession={createInWorkspace} deleteSession={deletePreview}
+      forkSession={id => open(id, () => {
+        setCommand({ request: { id: 'fork' }, current: navigation.capture(), generation: client.getSnapshot().generation, sessionId: id, conversationId: client.getSnapshot().views[id]?.target?.conversation_id });
+      })} />
   </Sidebar>} dockLabel="Developer inspector" dock={<Inspector client={client} state={state} view={view} />}>
     <header className="console-header"><div><div className="eyebrow">DEVELOPER WEB CONSOLE</div><h1>Sessions, in motion.</h1></div><Pill>{state.connection}</Pill></header>
     <nav className="tabs" aria-label="Open Session views">{tabs.map(id => <div className="tab" key={id}>
-      <Pill role="tab" active={selected === id} aria-selected={selected === id} onClick={() => setSelected(id)}>{state.sessions.find(item => item.id === id)?.name ?? id.slice(0, 16)}</Pill>
+      <Pill role="tab" active={selected === id} aria-selected={selected === id} onClick={() => focusSession(id)}>{state.sessions.find(item => item.id === id)?.name ?? id.slice(0, 16)}</Pill>
       <button className="close-tab" aria-label={`Close view ${id}`} onClick={() => {
-        const remaining = tabs.filter(item => item !== id); setTabs(remaining); if (selected === id) setSelected(remaining[0]);
+        const remaining = tabs.filter(item => item !== id); setTabs(remaining); if (selected === id) focusSession(remaining[0]);
         run(() => client.release(id, false));
       }}>×</button>
     </div>)}</nav>
@@ -159,18 +192,19 @@ export function App({ client }: { client: AppServerClient }) {
       <p>This deletes the native ownership graph. An in-use Session may need explicit unload first.</p>
       <div className="row"><Button onClick={() => setPreview(undefined)}>Keep Session</Button><Button variant="primary" disabled={!connected} onClick={() => run(async () => {
         const generation = client.getSnapshot().generation;
+        const current = navigation.capture();
         const result = await client.deleteSession(preview.session_id, preview.target_revision);
         if (generation !== client.getSnapshot().generation || !result) return;
         if (result.status === 'deleted' || result.status === 'not_found') {
-          const remaining = tabs.filter(id => id !== preview.session_id); setTabs(remaining);
-          if (selected === preview.session_id) setSelected(remaining[0]);
+          const remaining = tabs.filter(id => id !== preview.session_id); setTabs(value => value.filter(id => id !== preview.session_id));
+          if (current() && selected === preview.session_id) focusSession(remaining[0]);
         }
         setError(`Deletion result: ${json(result)}`); setPreview(undefined);
       })}>Confirm delete</Button></div>
     </section>}
     {view ? <>
       <section className="session-toolbar"><div><strong>{view.id}</strong><small>{view.settings?.cwd ?? 'cwd unavailable'} · {view.attachment}</small></div>
-        <div className="row"><Button size="sm" disabled={!connected} onClick={() => run(() => client.attach(view.id))}>{view.target && view.attachmentIntent === 'wanted' ? 'Resync' : 'Attach / cold resume'}</Button>
+        <div className="row"><Button size="sm" disabled={!connected} onClick={() => focusSession(view.id, { attach: true, preserveDraft: true })}>{view.target && view.attachmentIntent === 'wanted' ? 'Resync' : 'Attach / cold resume'}</Button>
           <Button size="sm" disabled={!attached || commandOpen || !lineageSwitchSafe(view)} onClick={() => invokeCommand({ id: 'tree' })}>Session tree</Button>
           <Button size="sm" disabled={!attached} onClick={() => run(() => client.release(view.id, false))}>Detach</Button>
           <Button size="sm" disabled={!attached} onClick={() => run(() => client.release(view.id, true))}>Unload runtime</Button></div>
@@ -207,10 +241,10 @@ export function App({ client }: { client: AppServerClient }) {
           navigation.invalidate(); setCommand(undefined);
         }} opened={result => {
           if (!command.current() || client.getSnapshot().generation !== command.generation) return;
-          setRestored({ conversation: result.session.active_conversation_id, content: result.content });
-          navigation.invalidate(); setCommand(undefined); selectSession(result.session.id); setTabs(current => current.includes(result.session.id) ? current : [...current, result.session.id]);
+          focusSession(result.session.id, { ready: () => setRestored({ conversation: result.session.active_conversation_id, content: result.content }) });
+          setTabs(current => current.includes(result.session.id) ? current : [...current, result.session.id]);
         }} />}
 
-    </> : <div className="empty"><h2>One runtime. Many Sessions.</h2><p>Connect to rustX, then open or create a Session with an explicit cwd.</p><p>Switching or closing views never cancels work.</p></div>}
+    </> : <div className="empty"><h2>One runtime. Many Sessions.</h2><p>Choose a Host-authorized Workspace in the sidebar, then create a Session. Project trust is resolved independently by rustX.</p><p>Switching or closing views never cancels work.</p></div>}
   </AppFrame>;
 }

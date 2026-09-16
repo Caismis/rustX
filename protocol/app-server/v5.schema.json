@@ -3162,6 +3162,13 @@
         {
           "type": "object",
           "properties": {
+            "residencies": {
+              "description": "Point-in-time runtime observation for exactly this bounded catalog page.\nThis never loads or attaches a Session.",
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/ResidencyState"
+              }
+            },
             "sessions": {
               "type": "array",
               "items": {
@@ -3185,6 +3192,7 @@
           "additionalProperties": false,
           "required": [
             "type",
+            "residencies",
             "sessions"
           ]
         },
@@ -3402,6 +3410,13 @@
         {
           "type": "object",
           "properties": {
+            "project_trusted": {
+              "description": "Current native project source trust; unresolved is never trusted.\nLoaded resources retain their admitted generation independently.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "revision": {
               "type": "string",
               "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
@@ -8708,6 +8723,10 @@
       "description": "One bounded row in the `/resume` selector.",
       "type": "object",
       "properties": {
+        "cwd": {
+          "description": "Canonical durable Session cwd, projected without loading a runtime.",
+          "type": "string"
+        },
         "id": {
           "description": "Session identity.",
           "$ref": "#/$defs/SessionId"
@@ -8737,6 +8756,7 @@
         }
       },
       "required": [
+        "cwd",
         "id",
         "updated_at",
         "active_node"

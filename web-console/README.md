@@ -49,9 +49,10 @@ target/debug/rustx app-server \
 Read the token file locally. Enter `ws://127.0.0.1:8080/` and that token in the
 console, then **Connect**. The client sends `initialize` protocol v5, checks native
 capabilities, lists Sessions, and attaches saved open views. Initialization failures
-and missing capabilities are visible. Enter an explicit absolute **Session cwd**
-to create a Session, or open a listed Session. rustX validates paths, trust and
-configuration; this UI does not author provider/MCP configuration or grant trust.
+and missing capabilities are visible. Configure the [Product Host Workspace adapter](WORKSPACES.md),
+choose an authorized Workspace, and create a Session, or open a listed native Session.
+The former arbitrary browser cwd field has been removed. Host authorization is
+independent of native project trust; this UI cannot grant trust.
 
 Authentication is #36's **local/trusted, single writable controller** boundary.
 The browser sends subprotocols `rustx.app-server.v5` and `rustx-token.<token>` in its

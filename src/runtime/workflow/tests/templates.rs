@@ -5,9 +5,12 @@ pub(super) fn template(id: &str) -> Arc<WorkflowProgram> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples/local-runtime/workflow-templates");
     // Canonical role parsing is part of this fixture, not a replacement inline role format.
-    let (roles, sources) =
-        crate::local_runtime::agent_resources::load(&root, &root.join("absent-user-roles"))
-            .unwrap();
+    let (roles, sources) = crate::local_runtime::agent_resources::load_authorized(
+        &root,
+        &root.join("absent-user-roles"),
+        true,
+    )
+    .unwrap();
     assert_eq!(roles.len(), 1);
     assert_eq!(sources[&profile("reviewer")].layer, "project");
     let catalog = crate::local_runtime::workflow_resources::load(&root).unwrap();

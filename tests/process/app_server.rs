@@ -995,6 +995,7 @@ async fn app_server_current_sources_persisted_selection_and_targeted_cold_replac
         let MethodResult::Settings {
             revision,
             mut settings,
+            ..
         } = result(
             &client,
             Method::SettingsRead {

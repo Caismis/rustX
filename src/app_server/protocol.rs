@@ -434,6 +434,12 @@ pub enum MethodResult {
         durability_diagnostic: Option<String>,
     },
     Sessions {
+        /// Point-in-time runtime observation for exactly this bounded catalog page.
+        /// This never loads or attaches a Session.
+        residencies: std::collections::BTreeMap<
+            crate::local_runtime::session::SessionId,
+            crate::local_runtime::session_runtime_manager::ResidencyState,
+        >,
         sessions: Vec<crate::local_runtime::session::SessionSummary>,
         next_offset: Option<usize>,
     },
@@ -474,6 +480,9 @@ pub enum MethodResult {
         interaction: InteractionRef,
     },
     Settings {
+        /// Current native project source trust; unresolved is never trusted.
+        /// Loaded resources retain their admitted generation independently.
+        project_trusted: Option<bool>,
         revision: u64,
         settings: SessionPersistentState,
     },

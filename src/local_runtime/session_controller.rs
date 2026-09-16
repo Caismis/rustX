@@ -832,6 +832,46 @@ mod tests {
         );
     }
     #[tokio::test]
+    async fn bounded_cwd_projection_reads_the_only_durable_owner_without_runtime() {
+        let root = tempfile::tempdir().unwrap();
+        let controller = SessionController::open(root.path()).unwrap();
+        let original = settings(root.path());
+        let session = controller
+            .create_session(original.clone())
+            .await
+            .unwrap()
+            .session;
+        let page = controller.list_sessions(None, 0, 1).await.unwrap();
+        assert_eq!(page.sessions[0].cwd, original.cwd);
+        assert_eq!(page.next_offset, None);
+        controller
+            .rename_session(&session.id, "named cold session")
+            .await
+            .unwrap();
+        assert_eq!(
+            controller.read_settings(&session.id).await.unwrap(),
+            (0, original.clone())
+        );
+        drop(controller);
+        let controller = SessionController::open(root.path()).unwrap();
+        let page = controller
+            .list_sessions(Some("named cold"), 0, 1)
+            .await
+            .unwrap();
+        assert_eq!(page.sessions[0].cwd, original.cwd);
+        let mut changed = original;
+        changed.cwd = root.path().join("another");
+        controller
+            .replace_settings(&session.id, 0, changed.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            controller.list_sessions(None, 0, 1).await.unwrap().sessions[0].cwd,
+            changed.cwd
+        );
+    }
+
+    #[tokio::test]
     async fn explicit_empty_disabled_and_omitted_selections_round_trip() {
         let root = tempfile::tempdir().unwrap();
         let controller = SessionController::open(root.path()).unwrap();

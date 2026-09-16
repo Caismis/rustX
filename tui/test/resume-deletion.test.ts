@@ -14,7 +14,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 const turn = () => new Promise<void>((resolve) => setImmediate(resolve));
-const row = (id: string): SessionSummaryView => ({ id, name: id, active_node: id, updated_at: "2026-09-11" });
+const row = (id: string): SessionSummaryView => ({ id, name: id, cwd: "/server/work", active_node: id, updated_at: "2026-09-11" });
 const preview = (id = "b", revision = "revision-1"): SessionDeleteResult => ({ status: "preview", preview: { session_id: id, name: id, target_revision: revision, owned_node_count: 1, owned_conversation_count: 2, owned_child_count: 1 } });
 const down = "\x1b[B", del = "\x04", esc = "\x1b";
 const confirm = (view: ResumeSelector) => { view.handleInput("\t"); view.handleInput("\r"); };

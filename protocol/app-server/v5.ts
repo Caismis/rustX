@@ -681,6 +681,13 @@ export type MethodResult =
       type: 'session_transition';
     }
   | {
+      /**
+       * Point-in-time runtime observation for exactly this bounded catalog page.
+       * This never loads or attaches a Session.
+       */
+      residencies: {
+        [k: string]: ResidencyState;
+      };
       sessions: SessionSummary[];
       next_offset?: number | null;
       type: 'sessions';
@@ -745,6 +752,11 @@ export type MethodResult =
       type: 'interaction_settled';
     }
   | {
+      /**
+       * Current native project source trust; unresolved is never trusted.
+       * Loaded resources retain their admitted generation independently.
+       */
+      project_trusted?: boolean | null;
       revision: string;
       settings: SessionPersistentState;
       type: 'settings';
@@ -5261,6 +5273,10 @@ export interface SessionSnapshot {
  * One bounded row in the `/resume` selector.
  */
 export interface SessionSummary {
+  /**
+   * Canonical durable Session cwd, projected without loading a runtime.
+   */
+  cwd: string;
   /**
    * Identifies one user-facing local Session.
    */

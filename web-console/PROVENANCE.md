@@ -285,3 +285,32 @@ excluded. rustX controls use exact native pending sequence/MessageId/revision,
 retain stale drafts, and reread after responses. Nonrepresentable typed content
 cannot be edited; upload references are preserved. No per-row Steer is exposed
 because native Queue and Steer do not define separate durable delivery classes.
+
+## WEB-07 Workspace navigation inspection
+
+Verified external checkout `/home/caismis/Documents/codes/deepseek-harness-reference`
+at `c291e7961a515f6d7af9304e7fd1d257929aef26` before implementation. Inspected
+`ui-workspace` browser/rows/picker/navigation, their styles, picker/browser tests and
+README; `ui-sidebar` shell, styles, tests and README; `ui-conversation` EmptyHero,
+Workspace chip, HeroShell styles and skeleton tests; directory-picker seam, native
+and browse flows/styles/tests; and `api/workspace-controller` commands, DTOs,
+directory controller, tests and README.
+
+`src/workspaces/WorkspaceNavigation.tsx` and its CSS adapt grouped/flat rows,
+expansion, selected rows, bounded search, metadata actions and capability-gated
+picking. The shared inventory records precise paths, hashes, additional sources,
+retained imports and MIT attribution. No upstream source was copied wholesale.
+The Host implementation and native navigation bindings/tests are rustX-authored.
+
+Excluded owners: Harness Workspace Registry/Controller, stored Session membership,
+Session Controller, automatic blank-Session allocation, Remote/Cordis/slots,
+archive/subagent/schedule policies, content-search service, native OS directory
+allocation and browser filesystem browsing. Product Host owns finite authorized
+roots and metadata; native rustX owns Session cwd, history, trust, runtime and Fork.
+There is no build/runtime dependency on the external checkout.
+
+PR #324 review repair retains the same Harness presentation sources. The updated
+Workspace rows display Host classification independently of registration;
+`endpoint.ts` and the shared admission/focus bindings are rustX-authored. No new
+Harness authority or source was imported. The inventory records the new local
+endpoint helper dependency.

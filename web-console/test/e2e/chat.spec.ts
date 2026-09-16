@@ -1,3 +1,4 @@
+import { routeWorkspaceHost } from './workspace-host';
 import { test, expect } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
 import { AppServerHost } from '../../../tui/src/app-server/host';
@@ -25,6 +26,7 @@ test('native history, rich settlement, real image decode/lightbox, reconnect and
     expect(traceBeforeBrowser.entries).toHaveLength(32);
     await remote.client.call('session/detach', { target: attached.target }, 'detached');
     await remote.shutdown();
+    await routeWorkspaceHost(page, fixture);
     await page.goto('/');
     await page.getByLabel('WebSocket endpoint').fill(fixture.endpoint);
     await page.getByLabel('Transport token').fill(fixture.token);

@@ -1,3 +1,4 @@
+import { routeWorkspaceHost } from './workspace-host';
 import { test, expect } from '@playwright/test';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -15,12 +16,13 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
   const command = async (name: string) => { await message.fill(`/${name}`); await message.press('Enter'); return page.getByRole('dialog', { name: `/${name}`, exact: true }); };
   const settled = () => expect(page.locator('.attempt-status')).toContainText('settled');
   try {
+    await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await expect(page).toHaveTitle(/rustX/);
     await page.getByLabel('WebSocket endpoint').fill(fixture.endpoint);
     await page.getByLabel('Transport token').fill(fixture.token);
     await page.getByRole('button', { name: 'Connect', exact: true }).click();
     await expect(page.locator('.status strong')).toHaveText('connected');
-    await page.getByLabel('Session cwd').fill(fixture.workspaceA);
+    await page.getByLabel('Choose Workspace').selectOption({ label: 'Workspace A' });
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(message).toBeEnabled();
     const originalId = JSON.parse(await facts.innerText()).SessionId as string;

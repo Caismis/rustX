@@ -254,7 +254,11 @@ command = "must-never-spawn"
         }
     }
     assert_eq!(records[1]["results"][0]["state"], "unresolved");
-    assert_eq!(records[1]["results"][1]["state"], "skipped");
+    assert_eq!(
+        records[1]["results"].as_array().unwrap().len(),
+        1,
+        "untrusted project sources are not read"
+    );
     assert!(!root.path().join("home/.local/state").exists());
 
     assert!(run(root.path(), &["--trust", "grant"]).status.success());

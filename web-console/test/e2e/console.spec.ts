@@ -1,3 +1,4 @@
+import { routeWorkspaceHost } from './workspace-host';
 import { expect, test } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { AppServerHost } from '../../../tui/src/app-server/host.ts';
@@ -18,14 +19,15 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
   let remote: AppServerHost | undefined;
   let passed = false;
   try {
+    await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await expect(page).toHaveTitle('rustX Developer Console');
     await expect(page.getByRole('heading', { name: 'Sessions, in motion.' })).toBeVisible();
     await connect();
-    await page.getByLabel('Session cwd').fill(fixture.workspaceA);
+    await page.getByLabel('Choose Workspace').selectOption({ label: 'Workspace A' });
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(page.locator('.session-toolbar small')).toHaveText(`${fixture.workspaceA} · attached`);
     const idA = await page.locator('.session-toolbar strong').innerText();
-    await page.getByLabel('Session cwd').fill(fixture.workspaceB); await page.getByRole('button', { name: 'Create Session', exact: true }).click();
+    await page.getByLabel('Choose Workspace').selectOption({ label: 'Workspace B' }); await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(page.locator('.session-toolbar small')).toHaveText(`${fixture.workspaceB} · attached`);
     const idB = await page.locator('.session-toolbar strong').innerText();
     await expect(page.getByRole('tab', { name: /^session-/ })).toHaveCount(2);
@@ -129,6 +131,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await page.getByRole('tab', { name: idB.slice(0, 16), exact: true }).click();
     await page.getByRole('button', { name: 'Unload runtime', exact: true }).click();
     await expect(page.locator('.session-toolbar small')).toContainText('unloaded');
+    await page.getByLabel('Actions session-2', { exact: true }).click();
     await page.getByRole('button', { name: 'Delete session-2', exact: true }).click();
     await expect(page.getByRole('region', { name: 'Confirm Session deletion' })).toBeVisible();
     await page.getByRole('button', { name: 'Confirm delete', exact: true }).click();

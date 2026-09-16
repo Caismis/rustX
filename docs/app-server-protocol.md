@@ -77,8 +77,8 @@ authored in user settings resolve relative to that document. `--config` is
 intentionally absent here: in ordinary `rustx` it selects a Session/project override,
 not the canonical user source. Use `--user-settings` for that process-level binding.
 Session cwd and optional project configuration come from `session/create` settings;
-launch cwd is never substituted for Session cwd. Sessions retain the existing trust
-and configuration admission rules. Neither cwd nor transport authentication is a sandbox.
+launch cwd is never substituted for Session cwd. Project trust gates native project
+configuration/resources, independently of permission to use an explicit cwd. Neither cwd nor transport authentication is a sandbox.
 
 Exactly one transport is selected. `ws://IP:PORT` accepts numeric IPv4/IPv6 socket
 addresses, including port 0 for host-assigned ports. The server advertises the bound
@@ -745,3 +745,25 @@ publishes a replacement only if the pending projection differs. A read concurren
 with native publication retains the preceding complete observation cut rather
 than exposing a half-installed transition; subsequent observation/readback
 converges on the committed state.
+
+
+## WEB-07 bounded Workspace navigation projections
+
+Product Host owns Workspace registration, authorization, location resolution and
+metadata. App Server does not allocate Workspaces, accept Host ACLs, or persist
+Workspace IDs. Browser path strings are not authorization. The local adapter and
+its same-origin Host contract are documented in [Web Workspaces](../web-console/WORKSPACES.md).
+
+`session/list` now includes `SessionSummary.cwd`, projected by the native catalog
+from `SessionPersistentState`, and `residencies`, a native manager observation for
+exactly the returned page. The existing bounded pagination/query semantics remain;
+neither field loads a runtime. This avoids a second Session-to-Workspace database.
+
+`settings/read` includes nullable `project_trusted`, read by the native configuration
+owner without composing a runtime, reading project configuration or mutating trust.
+It reports current source trust, not loaded resource activation. Unknown remains
+unknown. Untrusted cwd composition excludes project configuration and automatic
+project resources; admitted resource generations retain their frozen authority.
+Workspace registration never grants trust. Workspace rename/order/unregister never
+rewrites Session state. Workspace switch is not unload/cancel; unregister is not
+Session delete. Native Fork/rename/history semantics are unchanged.

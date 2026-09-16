@@ -11,7 +11,7 @@ import css from './Commands.module.css';
 
 type Choice = { kind: 'model'; model: string } | { kind: 'approval'; mode: ApprovalMode } | { kind: 'history'; action: HistoryAction; selection: HistoricalSelection } | { kind: 'node'; nodeId: string; conversationId: string };
 interface Row { id: string; label: string; detail?: string; choice: Choice }
-export interface CommandRequest { id: CommandId | 'retry' | 'tree'; messageId?: string }
+export interface CommandRequest { id: Exclude<CommandId, 'new'> | 'retry' | 'tree'; messageId?: string }
 export function CommandPanel({ request, client, sessionId, current, close, succeeded, opened }: {
   request: CommandRequest; client: AppServerClient; sessionId: string; current: () => boolean;
   close: () => void; succeeded: () => void; opened: (result: { session: SessionSnapshot; content: UserInputBlock[] }) => void;
@@ -70,7 +70,6 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
           await loadBoundaries(0); break;
         case 'tools': { const result = await scope.tools(); if (valid()) { setDetail(JSON.stringify(result, null, 2)); succeeded(); } break; }
         case 'compact': setDetail('Compact this Session through the native context owner.'); break;
-        case 'new': setDetail('Create an independent blank Session using this Session’s native cwd.'); break;
         case 'tree': setDetail('Native Session lineage. Opening another node switches the idle resident runtime; the original history is preserved.'); await loadTree(0); break;
         case 'goal': throw new Error('Goal controls are in the Goal dock.');
         default: { const exhaustive: never = request.id; throw new Error(String(exhaustive)); }
@@ -101,7 +100,6 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
     selecting.current = true; setBusy(true); setError('');
     try {
       if (request.id === 'compact') { await scope.compact(); if (valid() && scope.current()) { succeeded(); close(); } }
-      else if (request.id === 'new') { const result = await scope.create(); if (valid() && result) opened(result); }
     } catch (cause) { if (valid()) { setError(`${String(cause)} Close and reread authoritative state before another mutation.`); setStopped(true); } }
     finally { selecting.current = false; if (valid()) setBusy(false); }
   };
@@ -115,7 +113,7 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
     {!busy && stale && <p role="status">Attachment changed. Close and reopen to read current native state.</p>}
     {busy && <p role="status">Waiting for native acknowledgement…</p>}
     {!busy && !error && !rows.length && (historical || request.id === 'tree' || request.id === 'model') && <p role="status">No native choices available.</p>}
-    {(request.id === 'compact' || request.id === 'new') && <Button disabled={busy || stopped || stale || blocked} onClick={() => void perform()}>{request.id === 'compact' ? 'Compact context' : 'Create Session'}</Button>}
+    {request.id === 'compact' && <Button disabled={busy || stopped || stale || blocked} onClick={() => void perform()}>Compact context</Button>}
     {!!rows.length && <><input autoFocus className={css.search} aria-label="Filter options" value={query} disabled={busy}
       onChange={event => { setQuery(event.target.value); setActive(0); }} aria-controls="command-options" aria-activedescendant={filtered[active] ? `choice-${active}` : undefined}
       onKeyDown={event => {

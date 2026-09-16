@@ -378,22 +378,15 @@ pub struct ProspectiveSessionConfig {
 }
 
 impl ProspectiveSessionConfig {
-    /// Apply real trust admission before calling the credential owner.
-    ///
+    /// Capture User-owned credentials after source resolution. Project trust
+    /// gates project sources at resolution; an untrusted cwd remains usable.
     /// # Errors
-    /// An untrusted workspace never reaches the credential capture callback.
-    #[allow(clippy::unnecessary_debug_formatting)] // escape the actionable shell path
+    /// Rejects changed physical resource authority before credential capture.
     pub fn admit(
         self,
         credentials: impl FnOnce() -> crate::credentials::CredentialSnapshot,
     ) -> Result<AdmittedSessionConfig, String> {
-        if !self.trusted {
-            return Err(format!(
-                "project {} is not trusted; run rustx --workspace {:?} --trust grant (revoke with --trust revoke)",
-                self.workspace.display(),
-                self.workspace
-            ));
-        }
+        self.validate_resource_authority()?;
         Ok(AdmittedSessionConfig {
             credentials: credentials(),
             prospective: Box::new(self),
@@ -427,11 +420,13 @@ impl ProspectiveSessionConfig {
     /// policy-aware and validates exactly the roots this launch selected and
     /// froze, so an unselected Skill source cannot fail startup or reload.
     pub(crate) fn validate_workspace_resource_roots(&self) -> Result<(), String> {
-        crate::runtime::resources::validate_project_resource_path(
-            &self.workspace,
-            &self.workspace.join(".agents/tools"),
-        )
-        .map_err(|e| e.to_string())?;
+        if self.trusted {
+            crate::runtime::resources::validate_project_resource_path(
+                &self.workspace,
+                &self.workspace.join(".agents/tools"),
+            )
+            .map_err(|e| e.to_string())?;
+        }
         crate::skills::source::validate_selected_roots(&self.workspace, &self.skill_sources)
             .map_err(|e| e.to_string())
     }
@@ -553,6 +548,22 @@ impl std::ops::Deref for ProspectiveSessionConfig {
     clippy::unnecessary_debug_formatting
 )] // derived paths always have parents; debug escapes diagnostic paths
 impl UserConfigManager {
+    /// Read current project trust without parsing project configuration, acquiring
+    /// credentials, composing a runtime, or writing trust. This is source trust;
+    /// an already loaded runtime retains its admitted resource generation.
+    /// # Errors
+    /// Invalid location or trust-store ownership is rejected.
+    pub fn project_trusted(&self, request: &SessionConfigInput) -> Result<bool, String> {
+        let (locations, identity) = self.resolve_locations(request)?;
+        self.location_trusted(&locations.workspace, &identity)
+    }
+
+    fn location_trusted(&self, workspace: &Path, identity: &str) -> Result<bool, String> {
+        Ok(trust_root(&self.sources, workspace)?
+            .join(identity)
+            .is_dir())
+    }
+
     /// Resolve current canonical sources for exactly this Session context.
     /// No credentials or external preparation are acquired here.
     ///
@@ -571,12 +582,15 @@ impl UserConfigManager {
             |p| absolute(&launch, p),
         );
         let mut user = read_layer(&user_path, false, false)?;
-        let project = read_layer(&project_path, request.config.is_some(), true)?;
-        // Even an empty workspace requires trust: files added before composition or reload
-        // must never turn a previously inert launch into project activation.
-        let trusted = trust_root(host, &locations.workspace)?
-            .join(&identity)
-            .is_dir();
+
+        // Even an empty project needs trust for project activation. Later file
+        // creation or reload cannot widen the captured source authority.
+        let trusted = self.location_trusted(&locations.workspace, &identity)?;
+        let project = if trusted {
+            read_layer(&project_path, request.config.is_some(), true)?
+        } else {
+            RuntimeLayer::default()
+        };
         // Binding authoring remains strictly validated, but cannot rebind this manager.
         user.models = None;
         user.runtime_root = None;
@@ -620,7 +634,7 @@ impl UserConfigManager {
                 e.to_string(),
             )
         })?;
-        let documents = vec![
+        let mut documents = vec![
             (
                 user_path.clone(),
                 false,
@@ -638,6 +652,9 @@ impl UserConfigManager {
                 },
             ),
         ];
+        if !trusted {
+            documents.retain(|(_, _, origin)| !matches!(origin, Origin::Project { .. }));
+        }
         let mut merged = RuntimeLayer::default();
         let mut provenance = BTreeMap::new();
         let mut project_resources = Vec::new();
@@ -766,7 +783,7 @@ impl UserConfigManager {
         // discovered. `--no-automatic-skills` is the launch-level off switch for automatic
         // discovery; the policy itself never names a rustX configuration
         // directory, and the global root is resolved from the captured host home.
-        let skill_sources = if request.no_automatic_skills {
+        let mut skill_sources = if request.no_automatic_skills {
             Vec::new()
         } else {
             crate::skills::automatic_skill_roots(
@@ -783,6 +800,9 @@ impl UserConfigManager {
                 })?,
             )
         };
+        if !trusted {
+            skill_sources.retain(|root| root.source != crate::skills::SkillSource::Workspace);
+        }
         // Capture authority once, including host path aliases and missing leaves.
         // Reload reuses this physical identity; validators must not rebind it.
         let agent_root = normalize_missing(&host.config_directory.join("agents"))?;
@@ -792,15 +812,9 @@ impl UserConfigManager {
         } else {
             Vec::new()
         };
-        let (subagents, role_sources) = if trusted {
-            super::agent_resources::load(&locations.workspace, &agent_root)
-                .map_err(LaunchFailure::resource)?
-        } else {
-            (
-                crate::runtime::subagent::AgentCatalog::empty(),
-                BTreeMap::new(),
-            )
-        };
+        let (subagents, role_sources) =
+            super::agent_resources::load_authorized(&locations.workspace, &agent_root, trusted)
+                .map_err(LaunchFailure::resource)?;
         let mut workflows = if trusted {
             super::workflow_resources::load(&locations.workspace)
                 .map_err(LaunchFailure::resource)?
@@ -809,7 +823,7 @@ impl UserConfigManager {
         };
         let workspace = crate::tools::workspace::Workspace::new(&locations.workspace)
             .map_err(|e| e.to_string())?;
-        let skill_discovery = if trusted {
+        let skill_discovery = {
             // Only the roots this launch actually selected are validated: a Skill
             // source the policy did not select is inert, so an invalid or
             // redirected `<workspace>/.agents/skills` cannot fail a launch that
@@ -833,8 +847,6 @@ impl UserConfigManager {
                     e.to_string(),
                 )
             })?
-        } else {
-            crate::skills::SkillDiscoveryOutcome::default()
         };
         let skills = crate::skills::SkillSnapshot::from_discovery(skill_discovery.clone());
         crate::runtime::subagent::SubagentResolver::validate_local_references(
@@ -859,11 +871,8 @@ impl UserConfigManager {
                 error.to_string(),
             )
         })?;
-        let main_subagents = if trusted {
-            subagents.selected_definitions(&config.agent.agents.iter().cloned().collect())
-        } else {
-            crate::runtime::subagent::AgentCatalog::empty()
-        };
+        let main_subagents =
+            subagents.selected_definitions(&config.agent.agents.iter().cloned().collect());
         let native_metadata =
             crate::tools::native::definitions(config.native_tools.to_policies(), &main_subagents);
         let native_leaves: std::collections::BTreeSet<_> = native_metadata
@@ -894,7 +903,7 @@ impl UserConfigManager {
                             SourceEnablement::Disabled
                         }
                     }),
-                    trusted,
+                    true, // Only User or admitted trusted-project entries reach this map.
                 ),
             );
         }

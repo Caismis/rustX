@@ -29,6 +29,8 @@ export interface SessionView {
   cursor?: RuntimeClientCursor;
   history?: TranscriptCache;
   settings?: SessionPersistentState;
+  /** Current native source trust, not loaded resource activation or Host authorization. */
+  projectTrusted?: boolean | null;
   /** Exact acknowledged MessageIds awaiting projection reconciliation, not queue authority. */
   submissions?: readonly Submission[];
   /** Current-generation turn/start or turn/steer requests awaiting an outcome.
@@ -59,11 +61,13 @@ export interface UncertainOperation {
   generation: number;
 }
 export interface ClientView {
+  endpoint?: string;
   connection: ConnectionState;
   generation: number;
   capabilities?: ServerCapabilities;
   error?: string;
   sessions: readonly SessionSummary[];
+  sessionResidencies?: Record<string, import('../../../protocol/app-server/v5').ResidencyState>;
   nextOffset?: number | null;
   views: Readonly<Record<string, SessionView>>;
   uncertain: readonly UncertainOperation[];
@@ -146,6 +150,21 @@ export class AppServerClient {
     const view = this.state.views[id] ?? { id, attachmentIntent: 'released' as const, attachment: 'detached' as const };
     this.publish({ views: { ...this.state.views, [id]: { ...view, ...patch } } });
   }
+  // Product policy is injected by the Web owner, not interpreted by this transport.
+  // Fail closed when there is no admission owner (including after its disposal).
+  private attachmentAdmission?: (id: string, current: () => boolean) => Promise<boolean>;
+  setAttachmentAdmission(admit: (id: string, current: () => boolean) => Promise<boolean>) {
+    this.attachmentAdmission = admit;
+    return () => { if (this.attachmentAdmission === admit) this.attachmentAdmission = undefined; };
+  }
+  async admitAttachment(id: string, current: () => boolean = () => true): Promise<boolean> {
+    const generation = this.state.generation;
+    const valid = () => current() && this.current(generation);
+    if (!valid()) return false;
+    if (!this.attachmentAdmission) throw new Error('No Web attachment admission owner.');
+    const allowed = await this.attachmentAdmission(id, valid);
+    return allowed && valid();
+  }
   restoreViews(ids: readonly string[]) {
     for (const id of ids.slice(0, 32)) if (!this.state.views[id]) this.setSession(id, { attachmentIntent: 'wanted' });
   }
@@ -157,7 +176,7 @@ export class AppServerClient {
     if (!/^[A-Za-z0-9_-]{43,128}$/.test(token)) throw new Error('Enter the dedicated 43–128 character App Server transport token.');
     this.disconnect();
     const generation = this.state.generation;
-    this.publish({ connection: reconnect ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
+    this.publish({ endpoint: url.href, connection: reconnect ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
     try {
       const socket = this.socketFactory(url.href, ['rustx.app-server.v5', `rustx-token.${token}`]);
       this.socket = socket;
@@ -332,10 +351,15 @@ export class AppServerClient {
       void this.refresh(target.session_id).catch(() => {});
     }
   }
-  async listSessions(offset = 0) {
+  private listEpoch = 0;
+  private listOffset = 0;
+  private listQuery = '';
+  async listSessions(offset = this.listOffset, query = this.listQuery, current: () => boolean = () => true) {
+    const epoch = ++this.listEpoch;
+    this.listOffset = offset; this.listQuery = query;
     const generation = this.state.generation;
-    const result = await this.request({ method: 'session/list', params: { offset, limit: 32 } }, 'sessions');
-    if (this.current(generation)) this.publish({ sessions: result.sessions, nextOffset: result.next_offset });
+    const result = await this.request({ method: 'session/list', params: { offset, limit: 32, query } }, 'sessions');
+    if (this.current(generation) && epoch === this.listEpoch && current()) this.publish({ sessions: result.sessions, sessionResidencies: result.residencies, nextOffset: result.next_offset });
   }
   async deleteSession(id: string, expectedRevision: string) {
     const generation = this.state.generation;
@@ -351,26 +375,28 @@ export class AppServerClient {
     if (this.current(generation)) return result.result;
   }
   /** Explicit Open / Attach gesture. Visibility itself does not acquire a claim. */
-  attach(id: string, nodeId?: string): Promise<void> {
+  attach(id: string, nodeId?: string, navigationCurrent: () => boolean = () => true): Promise<void> {
     if (nodeId && this.state.views[id]?.target && this.state.views[id]?.nodeId !== nodeId) return Promise.reject(new Error('Unload the resident Session before opening another node.'));
     this.setSession(id, { attachmentIntent: 'wanted', ...(nodeId ? { nodeId } : {}) });
-    return this.acquireAttachment(id);
+    return this.acquireAttachment(id, navigationCurrent);
   }
-  private acquireAttachment(id: string): Promise<void> {
+  private acquireAttachment(id: string, navigationCurrent: () => boolean = () => true): Promise<void> {
     return this.changeAttachment(id, 'attach', async generation => {
-      if (this.state.views[id]?.attachmentIntent !== 'wanted') return;
+      if (!navigationCurrent() || this.state.views[id]?.attachmentIntent !== 'wanted') return;
       if (this.state.views[id]?.target) return this.refresh(id);
-      this.setSession(id, { attachment: 'attaching', error: undefined });
+      this.setSession(id, { attachment: 'attaching', error: undefined, projectTrusted: undefined });
       const epoch = (this.attachmentEpochs.get(id) ?? 0) + 1;
       this.attachmentEpochs.set(id, epoch);
-      await this.performAttach(id, generation, epoch);
+      await this.performAttach(id, generation, epoch, navigationCurrent);
     });
   }
   /** Serialize explicit attachment gestures, including close during attach and
    * reopen during release. This queue never retries and cannot cross generations. */
   private changeAttachment(id: string, kind: 'attach' | 'detach' | 'unload', operation: (generation: number) => Promise<void>): Promise<void> {
     const previous = this.attachmentChanges.get(id);
-    if (previous?.kind === kind) return previous.work;
+    // A newer Open has its own navigation/admission fence. Queue it behind the
+    // preceding Open; if that one attached, the new gesture only refreshes it.
+    if (previous?.kind === kind && kind !== 'attach') return previous.work;
     if (this.attachmentChangeCount >= 64) return Promise.reject(new Error('Attachment operation capacity reached. Disconnect to release external claims.'));
     const generation = this.state.generation;
     this.attachmentChangeCount++;
@@ -387,10 +413,12 @@ export class AppServerClient {
     }).catch(() => {});
     return work;
   }
-  private async performAttach(id: string, generation: number, epoch: number) {
+  private async performAttach(id: string, generation: number, epoch: number, navigationCurrent: () => boolean) {
     const current = () => this.current(generation) && this.attachmentEpochs.get(id) === epoch;
+    const admissionCurrent = () => current() && navigationCurrent();
     let target: AttachmentTarget | undefined;
     try {
+      if (!await this.admitAttachment(id, admissionCurrent) || !admissionCurrent()) return;
       const result = await this.request({ method: 'session/attach', params: { session_id: id, node_id: this.state.views[id]?.nodeId } }, 'attached');
       if (!current()) return;
       target = result.target;
@@ -399,7 +427,7 @@ export class AppServerClient {
       this.reconcileInteractions(id); this.settleSubmissions(id);
       const settings = await this.request({ method: 'settings/read', params: { session_id: id } }, 'settings');
       if (!current() || !sameTarget(this.state.views[id]?.target, result.target)) return;
-      this.setSession(id, { settings: settings.settings });
+      this.setSession(id, { settings: settings.settings, projectTrusted: settings.project_trusted });
       if (this.dirty.has(id)) { this.resubscribe.add(id); await this.refresh(id); }
     } catch (error) {
       if (current() && (!target || sameTarget(this.state.views[id]?.target, target))) this.setSession(id, { attachment: 'error', error: String(error) });
