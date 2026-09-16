@@ -1,8 +1,11 @@
 import { Trajectory } from './Trajectory';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { AppServerClient } from '../client/app-server';
-import type { RuntimeClientSessionDeletePreview } from '../../../protocol/app-server/v4';
-import { activeAttempt, json } from '../bindings/projection';
+import type { RuntimeClientSessionDeletePreview, UserInputBlock } from '../../../protocol/app-server/v4';
+import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
+import { NavigationEpoch, createSession } from './commands/native';
+import { available, commands } from './commands/registry';
+import { activeAttempt, lineageSwitchSafe, json } from '../bindings/projection';
 import { goalDock, queueRows, todoDock } from '../bindings/composer-context';
 import { ComposerContextStack } from './composer/ComposerContextStack';
 import { GoalDock } from './composer/GoalDock';
@@ -41,7 +44,12 @@ export function App({ client }: { client: AppServerClient }) {
   const [endpoint, setEndpoint] = useState(preferences.endpoint);
   const [token, setToken] = useState('');
   const [tabs, setTabs] = useState<string[]>(preferences.tabs);
-  const [selected, setSelected] = useState<string | undefined>(preferences.tabs[0]);
+  const [selected, selectSession] = useState<string | undefined>(preferences.tabs[0]);
+  const [navigation] = useState(() => new NavigationEpoch());
+  const [command, setCommand] = useState<{ request: CommandRequest; current: () => boolean; generation: number; sessionId: string; conversationId?: string }>();
+  const [restored, setRestored] = useState<{ conversation: string; content: UserInputBlock[] }>();
+  const [consumed, setConsumed] = useState<{ id: string; sequence: number }>();
+  const setSelected = (id: string | undefined) => { navigation.invalidate(); setCommand(undefined); setRestored(undefined); selectSession(id); };
   // Existing navigation hints may restore wanted views, never a released claim.
   // A detached tab stays visible on this page but is no longer a resume hint.
   const resumeTabs = JSON.stringify(tabs.filter(id => state.views[id]?.attachmentIntent !== 'released'));
@@ -58,6 +66,19 @@ export function App({ client }: { client: AppServerClient }) {
   const connected = state.connection === 'connected';
   const attached = connected && view?.attachmentIntent === 'wanted' && view.attachment === 'attached';
   const composerDisabled = !attached || !!view?.snapshot?.shutting_down || !!view?.snapshot?.durability_failure;
+  const commandOpen = !!command && command.sessionId === selected && command.generation === state.generation && command.current();
+  const invokeCommand = (request: CommandRequest) => {
+    if (!view || composerDisabled) return;
+    const definition = commands.find(item => item.id === request.id);
+    if (definition && !available(definition, activeAttempt(view.snapshot), !!goalDock(view.snapshot), lineageSwitchSafe(view))) return;
+    if (request.id === 'goal') {
+      document.querySelector<HTMLElement>('[aria-label="Goal"] button')?.focus();
+      setConsumed(previous => ({ id: 'goal', sequence: (previous?.sequence ?? 0) + 1 }));
+      return;
+    }
+    navigation.invalidate();
+    setCommand({ request, current: navigation.capture(), generation: state.generation, sessionId: view.id, conversationId: view.target?.conversation_id });
+  };
   const run = (action: () => Promise<unknown>) => {
     const generation = client.getSnapshot().generation; setError('');
     void action().catch(cause => { if (generation === client.getSnapshot().generation) setError(String(cause)); });
@@ -104,8 +125,9 @@ export function App({ client }: { client: AppServerClient }) {
     </section>
     <section className="session-list" aria-label="Sessions">
       <div className="section-head"><h2>Sessions</h2><Button size="sm" disabled={!connected} onClick={() => run(() => client.listSessions(offset))}>Refresh list</Button></div>
-      <form onSubmit={event => { event.preventDefault(); const generation = state.generation; setCreating(generation); run(async () => {
-        try { const id = await client.createSession(cwd); if (id && generation === client.getSnapshot().generation) { setSelected(id); setTabs(current => current.includes(id) ? current : [...current, id]); } }
+      <form onSubmit={event => { event.preventDefault(); const generation = state.generation; const current = navigation.capture(); setCreating(generation); run(async () => {
+        try { const result = await createSession(client, cwd, current); if (result && current() && generation === client.getSnapshot().generation) { const id = result.session.id; setSelected(id); setTabs(current => current.includes(id) ? current : [...current, id]); } }
+        catch (cause) { if (current()) throw cause; }
         finally { if (generation === client.getSnapshot().generation) setCreating(undefined); }
       }); }}>
         <label>Explicit Session cwd<Input aria-label="Session cwd" placeholder="/absolute/path/to/project" value={cwd} onChange={event => setCwd(event.target.value)} /></label>
@@ -149,13 +171,15 @@ export function App({ client }: { client: AppServerClient }) {
     {view ? <>
       <section className="session-toolbar"><div><strong>{view.id}</strong><small>{view.settings?.cwd ?? 'cwd unavailable'} · {view.attachment}</small></div>
         <div className="row"><Button size="sm" disabled={!connected} onClick={() => run(() => client.attach(view.id))}>{view.target && view.attachmentIntent === 'wanted' ? 'Resync' : 'Attach / cold resume'}</Button>
+          <Button size="sm" disabled={!attached || commandOpen || !lineageSwitchSafe(view)} onClick={() => invokeCommand({ id: 'tree' })}>Session tree</Button>
           <Button size="sm" disabled={!attached} onClick={() => run(() => client.release(view.id, false))}>Detach</Button>
           <Button size="sm" disabled={!attached} onClick={() => run(() => client.release(view.id, true))}>Unload runtime</Button></div>
       </section>
       {view.attachment !== 'attached' && <p className="notice">{view.attachment}: last observed values may be stale. Execution and pending interactions remain server-owned. {view.error}</p>}
       <div className="row" role="tablist" aria-label="Conversation view"><Button role="tab" aria-selected={conversationMode === 'chat'} onClick={() => setConversationMode('chat')}>Chat</Button><Button role="tab" aria-selected={conversationMode === 'trajectory'} onClick={() => setConversationMode('trajectory')}>Trajectory</Button></div>
       <ArtifactContext.Provider value={artifacts}>{conversationMode === 'trajectory' && view.trace ? <Trajectory key={view.id} cache={view.trace} onSelect={id => client.selectTrace(view.id, id)} loadEarlier={() => run(() => client.loadEarlierTrace(view.id))} latest={() => client.latestTrace(view.id)} /> : <ChatViewport key={`${view.id}:${view.target?.attachment_id ?? state.generation}`}>
-        {view.snapshot && <><Conversation snapshot={view.snapshot} history={view.history} loadEarlier={() => run(() => client.loadEarlier(view.id))} latest={() => client.latestTranscript(view.id)} /><RuntimeFacts snapshot={view.snapshot} />
+        {view.snapshot && <><Conversation snapshot={view.snapshot} history={view.history} loadEarlier={() => run(() => client.loadEarlier(view.id))} latest={() => client.latestTranscript(view.id)}
+          lineageSwitchSafe={lineageSwitchSafe(view)} historicalDisabled={composerDisabled || commandOpen} onHistorical={(id, messageId) => invokeCommand({ id, messageId })} /><RuntimeFacts snapshot={view.snapshot} />
           <div className="attempt-status" role="status">Attempt: {view.snapshot.attempt ? `${view.snapshot.attempt.attempt_id} · ${view.snapshot.attempt.phase.type}` : 'none observed'}{view.snapshot.attempt?.phase.type === 'settled' && ` · ${view.snapshot.attempt.phase.outcome.type}`}</div>
           <Interactions client={client} state={state} view={view} run={run} />
         </>}
@@ -166,13 +190,26 @@ export function App({ client }: { client: AppServerClient }) {
         goal={<GoalDock state={goalDock(view.snapshot)} observation={view.snapshot} disabled={composerDisabled}
           mutate={(expected, mutation) => client.controlGoal(view.id, expected, mutation)} />}
         queue={<QueueDock rows={queueRows(view.snapshot)} submissions={view.submissions ?? []} running={activeAttempt(view.snapshot)} />}
-        composer={<InputBar disabled={composerDisabled} busy={sending[view.id] === state.generation} active={activeAttempt(view.snapshot)}
-          onCancel={() => run(() => client.cancelTurn(view.id))} onUpload={files => client.upload(view.id, files)} onSend={async (text, receipts) => {
+        composer={<InputBar key={`${view.snapshot?.conversation_id ?? view.id}:${restored?.conversation === view.snapshot?.conversation_id ? 'restored' : 'draft'}`} initialContent={restored?.conversation === view.snapshot?.conversation_id ? restored?.content : undefined}
+          disabled={composerDisabled} busy={sending[view.id] === state.generation} active={activeAttempt(view.snapshot)}
+          lineageSwitchSafe={lineageSwitchSafe(view)} hasGoal={!!goalDock(view.snapshot)} onCommand={id => invokeCommand({ id })}
+          consumed={consumed}
+          onCancel={() => run(() => client.cancelTurn(view.id))} onUpload={files => client.upload(view.id, files)} onSend={async (text, receipts, delivery) => {
             const generation = state.generation; setSending(current => ({ ...current, [view.id]: generation })); setError('');
-            try { await client.send(view.id, text, receipts); return generation === client.getSnapshot().generation; }
+            try { await client.send(view.id, text, receipts, delivery); return generation === client.getSnapshot().generation; }
             catch (cause) { if (generation === client.getSnapshot().generation) setError(String(cause)); return false; }
             finally { if (generation === client.getSnapshot().generation) setSending(current => { const next = { ...current }; delete next[view.id]; return next; }); }
           }} />} />
+      {commandOpen && <CommandPanel key={`${command.generation}:${command.sessionId}:${command.request.id}:${command.request.messageId ?? ''}`} request={command.request} client={client} sessionId={command.sessionId} current={() => command.current() && client.getSnapshot().generation === command.generation}
+        succeeded={() => { setConsumed(previous => ({ id: command.request.id, sequence: (previous?.sequence ?? 0) + 1 })); }}
+        close={() => {
+          if (command.conversationId !== client.getSnapshot().views[command.sessionId]?.snapshot?.conversation_id) setRestored(undefined);
+          navigation.invalidate(); setCommand(undefined);
+        }} opened={result => {
+          if (!command.current() || client.getSnapshot().generation !== command.generation) return;
+          setRestored({ conversation: result.session.active_conversation_id, content: result.content });
+          navigation.invalidate(); setCommand(undefined); selectSession(result.session.id); setTabs(current => current.includes(result.session.id) ? current : [...current, result.session.id]);
+        }} />}
 
     </> : <div className="empty"><h2>One runtime. Many Sessions.</h2><p>Connect to rustX, then open or create a Session with an explicit cwd.</p><p>Switching or closing views never cancels work.</p></div>}
   </AppFrame>;

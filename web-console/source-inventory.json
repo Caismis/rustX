@@ -3,6 +3,88 @@
   "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
   "files": [
     {
+      "upstream": "packages/client/ui-primitives/src/rank-by-name.ts",
+      "destination": "web-console/src/app/commands/matching.ts",
+      "treatment": "adapted subsequence ranking with rustX identity and aliases",
+      "upstream_sha256": "bdd17f45d9ec55fc701d9242c21599cea4cd3fd39df8a7f7e93ed44d7c02ea30",
+      "retained_dependencies": [
+        "./registry"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host/Remote command execution",
+        "Session Controller and conversation/event authority",
+        "Cordis/plugin runtime",
+        "Harness queue and retry authority"
+      ]
+    },
+    {
+      "upstream": "packages/client/ui-input-trigger/src/client/MenuView.tsx",
+      "destination": "web-console/src/app/commands/CommandMenu.tsx",
+      "treatment": "rewritten composer discovery; no controller, plugins or slot registry",
+      "upstream_sha256": "765da986046fcf0f5f02d676b3e3c31aa82d10e9e614c853022794e1ae36683f",
+      "retained_dependencies": [
+        "./Commands.module.css",
+        "./registry",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host/Remote command execution",
+        "Session Controller and conversation/event authority",
+        "Cordis/plugin runtime",
+        "Harness queue and retry authority"
+      ]
+    },
+    {
+      "upstream": "packages/client/ui-commands/src/client/PopupSelectView.tsx",
+      "destination": "web-console/src/app/commands/CommandPanel.tsx",
+      "treatment": "rewritten selectors with native Dialog and typed rustX dispatch",
+      "upstream_sha256": "c6a89ae2771f36ff6da26886fbc6719369f41f9eae004e52561644c788df153f",
+      "retained_dependencies": [
+        "../../../../protocol/app-server/v4",
+        "../../bindings/projection",
+        "../../client/app-server",
+        "../../presentation/primitives/Button",
+        "../../presentation/primitives/Dialog",
+        "./Commands.module.css",
+        "./native",
+        "./registry",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host/Remote command execution",
+        "Session Controller and conversation/event authority",
+        "Cordis/plugin runtime",
+        "Harness queue and retry authority"
+      ]
+    },
+    {
+      "upstream": "packages/client/ui-commands/src/client/PopupSelectView.module.css",
+      "destination": "web-console/src/app/commands/Commands.module.css",
+      "treatment": "adapted rounded bounded menu and rows",
+      "upstream_sha256": "5046e2ad9cf28d549f749277accf8d00f5ad9bb53afbd5d113ca3b21d855b87a",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-input-trigger/src/client/MenuView.module.css",
+          "upstream_sha256": "9622795d8de762b46e2f279c6e544e60fcc92419952b2fc922e7d1019678cd46",
+          "treatment": "adapted composer-anchored discovery menu presentation"
+        }
+      ],
+      "retained_dependencies": [
+        "CSS modules",
+        "existing theme tokens"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Harness Host/Remote command execution",
+        "Session Controller and conversation/event authority",
+        "Cordis/plugin runtime",
+        "Harness queue and retry authority"
+      ]
+    },
+    {
       "upstream": "packages/client/ui-primitives/src/Button.tsx",
       "destination": "web-console/src/presentation/primitives/Button.tsx",
       "treatment": "retained mostly intact",
@@ -272,6 +354,10 @@
         "../../client/uploads",
         "../../presentation/attachments/AttachmentCard",
         "../../presentation/primitives/Button",
+        "../commands/CommandMenu",
+        "../commands/matching",
+        "../commands/registry",
+        "../composer/editor-content",
         "./InputBar.module.css",
         "react"
       ],
@@ -1004,6 +1090,38 @@
     }
   ],
   "inspected": [
+    "packages/client/ui-commands/README.md",
+    "packages/client/ui-commands/src/client/directory.ts",
+    "packages/client/ui-commands/src/client/resolution.ts",
+    "packages/client/ui-commands/src/client/presentation.ts",
+    "packages/client/ui-commands/src/client/popup.ts",
+    "packages/client/ui-commands/src/client/service.ts",
+    "packages/client/ui-commands/src/client/PopupSelectView.module.css",
+    "packages/client/ui-commands/tests/popup.client.spec.ts",
+    "packages/client/ui-commands/tests/popup-view.client.spec.tsx",
+    "packages/client/ui-input-trigger/README.md",
+    "packages/client/ui-input-trigger/src/core/detect.ts",
+    "packages/client/ui-input-trigger/src/core/menu.ts",
+    "packages/client/ui-input-trigger/src/client/MenuView.module.css",
+    "packages/client/ui-conversation/src/client/skeleton/InputBar.module.css",
+    "packages/client/ui-conversation/src/client/skeleton/PermissionSelect.tsx",
+    "packages/client/ui-conversation/src/client/apply.ts",
+    "packages/client/ui-conversation/tests/keymap-routing.client.spec.tsx",
+    "packages/client/ui-workspace/README.md",
+    "packages/client/ui-workspace/src/client/index.ts",
+    "packages/client/ui-workspace/src/client/navigation.ts",
+    "packages/client/ui-workspace/tests/apply.client.spec.ts",
+    "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
+    "packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx",
+    "packages/client/ui-model-selection/README.md",
+    "packages/client/ui-model-selection/src/client/catalog.ts",
+    "packages/client/ui-model-selection/src/client/ModelSelect.tsx",
+    "packages/client/ui-model-selection/src/client/ModelSelect.module.css",
+    "packages/client/ui-model-selection/tests/catalog.client.spec.ts",
+    "packages/client/ui-permission-presets/README.md",
+    "packages/client/ui-permission-presets/src/client/PermissionRow.module.css",
+    "packages/client/ui-primitives/src/rank-by-name.ts",
+    "packages/client/ui-primitives/tests/rank-by-name.client.spec.ts",
     "packages/client/README.md",
     "packages/client/ui-attachment/README.md",
     "packages/client/ui-attachment/src/AttachmentRail.module.css",

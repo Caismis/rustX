@@ -22,7 +22,8 @@ Typed current context is disclosed separately. Subagent, Workflow, foreground an
 background activity are current adjuncts, not fabricated historical placements.
 Historical interaction/publication audits are read-only; live Approval,
 Questionnaire and Review retain existing typed settlement and uncertain-outcome
-controls. No Todo/Goal/queue derivation, Trace, or active retry/fork control is added.
+controls. Todo/Goal/Queue projection remains in the composer docks. WEB-05 adds
+native historical actions as described below; it never derives canonical history.
 
 ## Paging and reconnect
 
@@ -45,6 +46,71 @@ keeps that row's viewport offset and enters history reading. ResizeObserver
 restores the same anchor after image/Markdown/layout growth. Only a reader at the
 bottom follows new output; programmatic scroll delivery and shrink clamps do not
 reassign that ownership. No timeout or sleep determines layout correctness.
+
+## Historical Fork, Branch and Retry (WEB-05)
+
+User-message rows offer Fork, Branch and Retry / Regenerate. Command discovery also
+opens Fork/Branch boundary selection. `session/boundaries` supplies the exact User
+MessageId and Surface revision; `session/tree` resolves the **attached Conversation**
+to its native node, never to the Session's potentially different default node.
+The frozen selection includes Session, attachment/incarnation, node, revision and
+message. No stale-revision error triggers refresh-and-retry. Native immutable older
+revisions remain valid cuts; unknown revisions and invalid boundaries fail visibly.
+
+Fork creates an independent Session. Branch creates an in-Session node. Both native
+cuts end **before** the selected User message and return its `editor_content` as an
+uncommitted draft. The UI opens only the acknowledged destination and restores its
+native text/upload receipts. Independent Fork upload copying is entirely #319's
+native responsibility, including editor-boundary uploads before publication.
+In-Session branches share Session-owned uploads; the browser copies no files.
+
+Retry is `session/branch` → authoritative destination identity → unload the idle
+source runtime → attach the exact new node → `turn/start` with the returned
+`editor_content` **once**. The User message is not duplicated: it was excluded from
+the copied prefix. Original Assistant responses remain canonical in the original
+node; no response text is replaced and no browser alternate-response store exists.
+The Session tree button reads native nodes and can reopen the original lineage.
+Branch, Retry and tree switching require `lineageSwitchSafe(view)`: the existing
+`executionIdle(view)` observation plus no unresolved inbound transport request on
+the current attached view. `executionIdle` remains unchanged: an observed
+snapshot with no active Attempt, no authoritative `inbound.pending`, and no
+acknowledged-but-not-yet-projected `view.submissions`. The native manager allows
+one resident Conversation per Session. An accepted MessageId is evidence of native
+ownership even before an Attempt appears; it is not browser queue authority.
+Existing exact-MessageId reconciliation removes that evidence when native pending
+or canonical history names it. `AppServerClient` separately publishes a per-Session
+count of actual pending `turn/start`/`turn/steer` requests, including requests waiting
+for a socket slot. Admission may commit before the acknowledgement reaches the
+browser. Receiving success atomically hands that count to exact MessageId evidence;
+a known rejection clears it without inventing a submission. Connection loss marks
+sent mutations uncertain and invalidates the generation; reconnect rereads authority
+and does not retain old transport counts or replay requests. No timer or React
+send-button flag declares idle.
+The guard is checked again after branch publication, before unload: if work arrived,
+the committed node remains discoverable in Session tree, but no switch/retry occurs.
+Fork does not unload the independent source and remains available during execution.
+Native admission and shutdown remain the final authority; this product guard does
+not turn an observation into a server-side idle reservation.
+
+Editable Fork/Branch restore accepts only `Upload*` followed by at most one
+**nonempty** Text block. Other ordered native shapes (interleaving, multiple Text
+blocks, or an empty Text block that the flat sender would drop) produce a visible
+refusal and disabled composer before decomposition. No blocks are reordered or
+sent; the committed lineage is unaffected. Use an ordered-block client for those
+inputs. Retry is not restricted by this editor: it sends returned blocks directly.
+Restored upload rows use `(batch_id, token)`, not batch alone, as React identity.
+
+Live model/approval settings belong to the Conversation. A cold new lineage uses
+native Session/launch settings, which can differ from the source's live selections.
+The browser never copies its cached model/policy values into a new runtime.
+
+Navigation, dismissal or reconnect can obsolete a continuation after the native
+mutation committed. It then neither redirects the user nor starts another step.
+Response loss at branch, unload, attach or turn admission stops the flow without
+replay. Reconnect and Session list/tree inspection repair observable state; when
+the exact outcome is unknown, retain uncertainty. Original node navigation intent
+is retained after reading its authoritative tree identity, so reconnect does not
+silently substitute a different default node.
 
 ## Attachments
 

@@ -54,7 +54,7 @@ it('mixed draft order and failed admission retain text and attachments, with det
   const file = new File(['text'], 'second.txt', { type: 'text/plain' });
   await act(async () => fireEvent.change(ui.getByLabelText('Attach files'), { target: { files: [image, file] } }));
   await act(async () => fireEvent.click(ui.getByRole('button', { name: 'Send' })));
-  expect(send).toHaveBeenCalledWith('keep me', [completed('first.png', 'one').receipt, completed('second.txt', 'two').receipt]);
+  expect(send).toHaveBeenCalledWith('keep me', [completed('first.png', 'one').receipt, completed('second.txt', 'two').receipt], 'send');
   expect((ui.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('keep me');
   expect(ui.getByRole('button', { name: 'Remove second.txt' })).toBeTruthy();
   ui.unmount(); expect(revoke).toHaveBeenCalledTimes(1);

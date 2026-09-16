@@ -47,8 +47,10 @@ export class FakeSocket implements Socket {
   close() { if (!this.closed) { this.closed = true; this.releaseClaims(); this.onclose?.(new CloseEvent('close')); } }
 }
 export class Server {
+  handlers = new Map<Request['method'], (request: Request) => MethodResult>();
   sockets: FakeSocket[] = [];
   snapshots = new Map<string, RuntimeClientSnapshot>([['A', snapshot('A')], ['B', snapshot('B')]]);
+  nodeSnapshots = new Map<string, RuntimeClientSnapshot>();
   cursor = 0n;
   private attachmentSequence = 0;
   private completed = new Map<Request, Response>();
@@ -118,6 +120,8 @@ export class Server {
     if (socket.closed || ('target' in params && !sameTarget(this.targets.get(socket)?.get(id), params.target))) {
       throw new RpcFailure({ code: -32000, message: 'Stale attachment', data: { kind: 'stale_attachment' } });
     }
+    const handler = this.handlers.get(request.method);
+    if (handler) return handler(request);
     let result: MethodResult;
     switch (request.method) {
       case 'initialize': result = { type: 'initialized', protocol_version: this.version, capabilities: this.capabilities }; break;
@@ -128,10 +132,11 @@ export class Server {
         if (!this.loaded.has(id)) { this.loaded.add(id); this.coldLoads.set(id, (this.coldLoads.get(id) ?? 0) + 1); }
         if (this.sockets.some(source => this.claims(source).some(target => target.session_id === id))) throw new RpcFailure({ code: -32000, message: 'Controller in use', data: { kind: 'controller_in_use' } });
         const targets = this.targets.get(socket) ?? new Map<string, AttachmentTarget>();
-        targets.set(id, { session_id: id, conversation_id: `conversation-${id}`, runtime_incarnation: String(9007199254740992n + BigInt(this.coldLoads.get(id)!)), attachment_id: `${id}-${++this.attachmentSequence}` });
+        const attachedSnapshot = (request.params.node_id ? this.nodeSnapshots.get(request.params.node_id) : undefined) ?? this.snapshots.get(id)!;
+        targets.set(id, { session_id: id, conversation_id: attachedSnapshot.conversation_id, runtime_incarnation: String(9007199254740992n + BigInt(this.coldLoads.get(id)!)), attachment_id: `${id}-${++this.attachmentSequence}` });
         this.targets.set(socket, targets);
         this.maxClaims = Math.max(this.maxClaims, targets.size);
-        result = { type: 'attached', target: this.target(id, socket), snapshot: this.snapshots.get(id)!, cursor: String(this.cursor) }; break;
+        result = { type: 'attached', target: this.target(id, socket), snapshot: attachedSnapshot, cursor: String(this.cursor) }; break;
       }
       case 'settings/read': result = { type: 'settings', revision: '0', settings: { cwd: `/workspace/${id}` } }; break;
       case 'session/snapshot': result = { type: 'snapshot', snapshot: this.snapshots.get(id)!, cursor: String(this.cursor) }; break;

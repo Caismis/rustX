@@ -367,18 +367,27 @@ describe('Queue dock binds the native inbound mailbox', () => {
     expect(JSON.stringify(localStorage)).not.toContain('First queued');
     expect(JSON.stringify(server.client.getSnapshot().views.A.settings)).not.toContain('First queued');
   });
-  it('composer delivery follows the authoritative attempt and uses the single native inbound method', async () => {
+  it('composer delivery follows the authoritative attempt and labels the shared inbound semantics', async () => {
     await mount(snapshot());
     expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Steer' })).toBeNull();
     await update(running());
     expect(screen.getByRole('button', { name: 'Queue' })).toBeTruthy();
-    expect(screen.getByText('Attempt running · Enter queues for its next safe boundary')).toBeTruthy();
+    expect(screen.getByText('Attempt running · Queue and Steer both enter the native mailbox at a safe boundary')).toBeTruthy();
     await sendQueued('While running');
     await server.waitFor('turn/start', 1);
     expect(methods()).not.toContain('turn/steer');
+    fireEvent.change(screen.getByLabelText('Delivery'), { target: { value: 'steer' } });
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Steer running attempt' } });
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Steer' })));
+    const steered = await server.waitFor('turn/steer', 1);
+    expect(steered.params).toMatchObject({ target: server.target('A'), content: [{ type: 'text', text: 'Steer running attempt' }] });
     await update(snapshot());
     expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy();
+    expect(screen.queryByLabelText('Delivery')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Idle again' } });
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+    expect((await server.waitFor('turn/start', 2)).params).toMatchObject({ content: [{ type: 'text', text: 'Idle again' }] });
   });
   it('an unacknowledged request is composer transport state, never a queue row', async () => {
     await mount(running(withQueue([inbound('1', 'Native row')])));

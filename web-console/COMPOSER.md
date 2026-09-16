@@ -62,8 +62,8 @@ Absent extension, no Goal and terminal `complete` occupy no composer space.
 (`Ongoing` / `Inactive`) and never changes the displayed revision or an open draft.
 
 Controls are exactly the ones GoalDomain assigns to users: pause, resume
-(re-arm), edit objective and edit budget. Create, block and complete remain `/goal`
-and model declarations; there is no clear.
+(re-arm), edit objective and edit budget. Create, block and complete remain native
+model declarations; the Web `/goal` opens these existing controls, and there is no clear.
 
 Every mutation is `goal/control` `mutate` with the rendered authoritative
 `GoalRef` as its CAS token. Nothing is ever retried, and no newer revision is ever
@@ -116,15 +116,17 @@ their provenance (for example a Goal continuation). The dock is read-only: queue
 edit/remove and per-row steer belong to WEB-06.
 
 `turn/start` and `turn/steer` dispatch to the same native `submit_inbound`
-(`src/app_server/connection.rs`). The composer therefore has one delivery action,
-labelled from the authoritative attempt: **Send** while idle and **Queue** while an
-attempt is running, when input waits for the next safe-boundary drain. The former
-separate Steer button implied a second mode rustX does not have and was removed.
+(`src/app_server/connection.rs`). **Send** while idle dispatches `turn/start`.
+While the authoritative attempt is running, the delivery selector offers **Queue**
+(`turn/start`) and **Steer (same mailbox)** (`turn/steer`). Both enter the same
+native mailbox and drain at a safe boundary; Steer does not promise interruption,
+priority, or a separate execution mode. Returning to idle always uses `turn/start`,
+even if Steer was previously selected. The selected delivery is presentation only.
 
 A submission passes three presentation stages:
 
 ```text
-turn/start in flight
+turn/start or turn/steer in flight
     -> composer transport only ("Awaiting acknowledgement…"); not a Queue row,
        not counted as queued
 inbound_accepted { message_id }
@@ -161,14 +163,78 @@ viewports. The real-server browser test measures the alignment at 1440px and 390
 PR #320 (#319) is merged. User uploads are Session-owned workspace uploads and the
 App Server protocol is **v4**; this slice is rebased onto that `main`. The stack
 wraps the existing `InputBar` without changing upload behaviour: a draft transfers
-through `session/upload` first, and the single delivery action carries the resulting
+through `session/upload` first, and either delivery action carries the resulting
 typed `UploadReceipt`s as ordinary content.
 
 ```text
-send(sessionId, text, uploadReceipts) -> turn/start { content: [upload…, text] }
+send(sessionId, text, uploadReceipts, delivery) -> turn/start or turn/steer
 ```
 
-There is no `steer` flag, no second send method, no `artifact/upload` user path and
-no v3/v4 or old/new upload compatibility path. Upload receipts are content only:
+There is no `artifact/upload` user path and no v3/v4 or old/new upload compatibility
+path. Upload receipts are content only:
 they never participate in the accepted-`MessageId` identity contract above, and an
 uncertain upload leaves its draft card uncertain rather than being replayed.
+
+## Commands (WEB-05)
+
+Slash commands are browser input grammar and presentation, not a server interpreter.
+`app/commands/registry.ts` is the single closed command catalog. Stable `CommandId`
+values are separate from labels and aliases (including Chinese spellings). A
+leading slash reserves the whole trimmed draft: no arguments, interpolation or
+shell grammar. Unknown/unsupported slash input is visibly refused and retained;
+it never falls through to a model prompt. Inline slashes and URLs remain text.
+
+`/` or the composer `+` opens discovery. Matching uses the pinned Harness ordered
+subsequence scorer: prefix first, strongest alignment next, registry order for
+ties. Filtering includes identity, label and aliases. Up/Down wraps, Enter picks,
+Escape and outside pointer dismiss. The composer keeps focus during discovery;
+selectors take search focus and return it on dismissal. IME Enter is untouched.
+`+` preserves a non-command draft instead of replacing it. Commands with draft
+uploads are refused rather than dropping attachments. A successful selector consumes
+only the exact draft captured at invocation, if it has not since changed; dismissal
+or failure keeps it. This covers exact tokens, aliases, fuzzy `/mdl`, and bare `/`
+discovery alike. A successful `/tools` native read consumes its invoking draft while
+keeping the capability panel open; consumption and panel dismissal are separate.
+
+| Command | Typed integration |
+| --- | --- |
+| `/model` | `settings/model` + `settings/models`, then `settings/setModel` with an exact catalog model reference and native defaults |
+| `/permission` (`/approval`) | Native `policy` / `full_access`, `settings/setApprovalMode`, authoritative snapshot reread |
+| `/compact` | Native `context/compact`, available with no active Attempt; pending inbound alone is permitted by native maintenance |
+| `/new` | `session/create` using native Session cwd; attach/open only after success |
+| `/fork` | Native exact user-boundary selection and independent `session/fork` |
+| `/branch` | Native exact user-boundary selection and in-Session `session/branch`, stable execution-idle only |
+| `/goal` | Focus existing GoalDomain-backed dock controls when a current Goal is visible |
+| `/tools` | Read-only `resources/read` capability inspection |
+
+`/settings` is omitted: there is no current product settings editor to navigate to.
+Stable execution-idle means no active Attempt, no authoritative pending inbound,
+and no acknowledged MessageId still awaiting projection reconciliation. Destructive
+lineage switching additionally requires no unresolved `turn/start`/`turn/steer`
+request in AppServerClient's current-generation pipeline (`lineageSwitchSafe`).
+This guard covers historical Branch/Retry, Session-tree switches and open selectors.
+The four stages are unresolved transport -> acknowledged MessageId evidence ->
+authoritative pending/canonical/Attempt observation -> genuinely idle. The first
+two stages are not a browser queue; the client atomically hands request ownership
+to acknowledged evidence without publishing a transient safe state. Compact intentionally
+uses a different native precondition: the coordinator can perform maintenance while
+inbound awaits adoption; concurrent Attempt/maintenance/resource-reload conflicts
+remain native refusals. Fork does not replace the source and is not idle-gated.
+
+The flat editor fails closed on restored input outside `Upload* + nonempty Text?`;
+it never combines/reorders arbitrary native `editor_content`. See CHAT.md for the
+explicit editable limitation. Retry submits native blocks directly without it.
+
+No provider, Workspace, resource or MCP editor is introduced. The Goal command does
+not invent user authority to create or complete a Goal.
+
+`CommandSession` binds typed operations to an exact AttachmentTarget and connection
+generation. Navigation/dismissal epochs revoke UI continuations, not committed
+mutations. After a side-effecting response loss, no step is replayed and no later
+step continues. Reconnect lists Sessions, reacquires intended attachments, rereads
+snapshots/settings; reopening a selector rereads model/current/catalog state.
+Unknown outcomes remain diagnostics: inspect the Session list/tree rather than
+guessing which operation succeeded. A failed mutation locks that selection until
+the user closes it and rereads authority. The fixed Todo → Goal → Queue → Composer
+stack and accepted-MessageId echo contract remain intact. Exact accepted queue
+edit/remove/reorder is still #309.

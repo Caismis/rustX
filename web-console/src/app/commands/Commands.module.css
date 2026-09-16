@@ -1,0 +1,34 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted from ui-commands/PopupSelectView.module.css and ui-input-trigger/MenuView.module.css; see PROVENANCE.md. */
+.menu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 100;
+  padding: 4px;
+  max-height: min(320px, 40vh);
+  overflow-y: auto;
+  border-radius: 20px;
+  background: var(--dsw-specific-menu);
+  --dsw-elevation-stroke-color: var(--dsw-alias-border-l1);
+  box-shadow: var(--dsw-elevation-prominent);
+}
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.row[aria-selected="true"], .row:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.row small { color: var(--dsw-alias-label-tertiary); }
+.options { max-height: 40vh; overflow-y: auto; }
+.search { width: 100%; margin-bottom: 8px; }

@@ -183,14 +183,24 @@ The log is disposable diagnostics, never durable history. No fetch or remote
 telemetry is used by it.
 
 Supported native gestures: list/create/open, delete preview and revision-checked
-delete, one Send/Queue delivery action and cancel, Goal pause/resume/edit,
-answer/decline/cancel interactions, resync, detach, unload/cold attach,
-disconnect/reconnect. No workspace manager, editor, terminal, provider setup, file
-navigation, Harness commands, client-owned queue editing or retry, fork, policy
-preset, plugin controls or unsupported status actions remain. Conversation
-text remains plain text in native projections. Assistant text uses the incremental
-Markdown foundation; reasoning/Tool/other blocks retain disclosures. Image loading
-and paginated transcript products belong to later WEB slices.
+delete, Send/Queue/Steer and cancel, Goal pause/resume/edit, typed slash commands,
+native Fork/Branch/Retry and Session tree navigation, model/approval selectors,
+answer/decline/cancel interactions, resync, detach, unload/cold attach and reconnect.
+Commands are client grammar, never server command strings. Unsupported slash input
+is refused without prompt fallback. Retry creates a native branch and executes its
+returned input once; original canonical history remains unchanged. Fork relies on
+#319 for independent destination upload ownership. Lost mutation responses remain
+uncertain and are never replayed; navigation/reconnect fences late continuations.
+Queue and Steer truthfully expose the shared native inbound mailbox, with exact
+accepted queue edits/removal/reordering deferred to #309.
+
+See [COMPOSER.md](COMPOSER.md) for the catalog and interaction contract and
+[CHAT.md](CHAT.md) for historical boundaries, cold-lineage settings and retry order.
+No Workspace manager, provider/model configuration editor, MCP/resource editor,
+terminal, browser canonical history or Harness runtime authority is introduced.
+Assistant text uses the incremental Markdown foundation; reasoning/Tool/other
+blocks retain disclosures. Native transcript paging and typed attachment cards
+are described in CHAT.md.
 
 ## Reproducible real-server browser fixture
 

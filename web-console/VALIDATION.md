@@ -750,3 +750,309 @@ defect on the managed MCP path, so this branch also carries a Rust fix and its
 diff is no longer Web-only. The defect, its root cause in rmcp's `Auto`
 lifecycle, the fix and its residual risk are recorded in
 [pr-321-mcp-handshake-flake.md](../docs/pr-321-mcp-handshake-flake.md).
+
+## WEB-05 / #308 validation (2026-09-16)
+
+Base: `5537d1e27240c0b239ea0ba8403e784e54bd3117`, including #304, #292,
+#319 (native Session uploads), and #307. Work was isolated in the
+`rustX-issue-308` worktree. The original checkout was not edited.
+Harness HEAD was verified as `c291e7961a515f6d7af9304e7fd1d257929aef26`;
+the shared provenance inventory records inspected and adapted sources.
+
+### Commands and results
+
+Commands below are from the repository root unless a directory is indicated.
+The final diff changes Web source/docs and one deterministic provider scenario;
+it changes no Rust source, protocol DTO, dependency manifest, or lockfile.
+
+| Command | Result |
+| --- | --- |
+| `pnpm --dir web-console install --frozen-lockfile` | Passed |
+| `pnpm --dir tui install --frozen-lockfile` | Passed; shared TUI dependency for Web checks |
+| `uv sync --frozen` (test-support/fake-provider) | Passed |
+| `cargo build --bins` | Passed; real App Server and supervisors |
+| `uv run --frozen pytest` (test-support/fake-provider) | 51 passed |
+| `pnpm --dir web-console typecheck` | Passed |
+| `pnpm --dir web-console test` | 208 passed, 16 files |
+| `pnpm --dir web-console exec vitest run test/commands.test.tsx` | Passed during focused development; included in the full run above |
+| `pnpm --dir web-console check:provenance` | 68 source records, 100 production package notices passed |
+| `pnpm --dir web-console build` | Passed; existing non-fatal bundle-size advisory |
+| `pnpm --dir web-console exec playwright test test/e2e/commands.spec.ts` | Passed against the real App Server |
+| `pnpm --dir web-console test:e2e` | 8 passed against the real App Server |
+| `git diff --check` | Passed |
+
+The current CI workflow was inspected. All applicable Web-lane checks and the
+changed fake-provider suite ran locally. Rust-wide clippy/test/format and protocol
+regeneration checks were not rerun for this Web-only implementation; neither Rust
+nor generated bindings changed. No applicable validation was skipped for an
+environment limitation. Chromium was already installed. GitHub Actions still
+owns the full platform matrix, including macOS.
+
+### Deterministic evidence
+
+- Registry tests cover `/`, exact identities, localized/alternate aliases, fuzzy
+  subsequences, stable tie ordering, keyboard selection/Escape, unsupported slash
+  refusal, and ordinary prompt submission.
+- Typed selector tests assert native catalog/current/setModel and approval
+  requests, filtering/Enter, and stale Session/attachment completion fences.
+- Historical tests assert exact target/node/message/revision, explicit rejection
+  with no revision substitution, authoritative Fork-before-open, in-Session
+  Branch, and upload receipts without browser file copies. An unavailable
+  historical message cannot substitute another displayed boundary.
+- Retry tests assert branch -> unload -> exact attach -> one native editor input
+  submission; no previous Assistant replacement or browser history copying.
+- Deferred response barriers commit and hold Fork/Branch/Retry, navigate, then
+  release. The mutation remains committed but the continuation does not redirect.
+  App-level tests exercise dismissal and navigation to Session B as well.
+- Queue/Steer tests use authoritative running snapshots and assert `turn/start`
+  versus `turn/steer` requests; idle always uses `turn/start`. Accepted queue
+  edit/remove/reorder remains absent and deferred to #309.
+- Lost responses for settings, lineage, create/compact, and each retry step stop
+  continuation and never replay. Reconnect rereads native settings/Session state;
+  old generation/socket callbacks cannot alter the new view.
+- `commands.spec.ts` uses the real App Server and controlled provider to select
+  model/approval, restore focus on Escape, reject unsupported slash input, retry
+  upload-bearing history, reopen the original native node, independently Fork,
+  verify destination upload bytes, and reconnect. Provider assertions require a
+  fresh execution with no old Assistant response in its context.
+- Desktop retry and mobile selector screenshots were visually inspected; the
+  mobile test also asserts no horizontal overflow and no browser errors. Evidence
+  lives in ignored `test-results/commands-*.png`, collected by CI.
+
+No sleeps establish ordering: barriers, native acknowledgements/projections, and
+Playwright assertions do; timeouts only guard liveness.
+
+### Findings and corrections during development
+
+Initial unit failures exposed fixture wait-count and selector ambiguity, plus
+old callback/queue-label expectations; these were corrected without weakening
+native request assertions. Initial provenance checks identified the new derived
+sources and imports; the existing inventory was extended, not bypassed.
+The first browser run found focus restoration blocked by disabling the composer
+behind the modal; native modal inertness now handles that. A later provider
+assertion incorrectly expected live model selection to persist into a cold branch:
+native semantics correctly use Session/launch defaults on cold resume. The fixture
+and documentation now state this lifetime explicitly. All final checks pass.
+
+Native historical Surface revisions are immutable cuts: an older valid revision
+is not inherently stale. Tests reject invalid revisions/boundaries and prove the
+browser never replaces the selected cut with a freshly fetched one.
+
+### Final architecture audit
+
+One registry/grammar feeds explicit closed typed dispatch. No command interpreter,
+arbitrary command string RPC, compatibility upload path, Harness runtime authority,
+or second composer/queue/history state machine was introduced. `/settings` has no
+current legitimate surface and is omitted. Goal navigation uses the existing dock.
+Native branch/fork cuts and #319 upload ownership remain unchanged. Reconnect and
+navigation invalidate UI continuations, never pretend to cancel committed native
+mutations. Lost mutation responses remain uncertain; no browser idempotency or
+automatic replay was added. Todo -> Goal -> Queue -> Composer is preserved.
+
+## PR #322 review correction: native admission before Attempt projection
+
+Reviewed head: `0def5008e9a8e637097aee82c763075fbd752d38` (2026-09-16).
+The defect was treating `!activeAttempt(snapshot)` as permission to replace a
+resident lineage. A native acknowledgement already proves accepted work even
+when the replaceable snapshot has not projected an Attempt yet.
+
+### Native-owner findings
+
+1. `ConversationRuntime::admit_sourced_inbound` commits durable mailbox acceptance
+   under the coordinator lock. Its returned MessageId/sequence names runtime-owned
+   work; it is not completion. App Server start/steer both use this owner.
+2. `accepted_inbound_before_attempt_admission_prevents_idle_claim` gates Attempt
+   admission after acceptance, proves no current Attempt, and proves native idle
+   reclamation is refused. Acceptance can precede Attempt projection.
+3. Pending inbox observations are independent of the Attempt projection. Pending
+   can coexist with absent/settled Attempt; Web tests cover both explicitly.
+4. Manager unload drains admitted operations, invokes native shutdown, waits for
+   settlement and projection drain, then releases composition. It is not a promise
+   to execute every pending message before shutdown. The drain-linearization test
+   proves pre-drain accepted input remains durably pending and later input is refused.
+5. `SessionController::copy_lineage` reads the exact immutable Surface cut and
+   retains allocation access. Source appends do not alter that cut. Independent
+   Fork neither unloads nor replaces the source and remains allowed.
+6. `compact_context` rejects current Attempt, manual compaction, resource reload,
+   lifecycle/durability conflicts, but intentionally does not reject pending inbox
+   entries. It owns the Conversation while maintenance runs. `/compact` therefore
+   has `no-attempt` availability, not the stronger lineage-switch condition.
+7. App Server converts `UserInputBlock` in order; native `editor_input` maps each
+   canonical block in place. The native upload test returns Upload/Text/Upload.
+   TUI `app-server/editor.ts` preserves arbitrary unchanged ordering and rejects
+   ambiguous edits; its session transport submits the array directly. Web normal
+   send authors uploads then one nonempty text, while Retry submits native arrays
+   directly. Headless composition uses ordered `UserContentBlock` admission rather
+   than the Web editor or an alternative `UserInputBlock` normalizer. Thus the Web
+   cannot assume every native producer uses its flat editable shape.
+
+### Bounded implementation and deterministic regressions
+
+`bindings/projection.ts::executionIdle` requires an observed snapshot, no active
+Attempt, no authoritative pending inbound, and no unprojected acknowledged
+submission. It is only a Web product guard, not a native idle lease or queue owner.
+The existing exact-MessageId reconciliation is unchanged. App command discovery,
+historical Branch/Retry, tree availability and open selectors use that definition;
+native integration rechecks it before Branch/Retry mutation, after branch commit
+before unload, and before tree switching. Compact follows the distinct contract
+above. Fork remains available with accepted source work.
+
+Gate-based tests hold admission acknowledgement ahead of projection, then project
+the exact MessageId into pending and canonical history. They assert blocked
+Branch/Retry/tree RPCs and controls, native-legal compaction, unchanged reconciliation,
+and re-enabling at genuine idle. Separate absent/settled Attempt tests start with
+authoritative pending and no provisional submission. Already-open selectors also
+track acknowledgement and reconciliation. Commit/hold/admit/release tests prove
+Branch and Retry preserve the published node, report its identity, never repeat
+the branch, and never unload accepted source work. Fork has a positive busy-source
+test. No sleeps synchronize any of these races.
+
+Restored rows now key by `(batch_id, token)`. Two same-batch receipts render with
+no React warnings; removing either independently preserves the other exact receipt
+in the typed outbound payload. Following React's stable-data identity guidance,
+the key does not depend on the array index.
+
+The bounded flat editor supports uploads followed by at most one **nonempty** Text
+block. It validates before decomposition and visibly disables unsupported restores;
+it does not merge, reorder or send them. Tests cover Text/Upload/Text, multiple Text
+blocks, and an empty Text block that the ordinary sender would otherwise drop.
+Supported unchanged content round-trips in exact order. Retry remains unrestricted
+by this editor and retains its direct ordered `sendContent` coverage.
+
+### Validation of the correction
+
+| Command (repository root unless stated) | Result |
+| --- | --- |
+| `pnpm --dir web-console install --frozen-lockfile` | Passed |
+| `pnpm --dir tui install --frozen-lockfile` | Passed |
+| `pnpm --dir web-console typecheck` | Passed |
+| `pnpm --dir web-console exec vitest run test/commands.test.tsx` | 42 passed |
+| `pnpm --dir web-console test` | 223 passed, 16 files |
+| `pnpm --dir web-console check:provenance` | 68 source records, 100 notices passed |
+| `pnpm --dir web-console build` | Passed; existing bundle-size advisory |
+| `pnpm --dir web-console test:e2e` | 8 passed, real App Server and provider |
+| `cargo test --lib --all-features accepted_inbound_before_attempt_admission_prevents_idle_claim` | 1 passed |
+| `cargo test --lib --all-features unload_and_inbound_have_both_native_admission_winners` | 1 passed |
+| `cargo test --lib --all-features manual_compaction_` | 7 passed |
+| `cargo test --lib --all-features restored_editor_uploads_are_ordered_owned_and_prepared_before_publication` | 1 passed |
+| `cargo test --lib --all-features drain_linearization_precedes_the_refused_acceptance` | 1 passed |
+| `git diff --check` | Passed |
+
+Two initial typecheck iterations caught test-fixture DTO omissions and a
+Playwright-only locator option used in Testing Library. Those test authoring errors
+were corrected; no product failure was waived. No environment limitation blocked
+validation. The existing binary/provider/browser installations were reused; Rust,
+protocol, TUI and provider sources are unchanged by this correction. CI was inspected
+and all affected Web checks rerun; targeted native tests verify the relied-on owners.
+
+Browser plugin unavailable: repository Playwright used `127.0.0.1:5174` with the
+real App Server fixture. Flow: connect/create -> selectors -> upload-bearing Retry
+-> original node -> independent Fork -> reconnect. Page identity, meaningful DOM,
+interactions, console health and mobile overflow assertions passed. Desktop
+1440×1000 and mobile 390×844 evidence remains in the existing ignored CI screenshot
+paths; screenshots were inspected. No rendering overlay or layout regression found.
+
+No generic command RPC, browser queue authority, replay, #309 mutations, #319
+compatibility shim, or canonical history rewriting was introduced. This correction
+changes no native semantics or protocol. Main was refetched unchanged before push;
+the existing PR #322 is the only publication target.
+
+## PR #322 follow-up: unresolved inbound transport and discovered drafts
+
+Reviewed head: `8e856c6d44c4378a68de9ba3076b42d25c00398a` (2026-09-16).
+The prior correction remains intact. Its remaining gap was **before** browser
+acknowledgement: native acceptance can commit while both `submissions` and the
+idle-looking snapshot still contain no evidence of that work.
+
+### Linearization and ownership
+
+`ConversationRuntime::admit_sourced_inbound` calls `mailbox.accept_draft` under the
+coordinator lock. That durable transaction commits sequence, MessageId and pending
+record before returning `InboundAdmission`. `RuntimeClientHost::submit_session_inbound`
+then constructs `InboundAccepted`; App Server `TurnStart`/`TurnSteer` dispatch maps
+that result into the response. Socket delivery and browser observation happen later.
+Thus a transmitted request and an idle-looking Web snapshot can coexist after commit.
+
+Manager unload drains admitted operations, invokes shutdown, waits for native
+settlement and projection drain, and releases composition. It does not promise to
+execute all pending input first; pre-drain pending input remains durable. Compact
+still has its own coordinator preconditions and permits pending inbound before
+Attempt adoption. Independent Fork reads an immutable historical cut under source
+allocation access, without unloading the source. Neither gains a transport-idle gate.
+
+`executionIdle(view)` is unchanged. New `lineageSwitchSafe(view)` additionally
+requires a current attached/wanted view and no `inboundRequests`. AppServerClient
+derives this count from its actual bounded pending request map, not React's sending
+flag. Registration publishes it before pumping the socket; concurrent calls are
+counted separately, including requests still waiting for a transmission slot.
+
+The four stages are:
+
+1. Unresolved inbound request: transport ownership, no invented MessageId.
+2. Acknowledged MessageId awaiting projection: existing reconciliation evidence.
+3. Authoritative pending/canonical/Attempt observation: runtime ownership.
+4. Stable lineage-switch frontier: none of the above remains unresolved/active.
+
+Success publishes the decremented request count and acknowledged MessageId together,
+then uses existing exact-identity reconciliation. No intermediate safe state is
+published. Definite rejection removes request ownership without a submission.
+Transmitted response loss remains OutcomeUncertain, invalidates the generation and
+attachment, and is never replayed. Reconnect rereads native state without retaining
+old generation counts. Old socket/command continuations remain fenced.
+
+The stronger guard is used by command availability, historical Branch/Retry,
+Session-tree controls, open selectors, native Branch/Retry before mutation and
+after publication, and native other-node opening before unload. Already committed
+branches remain discoverable when continuation stops. No runtime/protocol change.
+
+### Draft success semantics
+
+The composer records stable command identity plus the **exact invocation draft**.
+Success clears only an unchanged matching draft, covering `/model`, `/mdl`, `/`,
+and `/模型`. Dismissal and failure preserve it; edits made while a selector is
+pending survive success. Panel success and close callbacks are separate: `/tools`
+consumes on successful native read while keeping its panel open. No parser expansion,
+event bus, immediate-on-selection clearing, or focus workaround was introduced.
+
+### Deterministic and browser evidence
+
+Tests separate `server.commit(request)` from `socket.deliver(response)` for both
+start and steer. Before delivery they assert zero branch/unload/child-attach effects,
+even though native commit has happened. A state subscriber proves no safe publication
+from send initiation through acknowledged and pending reconciliation. Additional
+cases cover transmission-slot waiting, concurrent known refusals, loss/reconnect,
+old socket rejection, per-Session isolation, open-selector updates, and concurrent
+unacknowledged admission after branch publication. Fork/Compact have positive tests
+with held inbound acknowledgement. Earlier pending/settled/acknowledged guards,
+upload identity, ordered input refusal and exact Retry tests remain passing.
+
+Draft tests cover exact/fuzzy/bare/alias success, cancellation/failure preservation,
+concurrent edits and tools read success/failure. The real App Server browser flow
+now explicitly uses `/mdl` and checks successful `/tools` consumption with the panel
+still open, alongside existing Fork/Retry/reconnect and focus tests. No sleeps
+synchronize races. Desktop/mobile screenshot and console/layout checks passed.
+
+| Command | Result |
+| --- | --- |
+| `pnpm --dir web-console install --frozen-lockfile` | Passed |
+| `pnpm --dir tui install --frozen-lockfile` | Passed |
+| `pnpm --dir web-console typecheck` | Passed |
+| `pnpm --dir web-console exec vitest run test/commands.test.tsx` | 59 passed |
+| `pnpm --dir web-console test` | 240 passed, 16 files |
+| `pnpm --dir web-console check:provenance` | 68 source records, 100 notices passed |
+| `pnpm --dir web-console build` | Passed; existing bundle-size advisory |
+| `pnpm --dir web-console test:e2e` | 8 passed, real App Server |
+| `cargo test --lib --all-features accepted_inbound_before_attempt_admission_prevents_idle_claim` | 1 passed |
+| `cargo test --lib --all-features unload_and_inbound_have_both_native_admission_winners` | 1 passed |
+| `cargo test --lib --all-features drain_linearization_precedes_the_refused_acceptance` | 1 passed |
+| `cargo test --lib --all-features manual_compaction_` | 7 passed |
+| `cargo test --lib --all-features exact_fork_boundary_excludes_delete_and_releases_metadata_lock` | 1 passed |
+| `git diff --check` | Passed |
+
+Initial typecheck iterations caught old test callback names after the success/close
+split and a nonexistent `fireEvent.cancel` convenience method; tests now dispatch
+the native cancel event. All final checks pass. No environment limitations or
+waived checks. Current CI configuration was inspected; native binaries, provider
+and Chromium installations were reused because those sources/dependencies did not
+change. Full platform CI remains GitHub-owned. Browser plugin was unavailable, so
+the repository Playwright workflow was used at `127.0.0.1:5174`.

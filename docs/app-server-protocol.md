@@ -671,4 +671,9 @@ This remains mandatory protocol v4; no compatibility path is provided.
 Session transitions return `editor_content` as ordered `UserInputBlock` values,
 ready for `turn/start`: exact text plus server-issued upload receipts. Independent
 forks copy editor-boundary uploads before publication; same-Session branches share
-Session ownership. This finalizes the v4 contract in the unmerged upload change.
+Session ownership. The canonical destination prefix ends **before** the selected
+User message. A client restoring an editor keeps `editor_content` uncommitted; a
+product Retry may branch, attach the exact returned node/Conversation, then submit
+that content once through `turn/start`. It must stop after any uncertain mutation
+response, without repeating the branch or admission. No command interpreter or
+additional retry endpoint is involved. These are the merged #319 v4 semantics.
