@@ -27,7 +27,7 @@ jobs:
           components: rustfmt, clippy
 
       # The one Rust cache policy, applied identically to every Rust-bearing
-      # lane. Four properties matter and all four are deliberate:
+      # lane. Five properties matter and all five are deliberate:
       #
       # 1. It runs *after* the toolchain step, so the resolved compiler is part
       #    of the cache identity. The key the action builds already covers the
@@ -56,10 +56,21 @@ jobs:
       #    evicted, or stale cache changes nothing about which tests are
       #    selected or what they prove; it only changes how much dependency
       #    compilation is repeated. A completely cold runner remains valid.
+      #
+      # 5. Every lane may *restore* a compatible cache, but only a trusted push
+      #    to `main` *publishes* one — that is what `save-if` encodes. Pull
+      #    requests are cache consumers, never cache publishers: a PR cannot
+      #    spend the repository's shared cache budget (the seven lineages are
+      #    ~7.1 GB of a 10 GB LRU pool) and untrusted fork execution can never
+      #    become a writer of the state trusted runs later restore. The reuse
+      #    path is `main` cache -> future run with a compatible key. This
+      #    workflow's `push` trigger is already `main`-only; the condition
+      #    stays explicit so the ownership contract is locally obvious.
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: quality
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -99,6 +110,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-contracts
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       # `cargo test --bins` builds the bin *test harnesses* but does not
       # place the binaries at `target/debug/`, where the bash tool's unit
@@ -111,16 +123,15 @@ jobs:
       # tools/). The in-crate boundary conformance suites are selected OUT by
       # their `boundary_suites::` prefix; they run in the boundary jobs.
       #
-      # `--bins` and `--examples` are deliberately absent. Neither the three
-      # binaries nor the three examples define a single `#[test]`, so those
-      # selectors only linked six extra harnesses that each reported
-      # "0 passed" — measured at ~41s of pure link time per run with nothing
-      # to execute. Compilation of those targets is not lost: the `quality`
-      # lane type-checks every one of them through
-      # `cargo clippy --all-targets`, and `app-server-protocol` actually
-      # builds and runs the `generate_app_server_protocol` example.
+      # `--bins`/`--examples` execute zero tests today: none of the three
+      # binaries and none of the three examples defines a `#[test]`, and
+      # dropping both selectors was measured at ~41s of saved link time. They
+      # are kept regardless. Cargo already owns test-target discovery, so a
+      # test added to a bin or an example in future is picked up here
+      # automatically — which is simpler than a second repository policy
+      # saying those targets must stay test-free forever.
       - name: Run unit tests and the in-crate contract suites
-        run: 'cargo test --lib --all-features -- --skip boundary_suites::'
+        run: 'cargo test --lib --bins --examples --all-features -- --skip boundary_suites::'
 
       # contracts/: pure serialization/configuration fixture contracts.
       # provider/: adapter request serialization, stream parsing, error
@@ -153,6 +164,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-boundaries
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Install Python 3.12
         uses: actions/setup-python@v5
@@ -236,6 +248,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-platform-boundaries
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       # The conformance target launches the provider emulator with `uv run`.
       - name: Install Python 3.12
@@ -263,12 +276,13 @@ jobs:
       # to reach its private owner gates; their physical test class is still
       # deterministic and Linux-only, despite this different name prefix.
       #
-      # `--bins` is deliberately absent: none of the three binaries defines a
-      # `#[test]`, so it only linked three harnesses that each reported
-      # "0 passed". The binaries themselves are still built by the step above,
-      # which is what the tests actually need — they exec them by path.
+      # `--bins` executes zero tests today and removing it was measured, but it
+      # is retained so Cargo's normal target discovery picks up any future test
+      # added to a binary. It is not a substitute for the explicit
+      # `cargo build --bins` step above, which serves a different contract:
+      # placing the real executables at `target/debug/` for tests to exec.
       - name: Run unit tests and the in-crate boundary suites
-        run: 'cargo test --lib --all-features -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::'
+        run: 'cargo test --lib --bins --all-features -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::'
 
       - name: Run the external boundary targets
         env:
@@ -355,6 +369,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: tui
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       # The integration suite drives the real binary over the real stdio
       # transport, so it must exist before the tests run.
@@ -381,6 +396,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: app-server-protocol
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -437,6 +453,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: web-console
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
