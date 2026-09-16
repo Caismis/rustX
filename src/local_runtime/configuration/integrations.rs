@@ -93,9 +93,18 @@ impl McpDraft {
         })
     }
 }
+/// User policy relationship to the authorized merged definition domain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum McpPolicyState {
+    Absent,
+    Valid,
+    Dangling,
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct McpIdentityView {
     pub id: McpServerId,
+    pub policy_state: McpPolicyState,
     pub user: Option<McpDraft>,
     pub workspace: Option<McpDraft>,
     pub winning: Option<Origin>,
@@ -199,12 +208,22 @@ impl UserConfigManager {
             .map_err(|_| SettingsError::Invalid)?;
         let user = super::parse_layer(&self.sources.settings, user, false)
             .map_err(|_| SettingsError::Invalid)?;
-        let workspace = super::parse_layer(&input.cwd.join("rustx.toml"), workspace, true)
-            .map_err(|_| SettingsError::Invalid)?;
+        let workspace = if trusted {
+            super::parse_layer(&input.cwd.join("rustx.toml"), workspace, true)
+                .map_err(|_| SettingsError::Invalid)?
+        } else {
+            crate::local_runtime::authoring::RuntimeLayer::default()
+        };
         let mut ids = std::collections::BTreeSet::new();
         for layer in [&user, &workspace] {
             ids.extend(layer.mcp_servers.iter().flat_map(|map| map.keys()).cloned());
         }
+        ids.extend(
+            user.mcp_tool_policies
+                .iter()
+                .flat_map(|map| map.keys())
+                .cloned(),
+        );
         let mcp = ids
             .into_iter()
             .map(|id| {
@@ -214,6 +233,19 @@ impl UserConfigManager {
                     .as_ref()
                     .and_then(|m| m.get(&id));
                 McpIdentityView {
+                    policy_state: if user
+                        .mcp_tool_policies
+                        .as_ref()
+                        .is_some_and(|m| m.contains_key(&id))
+                    {
+                        if effective.is_some() {
+                            McpPolicyState::Valid
+                        } else {
+                            McpPolicyState::Dangling
+                        }
+                    } else {
+                        McpPolicyState::Absent
+                    },
                     user: user
                         .mcp_servers
                         .as_ref()
@@ -293,6 +325,213 @@ mod tests {
             authored,
         }
     }
+    #[test]
+    fn web09_user_entry_validation_preserves_workspace_policy_closure() {
+        let (_root, owner, input) = fixture();
+        trust(&owner, &input);
+        let original = std::fs::read_to_string(&owner.sources.settings).unwrap();
+        std::fs::write(
+            &owner.sources.settings,
+            format!("{original}\n[mcp_tool_policies.project-only]\napproval = 'always'\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            input.cwd.join("rustx.toml"),
+            "[mcp_servers.project-only]\ncommand = 'workspace-winner'\nenabled = false\n",
+        )
+        .unwrap();
+        let initial = owner.read_source_settings(&input).unwrap();
+        assert!(initial.integrations.mcp_valid);
+        let policy = initial.integrations.mcp_tool_policies.clone();
+        let workspace_bytes = std::fs::read(input.cwd.join("rustx.toml")).unwrap();
+        let mut current = initial;
+        for (id, command) in [
+            ("user-entry", "unrelated"),
+            ("project-only", "user-shadow"),
+            ("project-only", "edited-shadow"),
+        ] {
+            current = owner
+                .write_source_settings(
+                    &input,
+                    &current.user.revision,
+                    mutation(IntegrationScope::User, id, Some(draft(command))),
+                )
+                .unwrap();
+            assert!(current.integrations.mcp_valid);
+            assert_eq!(current.integrations.mcp_tool_policies, policy);
+            let row = current
+                .integrations
+                .mcp
+                .iter()
+                .find(|row| row.id.as_str() == "project-only")
+                .unwrap();
+            assert!(matches!(row.winning, Some(Origin::Project { .. })));
+            assert_eq!(row.policy_state, McpPolicyState::Valid);
+            if id == "project-only" {
+                assert_eq!(row.user.as_ref().unwrap().command.as_deref(), Some(command));
+            }
+            let capture = owner.capture_layers(&input, None, true).unwrap();
+            let bindings = crate::local_runtime::config::resolve_mcp_bindings(
+                &capture
+                    .merged
+                    .mcp_servers
+                    .unwrap()
+                    .into_iter()
+                    .map(|(id, entry)| (id, entry.resolve()))
+                    .collect(),
+                &capture.merged.mcp_tool_policies.unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                bindings[&McpServerId::new("project-only")].policy,
+                policy[&McpServerId::new("project-only")].to_policy()
+            );
+            assert_eq!(
+                std::fs::read(input.cwd.join("rustx.toml")).unwrap(),
+                workspace_bytes
+            );
+        }
+        let bytes = std::fs::read(&owner.sources.settings).unwrap();
+        let mut invalid_url = draft("x");
+        invalid_url.command = None;
+        invalid_url.transport = Some(McpTransportType::Http);
+        invalid_url.url = Some("https://user:password@example.invalid/".into());
+        let mut mixed = draft("x");
+        mixed.url = Some("https://example.invalid".into());
+        let mut env = draft("x");
+        env.sensitive_env.insert(
+            "BAD=KEY".into(),
+            serde_json::from_value(serde_json::json!("$KEY")).unwrap(),
+        );
+        let mut headers = invalid_url.clone();
+        headers.url = Some("https://example.invalid".into());
+        headers.sensitive_headers.insert(
+            "Authorization".into(),
+            serde_json::from_value(serde_json::json!("$KEY")).unwrap(),
+        );
+        headers.sensitive_headers.insert(
+            "authorization".into(),
+            serde_json::from_value(serde_json::json!("$KEY")).unwrap(),
+        );
+        let mut cwd = draft("x");
+        cwd.cwd = Some(PathBuf::new());
+        for invalid in [
+            draft(""),
+            draft("nul\0command"),
+            invalid_url,
+            mixed,
+            env,
+            headers,
+            cwd,
+        ] {
+            assert!(matches!(
+                owner.write_source_settings(
+                    &input,
+                    &current.user.revision,
+                    mutation(IntegrationScope::User, "project-only", Some(invalid))
+                ),
+                Err(SettingsError::Invalid)
+            ));
+            assert_eq!(std::fs::read(&owner.sources.settings).unwrap(), bytes);
+        }
+        // Deleting the shadow must not hide Workspace from User policy closure either.
+        let deleted = owner
+            .write_source_settings(
+                &input,
+                &current.user.revision,
+                mutation(IntegrationScope::User, "project-only", None),
+            )
+            .unwrap();
+        assert!(deleted.integrations.mcp_valid);
+    }
+
+    #[test]
+    fn web09_policy_only_identity_survives_revoke_and_user_cas_repairs_it() {
+        let (_root, owner, input) = fixture();
+        trust(&owner, &input);
+        let original = std::fs::read_to_string(&owner.sources.settings).unwrap();
+        std::fs::write(
+            &owner.sources.settings,
+            format!("{original}\n[mcp_tool_policies.foo]\napproval = 'always'\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            input.cwd.join("rustx.toml"),
+            "[mcp_servers.foo]\ncommand = 'private-workspace-command'\nenabled = false\n",
+        )
+        .unwrap();
+        let before = owner.read_source_settings(&input).unwrap();
+        assert!(before.integrations.mcp_valid);
+        assert_eq!(
+            before.integrations.mcp[0].policy_state,
+            McpPolicyState::Valid
+        );
+        assert!(matches!(
+            before.integrations.mcp[0].winning,
+            Some(Origin::Project { .. })
+        ));
+        owner
+            .trust_epoch(&input)
+            .unwrap()
+            .change(crate::local_runtime::launch::TrustAction::Revoke)
+            .unwrap();
+        let revoked = owner.read_source_settings(&input).unwrap();
+        assert!(!revoked.workspace.active);
+        assert!(!revoked.integrations.mcp_valid);
+        assert_eq!(revoked.user.revision, before.user.revision);
+        assert_eq!(
+            revoked.integrations.mcp_tool_policies,
+            before.integrations.mcp_tool_policies
+        );
+        let row = &revoked.integrations.mcp[0];
+        assert_eq!(row.id.as_str(), "foo");
+        assert_eq!(row.policy_state, McpPolicyState::Dangling);
+        assert!(
+            row.user.is_none()
+                && row.workspace.is_none()
+                && row.winning.is_none()
+                && row.activation.is_none()
+        );
+        assert!(
+            !serde_json::to_string(&revoked)
+                .unwrap()
+                .contains("private-workspace-command")
+        );
+        std::fs::write(input.cwd.join("rustx.toml"), "PRIVATE invalid TOML content").unwrap();
+        assert_eq!(owner.read_source_settings(&input).unwrap(), revoked);
+        let reset = owner
+            .write_source_settings(
+                &input,
+                &revoked.user.revision,
+                SourceMutation::McpPolicy {
+                    id: McpServerId::new("foo"),
+                    authored: None,
+                },
+            )
+            .unwrap();
+        assert!(reset.integrations.mcp_valid);
+        assert!(reset.integrations.mcp.is_empty());
+        assert!(reset.integrations.mcp_tool_policies.is_empty());
+        assert!(matches!(
+            owner.write_source_settings(
+                &input,
+                &revoked.user.revision,
+                SourceMutation::McpPolicy {
+                    id: McpServerId::new("foo"),
+                    authored: None
+                }
+            ),
+            Err(SettingsError::Conflict {
+                scope: SourceScope::User,
+                ..
+            })
+        ));
+        assert_eq!(
+            std::fs::read_to_string(input.cwd.join("rustx.toml")).unwrap(),
+            "PRIVATE invalid TOML content"
+        );
+    }
+
     #[test]
     fn web09_both_scopes_roundtrip_whole_entries_provenance_and_independent_cas() {
         let (_root, owner, input) = fixture();

@@ -1167,7 +1167,7 @@
         "./RequestPolicy",
         "./SessionIntegrations",
         "./Settings.module.css",
-        "./mcp-outcome",
+        "./source-outcome",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",

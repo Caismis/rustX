@@ -2695,3 +2695,174 @@ async fn web09_mcp_cas_and_committed_uncertainty_use_existing_settings_boundary(
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn web09_workspace_policy_remains_user_owned_and_repairable_over_protocol() {
+    use crate::local_runtime::configuration::{
+        integrations::{IntegrationScope, McpDraft, McpPolicyState},
+        settings::SourceMutation,
+    };
+    use crate::runtime::identity::McpServerId;
+    bounded(async {
+        let f = Fixture::new().await;
+        let id = f.sessions[0].id.clone();
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let (before, _, _) = f.manager.source_settings(&id, None).await.unwrap();
+        let MethodResult::SourceSettings {
+            projection: workspace,
+            ..
+        } = call(
+            &connection,
+            1,
+            Method::SourcesWrite {
+                session_id: id.clone(),
+                expected_revision: before.workspace.revision,
+                mutation: SourceMutation::Mcp {
+                    scope: IntegrationScope::Workspace,
+                    id: McpServerId::new("project-only"),
+                    authored: Some(McpDraft {
+                        command: Some("inert-workspace".into()),
+                        enabled: Some(false),
+                        ..Default::default()
+                    }),
+                },
+            },
+        )
+        .await
+        else {
+            panic!()
+        };
+        let MethodResult::SourceSettings {
+            projection: policy, ..
+        } = call(
+            &connection,
+            2,
+            Method::SourcesWrite {
+                session_id: id.clone(),
+                expected_revision: before.user.revision,
+                mutation: SourceMutation::McpPolicy {
+                    id: McpServerId::new("project-only"),
+                    authored: Some(crate::local_runtime::config::InvocationPolicyDocument {
+                        approval: crate::local_runtime::config::ApprovalPolicyDocument::Always,
+                        ..Default::default()
+                    }),
+                },
+            },
+        )
+        .await
+        else {
+            panic!()
+        };
+        assert!(policy.integrations.mcp_valid);
+        assert_eq!(policy.workspace.revision, workspace.workspace.revision);
+        let MethodResult::SourceSettings {
+            projection: edited, ..
+        } = call(
+            &connection,
+            3,
+            Method::SourcesWrite {
+                session_id: id.clone(),
+                expected_revision: policy.user.revision,
+                mutation: SourceMutation::Mcp {
+                    scope: IntegrationScope::User,
+                    id: McpServerId::new("unrelated"),
+                    authored: Some(McpDraft {
+                        command: Some("inert-user".into()),
+                        enabled: Some(false),
+                        ..Default::default()
+                    }),
+                },
+            },
+        )
+        .await
+        else {
+            panic!()
+        };
+        assert!(edited.integrations.mcp_valid);
+        assert_eq!(
+            edited.integrations.mcp_tool_policies,
+            policy.integrations.mcp_tool_policies
+        );
+        let host = super::HostEnvironment::from_paths(
+            f.workspaces[0].clone(),
+            f.workspaces[0].parent().unwrap().join("home"),
+            None,
+            None,
+        )
+        .unwrap();
+        super::launch::change_trust(
+            &super::LaunchRequest {
+                workspace: Some(f.workspaces[0].clone()),
+                ..Default::default()
+            },
+            &host,
+            super::TrustAction::Revoke,
+        )
+        .unwrap();
+        std::fs::write(
+            f.workspaces[0].join("rustx.toml"),
+            "private invalid untrusted content",
+        )
+        .unwrap();
+        let MethodResult::SourceSettings {
+            projection: revoked,
+            ..
+        } = call(
+            &connection,
+            4,
+            Method::SourcesRead {
+                session_id: id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!()
+        };
+        assert!(!revoked.workspace.active);
+        assert!(!revoked.integrations.mcp_valid);
+        let row = revoked
+            .integrations
+            .mcp
+            .iter()
+            .find(|row| row.id.as_str() == "project-only")
+            .unwrap();
+        assert_eq!(row.policy_state, McpPolicyState::Dangling);
+        assert!(row.workspace.is_none() && row.user.is_none() && row.winning.is_none());
+        assert_eq!(revoked.user.revision, edited.user.revision);
+        assert_eq!(
+            revoked.integrations.mcp_tool_policies,
+            edited.integrations.mcp_tool_policies
+        );
+        let MethodResult::SourceSettings {
+            projection: reset, ..
+        } = call(
+            &connection,
+            5,
+            Method::SourcesWrite {
+                session_id: id,
+                expected_revision: revoked.user.revision,
+                mutation: SourceMutation::McpPolicy {
+                    id: McpServerId::new("project-only"),
+                    authored: None,
+                },
+            },
+        )
+        .await
+        else {
+            panic!()
+        };
+        assert!(reset.integrations.mcp_valid);
+        assert!(reset.integrations.mcp_tool_policies.is_empty());
+        assert!(
+            reset
+                .integrations
+                .mcp
+                .iter()
+                .all(|row| row.id.as_str() != "project-only")
+        );
+        assert!(f.provider.request_bodies().is_empty());
+        f.close().await;
+    })
+    .await;
+}

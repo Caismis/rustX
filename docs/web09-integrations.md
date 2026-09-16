@@ -17,10 +17,16 @@ a model identity nor valid Workflow/Agent semantic configuration. Full
 MCP-domain success never asserts full runtime admissibility.
 
 `McpDraft` projects existing canonical transport fields and reference metadata.
-Rust reconstructs the selected source entry, validates the complete candidate MCP
-domain (including a shadowed User candidate in User authority), serializes typed
-TOML, and publishes. Unknown fields/scopes and invalid transport combinations are
-rejected. URL/header/environment validation belongs to the canonical MCP owner,
+Rust reconstructs the selected source entry and validates that exact authored
+entry through `config::resolve_mcp_entry`, also used by runtime binding. This
+checks intrinsic identity/transport/field/reference semantics even when Workspace
+shadows the User entry. Separately, `resolve_mcp_candidate` checks the real
+trusted merged definition domain plus User policies through `resolve_mcp_bindings`
+(including policy target closure and source count bounds). Individual authored
+MCP-entry validity is not merged MCP definition/policy closure validity. User
+validation never simulates an untrusted Workspace to hide authorized definitions.
+Both checks precede CAS publication. Unknown fields/scopes and invalid transport
+combinations are rejected. URL/header/environment validation belongs to the canonical MCP owner,
 so launch and Settings have identical semantics.
 
 `SourceMutation::Mcp` addresses an `IntegrationScope` (User or Workspace), exact
@@ -137,12 +143,32 @@ scope field: only User may author `mcp_tool_policies`. Approval, execution and
 concurrency use the existing canonical enums. Workspace MCP replacement does not
 replace these policies. Reset removes only that User policy entry; dangling policy
 references remain invalid under the shared MCP semantic validator.
+
+MCP definition provenance != MCP Tool policy provenance. A User policy may apply
+to a winning trusted Workspace definition. Inventory identities include User
+definitions, trusted Workspace definitions, and User policy identities. Each row
+has native `policy_state` (`absent`, `valid`, `dangling`); `valid` describes the
+policy target relationship, while `mcp_valid` reports full MCP-domain validity.
+An absent winning definition is represented as absent, never a synthetic server.
+After trust revocation, Workspace content is not read or parsed, but a User-only
+policy row remains visible with no authorized definition and a dangling policy
+fact. Reset uses the normal User source CAS and restores MCP-domain validity when
+no other invalid state remains. Definition winner and User policy are displayed
+separately, including when the definition winner is none.
+
+Policy drafts pin identity, User scope, value, and the User revision at editing
+start. A later authoritative refresh never rebases the first save. Conflict keeps
+the draft; explicit Retry may use refreshed authority, and Discard abandons it.
+`observesSourceMutation` supports exactly MCP definitions and User MCP policies,
+including deletion: after uncertain outcome, an authoritative reread compares the
+exact typed target with the requested post-state. Equality proves observed state,
+not writer attribution; there is no automatic write replay.
 Catalog semantic validity is reported independently (`catalog.valid`), so invalid
 model limits do not block MCP-domain source editing. Strict source parsing and full
 runtime admission remain unchanged.
 
 
-## Validation record (Linux)
+## Initial implementation validation (a432b12c, Linux)
 
 Validated against fetched `origin/main` at
 `58f17e3c90f60275c3f58ebf9f9061dc0c5412e7`, unchanged on final fetch.
@@ -186,3 +212,82 @@ run caught the canonical empty-URL diagnostic regression (fixed in its owner);
 browser/unit tests caught an ambiguous argument label and duplicate child reset
 keys (fixed in the UI). No test was disabled or weakened. Intermediate focused
 and full Web runs were repeated after fixes; the table records final counts.
+
+
+## PR #326 policy repair validation (Linux)
+
+Repair started from clean PR HEAD `a432b12c3d4aa0807f3410a0cd722292d3973bc5`.
+The PR remote still matched that commit on the final fetch. `origin/main` remained
+`58f17e3c90f60275c3f58ebf9f9061dc0c5412e7`; no integration or rebase was needed.
+The accepted WEB-09 implementation and its provenance remain in this PR.
+
+The three corrected contracts have deterministic regressions:
+
+- `web09_user_entry_validation_preserves_workspace_policy_closure`: an unrelated
+  User edit and a shadowed same-identity edit keep Workspace as definition winner
+  and preserve the User policy on the canonical binding. Invalid transport, URL,
+  command, cwd and reference-key/header combinations cannot change source bytes.
+- `web09_policy_only_identity_survives_revoke_and_user_cas_repairs_it`: native trust
+  revoke preserves User revision/policy, hides Workspace definitions and content,
+  reports dangling, ignores malformed untrusted bytes, and resets through User CAS.
+- `web09_workspace_policy_remains_user_owned_and_repairable_over_protocol`: real
+  App Server reads/writes preserve Workspace-backed policy, then native trust
+  revocation and User reset repair the projected invalid domain without preparation.
+- Web tests pin the policy revision before an unrelated Settings write/reread,
+  preserve the draft on typed conflict, and retry with refreshed authority only on
+  user action. Exact policy save/reset observations clear uncertain outcome with
+  precisely one write. Negative comparisons distinguish default policy from absence.
+- Browser acceptance exercises those ownership transitions with real source CAS
+  and native trust revoke. The policy-only card explicitly separates absent
+  definition from dangling User policy; reset repairs it. No timing sleeps are used.
+
+| Directory | Command | Repair result |
+| --- | --- | --- |
+| repository | `cargo fmt --all` | Pass |
+| repository | `cargo fmt --all -- --check` | Pass |
+| repository | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Pass |
+| repository | `cargo check --all-targets --all-features` | Pass |
+| repository | `cargo build --bins` | Pass |
+| repository | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --workspace --all-targets --all-features` | 3,723 passed, 6 existing ignored, 0 failed, 14 targets |
+| repository | `cargo test --doc --workspace --all-features` | 9 passed |
+| repository | `cargo test --lib web09_ --all-features` | Initial focused run: 13 passed |
+| repository | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib web09_ --all-features` | Final focused run: 14 passed |
+| repository | `cargo test --lib configuration::settings --all-features` | 13 passed |
+| repository | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib web08_ --all-features` | 5 passed |
+| repository | `git diff --check` | Pass |
+| repository | `git diff --cached --check` | Pass |
+| test-support/fake-provider | `uv sync --frozen` | Pass |
+| test-support/fake-provider | `uv run --frozen pytest` | 51 passed |
+| web-console | `pnpm install --frozen-lockfile` | Pass |
+| web-console | `pnpm typecheck` | Pass |
+| web-console | `pnpm test -- test/integrations.test.tsx test/settings.test.tsx` | Initial invocation ran the full suite: 293 passed |
+| web-console | `pnpm exec vitest run test/integrations.test.tsx test/settings.test.tsx test/source-outcome.test.ts` | 21 passed |
+| web-console | `pnpm test` | 295 passed in 22 files |
+| web-console | `pnpm check:provenance` | Pass: 74 source records, 100 production dependency notices |
+| web-console | `pnpm build` | Pass; existing bundle-size advisory |
+| web-console | `pnpm test:e2e` | 11 passed |
+| repository | `pnpm --dir web-console exec playwright test test/e2e/integrations.spec.ts` | 1 passed; repeated after improving policy-card screenshot capture |
+| protocol/app-server | `pnpm install --frozen-lockfile` | Pass |
+| protocol/app-server | `pnpm generate` | Pass |
+| protocol/app-server | `pnpm check` | Pass; generated files staged before drift check |
+| protocol/app-server | `pnpm typecheck` | Pass |
+| tui | `pnpm install --frozen-lockfile` | Pass |
+| tui | `pnpm typecheck` | Pass |
+| tui | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test` | 816 passed |
+
+Development failures were corrected and the affected checks rerun: Clippy requested
+explicit `RuntimeLayer::default` and avoiding an underscore fixture binding; Web
+typechecking required proper union narrowing and a complete typed comparison
+fixture. The first browser run had 10 passes and one new-test failure because
+`check()` asserted a server-controlled checkbox before readback. Clicking and
+waiting for its authoritative checked state fixed synchronization; all 11 then
+passed. No assertion, existing test, or semantic contract was weakened.
+
+CI workflow inspection confirms the broad Rust run covers the Linux contract and
+boundary jobs; the Provider emulator's own pytest suite also ran. macOS is CI-only.
+Browser skill/plugin was unavailable, so the repository Playwright path ran at
+`http://127.0.0.1:5173` with real local App Server fixtures. The integration flow
+passed at 1440x1000 and mobile overflow was checked at 390x844. Screenshots were
+visually inspected; no framework overlay or page error was observed. Source
+saves started no MCP fixture and made zero Provider requests. These checks assert
+prospective source behavior, not a runtime reload or stronger transaction guarantee.

@@ -35,7 +35,7 @@ export function Integrations({ source, snapshot, busy, save }: {
     {!state.mcp_valid && <p role="alert">Native MCP validation failed. This does not establish runtime admissibility.</p>}
     {state.mcp.filter(entry => entry.id.toLowerCase().includes(query.toLowerCase())).map(entry => <article key={entry.id} className={css.card}>
       <h4>{entry.id}</h4>
-      <p>Winning source: {entry.winning?.kind === 'project' ? 'Workspace' : entry.winning?.kind === 'user' ? 'User' : 'None'}</p>
+      <p>Definition winner: {entry.winning?.kind === 'project' ? 'Workspace' : entry.winning?.kind === 'user' ? 'User' : 'None'}</p>
       <p>User definition: {entry.user ? 'present' : 'absent'} · Workspace definition: {source.workspace.active ? entry.workspace ? 'present' : 'absent' : 'not inspected (untrusted)'}</p>
       {entry.user && entry.winning?.kind === 'project' && <p>Shadowed User definition — editable independently</p>}
       <p>Prospective activation: {entry.activation ?? 'Not active'}</p>
@@ -44,8 +44,10 @@ export function Integrations({ source, snapshot, busy, save }: {
         <p>Loaded source: {snapshot?.capabilities.sources?.filter(row => row.source.type === 'mcp' && row.source.server_id === entry.id).map(row => row.state.type).join(', ') || 'No runtime observation'}</p>
         <p>Discovery and enablement do not prove connection or Tool exposure.</p>
       </details>
-      <p>User Tool policy: {state.mcp_tool_policies[entry.id]?.approval ?? 'Native default'} approval · independent of winning definition scope</p>
-      {scope === 'user' && <PolicyEditor key={entry.id} id={entry.id} policy={state.mcp_tool_policies[entry.id]} busy={busy} save={authored => save('user', { kind: 'mcp_policy', id: entry.id, authored })} />}
+      <p>Authorized MCP definition: {entry.winning ? 'present' : 'absent'}</p>
+      <p>User Tool policy: {entry.policy_state === 'absent' ? 'absent — native default' : entry.policy_state === 'dangling' ? 'authored — dangling' : 'authored'}</p>
+      {entry.policy_state === 'dangling' && <p role="alert">Current MCP domain: invalid — User policy has no authorized MCP definition.</p>}
+      <PolicyEditor key={entry.id} id={entry.id} policy={state.mcp_tool_policies[entry.id]} revision={source.user.revision} busy={busy} save={(authored, revision) => save('user', { kind: 'mcp_policy', id: entry.id, authored }, revision)} />
       <Button disabled={blocked || !!draft} onClick={() => setDraft({ scope, revision: source[scope].revision, attempted: false, id: entry.id, existing: !!entry[scope], value: structuredClone(entry[scope] ?? empty()) })}>{entry[scope] ? 'Edit' : 'Define'} {label} · {entry.id}</Button>
     </article>)}
     {!state.mcp.length && <p>No MCP definitions in authorized sources.</p>}
@@ -110,13 +112,23 @@ function References({ label, values, change }: { label: string; values: Record<s
   </div>;
 }
 
-function PolicyEditor({ id, policy, busy, save }: { id: string; policy?: InvocationPolicyDocument; busy: boolean; save: (policy: InvocationPolicyDocument | null) => Promise<boolean> }) {
-  const [draft, setDraft] = useState<InvocationPolicyDocument>();
-  const value = draft ?? policy ?? { approval: 'never', execution: 'foreground_only', concurrency: 'sequential' };
-  return <details><summary>User-owned Tool policy · {id}</summary><fieldset disabled={busy}><p>Target: mcp_tool_policies.{id} · User revision above. Workspace/Session cannot author this ceiling.</p>
-    <label>Approval · {id}<select value={value.approval} onChange={e => setDraft({ ...value, approval: e.target.value as 'never' | 'always' })}><option value="never">Never</option><option value="always">Always</option></select></label>
-    <label>Execution · {id}<select value={value.execution} onChange={e => setDraft({ ...value, execution: e.target.value as InvocationPolicyDocument['execution'] })}>{['foreground_only', 'background_only', 'model_selectable'].map(value => <option key={value}>{value}</option>)}</select></label>
-    <label>Concurrency · {id}<select value={value.concurrency} onChange={e => setDraft({ ...value, concurrency: e.target.value as 'sequential' | 'parallel' })}><option value="sequential">sequential</option><option value="parallel">parallel</option></select></label>
-    <Button onClick={() => setDraft(undefined)}>Discard policy draft</Button><Button onClick={() => void save(value).then(ok => { if (ok) setDraft(undefined); })}>Save User Tool policy</Button><Button onClick={() => void save(null).then(ok => { if (ok) setDraft(undefined); })}>Reset User Tool policy</Button>
+type PolicyDraft = { value: InvocationPolicyDocument; revision: string; attempted: boolean };
+function PolicyEditor({ id, policy, revision, busy, save }: { id: string; policy?: InvocationPolicyDocument; revision: string; busy: boolean; save: (policy: InvocationPolicyDocument | null, revision: string) => Promise<boolean> }) {
+  const [draft, setDraft] = useState<PolicyDraft>();
+  const value = draft?.value ?? policy ?? { approval: 'never', execution: 'foreground_only', concurrency: 'sequential' };
+  const begin = () => setDraft(current => current ?? { value: { ...value }, revision, attempted: false });
+  const change = (patch: Partial<InvocationPolicyDocument>) => setDraft(current => ({ value: { ...value, ...patch }, revision: current?.revision ?? revision, attempted: current?.attempted ?? false }));
+  const commit = async (remove = false) => {
+    const pending = draft ?? { value: { ...value }, revision, attempted: false };
+    setDraft(pending);
+    if (await save(remove ? null : pending.value, pending.attempted ? revision : pending.revision)) setDraft(undefined);
+    else setDraft(current => current && ({ ...current, attempted: true }));
+  };
+  return <details onToggle={event => { if (event.currentTarget.open) begin(); }}><summary>User-owned Tool policy · {id}</summary><fieldset disabled={busy}><p>Scope: User · Target: mcp_tool_policies.{id}. Workspace/Session cannot author this ceiling.</p>
+    <p>User revision: {revision}{draft && <> · Draft revision: {draft.revision} · Next explicit save revision: {draft.attempted ? revision : draft.revision}</>}</p>
+    <label>Approval · {id}<select value={value.approval} onChange={e => change({ approval: e.target.value as 'never' | 'always' })}><option value="never">Never</option><option value="always">Always</option></select></label>
+    <label>Execution · {id}<select value={value.execution} onChange={e => change({ execution: e.target.value as InvocationPolicyDocument['execution'] })}>{['foreground_only', 'background_only', 'model_selectable'].map(value => <option key={value}>{value}</option>)}</select></label>
+    <label>Concurrency · {id}<select value={value.concurrency} onChange={e => change({ concurrency: e.target.value as 'sequential' | 'parallel' })}><option value="sequential">sequential</option><option value="parallel">parallel</option></select></label>
+    <Button onClick={() => setDraft(undefined)}>Discard policy draft</Button><Button onClick={() => void commit()}>{draft?.attempted ? 'Retry User Tool policy' : 'Save User Tool policy'}</Button><Button onClick={() => void commit(true)}>Reset User Tool policy</Button>
   </fieldset></details>;
 }

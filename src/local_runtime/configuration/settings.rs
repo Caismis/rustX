@@ -357,6 +357,9 @@ impl UserConfigManager {
                 if let Some(draft) = authored {
                     let entry =
                         draft.author(layer.mcp_servers.as_ref().and_then(|m| m.get(&id)), scope)?;
+                    // Validate the exact authored entry even if Workspace shadows it.
+                    crate::local_runtime::config::resolve_mcp_entry(&id, &entry.clone().resolve())
+                        .map_err(|_| SettingsError::Invalid)?;
                     table(&mut tree, "mcp_servers")?.insert(id.as_str(), serialized_table(&entry)?);
                 } else if let Some(servers) = tree.get_mut("mcp_servers") {
                     let servers = servers.as_table_like_mut().ok_or(SettingsError::Invalid)?;
@@ -368,10 +371,6 @@ impl UserConfigManager {
                 }
                 let bytes = tree.to_string().into_bytes();
                 self.resolve_mcp_candidate(input, Some((target, &bytes)), trusted)?;
-                // Validate a shadowed User candidate in its own authority domain too.
-                if scope == super::integrations::IntegrationScope::User {
-                    self.resolve_mcp_candidate(input, Some((target, &bytes)), false)?;
-                }
                 bytes
             }
             SourceMutation::Integration { scope: _, control } => {

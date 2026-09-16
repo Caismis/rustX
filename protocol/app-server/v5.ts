@@ -2134,6 +2134,10 @@ export type SkillDiagnostic =
  */
 export type InboundSequence = string;
 /**
+ * User policy relationship to the authorized merged definition domain.
+ */
+export type McpPolicyState = 'absent' | 'valid' | 'dangling';
+/**
  * Values are never included: provenance cannot expose credentials or environment values.
  */
 export type Origin =
@@ -7495,6 +7499,7 @@ export interface IntegrationSettings {
 }
 export interface McpIdentityView {
   id: McpServerId;
+  policy_state: McpPolicyState;
   user?: McpDraft | null;
   workspace?: McpDraft | null;
   winning?: Origin | null;

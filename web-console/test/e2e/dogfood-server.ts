@@ -79,6 +79,10 @@ enabled = true
       { id: 'root-a', cwd: workspaceA, displayName: 'Workspace A' }, { id: 'root-b', cwd: workspaceB, displayName: 'Workspace B' },
     ] });
     return { workspaceHost, workspaceHostUrl: workspaceHost.url, directory, endpoint, token, tokenFile, workspaceA, workspaceB, providerUrl, settings, writeSettings, control,
+      revokeWorkspaceTrust: () => {
+        const result = spawnSync(binary, ['--workspace', workspaceA, '--trust', 'revoke'], { env, encoding: 'utf8' });
+        if (result.status !== 0) throw new Error(`Trust revoke failed: ${result.stderr}`);
+      },
       gate: (name: string) => control(`observations/await?kind=gate_reached&name=${name}&timeoutMs=30000`),
       release: (name: string) => control(`gates/${name}/release`, 'POST'),
       diagnostics: () => ({ providerErrors, appErrors }),

@@ -769,37 +769,7 @@ pub(super) fn resolve_mcp_bindings(
     servers
         .iter()
         .map(|(server_id, document)| {
-            if server_id.as_str().is_empty() {
-                return Err(CurrentRuntimeConfigError::Invalid {
-                    detail: "mcp_servers keys must be non-empty server identities".to_owned(),
-                });
-            }
-            // The `python:` MCP server namespace is structurally
-            // reserved for rustX-managed Python packages (Issue #174):
-            // every discovered package synthesizes `python:<folder>`,
-            // and one `McpServerId` can never have two owners. This is
-            // validated here, at configuration normalization, before
-            // any capability preparation — not arbitrated at runtime.
-            if server_id
-                .as_str()
-                .starts_with(crate::tools::python::MANAGED_MCP_NAMESPACE)
-            {
-                return Err(CurrentRuntimeConfigError::Invalid {
-                    detail: format!(
-                        "mcp_servers.{server_id}: the \"{}\" MCP server namespace is reserved \
-                             for automatically discovered managed Python tool packages \
-                             (each `.agents/tools/<folder>/` synthesizes \
-                             \"{0}<folder>\"); configure this server under a different id",
-                        crate::tools::python::MANAGED_MCP_NAMESPACE,
-                    ),
-                });
-            }
-            let transport =
-                document
-                    .to_transport()
-                    .map_err(|detail| CurrentRuntimeConfigError::Invalid {
-                        detail: format!("mcp_servers.{server_id}: {detail}"),
-                    })?;
+            let transport = resolve_mcp_entry(server_id, document)?;
             Ok((
                 server_id.clone(),
                 McpServerBinding {
@@ -820,6 +790,44 @@ pub(super) fn resolve_mcp_bindings(
             ))
         })
         .collect()
+}
+
+/// Validate and normalize one definition independently of policy target closure.
+/// Runtime binding and authored (including shadowed) entries share this owner.
+pub(super) fn resolve_mcp_entry(
+    server_id: &McpServerId,
+    document: &McpServerDocument,
+) -> Result<McpTransportConfig, CurrentRuntimeConfigError> {
+    if server_id.as_str().is_empty() {
+        return Err(CurrentRuntimeConfigError::Invalid {
+            detail: "mcp_servers keys must be non-empty server identities".to_owned(),
+        });
+    }
+    // The `python:` MCP server namespace is structurally
+    // reserved for rustX-managed Python packages (Issue #174):
+    // every discovered package synthesizes `python:<folder>`,
+    // and one `McpServerId` can never have two owners. This is
+    // validated here, at configuration normalization, before
+    // any capability preparation — not arbitrated at runtime.
+    if server_id
+        .as_str()
+        .starts_with(crate::tools::python::MANAGED_MCP_NAMESPACE)
+    {
+        return Err(CurrentRuntimeConfigError::Invalid {
+            detail: format!(
+                "mcp_servers.{server_id}: the \"{}\" MCP server namespace is reserved \
+                             for automatically discovered managed Python tool packages \
+                             (each `.agents/tools/<folder>/` synthesizes \
+                             \"{0}<folder>\"); configure this server under a different id",
+                crate::tools::python::MANAGED_MCP_NAMESPACE,
+            ),
+        });
+    }
+    document
+        .to_transport()
+        .map_err(|detail| CurrentRuntimeConfigError::Invalid {
+            detail: format!("mcp_servers.{server_id}: {detail}"),
+        })
 }
 
 pub(super) fn validate_unique_workflow_ids(
@@ -1215,6 +1223,11 @@ impl McpServerDocument {
         )
     }
     fn validate_transport_values(&self) -> Result<(), String> {
+        if self.cwd.as_ref().is_some_and(|path| {
+            path.as_os_str().is_empty() || path.as_os_str().as_encoded_bytes().contains(&0)
+        }) {
+            return Err("cwd must be a non-empty path without NUL".into());
+        }
         if self.env.iter().any(|(key, value)| {
             !crate::credentials::valid_environment_name(key) || value.contains('\0')
         }) || self.args.iter().any(|value| value.contains('\0'))

@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from ui-settings-general/SettingsRoot and ui-settings-models/ProviderEditor; see PROVENANCE.md. */
-import { observesMcpMutation } from './mcp-outcome';
+import { observesSourceMutation } from './source-outcome';
 import { SessionIntegrations } from './SessionIntegrations';
 import { Integrations } from './Integrations';
 import { RequestPolicy } from './RequestPolicy';
@@ -51,9 +51,9 @@ export function Settings({ client, sessionId }: { client: AppServerClient; sessi
         const fresh = await read();
         if (alive.current) {
           setState(fresh);
-          if (uncertain && operation.method === 'settings/sourcesWrite' && observesMcpMutation(fresh.projection, operation.params.mutation)) {
+          if (uncertain && operation.method === 'settings/sourcesWrite' && observesSourceMutation(fresh.projection, operation.params.mutation)) {
             setDraft(structuredClone(fresh)); setError('');
-            setMessage('Authoritative reread matches the requested MCP source state. No write was replayed. Loaded runtimes and admitted attempts are unchanged.');
+            setMessage('Authoritative reread matches the requested source state. No write was replayed. Loaded runtimes and admitted attempts are unchanged.');
             return true;
           }
         }

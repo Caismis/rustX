@@ -137,7 +137,7 @@ it('repairs a lost MCP save response by exact-source reread without replay', asy
     if (operation.method === 'settings/read') return { type: 'settings', revision: '7', settings: { cwd: '/workspace', no_automatic_skills: false, no_builtin_tools: false, no_direct_tools: false } };
     if (operation.method === 'settings/sourcesWrite' && operation.params.mutation.kind === 'mcp') {
       const mutation = operation.params.mutation;
-      value.projection.integrations.mcp = [{ id: mutation.id, user: mutation.authored, workspace: null, winning: { kind: 'user', document: '/bound/settings.toml', base: '/bound' }, activation: 'disabled' }];
+      value.projection.integrations.mcp = [{ id: mutation.id, policy_state: 'absent', user: mutation.authored, workspace: null, winning: { kind: 'user', document: '/bound/settings.toml', base: '/bound' }, activation: 'disabled' }];
       value.projection.user.revision = 'committed';
       throw new OutcomeUncertain();
     }
@@ -170,4 +170,62 @@ it('isolates MCP form validation from hidden model drafts and explicitly discard
   fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'discard-me' } });
   fireEvent.click(screen.getByRole('button', { name: 'Reload / discard draft' }));
   await waitFor(() => expect(screen.queryByLabelText('Command')).toBeNull());
+});
+
+it.each([false, true])('repairs uncertain User policy post-state (reset=%s) with exactly one write', async reset => {
+  const value = fixture();
+  value.projection.integrations.mcp_tool_policies.exact = { approval: 'always', execution: 'foreground_only', concurrency: 'sequential' };
+  value.projection.integrations.mcp = [{ id: 'exact', user: null, workspace: reset ? null : { enabled: false, transport: 'stdio', command: 'inert', args: [], cwd: null, url: null, retained_env: [], retained_headers: [], sensitive_env: {}, sensitive_headers: {} }, winning: reset ? null : { kind: 'project', document: '/workspace/rustx.toml', base: '/workspace' }, activation: reset ? null : 'disabled', policy_state: reset ? 'dangling' : 'valid' }];
+  value.projection.workspace.active = !reset;
+  value.projection.integrations.mcp_valid = !reset;
+  const subject = client(async operation => {
+    if (operation.method === 'settings/read') return { type: 'settings', revision: '7', settings: { cwd: '/workspace', no_automatic_skills: false, no_builtin_tools: false, no_direct_tools: false } };
+    if (operation.method === 'settings/sourcesWrite' && operation.params.mutation.kind === 'mcp_policy') {
+      const mutation = operation.params.mutation;
+      if (mutation.authored) value.projection.integrations.mcp_tool_policies[mutation.id] = mutation.authored;
+      else { delete value.projection.integrations.mcp_tool_policies[mutation.id]; value.projection.integrations.mcp = []; value.projection.integrations.mcp_valid = true; }
+      value.projection.user.revision = 'observed-new-revision';
+      throw new OutcomeUncertain();
+    }
+    return structuredClone(value);
+  });
+  render(<Settings client={subject.client} sessionId="A" />); await screen.findByText('native/server-resolved');
+  fireEvent.click(screen.getByRole('button', { name: 'Integrations' }));
+  fireEvent.change(screen.getByLabelText('Approval · exact'), { target: { value: 'never' } });
+  fireEvent.click(screen.getByRole('button', { name: reset ? 'Reset User Tool policy' : 'Save User Tool policy' }));
+  await screen.findByText(/Authoritative reread matches the requested source state/);
+  const writes = subject.request.mock.calls.filter(([r]) => r.method === 'settings/sourcesWrite');
+  expect(writes).toHaveLength(1);
+  expect(writes[0][0]).toMatchObject({ params: { expected_revision: 'user-1', mutation: { kind: 'mcp_policy', id: 'exact', authored: reset ? null : { approval: 'never', execution: 'foreground_only', concurrency: 'sequential' } } } });
+  expect(screen.queryByText(/Save outcome uncertain/)).toBeNull();
+  expect(screen.queryByText(/Draft revision:/)).toBeNull();
+});
+
+it('keeps policy CAS pinned across another Settings mutation and refreshes only for explicit retry', async () => {
+  const value = fixture();
+  value.projection.integrations.mcp = [{ id: 'exact', policy_state: 'absent', user: { enabled: false, transport: 'stdio', command: 'inert', args: [], cwd: null, url: null, retained_env: [], retained_headers: [], sensitive_env: {}, sensitive_headers: {} }, workspace: null, winning: { kind: 'user', document: '/bound/settings.toml', base: '/bound' }, activation: 'disabled' }];
+  const subject = client(async operation => {
+    if (operation.method === 'settings/read') return { type: 'settings', revision: '7', settings: { cwd: '/workspace', no_automatic_skills: false, no_builtin_tools: false, no_direct_tools: false } };
+    if (operation.method === 'settings/sourcesWrite') {
+      if (operation.params.expected_revision !== value.projection.user.revision) throw new RpcFailure({ code: -32000, message: 'Operation rejected', data: { kind: 'source_conflict', scope: 'user', expected: operation.params.expected_revision, actual: value.projection.user.revision } });
+      value.projection.user.revision = 'user-2';
+      if (operation.params.mutation.kind === 'mcp_policy') value.projection.integrations.mcp_tool_policies.exact = operation.params.mutation.authored!;
+    }
+    return structuredClone(value);
+  });
+  render(<Settings client={subject.client} sessionId="A" />); await screen.findByText('native/server-resolved');
+  fireEvent.click(screen.getByRole('button', { name: 'Integrations' }));
+  fireEvent.change(screen.getByLabelText('Approval · exact'), { target: { value: 'always' } });
+  fireEvent.click(screen.getByLabelText('goal'));
+  await screen.findByText(/Source committed/);
+  expect(screen.getByText(/User revision: user-2 · Draft revision: user-1/)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Save User Tool policy' }));
+  await screen.findByRole('button', { name: 'Retry User Tool policy' });
+  expect(screen.getByRole('alert').textContent).toContain('Conflict');
+  expect((screen.getByLabelText('Approval · exact') as HTMLSelectElement).value).toBe('always');
+  fireEvent.click(screen.getByRole('button', { name: 'Retry User Tool policy' }));
+  await screen.findByText(/Source committed/);
+  const writes = subject.request.mock.calls.flatMap(([r]) => r.method === 'settings/sourcesWrite' && r.params.mutation.kind === 'mcp_policy' ? [r.params] : []);
+  expect(writes.map(r => r.expected_revision)).toEqual(['user-1', 'user-2']);
+  expect(writes[0].mutation).toEqual(writes[1].mutation);
 });

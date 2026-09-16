@@ -8305,8 +8305,23 @@ See [Agent Profiles](agent-profiles.md) for the exact scope and ownership rules.
   Same-name replacement is whole-entry. No Session definition authority exists.
 - Workspace trust/provenance and source publication share the WEB-08 trust epoch;
   Host cwd admission grants no project configuration or credential authority.
-- MCP Tool policy has a distinct User-only mutation. A winning Workspace definition
-  cannot widen this policy or inherit User credentials.
+- MCP definition provenance != MCP Tool policy provenance. Definitions are User or
+  trusted Workspace authority; `mcp_policy` is always User-owned, with no scope
+  selector. A User policy may target a winning trusted Workspace definition.
+  Workspace cannot widen this policy or inherit User credentials.
+- Individual authored MCP-entry validity != merged MCP definition/policy closure
+  validity. The canonical entry owner validates every new authored definition,
+  including a shadowed User entry. The merged validator independently checks real
+  authorized definitions plus User policy closure and source-count bounds before
+  publication. No simulated trust state or generic validation mode is used.
+- User policy identities remain projected after their only Workspace definition
+  loses trust. Native `policy_state` reports dangling and `mcp_valid` reports invalid;
+  no Workspace content is read or exposed. Resetting the policy uses User CAS and
+  can repair the domain without re-trusting or inventing a server definition.
+- MCP definition and policy drafts pin their creation revision for the first save.
+  Conflict preserves the exact draft; only explicit retry uses refreshed authority.
+  Uncertain saves/deletions repair through exact-target authoritative reread, never
+  replay. Observing the requested post-state does not identify its writer.
 - Native integration inventories distinguish resource provenance, authored root
   selections, prospective state, loaded resources and frozen admission.
 - Extension member changes preserve the exact same-scope collection; cross-scope

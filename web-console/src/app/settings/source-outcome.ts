@@ -2,7 +2,13 @@ import type { McpDraft, SourceMutation, SourceSettings } from '../../../../proto
 // Equality of an exact typed source target after uncertainty, never resolution,
 // merge or provenance inference. A match proves the requested state is present;
 // it does not attribute that state to a particular writer.
-export function observesMcpMutation(source: SourceSettings, mutation: SourceMutation): boolean {
+export function observesSourceMutation(source: SourceSettings, mutation: SourceMutation): boolean {
+  if (mutation.kind === 'mcp_policy') {
+    const observed = source.integrations.mcp_tool_policies[mutation.id];
+    const requested = mutation.authored;
+    if (!requested) return observed == null;
+    return observed != null && (['approval', 'execution', 'concurrency'] as const).every(key => observed[key] === requested[key]);
+  }
   if (mutation.kind !== 'mcp') return false;
   const observed = source.integrations.mcp.find(entry => entry.id === mutation.id)?.[mutation.scope];
   if (!mutation.authored) return observed == null;

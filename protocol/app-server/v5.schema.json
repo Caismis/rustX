@@ -14357,6 +14357,9 @@
         "id": {
           "$ref": "#/$defs/McpServerId"
         },
+        "policy_state": {
+          "$ref": "#/$defs/McpPolicyState"
+        },
         "user": {
           "anyOf": [
             {
@@ -14399,7 +14402,17 @@
         }
       },
       "required": [
-        "id"
+        "id",
+        "policy_state"
+      ]
+    },
+    "McpPolicyState": {
+      "description": "User policy relationship to the authorized merged definition domain.",
+      "type": "string",
+      "enum": [
+        "absent",
+        "valid",
+        "dangling"
       ]
     },
     "Origin": {
