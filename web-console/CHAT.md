@@ -70,13 +70,22 @@ source runtime → attach the exact new node → `turn/start` with the returned
 the copied prefix. Original Assistant responses remain canonical in the original
 node; no response text is replaced and no browser alternate-response store exists.
 The Session tree button reads native nodes and can reopen the original lineage.
-Branch, Retry and tree switching require `executionIdle(view)`: an observed
+Branch, Retry and tree switching require `lineageSwitchSafe(view)`: the existing
+`executionIdle(view)` observation plus no unresolved inbound transport request on
+the current attached view. `executionIdle` remains unchanged: an observed
 snapshot with no active Attempt, no authoritative `inbound.pending`, and no
 acknowledged-but-not-yet-projected `view.submissions`. The native manager allows
 one resident Conversation per Session. An accepted MessageId is evidence of native
 ownership even before an Attempt appears; it is not browser queue authority.
 Existing exact-MessageId reconciliation removes that evidence when native pending
-or canonical history names it. No timer or local send-request flag declares idle.
+or canonical history names it. `AppServerClient` separately publishes a per-Session
+count of actual pending `turn/start`/`turn/steer` requests, including requests waiting
+for a socket slot. Admission may commit before the acknowledgement reaches the
+browser. Receiving success atomically hands that count to exact MessageId evidence;
+a known rejection clears it without inventing a submission. Connection loss marks
+sent mutations uncertain and invalidates the generation; reconnect rereads authority
+and does not retain old transport counts or replay requests. No timer or React
+send-button flag declares idle.
 The guard is checked again after branch publication, before unload: if work arrived,
 the committed node remains discoverable in Session tree, but no switch/retry occurs.
 Fork does not unload the independent source and remains available during execution.

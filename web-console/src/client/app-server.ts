@@ -23,8 +23,11 @@ export interface SessionView {
   cursor?: RuntimeClientCursor;
   history?: TranscriptCache;
   settings?: SessionPersistentState;
-  /** Accepted, not yet projected submissions of this connection. Presentation only. */
+  /** Exact acknowledged MessageIds awaiting projection reconciliation, not queue authority. */
   submissions?: readonly Submission[];
+  /** Current-generation turn/start or turn/steer requests awaiting an outcome.
+   * Transport ownership only, including unsent requests in the bounded pipeline. */
+  inboundRequests?: number;
   error?: string;
 }
 /** Exists only after `inbound_accepted` names the server MessageId, which is its
@@ -222,7 +225,7 @@ export class AppServerClient {
     for (const item of uncertain) if (item.interactionKey) operations[item.interactionKey] = { sessionId: item.sessionId!, status: 'uncertain' };
     this.publish({ connection, generation: this.state.generation + 1, uncertain, interactionOperations: operations,
       views: Object.fromEntries(Object.entries(this.state.views).map(([id, view]) => [id, {
-        ...view, history: undefined, target: undefined, submissions: undefined, attachment: view.target || ['attaching', 'attached', 'resynchronizing'].includes(view.attachment) ? 'stale' : view.attachment,
+        ...view, history: undefined, target: undefined, submissions: undefined, inboundRequests: undefined, attachment: view.target || ['attaching', 'attached', 'resynchronizing'].includes(view.attachment) ? 'stale' : view.attachment,
       }])),
     });
     oldSocket?.close();
@@ -243,6 +246,7 @@ export class AppServerClient {
       const context = { method: operation.method,
         sessionId: 'target' in params ? params.target.session_id : 'session_id' in params ? params.session_id : undefined };
       this.pending.set(id, { request, context, mutation: !READS.has(operation.method), sent: false, expected, resolve, reject });
+      if (operation.method === 'turn/start' || operation.method === 'turn/steer') this.publishInbound(operation.params.target.session_id);
       this.pump();
     });
     if (!this.current(generation)) throw new Error('Obsolete connection response; inspect the current authoritative state.');
@@ -287,6 +291,16 @@ export class AppServerClient {
         this.lose(generation); return;
       }
       this.pending.delete(String(value.id)); clearTimeout(pending.timer);
+      const operation = pending.request;
+      if (operation.method === 'turn/start' || operation.method === 'turn/steer') {
+        const target = operation.params.target;
+        const accepted = 'result' in value && value.result.type === 'inbound_accepted' && sameTarget(this.state.views[target.session_id]?.target, target)
+          ? { messageId: value.result.message_id, content: operation.params.content } : undefined;
+        // One publication hands request ownership to exact acknowledged identity.
+        // Never publish a zero count before publishing the accepted MessageId.
+        this.publishInbound(target.session_id, accepted);
+        this.settleSubmissions(target.session_id);
+      }
       if ('error' in value) pending.reject(new RpcFailure(value.error));
       else if ('result' in value) pending.resolve(value.result);
       this.pump();
@@ -523,18 +537,20 @@ export class AppServerClient {
   }
   async sendContent(id: string, content: UserInputBlock[], delivery: 'send' | 'steer' = 'send') {
     const target = this.target(id);
-    const generation = this.state.generation;
-    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
     // `turn/start` and `turn/steer` share one native inbound owner: an idle runtime
     // admits a fresh attempt, a running one drains the mailbox at a safe boundary.
-    // Until acknowledged, the request is composer transport state only (and a lost
-    // response stays an uncertain diagnostic): it has no identity to queue under.
-    const accepted = await this.request({ method: delivery === 'steer' ? 'turn/steer' : 'turn/start', params: { target, content } }, 'inbound_accepted');
-    if (current() && !this.state.views[id].submissions?.some(item => item.messageId === accepted.message_id)) {
-      this.setSession(id, { submissions: [...(this.state.views[id].submissions ?? []), { messageId: accepted.message_id, content }] });
-      this.settleSubmissions(id);
-    }
-    return accepted;
+    // The request pipeline owns unresolved transport and its acknowledgement
+    // handoff. No MessageId or queue identity is invented before acceptance.
+    return this.request({ method: delivery === 'steer' ? 'turn/steer' : 'turn/start', params: { target, content } }, 'inbound_accepted');
+  }
+  private publishInbound(id: string, accepted?: Submission) {
+    const view = this.state.views[id];
+    if (!view) return;
+    const inboundRequests = [...this.pending.values()].filter(item =>
+      (item.request.method === 'turn/start' || item.request.method === 'turn/steer') && item.context.sessionId === id).length;
+    const submissions = view.submissions ?? [];
+    this.setSession(id, { inboundRequests, submissions: accepted && !submissions.some(item => item.messageId === accepted.messageId)
+      ? [...submissions, accepted] : submissions });
   }
   /** An accepted submission settles only when an authoritative snapshot names its
    * exact MessageId: pending in the mailbox (the native row replaces it) or adopted

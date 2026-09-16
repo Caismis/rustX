@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { commands, discoveryQuery, parseCommand, available } from '../src/app/commands/registry';
-import { activeAttempt, executionIdle } from '../src/bindings/projection';
+import { activeAttempt, executionIdle, lineageSwitchSafe } from '../src/bindings/projection';
 import { matchCommands } from '../src/app/commands/matching';
 import { InputBar } from '../src/app/components/InputBar';
 import { CommandSession, NavigationEpoch } from '../src/app/commands/native';
@@ -114,6 +114,158 @@ async function subject() {
   const selection = (await scope.boundaries()).selections[0];
   return { fixture, navigation, scope, selection };
 }
+describe('successful command draft consumption', () => {
+  async function open(draft: string) {
+    await subject();
+    localStorage.setItem('rustx-console-view-v1', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', tabs: ['A'] }));
+    render(<App client={server.client} />);
+    const input = screen.getByLabelText('Message'); input.focus();
+    fireEvent.change(input, { target: { value: draft } });
+    await act(async () => fireEvent.keyDown(input, { key: 'Enter' }));
+    return input;
+  }
+  it.each(['/model', '/mdl', '/', '/模型'])('%s is consumed only after successful selection', async draft => {
+    const input = await open(draft);
+    expect(input).toHaveProperty('value', draft);
+    await act(async () => fireEvent.click(await screen.findByRole('option', { name: /fixture\/second/ })));
+    expect(input).toHaveProperty('value', ''); expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(input);
+  });
+  it('dismissal preserves a fuzzy invocation', async () => {
+    const input = await open('/mdl');
+    fireEvent(screen.getByRole('dialog'), new Event('cancel', { bubbles: true, cancelable: true }));
+    expect(input).toHaveProperty('value', '/mdl'); expect(document.activeElement).toBe(input);
+  });
+  it('known model refusal preserves its fuzzy invocation', async () => {
+    const input = await open('/mdl');
+    server.handlers.set('settings/setModel', () => { throw new RpcFailure({ code: -32602, message: 'Model refused' }); });
+    await act(async () => fireEvent.click(await screen.findByRole('option', { name: /fixture\/second/ })));
+    expect(screen.getByRole('alert').textContent).toContain('Model refused');
+    expect(input).toHaveProperty('value', '/mdl');
+  });
+  it('a draft edited while selection is pending survives successful completion', async () => {
+    const input = await open('/mdl'); server.held.add('settings/setModel');
+    fireEvent.click(await screen.findByRole('option', { name: /fixture\/second/ }));
+    const request = await server.waitFor('settings/setModel', 1);
+    fireEvent.change(input, { target: { value: 'new text' } });
+    await act(async () => server.reply(request));
+    expect(input).toHaveProperty('value', 'new text'); expect(screen.queryByRole('dialog')).toBeNull();
+  });
+  it.each([false, true])('/tools read failure=%s consumes only on successful load and keeps its panel open', async failure => {
+    server.held.add('resources/read');
+    server.handlers.set('resources/read', () => {
+      if (failure) throw new RpcFailure({ code: -32000, message: 'Capability read refused' });
+      return { type: 'capabilities', capabilities: { revision: '0' } };
+    });
+    const input = await open('/tools');
+    expect(input).toHaveProperty('value', '/tools');
+    await act(async () => server.reply(await server.waitFor('resources/read', 1)));
+    expect(input).toHaveProperty('value', failure ? '/tools' : '');
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    if (failure) expect(screen.getByRole('alert').textContent).toContain('Capability read refused');
+  });
+});
+
+describe('inbound transport frontier', () => {
+  it('counts inbound already in the bounded client pipeline before a socket slot is available', async () => {
+    await subject(); server.held.add('resources/read'); server.held.add('turn/start');
+    server.handlers.set('resources/read', () => ({ type: 'capabilities', capabilities: { revision: '0' } }));
+    const reads = Array.from({ length: 8 }, () => server.client.request({ method: 'resources/read', params: { target: server.client.target('A') } }, 'capabilities'));
+    const work = server.client.send('A', 'queued transport');
+    expect(methods()).not.toContain('turn/start');
+    expect(server.client.getSnapshot().views.A.inboundRequests).toBe(1);
+    expect(lineageSwitchSafe(server.client.getSnapshot().views.A)).toBe(false);
+    for (let index = 1; index <= 8; index++) server.reply(await server.waitFor('resources/read', index));
+    server.reply(await server.waitFor('turn/start', 1));
+    await Promise.all([...reads, work]);
+    expect(server.client.getSnapshot().views.A.inboundRequests).toBe(0);
+    expect(lineageSwitchSafe(server.client.getSnapshot().views.A)).toBe(false);
+  });
+  it.each(['send', 'steer'] as const)('%s commit without response delivery blocks lineage, then atomically hands off to acknowledged identity', async delivery => {
+    const { scope, selection, fixture } = await subject();
+    const view = () => server.client.getSnapshot().views.A;
+    const method = delivery === 'send' ? 'turn/start' : 'turn/steer';
+    server.held.add(method);
+    const states: boolean[] = [];
+    const unsubscribe = server.client.subscribe(() => states.push(lineageSwitchSafe(view())));
+    const work = server.client.send('A', 'accepted task', [], delivery);
+    expect(view().inboundRequests).toBe(1); expect(executionIdle(view())).toBe(true);
+    expect(lineageSwitchSafe(view())).toBe(false);
+    expect(lineageSwitchSafe(server.client.getSnapshot().views.B)).toBe(true);
+    const request = await server.waitFor(method, 1), response = server.commit(request);
+    expect(view().submissions ?? []).toEqual([]);
+    await expect(scope.transition('branch', selection)).rejects.toThrow('accepted inbound');
+    await expect(scope.transition('retry', selection)).rejects.toThrow('accepted inbound');
+    await expect(scope.openNode('other', 'other-conversation')).rejects.toThrow('accepted inbound');
+    expect(methods()).not.toContain('session/branch'); expect(methods()).not.toContain('session/unload');
+    expect(methods().filter(method => method === 'session/attach')).toHaveLength(2);
+    server.socket.deliver(response); await work;
+    expect(view().inboundRequests).toBe(0);
+    expect(view().submissions?.map(item => item.messageId)).toEqual(['accepted-user']);
+    const message = { id: 'accepted-user', source: 'human' as const, content: [{ type: 'text' as const, text: 'accepted task' }] };
+    await server.update('A', { ...fixture.original, inbound: { pending: [{ sequence: '1', message }] } });
+    expect(view().submissions).toEqual([]); expect(lineageSwitchSafe(view())).toBe(false);
+    unsubscribe(); expect(states.length).toBeGreaterThan(1); expect(states.every(safe => !safe)).toBe(true);
+    await server.update('A', { ...fixture.original, messages: [{ role: 'user', ...message }], inbound: {} });
+    expect(lineageSwitchSafe(view())).toBe(true);
+  });
+  it('concurrent known refusals decrement exact pending ownership without creating submissions', async () => {
+    await subject(); server.held.add('turn/start'); server.held.add('turn/steer');
+    const fail = () => { throw new RpcFailure({ code: -32602, message: 'Known native refusal' }); };
+    server.handlers.set('turn/start', fail); server.handlers.set('turn/steer', fail);
+    const first = server.client.send('A', 'one'), second = server.client.send('A', 'two', [], 'steer');
+    const rejectedFirst = expect(first).rejects.toBeInstanceOf(RpcFailure), rejectedSecond = expect(second).rejects.toBeInstanceOf(RpcFailure);
+    const view = () => server.client.getSnapshot().views.A;
+    expect(view().inboundRequests).toBe(2);
+    server.reply(await server.waitFor('turn/start', 1)); await rejectedFirst;
+    expect(view().inboundRequests).toBe(1); expect(lineageSwitchSafe(view())).toBe(false);
+    server.reply(await server.waitFor('turn/steer', 1)); await rejectedSecond;
+    expect(view().inboundRequests).toBe(0); expect(view().submissions ?? []).toEqual([]);
+    expect(lineageSwitchSafe(view())).toBe(true);
+  });
+  it('lost inbound response is uncertain, fences old commands, and reconnect clears only old transport ownership', async () => {
+    const { scope, selection, fixture } = await subject(); server.held.add('turn/start');
+    const work = server.client.send('A', 'possibly accepted'), rejected = expect(work).rejects.toBeInstanceOf(OutcomeUncertain);
+    const response = server.commit(await server.waitFor('turn/start', 1)), oldSocket = server.socket;
+    const generation = server.client.getSnapshot().generation;
+    server.client.disconnect(); await rejected;
+    expect(server.client.getSnapshot().generation).toBeGreaterThan(generation);
+    expect(lineageSwitchSafe(server.client.getSnapshot().views.A)).toBe(false);
+    await expect(scope.transition('branch', selection)).rejects.toThrow('Obsolete');
+    const pending = { ...fixture.original, inbound: { pending: [{ sequence: '1', message: { id: 'accepted-user', source: 'human' as const, content: [{ type: 'text' as const, text: 'possibly accepted' }] } }] } };
+    server.snapshots.set('A', pending); server.nodeSnapshots.set('node-A', pending);
+    await server.connect();
+    expect(server.client.getSnapshot().views.A.inboundRequests ?? 0).toBe(0);
+    expect(lineageSwitchSafe(server.client.getSnapshot().views.A)).toBe(false);
+    const repaired = server.client.getSnapshot(); oldSocket.deliver(response); expect(server.client.getSnapshot()).toBe(repaired);
+    expect(methods().filter(method => method === 'turn/start')).toHaveLength(1);
+    expect(repaired.uncertain.some(item => item.method === 'turn/start')).toBe(true);
+    await server.update('A', fixture.original);
+    expect(lineageSwitchSafe(server.client.getSnapshot().views.A)).toBe(true);
+  });
+  it('Fork and Compact remain allowed while source inbound acknowledgement is held', async () => {
+    const { scope, selection } = await subject(); server.held.add('turn/start');
+    const work = server.client.send('A', 'in transit');
+    const request = await server.waitFor('turn/start', 1);
+    await scope.compact();
+    expect((await scope.transition('fork', selection))?.session.id).toBe('child');
+    expect(methods()).not.toContain('session/unload');
+    server.reply(request); await work;
+  });
+  it.each(['branch', 'retry'] as const)('%s committed before an unresolved inbound request stops before unload', async action => {
+    const { scope, selection, fixture } = await subject(); server.held.add('session/branch'); server.held.add('turn/start');
+    const branch = scope.transition(action, selection), rejected = expect(branch).rejects.toThrow('Branch branch-A committed');
+    const branchResponse = server.commit(await server.waitFor('session/branch', 1));
+    const send = server.client.send('A', 'racing inbound');
+    const turn = await server.waitFor('turn/start', 1), turnResponse = server.commit(turn);
+    server.socket.deliver(branchResponse); await rejected;
+    expect(fixture.committed).toHaveLength(1); expect((await scope.tree()).nodes.some(node => node.id === 'branch-A')).toBe(true);
+    expect(methods()).not.toContain('session/unload');
+    expect(methods().filter(method => method === 'session/branch')).toHaveLength(1);
+    server.socket.deliver(turnResponse); await send;
+  });
+});
+
 describe('restored native editor content', () => {
   const uploads: UserInputBlock[] = ['one', 'two'].map(token => ({ type: 'upload', session_id: 'A', batch_id: 'same-batch', token }));
   it.each([0, 1])('same-batch receipts have independent stable identities; remove index %s', async index => {
@@ -163,9 +315,14 @@ describe('typed native operations and continuation fencing', () => {
     const pending = { sequence: '1', message: { id: 'accepted-user', source: 'human' as const, content: [{ type: 'text' as const, text: 'Accepted task' }] } };
     if (source === 'acknowledgement') {
       server.held.add('turn/start');
-      const work = server.client.send('A', 'Accepted task');
+      let work!: Promise<unknown>;
+      act(() => { work = server.client.send('A', 'Accepted task'); });
       const request = await server.waitFor('turn/start', 1);
       expect(server.client.getSnapshot().views.A.submissions ?? []).toEqual([]);
+      for (const name of ['Branch', 'Retry / Regenerate', 'Session tree']) expect(screen.getByRole('button', { name })).toHaveProperty('disabled', true);
+      expect(screen.getByRole('button', { name: 'Fork' })).toHaveProperty('disabled', false);
+      fireEvent.change(screen.getByLabelText('Message'), { target: { value: '/branch' } });
+      expect(screen.queryByRole('option', { name: /Branch within/ })).toBeNull();
       await act(async () => { server.reply(request); await work; });
       expect(server.client.getSnapshot().views.A.submissions?.map(item => item.messageId)).toEqual(['accepted-user']);
       expect(server.client.getSnapshot().views.A.snapshot?.inbound.pending ?? []).toEqual([]);
@@ -223,13 +380,18 @@ describe('typed native operations and continuation fencing', () => {
   });
   it.each(['branch', 'retry', 'tree'] as const)('an already open %s selector tracks acknowledgement and authoritative reconciliation', async id => {
     const { navigation, fixture } = await subject();
-    render(<CommandPanel request={{ id }} client={server.client} sessionId="A" current={navigation.capture()} close={() => {}} completed={() => {}} opened={() => {}} />);
+    render(<CommandPanel request={{ id }} client={server.client} sessionId="A" current={navigation.capture()} close={() => {}} succeeded={() => {}} opened={() => {}} />);
     const row = await screen.findByRole('option');
     expect(row).toHaveProperty('disabled', false);
-    await act(() => server.client.send('A', 'accepted'));
+    server.held.add('turn/start');
+    let work!: Promise<unknown>;
+    act(() => { work = server.client.send('A', 'accepted'); });
+    const request = await server.waitFor('turn/start', 1), response = server.commit(request);
     expect(row).toHaveProperty('disabled', true);
     fireEvent.click(row);
     expect(methods()).not.toContain('session/branch'); expect(methods()).not.toContain('session/unload');
+    await act(async () => { server.socket.deliver(response); await work; });
+    expect(row).toHaveProperty('disabled', true);
     await act(() => server.update('A', { ...fixture.original, messages: [{ role: 'user', source: 'human', id: 'accepted-user', content: [{ type: 'text', text: 'accepted' }] }] }));
     expect(row).toHaveProperty('disabled', false);
   });
@@ -350,7 +512,7 @@ describe('typed native operations and continuation fencing', () => {
   });
   it('renders and filters native selector options, dispatches Enter, and visibly locks a rejected stale mutation', async () => {
     const { navigation } = await subject(); const close = vi.fn();
-    render(<CommandPanel request={{ id: 'model' }} client={server.client} sessionId="A" current={navigation.capture()} close={close} completed={close} opened={() => {}} />);
+    render(<CommandPanel request={{ id: 'model' }} client={server.client} sessionId="A" current={navigation.capture()} close={close} succeeded={() => {}} opened={() => {}} />);
     await screen.findByRole('option', { name: /fixture\/second/ });
     fireEvent.change(screen.getByLabelText('Filter options'), { target: { value: 'second' } });
     expect(screen.getAllByRole('option')).toHaveLength(1);
@@ -358,7 +520,7 @@ describe('typed native operations and continuation fencing', () => {
     expect(close).toHaveBeenCalledTimes(1);
     cleanup();
     server.handlers.set('session/fork', () => { throw new RpcFailure({ code: -32602, message: 'Invalid historical Surface revision' }); });
-    render(<CommandPanel request={{ id: 'fork' }} client={server.client} sessionId="A" current={navigation.capture()} close={close} completed={close} opened={() => {}} />);
+    render(<CommandPanel request={{ id: 'fork' }} client={server.client} sessionId="A" current={navigation.capture()} close={close} succeeded={() => {}} opened={() => {}} />);
     const row = await screen.findByRole('option', { name: /Try this/ });
     await act(async () => fireEvent.click(row));
     expect(screen.getByRole('alert').textContent).toContain('Invalid historical Surface revision');
@@ -366,7 +528,7 @@ describe('typed native operations and continuation fencing', () => {
   });
   it('an unavailable historical message cannot be replaced with another displayed boundary', async () => {
     const { navigation } = await subject();
-    render(<CommandPanel request={{ id: 'retry', messageId: 'missing-user' }} client={server.client} sessionId="A" current={navigation.capture()} close={() => {}} completed={() => {}} opened={() => {}} />);
+    render(<CommandPanel request={{ id: 'retry', messageId: 'missing-user' }} client={server.client} sessionId="A" current={navigation.capture()} close={() => {}} succeeded={() => {}} opened={() => {}} />);
     expect((await screen.findByRole('alert')).textContent).toContain('not an available native user boundary');
     expect(screen.queryByRole('option')).toBeNull(); expect(methods()).not.toContain('session/branch');
   });

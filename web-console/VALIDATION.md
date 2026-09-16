@@ -956,3 +956,103 @@ No generic command RPC, browser queue authority, replay, #309 mutations, #319
 compatibility shim, or canonical history rewriting was introduced. This correction
 changes no native semantics or protocol. Main was refetched unchanged before push;
 the existing PR #322 is the only publication target.
+
+## PR #322 follow-up: unresolved inbound transport and discovered drafts
+
+Reviewed head: `8e856c6d44c4378a68de9ba3076b42d25c00398a` (2026-09-16).
+The prior correction remains intact. Its remaining gap was **before** browser
+acknowledgement: native acceptance can commit while both `submissions` and the
+idle-looking snapshot still contain no evidence of that work.
+
+### Linearization and ownership
+
+`ConversationRuntime::admit_sourced_inbound` calls `mailbox.accept_draft` under the
+coordinator lock. That durable transaction commits sequence, MessageId and pending
+record before returning `InboundAdmission`. `RuntimeClientHost::submit_session_inbound`
+then constructs `InboundAccepted`; App Server `TurnStart`/`TurnSteer` dispatch maps
+that result into the response. Socket delivery and browser observation happen later.
+Thus a transmitted request and an idle-looking Web snapshot can coexist after commit.
+
+Manager unload drains admitted operations, invokes shutdown, waits for native
+settlement and projection drain, and releases composition. It does not promise to
+execute all pending input first; pre-drain pending input remains durable. Compact
+still has its own coordinator preconditions and permits pending inbound before
+Attempt adoption. Independent Fork reads an immutable historical cut under source
+allocation access, without unloading the source. Neither gains a transport-idle gate.
+
+`executionIdle(view)` is unchanged. New `lineageSwitchSafe(view)` additionally
+requires a current attached/wanted view and no `inboundRequests`. AppServerClient
+derives this count from its actual bounded pending request map, not React's sending
+flag. Registration publishes it before pumping the socket; concurrent calls are
+counted separately, including requests still waiting for a transmission slot.
+
+The four stages are:
+
+1. Unresolved inbound request: transport ownership, no invented MessageId.
+2. Acknowledged MessageId awaiting projection: existing reconciliation evidence.
+3. Authoritative pending/canonical/Attempt observation: runtime ownership.
+4. Stable lineage-switch frontier: none of the above remains unresolved/active.
+
+Success publishes the decremented request count and acknowledged MessageId together,
+then uses existing exact-identity reconciliation. No intermediate safe state is
+published. Definite rejection removes request ownership without a submission.
+Transmitted response loss remains OutcomeUncertain, invalidates the generation and
+attachment, and is never replayed. Reconnect rereads native state without retaining
+old generation counts. Old socket/command continuations remain fenced.
+
+The stronger guard is used by command availability, historical Branch/Retry,
+Session-tree controls, open selectors, native Branch/Retry before mutation and
+after publication, and native other-node opening before unload. Already committed
+branches remain discoverable when continuation stops. No runtime/protocol change.
+
+### Draft success semantics
+
+The composer records stable command identity plus the **exact invocation draft**.
+Success clears only an unchanged matching draft, covering `/model`, `/mdl`, `/`,
+and `/模型`. Dismissal and failure preserve it; edits made while a selector is
+pending survive success. Panel success and close callbacks are separate: `/tools`
+consumes on successful native read while keeping its panel open. No parser expansion,
+event bus, immediate-on-selection clearing, or focus workaround was introduced.
+
+### Deterministic and browser evidence
+
+Tests separate `server.commit(request)` from `socket.deliver(response)` for both
+start and steer. Before delivery they assert zero branch/unload/child-attach effects,
+even though native commit has happened. A state subscriber proves no safe publication
+from send initiation through acknowledged and pending reconciliation. Additional
+cases cover transmission-slot waiting, concurrent known refusals, loss/reconnect,
+old socket rejection, per-Session isolation, open-selector updates, and concurrent
+unacknowledged admission after branch publication. Fork/Compact have positive tests
+with held inbound acknowledgement. Earlier pending/settled/acknowledged guards,
+upload identity, ordered input refusal and exact Retry tests remain passing.
+
+Draft tests cover exact/fuzzy/bare/alias success, cancellation/failure preservation,
+concurrent edits and tools read success/failure. The real App Server browser flow
+now explicitly uses `/mdl` and checks successful `/tools` consumption with the panel
+still open, alongside existing Fork/Retry/reconnect and focus tests. No sleeps
+synchronize races. Desktop/mobile screenshot and console/layout checks passed.
+
+| Command | Result |
+| --- | --- |
+| `pnpm --dir web-console install --frozen-lockfile` | Passed |
+| `pnpm --dir tui install --frozen-lockfile` | Passed |
+| `pnpm --dir web-console typecheck` | Passed |
+| `pnpm --dir web-console exec vitest run test/commands.test.tsx` | 59 passed |
+| `pnpm --dir web-console test` | 240 passed, 16 files |
+| `pnpm --dir web-console check:provenance` | 68 source records, 100 notices passed |
+| `pnpm --dir web-console build` | Passed; existing bundle-size advisory |
+| `pnpm --dir web-console test:e2e` | 8 passed, real App Server |
+| `cargo test --lib --all-features accepted_inbound_before_attempt_admission_prevents_idle_claim` | 1 passed |
+| `cargo test --lib --all-features unload_and_inbound_have_both_native_admission_winners` | 1 passed |
+| `cargo test --lib --all-features drain_linearization_precedes_the_refused_acceptance` | 1 passed |
+| `cargo test --lib --all-features manual_compaction_` | 7 passed |
+| `cargo test --lib --all-features exact_fork_boundary_excludes_delete_and_releases_metadata_lock` | 1 passed |
+| `git diff --check` | Passed |
+
+Initial typecheck iterations caught old test callback names after the success/close
+split and a nonexistent `fireEvent.cancel` convenience method; tests now dispatch
+the native cancel event. All final checks pass. No environment limitations or
+waived checks. Current CI configuration was inspected; native binaries, provider
+and Chromium installations were reused because those sources/dependencies did not
+change. Full platform CI remains GitHub-owned. Browser plugin was unavailable, so
+the repository Playwright workflow was used at `127.0.0.1:5174`.

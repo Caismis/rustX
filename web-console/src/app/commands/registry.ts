@@ -16,10 +16,10 @@ export const commands: readonly CommandDefinition[] = [
   { id: 'goal', label: 'Goal controls', aliases: ['目标'], availability: 'goal' },
   { id: 'tools', label: 'Inspect capabilities', aliases: ['工具'], availability: 'attached' },
 ];
-export function available(command: CommandDefinition, running: boolean, goal: boolean, executionIdle: boolean) {
+export function available(command: CommandDefinition, running: boolean, goal: boolean, lineageSwitchSafe: boolean) {
   switch (command.availability) {
     case 'goal': return goal;
-    case 'idle': return executionIdle;
+    case 'idle': return lineageSwitchSafe;
     case 'no-attempt': return !running;
     case 'attached': return true;
   }

@@ -12,11 +12,11 @@ import { isOutcomeUncertain } from '../../client/app-server';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
 import { Button } from '../../presentation/primitives/Button';
 import css from './InputBar.module.css';
-export function InputBar({ disabled, busy, active, onSend, onUpload, onCancel, onCommand, hasGoal = false, executionIdle = false, initialContent = [], consumed }: {
+export function InputBar({ disabled, busy, active, onSend, onUpload, onCancel, onCommand, hasGoal = false, lineageSwitchSafe = false, initialContent = [], consumed }: {
   disabled: boolean; busy: boolean; active: boolean;
   onSend: (text: string, receipts: readonly UploadReceipt[], delivery: 'send' | 'steer') => Promise<boolean>;
   onUpload: (files: readonly File[]) => Promise<UploadedFile[]>; onCancel: () => void;
-  onCommand?: (id: CommandId) => void; hasGoal?: boolean; executionIdle?: boolean; initialContent?: UserInputBlock[];
+  onCommand?: (id: CommandId) => void; hasGoal?: boolean; lineageSwitchSafe?: boolean; initialContent?: UserInputBlock[];
   consumed?: { id: string; sequence: number };
 }) {
   const [restoreSupported] = useState(() => editableContent(initialContent));
@@ -48,9 +48,12 @@ export function InputBar({ disabled, busy, active, onSend, onUpload, onCancel, o
     }).finally(() => { transferring.current = false; });
   };
   const [draft, setDraft] = useState(() => restoreSupported ? initialContent.flatMap(block => block.type === 'text' ? [block.text] : []).join('') : '');
+  const invocation = useRef<{ id: CommandId; draft: string } | undefined>(undefined);
   useEffect(() => {
-    if (!consumed) return;
-    setDraft(current => { const parsed = parseCommand(current); return parsed.type === 'command' && parsed.id === consumed.id ? '' : current; });
+    const invoked = invocation.current;
+    if (!consumed || !invoked || invoked.id !== consumed.id) return;
+    invocation.current = undefined;
+    setDraft(current => current === invoked.draft ? '' : current);
   }, [consumed]);
   const [restored, setRestored] = useState(() => restoreSupported ? initialContent.flatMap(block => block.type === 'upload' ? [block] : []) : []);
   const [dismissed, setDismissed] = useState(false), [highlight, setHighlight] = useState(0);
@@ -58,12 +61,13 @@ export function InputBar({ disabled, busy, active, onSend, onUpload, onCancel, o
   const input = useRef<HTMLTextAreaElement>(null), root = useRef<HTMLDivElement>(null);
   const query = discoveryQuery(draft);
   const menu = onCommand && query !== undefined && !dismissed && !disabled && !busy;
-  const rows = matchCommands(query ?? '', commands.filter(command => available(command, active, hasGoal, executionIdle)));
+  const rows = matchCommands(query ?? '', commands.filter(command => available(command, active, hasGoal, lineageSwitchSafe)));
   const invoke = (id: CommandId) => {
     if (disabled || busy) return;
     if (files.length || restored.length) { setError('Remove draft attachments before invoking a command.'); return; }
     const definition = commands.find(command => command.id === id)!;
-    if (!onCommand || !available(definition, active, hasGoal, executionIdle)) { setError('Command unavailable in the current Session state.'); return; }
+    if (!onCommand || !available(definition, active, hasGoal, lineageSwitchSafe)) { setError('Command unavailable in the current Session state.'); return; }
+    invocation.current = { id, draft };
     setDismissed(true); setError(''); input.current?.focus(); onCommand(id);
   };
   useEffect(() => {

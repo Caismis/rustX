@@ -14,4 +14,10 @@ export function executionIdle(view?: Pick<SessionView, 'snapshot' | 'submissions
   return !!view?.snapshot && !activeAttempt(view.snapshot)
     && !view.snapshot.inbound.pending?.length && !view.submissions?.length;
 }
+/** A destructive lineage switch also needs a resolved inbound transport frontier.
+ * Neither request ownership nor acknowledged evidence is browser queue authority. */
+export function lineageSwitchSafe(view?: SessionView): boolean {
+  return view?.attachment === 'attached' && view.attachmentIntent === 'wanted'
+    && executionIdle(view) && !view.inboundRequests;
+}
 export const json = (value: unknown) => JSON.stringify(value, null, 2) ?? 'Unavailable';

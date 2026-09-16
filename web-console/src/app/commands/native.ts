@@ -1,6 +1,6 @@
 import type { AttachmentTarget, ApprovalMode, MethodResult, SessionUserMessageBoundary, UserInputBlock } from '../../../../protocol/app-server/v4';
 import { AppServerClient, sameTarget } from '../../client/app-server';
-import { activeAttempt, executionIdle } from '../../bindings/projection';
+import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 
 /** A UI continuation fence, never a cancellation token for server mutations. */
 export class NavigationEpoch {
@@ -84,14 +84,14 @@ export class CommandSession {
   async transition(action: HistoryAction, selection: HistoricalSelection) {
     this.requireCurrent();
     if (!sameTarget(selection.target, this.target)) throw new Error('Historical selection belongs to another attachment.');
-    if (action !== 'fork' && !executionIdle(this.client.getSnapshot().views[this.sessionId])) throw new Error('Wait for accepted inbound and the current attempt to settle before switching lineage.');
+    if (action !== 'fork' && !lineageSwitchSafe(this.client.getSnapshot().views[this.sessionId])) throw new Error('Wait for unresolved requests, accepted inbound and the current attempt to settle before switching lineage.');
     const params = { session_id: this.sessionId, node_id: selection.nodeId, surface_revision: selection.boundary.surface_revision, boundary: selection.boundary.message.id };
     // Never substitute a newer revision, retry on refusal, or copy browser history.
     const result = await this.client.request(action === 'fork' ? { method: 'session/fork', params } : { method: 'session/branch', params }, 'session_transition');
     if (!this.current()) return;
     if (result.durability_diagnostic) throw new Error(`Lineage committed with durability uncertainty: ${result.durability_diagnostic}. Inspect Sessions/tree; do not repeat the mutation.`);
     const session = result.session;
-    if (action !== 'fork' && !executionIdle(this.client.getSnapshot().views[this.sessionId])) throw new Error(`Branch ${session.active_node} committed, but the source now owns accepted work. Open it from Session tree after execution settles; do not repeat the branch.`);
+    if (action !== 'fork' && !lineageSwitchSafe(this.client.getSnapshot().views[this.sessionId])) throw new Error(`Branch ${session.active_node} committed, but the source now has unresolved inbound or accepted work. Open it from Session tree after execution settles; do not repeat the branch.`);
     // The manager permits one resident Conversation per Session. Switch only after
     // the branch exists. A lost unload/attach response also stops this sequence.
     if (action !== 'fork') await this.client.release(this.sessionId, true);
@@ -142,7 +142,7 @@ export class CommandSession {
   async openNode(nodeId: string, conversationId: string) {
     this.requireCurrent();
     if (conversationId !== this.target.conversation_id) {
-      if (!executionIdle(this.client.getSnapshot().views[this.sessionId])) throw new Error('Wait for accepted inbound and the current attempt to settle before switching lineage.');
+      if (!lineageSwitchSafe(this.client.getSnapshot().views[this.sessionId])) throw new Error('Wait for unresolved requests, accepted inbound and the current attempt to settle before switching lineage.');
       await this.client.release(this.sessionId, true);
       if (!this.navigationCurrent() || this.client.getSnapshot().generation !== this.generation) return;
       await this.client.attach(this.sessionId, nodeId);

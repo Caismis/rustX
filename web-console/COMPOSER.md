@@ -191,7 +191,10 @@ Escape and outside pointer dismiss. The composer keeps focus during discovery;
 selectors take search focus and return it on dismissal. IME Enter is untouched.
 `+` preserves a non-command draft instead of replacing it. Commands with draft
 uploads are refused rather than dropping attachments. A successful selector consumes
-only a matching command draft; dismissal keeps it.
+only the exact draft captured at invocation, if it has not since changed; dismissal
+or failure keeps it. This covers exact tokens, aliases, fuzzy `/mdl`, and bare `/`
+discovery alike. A successful `/tools` native read consumes its invoking draft while
+keeping the capability panel open; consumption and panel dismissal are separate.
 
 | Command | Typed integration |
 | --- | --- |
@@ -206,9 +209,14 @@ only a matching command draft; dismissal keeps it.
 
 `/settings` is omitted: there is no current product settings editor to navigate to.
 Stable execution-idle means no active Attempt, no authoritative pending inbound,
-and no acknowledged MessageId still awaiting projection reconciliation. This shared
-guard also covers historical Branch/Retry and Session-tree switches. Acknowledged
-submissions remain reconciliation evidence, not a browser queue. Compact intentionally
+and no acknowledged MessageId still awaiting projection reconciliation. Destructive
+lineage switching additionally requires no unresolved `turn/start`/`turn/steer`
+request in AppServerClient's current-generation pipeline (`lineageSwitchSafe`).
+This guard covers historical Branch/Retry, Session-tree switches and open selectors.
+The four stages are unresolved transport -> acknowledged MessageId evidence ->
+authoritative pending/canonical/Attempt observation -> genuinely idle. The first
+two stages are not a browser queue; the client atomically hands request ownership
+to acknowledged evidence without publishing a transient safe state. Compact intentionally
 uses a different native precondition: the coordinator can perform maintenance while
 inbound awaits adoption; concurrent Attempt/maintenance/resource-reload conflicts
 remain native refusals. Fork does not replace the source and is not idle-gated.

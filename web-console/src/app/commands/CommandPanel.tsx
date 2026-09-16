@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ApprovalMode, UserInputBlock, SessionSnapshot } from '../../../../protocol/app-server/v4';
 import type { AppServerClient } from '../../client/app-server';
-import { activeAttempt, executionIdle } from '../../bindings/projection';
+import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { Dialog } from '../../presentation/primitives/Dialog';
 import { Button } from '../../presentation/primitives/Button';
 import { CommandSession, type HistoricalSelection, type HistoryAction } from './native';
@@ -12,9 +12,9 @@ import css from './Commands.module.css';
 type Choice = { kind: 'model'; model: string } | { kind: 'approval'; mode: ApprovalMode } | { kind: 'history'; action: HistoryAction; selection: HistoricalSelection } | { kind: 'node'; nodeId: string; conversationId: string };
 interface Row { id: string; label: string; detail?: string; choice: Choice }
 export interface CommandRequest { id: CommandId | 'retry' | 'tree'; messageId?: string }
-export function CommandPanel({ request, client, sessionId, current, close, completed, opened }: {
+export function CommandPanel({ request, client, sessionId, current, close, succeeded, opened }: {
   request: CommandRequest; client: AppServerClient; sessionId: string; current: () => boolean;
-  close: () => void; completed: () => void; opened: (result: { session: SessionSnapshot; content: UserInputBlock[] }) => void;
+  close: () => void; succeeded: () => void; opened: (result: { session: SessionSnapshot; content: UserInputBlock[] }) => void;
 }) {
   const [rows, setRows] = useState<Row[]>([]), [query, setQuery] = useState(''), [active, setActive] = useState(0);
   const [busy, setBusy] = useState(true), [error, setError] = useState(''), [detail, setDetail] = useState('');
@@ -25,7 +25,7 @@ export function CommandPanel({ request, client, sessionId, current, close, compl
   const [scope] = useState(() => new CommandSession(client, sessionId, () => alive.current && current()));
   const view = useSyncExternalStore(client.subscribe, client.getSnapshot).views[sessionId];
   const blocked = request.id === 'compact' ? activeAttempt(view?.snapshot)
-    : ['branch', 'retry', 'tree'].includes(request.id) && !executionIdle(view);
+    : ['branch', 'retry', 'tree'].includes(request.id) && !lineageSwitchSafe(view);
   const valid = () => alive.current && current();
   const historical = request.id === 'fork' || request.id === 'branch' || request.id === 'retry';
   const loadBoundaries = async (offset: number) => {
@@ -68,7 +68,7 @@ export function CommandPanel({ request, client, sessionId, current, close, compl
         case 'fork': case 'branch': case 'retry':
           setDetail(request.id === 'fork' ? 'Independent Session. Choose the exact User boundary; its prompt returns to the composer.' : request.id === 'retry' ? 'Create a native branch, switch the idle Session to it, and execute the selected prompt once. The original response remains in its original node.' : 'Create a native branch and switch the idle Session to it. The selected prompt returns to the composer.');
           await loadBoundaries(0); break;
-        case 'tools': { const result = await scope.tools(); if (valid()) setDetail(JSON.stringify(result, null, 2)); break; }
+        case 'tools': { const result = await scope.tools(); if (valid()) { setDetail(JSON.stringify(result, null, 2)); succeeded(); } break; }
         case 'compact': setDetail('Compact this Session through the native context owner.'); break;
         case 'new': setDetail('Create an independent blank Session using this Session’s native cwd.'); break;
         case 'tree': setDetail('Native Session lineage. Opening another node switches the idle resident runtime; the original history is preserved.'); await loadTree(0); break;
@@ -84,8 +84,8 @@ export function CommandPanel({ request, client, sessionId, current, close, compl
     selecting.current = true; setBusy(true); setError('');
     try {
       switch (choice.kind) {
-        case 'model': await scope.setModel(choice.model); if (valid() && scope.current()) completed(); break;
-        case 'approval': await scope.setApproval(choice.mode); if (valid() && scope.current()) completed(); break;
+        case 'model': await scope.setModel(choice.model); if (valid() && scope.current()) { succeeded(); close(); } break;
+        case 'approval': await scope.setApproval(choice.mode); if (valid() && scope.current()) { succeeded(); close(); } break;
         case 'node': if (await scope.openNode(choice.nodeId, choice.conversationId) && valid()) close(); break;
         case 'history': {
           const result = await scope.transition(choice.action, choice.selection);
@@ -100,7 +100,7 @@ export function CommandPanel({ request, client, sessionId, current, close, compl
     if (selecting.current || busy || stopped || blocked || !valid()) return;
     selecting.current = true; setBusy(true); setError('');
     try {
-      if (request.id === 'compact') { await scope.compact(); if (valid() && scope.current()) completed(); }
+      if (request.id === 'compact') { await scope.compact(); if (valid() && scope.current()) { succeeded(); close(); } }
       else if (request.id === 'new') { const result = await scope.create(); if (valid() && result) opened(result); }
     } catch (cause) { if (valid()) { setError(`${String(cause)} Close and reread authoritative state before another mutation.`); setStopped(true); } }
     finally { selecting.current = false; if (valid()) setBusy(false); }

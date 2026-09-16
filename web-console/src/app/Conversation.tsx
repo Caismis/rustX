@@ -15,7 +15,7 @@ import { entryIdentity, HISTORY_LIMIT, type TranscriptCache } from '../client/tr
 import { useState } from 'react';
 import type { HistoryAction } from './commands/native';
 
-export function Conversation({ snapshot, history, loadEarlier, latest, onHistorical, historicalDisabled, executionIdle = false }: { snapshot: RuntimeClientSnapshot; history?: TranscriptCache; loadEarlier?: () => void; latest?: () => void; onHistorical?: (action: HistoryAction, messageId: string) => void; historicalDisabled?: boolean; executionIdle?: boolean }) {
+export function Conversation({ snapshot, history, loadEarlier, latest, onHistorical, historicalDisabled, lineageSwitchSafe = false }: { snapshot: RuntimeClientSnapshot; history?: TranscriptCache; loadEarlier?: () => void; latest?: () => void; onHistorical?: (action: HistoryAction, messageId: string) => void; historicalDisabled?: boolean; lineageSwitchSafe?: boolean }) {
   const { messages, streaming } = conversation(snapshot);
   const entries = history?.page.entries ?? snapshot.transcript.entries ?? [];
   const durableIds = new Set(entries.flatMap(entry => entry.item.type === 'message' ? [entry.item.message.id] : []));
@@ -30,7 +30,7 @@ export function Conversation({ snapshot, history, loadEarlier, latest, onHistori
         <pre>{json(entry.item)}</pre>
       </details>}
       {onHistorical && entry.item.type === 'message' && entry.item.message.role === 'user' && (!entry.item.message.kind || entry.item.message.kind === 'message') && <div className="row" aria-label={`History actions ${entry.item.message.id}`}>
-        {(['fork', 'branch', 'retry'] as const).map(action => <Button size="sm" key={action} disabled={historicalDisabled || (action !== 'fork' && !executionIdle)}
+        {(['fork', 'branch', 'retry'] as const).map(action => <Button size="sm" key={action} disabled={historicalDisabled || (action !== 'fork' && !lineageSwitchSafe)}
           onClick={() => { if (entry.item.type === 'message') onHistorical(action, entry.item.message.id); }}>{action === 'fork' ? 'Fork' : action === 'branch' ? 'Branch' : 'Retry / Regenerate'}</Button>)}
       </div>}
     </div>)}
