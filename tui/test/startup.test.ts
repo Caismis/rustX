@@ -18,7 +18,7 @@ import { SERVER_CAPABILITIES } from "./support/app-server-harness.ts";
 import { snapshot, sessionView } from "./support/fixtures.ts";
 
 const parsedResume = () => parseArguments(["--binary", "rustx", "--resume", "--cwd", "/server/work"]);
-const rows = ["A", "B"].map((id) => ({ id, name: `Session ${id}`, active_node: `node-${id}`, updated_at: "2026-09-14T00:00:00Z" }));
+const rows = ["A", "B"].map((id) => ({ id, name: `Session ${id}`, cwd: "/server/work", active_node: `node-${id}`, updated_at: "2026-09-14T00:00:00Z" }));
 const diagnostics = fixtures.flatMap((f) => "result" in f && f.result?.type === "diagnostics" ? [f.result] : [])[0]!;
 
 async function connected() {
@@ -30,7 +30,7 @@ async function connected() {
 }
 async function catalog(transport: FakeTransport, sessions = rows, count = 1) {
   const request = (await transport.log.awaitMethod("session/list", count)).at(-1)!;
-  transport.respond(request.id, { type: "sessions", sessions });
+  transport.respond(request.id, { type: "sessions", sessions, residencies: {} });
   const diagnostic = (await transport.log.awaitMethod("server/diagnostics", count)).at(-1)!;
   transport.respond(diagnostic.id, diagnostics);
 }

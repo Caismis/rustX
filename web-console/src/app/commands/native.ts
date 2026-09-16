@@ -112,12 +112,6 @@ export class CommandSession {
     if (!continuing() || !sameTarget(this.client.getSnapshot().views[session.id]?.target, target)) return;
     return { session, content: action === 'retry' ? [] : result.editor_content ?? [] };
   }
-  async create() {
-    this.requireCurrent();
-    const cwd = this.client.getSnapshot().views[this.sessionId]?.settings?.cwd;
-    if (!cwd) throw new Error('Read native Session cwd first.');
-    return createSession(this.client, cwd, this.current);
-  }
   async compact() {
     this.requireCurrent();
     // Native manual maintenance may own the Conversation before pending inbound

@@ -54,10 +54,11 @@ existing source lifecycle; unreferenced discovered packages remain inert.
 The CFG-01 Rust resolver remains the only merger: defaults < user settings <
 trusted project settings < applicable explicit CLI fields. There is no source
 activation CLI overlay. `--config` replaces the project slot and never changes
-its authority. Host trust is required before composition, including for an
-otherwise empty project; an untrusted launch is rejected before preparation.
-Trust does not enable any external source. Trusted + disabled stays inert;
-untrusted + enabled is rejected; trusted + enabled is eligible for preparation.
+its authority. Native trust gates project sources, including in an otherwise empty
+project. Untrusted cwd composition uses User/built-in sources and skips project
+documents/resources; User source authority is independent. Trust does not itself
+enable external sources. Disabled remains inert; unauthorized sources remain
+inactive; admitted enabled sources are eligible for preparation.
 
 `mcp_servers` overlays names and replaces a same-name entry **as a whole**. A
 replacement includes its own enable decision, command/URL, ordinary environment,

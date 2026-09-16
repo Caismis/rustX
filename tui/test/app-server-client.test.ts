@@ -160,7 +160,7 @@ describe("request correlation", () => {
 
     // Answer the *second* request first. Correlation is by id and nothing
     // else, so neither promise may take the other's result.
-    transport.respond(list.id, { type: "sessions", sessions: [], next_offset: null });
+    transport.respond(list.id, { type: "sessions", sessions: [], residencies: {}, next_offset: null });
     transport.respond(info.id, { type: "server_info", capabilities: CAPABILITIES });
 
     assert.equal((await second).type, "sessions");

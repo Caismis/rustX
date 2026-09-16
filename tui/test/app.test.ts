@@ -477,7 +477,7 @@ describe("RustxTuiApp lifecycle", () => {
                 id: "session-1",
                 name: "current",
                 updated_at: "2026-08-21T00:00:00Z",
-                active_node: "node-1",
+                cwd: "/server/work", active_node: "node-1",
               }],
             };
           },
@@ -519,7 +519,7 @@ describe("RustxTuiApp lifecycle", () => {
     const session = fakeSession(state);
     const log: string[] = [];
     let previews = 0, executes = 0, cancelled = 0;
-    let rows = [{ id: "old", name: "history", updated_at: "today", active_node: "node-2" }];
+    let rows = [{ id: "old", name: "history", updated_at: "today", cwd: "/server/work", active_node: "node-2" }];
     (session as unknown as { cancelCurrentAttempt: () => Promise<string> }).cancelCurrentAttempt =
       async () => { cancelled++; return "attempt"; };
     const app = appOver(session as unknown as AppServerSession, fakeHost({ log, catalog: {
@@ -561,7 +561,7 @@ describe("RustxTuiApp lifecycle", () => {
     const app = appOver(session as unknown as AppServerSession, fakeHost({ catalog: {
       listSessions: async () => {
         lists++;
-        return { sessions: lists === 1 ? [{ id: "old", name: "history", updated_at: "today", active_node: "node-2" }] : [] };
+        return { sessions: lists === 1 ? [{ id: "old", name: "history", updated_at: "today", cwd: "/server/work", active_node: "node-2" }] : [] };
       },
       previewSessionDeletion: async () => ({ status: "preview", preview: { session_id: "old", name: "history", target_revision: "revision", owned_node_count: 1, owned_conversation_count: 1, owned_child_count: 0 } }),
       deleteSession: () => { executes++; return execution.promise; },
@@ -1332,7 +1332,7 @@ describe("RustxTuiApp lifecycle", () => {
                     id: "session-a",
                     name: "A",
                     updated_at: "2026-08-21T00:00:00Z",
-                    active_node: "node-a",
+                    cwd: "/server/work", active_node: "node-a",
                   }],
                   nextOffset: 1,
                 };
@@ -1543,7 +1543,7 @@ async function deletionAppHarness(overlapInitial = false) {
   const lists: Array<[string | undefined, number | undefined]> = [];
   const executes: string[][] = [], recovers: string[] = [], responses: unknown[] = [];
   let cancelled = 0;
-  let rows: SessionSummaryView[] = [{ id: "old", name: "historical-target", updated_at: "today", active_node: "node-2", }];
+  let rows: SessionSummaryView[] = [{ id: "old", name: "historical-target", updated_at: "today", cwd: "/server/work", active_node: "node-2", }];
   let listResponse: ((query?: string, offset?: number) => Promise<{ sessions: SessionSummaryView[]; nextOffset?: number }>) | undefined;
   // Deletion addresses the durable Session catalog on the host; the attached
   // Session owns only what an attachment owns.
@@ -1770,7 +1770,7 @@ it("a delayed initial resume response cannot resurrect a row after deletion reco
     await waitForApplicationContinuation();
     const reconciled = h.surface();
     assert.doesNotMatch(h.text(), /historical-target/);
-    h.lateList.resolve({ sessions: [{ id: "old", name: "historical-target", updated_at: "today", active_node: "node-2", }] });
+    h.lateList.resolve({ sessions: [{ id: "old", name: "historical-target", updated_at: "today", cwd: "/server/work", active_node: "node-2", }] });
     await waitForApplicationContinuation();
     assert.equal(h.surface(), reconciled, "pre-mutation initial query cannot reopen a stale selector");
     assert.doesNotMatch(h.text(), /historical-target/);
@@ -1798,7 +1798,7 @@ for (const outcome of ["committed_cleanup_pending", "committed_durability_uncert
       assert.doesNotMatch(h.text(), /delete failed/);
       await h.input("\x1b[27u"); assert.match(h.text(), /visibility unavailable/);
       await h.input("\x1b[27u"); assert.equal(h.surface(), undefined);
-      h.setList(async () => ({ sessions: empty ? [] : ["A", "C"].map((id) => ({ id, name: `histor-${id}`, updated_at: "today", active_node: id, active: false })) }));
+      h.setList(async () => ({ sessions: empty ? [] : ["A", "C"].map((id) => ({ id, name: `histor-${id}`, updated_at: "today", cwd: "/server/work", active_node: id, active: false })) }));
       await h.input("/resume\r");
       assert.deepEqual(h.lists.at(-1), ["histor", 0]);
       assert.match(h.text(), /R retry native cleanup/);
@@ -1825,10 +1825,10 @@ it("failed reconciliation cannot revive a pre-mutation initial response after a 
     h.execution.resolve({ status: "committed_cleanup_pending", session_id: "old" });
     await waitForApplicationContinuation();
     await h.input("\x1b[27u\x1b[27u");
-    h.setList(async () => ({ sessions: [{ id: "A", name: "fresh-A", updated_at: "today", active_node: "A", active: false }] }));
+    h.setList(async () => ({ sessions: [{ id: "A", name: "fresh-A", updated_at: "today", cwd: "/server/work", active_node: "A", active: false }] }));
     await h.input("/resume\r"); await h.input("\x1b[27u");
     const fresh = h.surface(); assert.match(h.text(), /fresh-A/);
-    h.lateList.resolve({ sessions: [{ id: "old", name: "historical-target", updated_at: "today", active_node: "old", }] });
+    h.lateList.resolve({ sessions: [{ id: "old", name: "historical-target", updated_at: "today", cwd: "/server/work", active_node: "old", }] });
     await waitForApplicationContinuation();
     assert.equal(h.surface(), fresh); assert.match(h.text(), /fresh-A/);
     assert.doesNotMatch(h.text(), /historical-target/); assert.equal(h.executes.length, 1);
@@ -1837,7 +1837,7 @@ it("failed reconciliation cannot revive a pre-mutation initial response after a 
 
 it("reopening resume retains the current query while recovery retains the original target", async () => {
   const h = await deletionAppHarness();
-  const row = (id: string): SessionSummaryView => ({ id, name: id, active_node: id, updated_at: "today" });
+  const row = (id: string): SessionSummaryView => ({ id, name: id, cwd: "/server/work", active_node: id, updated_at: "today" });
   try {
     await h.input("\x1b[27u"); await h.input("old"); await h.input("\x04");
     await h.resolvePreview(); await h.input("\t\r");

@@ -1,3 +1,4 @@
+import { startWorkspaceHost } from './workspace-host.ts';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
@@ -23,7 +24,7 @@ function exited(child: ChildProcess): Promise<number | null> {
     child.once('exit', code => { clearTimeout(timer); resolveExit(code); });
   });
 }
-export async function startDogfood(scenario = 'web_console_dogfood') {
+export async function startDogfood(scenario = 'web_console_dogfood', trusted = true) {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-web-console-'));
   const taskConfig = join(directory, 'config');
   const settings = join(taskConfig, 'rustx/settings.toml');
@@ -59,7 +60,7 @@ enabled = true
 ` : '';
     const writeSettings = (model = 'console-model') => writeFileSync(settings, `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[native_tools.bash]\napproval = "always"\n[agent.model]\nmodel = "fixture/${model}"\n` + imageSource);
     writeSettings();
-    for (const workspace of [workspaceA, workspaceB]) {
+    for (const workspace of trusted ? [workspaceA, workspaceB] : []) {
       const trusted = spawnSync(binary, ['--workspace', workspace, '--trust', 'grant'], { env, encoding: 'utf8' });
       if (trusted.status !== 0) throw new Error(`Trust setup failed: ${trusted.stderr}`);
     }
@@ -73,7 +74,10 @@ enabled = true
       if (!response.ok) throw new Error(`Provider barrier failed: ${await response.text()}`);
       return response.json();
     };
-    return { directory, endpoint, token, tokenFile, workspaceA, workspaceB, providerUrl, settings, writeSettings, control,
+    const workspaceHost = await startWorkspaceHost({ endpoint: new URL(endpoint).href, picker: true, metadataFile: join(directory, 'workspaces.json'), roots: [
+      { id: 'root-a', cwd: workspaceA, displayName: 'Workspace A' }, { id: 'root-b', cwd: workspaceB, displayName: 'Workspace B' },
+    ] });
+    return { workspaceHost, workspaceHostUrl: workspaceHost.url, directory, endpoint, token, tokenFile, workspaceA, workspaceB, providerUrl, settings, writeSettings, control,
       gate: (name: string) => control(`observations/await?kind=gate_reached&name=${name}&timeoutMs=30000`),
       release: (name: string) => control(`gates/${name}/release`, 'POST'),
       diagnostics: () => ({ providerErrors, appErrors }),
@@ -85,6 +89,7 @@ enabled = true
           if (check && (!report.ok || providerCode !== 0)) throw new Error(`Provider scenario not satisfied (exit ${providerCode}): ${JSON.stringify(report)}`);
           return report;
         } finally {
+          await workspaceHost.stop();
           app?.kill('SIGTERM'); provider.kill('SIGTERM');
           rmSync(directory, { recursive: true, force: true });
         }

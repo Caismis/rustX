@@ -126,7 +126,7 @@ export class Server {
     switch (request.method) {
       case 'initialize': result = { type: 'initialized', protocol_version: this.version, capabilities: this.capabilities }; break;
       case 'server/info': result = { type: 'server_info', capabilities: this.capabilities }; break;
-      case 'session/list': if (request.params.limit > 32) throw new Error('Native Session page limit is 32'); result = { type: 'sessions', sessions: [...this.snapshots.keys()].slice(request.params.offset, request.params.offset + request.params.limit).map(id => ({ id, name: `Session ${id}`, updated_at: '2026-09-14T00:00:00Z', active_node: `node-${id}` } satisfies SessionSummary)) }; break;
+      case 'session/list': if (request.params.limit > 32) throw new Error('Native Session page limit is 32'); result = { type: 'sessions', residencies: Object.fromEntries([...this.snapshots.keys()].map(id => [id, this.loaded.has(id) ? 'Loaded' : 'Unloaded'])), sessions: [...this.snapshots.keys()].slice(request.params.offset, request.params.offset + request.params.limit).map(id => ({ id, cwd: `/workspace/${id}`, name: `Session ${id}`, updated_at: '2026-09-14T00:00:00Z', active_node: `node-${id}` } satisfies SessionSummary)) }; break;
       case 'session/attach': {
         this.reservations.get(socket)?.delete(id);
         if (!this.loaded.has(id)) { this.loaded.add(id); this.coldLoads.set(id, (this.coldLoads.get(id) ?? 0) + 1); }

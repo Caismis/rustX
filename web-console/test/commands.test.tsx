@@ -5,7 +5,7 @@ import { commands, discoveryQuery, parseCommand, available } from '../src/app/co
 import { activeAttempt, executionIdle, lineageSwitchSafe } from '../src/bindings/projection';
 import { matchCommands } from '../src/app/commands/matching';
 import { InputBar } from '../src/app/components/InputBar';
-import { CommandSession, NavigationEpoch } from '../src/app/commands/native';
+import { CommandSession, NavigationEpoch, createSession } from '../src/app/commands/native';
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
 import { OutcomeUncertain, RpcFailure } from '../src/client/app-server';
@@ -407,7 +407,7 @@ describe('typed native operations and continuation fencing', () => {
   });
   it.each(['session/create', 'context/compact'] as const)('%s uses its native owner and cannot continue across lost responses', async method => {
     const { scope, fixture } = await subject(); server.held.add(method);
-    const work = method === 'session/create' ? scope.create() : scope.compact();
+    const work = method === 'session/create' ? createSession(server.client, '/workspace/A', scope.current) : scope.compact();
     const rejected = expect(work).rejects.toBeInstanceOf(OutcomeUncertain);
     const request = await server.waitFor(method, 1); server.commit(request); server.client.disconnect(); await rejected;
     server.held.delete(method); await server.connect();
@@ -417,7 +417,7 @@ describe('typed native operations and continuation fencing', () => {
   });
   it('a new Session committed after navigation does not acquire a child attachment', async () => {
     const { scope, navigation, fixture } = await subject(); server.held.add('session/create');
-    const work = scope.create(), request = await server.waitFor('session/create', 1);
+    const work = createSession(server.client, '/workspace/A', scope.current), request = await server.waitFor('session/create', 1);
     const response = server.commit(request); navigation.invalidate(); server.socket.deliver(response);
     expect(await work).toBeUndefined(); expect(fixture.committed).toHaveLength(1);
     expect(methods().filter(method => method === 'session/attach')).toHaveLength(2);

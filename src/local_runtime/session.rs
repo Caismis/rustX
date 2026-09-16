@@ -238,6 +238,8 @@ pub struct SessionUserMessageBoundaryPage {
 /// One bounded row in the `/resume` selector.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SessionSummary {
+    /// Canonical durable Session cwd, projected without loading a runtime.
+    pub cwd: PathBuf,
     /// Session identity.
     pub id: SessionId,
     /// The user-defined display name, when this Session has one.
@@ -973,6 +975,7 @@ impl SessionCatalog {
                 break;
             }
             page.push(SessionSummary {
+                cwd: session.state.cwd.clone(),
                 id: session.id.clone(),
                 name: session.name.clone(),
                 preview,

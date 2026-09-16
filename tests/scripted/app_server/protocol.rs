@@ -722,6 +722,28 @@ async fn durable_session_operations_never_compose_a_runtime() {
             panic!("create");
         };
         let id = session.id;
+        let MethodResult::Sessions {
+            sessions,
+            residencies,
+            ..
+        } = call(
+            &connection,
+            110,
+            Method::SessionList {
+                query: None,
+                offset: 0,
+                limit: 32,
+            },
+        )
+        .await
+        else {
+            panic!("list");
+        };
+        assert_eq!(
+            sessions.iter().find(|row| row.id == id).unwrap().cwd,
+            f.workspaces[0]
+        );
+        assert_eq!(residencies.get(&id), Some(&super::ResidencyState::Unloaded));
         let MethodResult::Session { session } = call(
             &connection,
             101,
@@ -738,6 +760,7 @@ async fn durable_session_operations_never_compose_a_runtime() {
         let MethodResult::Settings {
             revision,
             mut settings,
+            ..
         } = call(
             &connection,
             102,

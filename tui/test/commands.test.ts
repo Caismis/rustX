@@ -597,18 +597,19 @@ describe("CommandDispatcher", () => {
     const list = await nextRequest(h, "session/list");
     h.transport.respond(list.id, {
       type: "sessions",
+      residencies: {},
       sessions: [
         {
           id: "session-1",
           name: "current",
           updated_at: "2026-08-21T00:00:00Z",
-          active_node: "node-1",
+          cwd: "/server/work", active_node: "node-1",
         },
         {
           id: "session-2",
           name: "saved review",
           updated_at: "2026-08-20T00:00:00Z",
-          active_node: "node-2",
+          cwd: "/server/work", active_node: "node-2",
         },
       ],
     });

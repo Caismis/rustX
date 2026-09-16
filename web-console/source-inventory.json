@@ -1088,6 +1088,69 @@
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": []
+    },
+    {
+      "upstream": "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx",
+      "destination": "web-console/src/workspaces/WorkspaceNavigation.tsx",
+      "treatment": "adapted grouped/flat navigation, bounded metadata search, capability-gated picker and metadata actions; native and Product Host authority replace Harness controllers",
+      "upstream_sha256": "541bcf73a753b049ca25ade38a6565ddeabc750d8b4098eee4901c6d4a461d09",
+      "retained_dependencies": [
+        "../app/commands/native",
+        "../bindings/projection",
+        "../client/app-server",
+        "../presentation/primitives/Button",
+        "../presentation/primitives/Dialog",
+        "../presentation/primitives/Input",
+        "../presentation/primitives/StateDot",
+        "./WorkspaceNavigation.module.css",
+        "./host",
+        "react"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/plugin runtime and Remote gateway",
+        "Harness Workspace Registry/Controller Session membership",
+        "Harness Session Controller, automatic blank Session allocation, archive/subagent/schedule semantics",
+        "Harness directory filesystem authority and content search"
+      ],
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-workspace/src/client/rows/Rows.tsx",
+          "treatment": "inspected and adapted presentation only",
+          "upstream_sha256": "d6383897ee54168d75e2b8dd3a9a29824ed446016d1ee2f21b9f8fc14a4cef09"
+        },
+        {
+          "upstream": "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",
+          "treatment": "inspected and adapted presentation only",
+          "upstream_sha256": "465952b8488857e437739b72585295d28535e3cd7f593c2d02aaf3ad14fcfab5"
+        },
+        {
+          "upstream": "packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx",
+          "treatment": "inspected and adapted presentation only",
+          "upstream_sha256": "e42beb178c3c9bd6f102f6c1693895b18161ce824393daabd95f96dc47b6e9e3"
+        }
+      ]
+    },
+    {
+      "upstream": "packages/client/ui-workspace/src/client/rows/Rows.module.css",
+      "destination": "web-console/src/workspaces/WorkspaceNavigation.module.css",
+      "treatment": "adapted grouped/flat navigation, bounded metadata search, capability-gated picker and metadata actions; native and Product Host authority replace Harness controllers",
+      "upstream_sha256": "04999adb9e02fe22184193ef5ef06431c87969d30c3f94b54710d5b0328ad1fa",
+      "retained_dependencies": [],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/plugin runtime and Remote gateway",
+        "Harness Workspace Registry/Controller Session membership",
+        "Harness Session Controller, automatic blank Session allocation, archive/subagent/schedule semantics",
+        "Harness directory filesystem authority and content search"
+      ],
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.module.css",
+          "treatment": "inspected and adapted presentation only",
+          "upstream_sha256": "1aca37fb6c3409d638ea5dad4627b43f89056dae2a18d24dc487154a665a078d"
+        }
+      ]
     }
   ],
   "inspected": [
@@ -1231,6 +1294,32 @@
     "packages/client/ui-primitives/src/icons/index.tsx",
     "packages/client/ui-conversation/src/client/input/queue-store.ts",
     "packages/client/ui-conversation/src/client/input/submission-policy.ts",
-    "packages/client/ui-conversation/src/client/input/facade.ts"
+    "packages/client/ui-conversation/src/client/input/facade.ts",
+    "packages/api/workspace-controller/README.md",
+    "packages/api/workspace-controller/src/directory-picker.ts",
+    "packages/api/workspace-controller/src/types.ts",
+    "packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx",
+    "packages/client/ui-conversation/src/client/skeleton/HeroShell.module.css",
+    "packages/client/ui-directory-picker-browse/src/client/flow.ts",
+    "packages/client/ui-directory-picker-native/src/client/flow.ts",
+    "packages/client/ui-sidebar/src/client/SidebarRoot.module.css",
+    "packages/client/ui-sidebar/src/client/SidebarRoot.tsx",
+    "packages/client/ui-sidebar/tests/sidebar-root.client.spec.tsx",
+    "packages/client/ui-workspace/src/client/WorkspacePicker.module.css",
+    "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",
+    "packages/client/ui-workspace/src/client/rows/Rows.module.css",
+    "packages/client/ui-workspace/src/client/rows/Rows.tsx",
+    "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.module.css",
+    "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx",
+    "packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx",
+    "packages/client/ui-workspace/tests/workspace-picker.client.spec.tsx",
+    "packages/host/directory-picker/README.md",
+    "packages/host/directory-picker/src/types.ts",
+    "packages/api/workspace-controller/tests/directory-picker.host.spec.ts",
+    "packages/host/directory-picker/tests/seam.spec.ts",
+    "packages/client/ui-directory-picker-browse/tests/client-flow.client.spec.tsx",
+    "packages/client/ui-directory-picker-browse/src/client/DirectoryBrowser.module.css",
+    "packages/client/ui-sidebar/README.md",
+    "packages/api/workspace-controller/src/commands.ts"
   ]
 }

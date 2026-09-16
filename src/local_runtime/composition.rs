@@ -260,15 +260,32 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                 .tool_environment()
                 .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
             let workspace = capability.current_snapshot().workspace_root().to_path_buf();
-            let project_context_files = load_project_context_files(&workspace)?;
-            let managed_python = super::managed_python_resources::discover(&workspace)?;
+            let project_context_files = if self.paths.trusted {
+                load_project_context_files(&workspace)?
+            } else {
+                Vec::new()
+            };
+            let managed_python = if self.paths.trusted {
+                super::managed_python_resources::discover(&workspace)?
+            } else {
+                crate::runtime::resources::ManagedPythonCatalog::default()
+            };
             // The catalog is built before the base registry, because the
             // `subagent` intrinsic's model-facing description is generated
             // from exactly the catalog this candidate generation admits.
-            let subagents = super::agent_resources::load(&workspace, &self.paths.agent_root)?.0;
+            let subagents = super::agent_resources::load_authorized(
+                &workspace,
+                &self.paths.agent_root,
+                self.paths.trusted,
+            )?
+            .0;
             let main_admission = config.agent.agents.iter().cloned().collect::<BTreeSet<_>>();
             let main_catalog = subagents.selected_definitions(&main_admission);
-            let mut workflows = super::workflow_resources::load(&workspace)?;
+            let mut workflows = if self.paths.trusted {
+                super::workflow_resources::load(&workspace)?
+            } else {
+                WorkflowCatalog::empty()
+            };
             let mut registry = ToolRegistry::new();
             register_native_tools(
                 &mut registry,

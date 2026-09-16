@@ -809,6 +809,16 @@ impl SessionRuntimeManager {
             clock: Arc::new(SystemMonotonicClock::new()),
         })
     }
+    /// Current source trust, independent of runtime residency and Host authorization.
+    /// # Errors
+    /// Invalid native configuration locations are rejected.
+    pub fn project_trusted(
+        &self,
+        settings: &super::session::SessionPersistentState,
+    ) -> Result<bool, String> {
+        self.configuration.project_trusted(&settings.input())
+    }
+
     #[must_use]
     /// # Panics
     /// Panics if an internal residency mutex was poisoned.

@@ -1,3 +1,4 @@
+import { routeWorkspaceHost } from './workspace-host';
 import { expect, test, type Locator } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { startDogfood } from './dogfood-server';
@@ -29,8 +30,9 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
   };
   let passed = false;
   try {
+    await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await connect();
-    await page.getByLabel('Session cwd').fill(fixture.workspaceA);
+    await page.getByLabel('Choose Workspace').selectOption({ label: 'Workspace A' });
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(page.locator('.session-toolbar small')).toHaveText(`${fixture.workspaceA} · attached`);
     // Composed Todo with no current list is its own bounded fact; no Goal and no queue take space.

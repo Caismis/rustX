@@ -29,6 +29,8 @@ export interface SessionView {
   cursor?: RuntimeClientCursor;
   history?: TranscriptCache;
   settings?: SessionPersistentState;
+  /** Current native source trust, not loaded resource activation or Host authorization. */
+  projectTrusted?: boolean | null;
   /** Exact acknowledged MessageIds awaiting projection reconciliation, not queue authority. */
   submissions?: readonly Submission[];
   /** Current-generation turn/start or turn/steer requests awaiting an outcome.
@@ -64,6 +66,7 @@ export interface ClientView {
   capabilities?: ServerCapabilities;
   error?: string;
   sessions: readonly SessionSummary[];
+  sessionResidencies?: Record<string, import('../../../protocol/app-server/v5').ResidencyState>;
   nextOffset?: number | null;
   views: Readonly<Record<string, SessionView>>;
   uncertain: readonly UncertainOperation[];
@@ -332,10 +335,15 @@ export class AppServerClient {
       void this.refresh(target.session_id).catch(() => {});
     }
   }
-  async listSessions(offset = 0) {
+  private listEpoch = 0;
+  private listOffset = 0;
+  private listQuery = '';
+  async listSessions(offset = this.listOffset, query = this.listQuery, current: () => boolean = () => true) {
+    const epoch = ++this.listEpoch;
+    this.listOffset = offset; this.listQuery = query;
     const generation = this.state.generation;
-    const result = await this.request({ method: 'session/list', params: { offset, limit: 32 } }, 'sessions');
-    if (this.current(generation)) this.publish({ sessions: result.sessions, nextOffset: result.next_offset });
+    const result = await this.request({ method: 'session/list', params: { offset, limit: 32, query } }, 'sessions');
+    if (this.current(generation) && epoch === this.listEpoch && current()) this.publish({ sessions: result.sessions, sessionResidencies: result.residencies, nextOffset: result.next_offset });
   }
   async deleteSession(id: string, expectedRevision: string) {
     const generation = this.state.generation;
@@ -360,7 +368,7 @@ export class AppServerClient {
     return this.changeAttachment(id, 'attach', async generation => {
       if (this.state.views[id]?.attachmentIntent !== 'wanted') return;
       if (this.state.views[id]?.target) return this.refresh(id);
-      this.setSession(id, { attachment: 'attaching', error: undefined });
+      this.setSession(id, { attachment: 'attaching', error: undefined, projectTrusted: undefined });
       const epoch = (this.attachmentEpochs.get(id) ?? 0) + 1;
       this.attachmentEpochs.set(id, epoch);
       await this.performAttach(id, generation, epoch);
@@ -399,7 +407,7 @@ export class AppServerClient {
       this.reconcileInteractions(id); this.settleSubmissions(id);
       const settings = await this.request({ method: 'settings/read', params: { session_id: id } }, 'settings');
       if (!current() || !sameTarget(this.state.views[id]?.target, result.target)) return;
-      this.setSession(id, { settings: settings.settings });
+      this.setSession(id, { settings: settings.settings, projectTrusted: settings.project_trusted });
       if (this.dirty.has(id)) { this.resubscribe.add(id); await this.refresh(id); }
     } catch (error) {
       if (current() && (!target || sameTarget(this.state.views[id]?.target, target))) this.setSession(id, { attachment: 'error', error: String(error) });

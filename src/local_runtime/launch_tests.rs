@@ -427,8 +427,11 @@ fn cfg236_offline_role_provenance_rejections_and_trust_have_zero_effects() {
         super::diagnostics::inspect("config_check", &f.request, &f.host)
     });
     assert_eq!(effects, [0; 13]);
-    assert!(report.launch.unwrap().roles.is_empty());
-    assert!(launch.unwrap().subagents.definitions().next().is_none());
+    let roles = report.launch.unwrap().roles;
+    assert_eq!(roles.len(), 1);
+    assert_eq!(roles.values().next().unwrap().selected, user);
+    assert_eq!(roles.values().next().unwrap().layer, "user");
+    assert_eq!(launch.unwrap().subagents.definitions().count(), 1);
 }
 
 #[cfg(unix)]
@@ -466,7 +469,9 @@ fn cfg236_user_role_authority_resolves_alias_once_for_launch_and_diagnostics() {
     std::fs::create_dir(&replacement).unwrap();
     std::fs::remove_file(&alias).unwrap();
     std::os::unix::fs::symlink(&replacement, &alias).unwrap();
-    let (catalog, _) = super::agent_resources::load(&launch.workspace, &launch.agent_root).unwrap();
+    let (catalog, _) =
+        super::agent_resources::load_authorized(&launch.workspace, &launch.agent_root, true)
+            .unwrap();
     assert_eq!(
         catalog.definitions().next().unwrap().instructions(),
         "User body"
@@ -480,7 +485,7 @@ fn cfg236_user_role_authority_resolves_alias_once_for_launch_and_diagnostics() {
     .unwrap();
     std::os::unix::fs::symlink(&replacement, &launch.agent_root).unwrap();
     assert!(
-        super::agent_resources::load(&launch.workspace, &launch.agent_root)
+        super::agent_resources::load_authorized(&launch.workspace, &launch.agent_root, true)
             .unwrap_err()
             .to_string()
             .contains("outside trusted workspace")
@@ -688,12 +693,9 @@ fn cfg235_static_check_show_have_zero_effects_and_redacted_outputs() {
     });
     assert_eq!(counts, [0; 13]);
     assert_eq!(report.exit_code(), 3);
-    assert!(
-        launch
-            .unwrap()
-            .admit(|| panic!("untrusted admission must never capture credentials"))
-            .is_err()
-    );
+    let admitted = launch.unwrap().admit(|| f.credentials.clone()).unwrap();
+    assert!(!admitted.trusted);
+    assert!(admitted.config.mcp_servers.is_empty());
 }
 
 #[test]
@@ -979,14 +981,8 @@ async fn cfg235_probe_verifies_mcp_without_business_calls_and_respects_inert_sou
         && !target.prepare_environment
         && !target.resolve_credentials));
     let results = execute(&untrusted, &plan, crate::runtime::CancellationSignal::new()).await;
-    assert_eq!(
-        results
-            .iter()
-            .find(|result| result.target == "enabled")
-            .unwrap()
-            .state,
-        ProbeState::Unavailable
-    );
+    assert!(results.iter().all(|result| result.target != "enabled"));
+    assert!(untrusted.config.mcp_servers.is_empty());
     fixture.shutdown().await;
 }
 
@@ -1617,11 +1613,7 @@ async fn cfg233_native_composition_keeps_disabled_and_discovered_resources_inert
     assert_eq!(std::fs::read_dir(&package).unwrap().count(), 1);
     product.runtime().shutdown().await.unwrap();
     f.trust(TrustAction::Revoke);
-    assert!(
-        resolve(&f.request, &f.host)
-            .unwrap_err()
-            .contains("not trusted")
-    );
+    assert!(!resolve(&f.request, &f.host).unwrap().trusted);
     assert_eq!(std::fs::read_dir(&package).unwrap().count(), 1);
 }
 
@@ -1958,11 +1950,7 @@ fn workspace_boundaries_subdirectories_non_git_nested_and_explicit() {
     std::fs::write(sub.join("rustx.toml"), "").unwrap();
     let (_, nested) = resolve_locations(&f.request, &f.host).unwrap();
     assert_ne!(nested, original.identity);
-    assert!(
-        resolve(&f.request, &f.host)
-            .unwrap_err()
-            .contains("not trusted")
-    );
+    assert!(!resolve(&f.request, &f.host).unwrap().trusted);
     f.request.workspace = Some(original.workspace.clone());
     assert_eq!(f.resolve().identity, original.identity);
     f.request.workspace = Some(sub);
@@ -2027,18 +2015,14 @@ fn canonical_symlink_and_real_git_worktree_identities_are_stable_and_separate() 
     let (locations, identity) = resolve_locations(&f.request, &host).unwrap();
     assert_ne!(identity, original.identity);
     assert_ne!(locations.runtime_root, original.runtime_root);
-    assert!(
-        resolve(&f.request, &host)
-            .unwrap_err()
-            .contains("not trusted")
-    );
+    assert!(!resolve(&f.request, &host).unwrap().trusted);
     change_trust(&f.request, &host, TrustAction::Grant).unwrap();
     assert_eq!(
         resolve(&f.request, &host).unwrap().workspace,
         std::fs::canonicalize(worktree).unwrap()
     );
     change_trust(&f.request, &host, TrustAction::Revoke).unwrap();
-    assert!(resolve(&f.request, &host).is_err());
+    assert!(!resolve(&f.request, &host).unwrap().trusted);
     assert!(resolve(&f.request, &f.host).is_ok(), "revocation is scoped");
     let outside = host.launch_directory.join("untrusted.md");
     std::fs::write(&outside, "other worktree").unwrap();
@@ -2096,11 +2080,7 @@ async fn resolution_and_composition_failures_preserve_published_session_selectio
     let catalog = launch.runtime_root.join("sessions/catalog.json");
     let before = std::fs::read(&catalog).unwrap();
     f.trust(TrustAction::Revoke);
-    assert!(
-        resolve(&f.request, &f.host)
-            .unwrap_err()
-            .contains("not trusted")
-    );
+    assert!(!resolve(&f.request, &f.host).unwrap().trusted);
     assert_eq!(before, std::fs::read(&catalog).unwrap());
     f.trust(TrustAction::Grant);
     f.project(json!({"agent_id":""}));
@@ -2793,11 +2773,7 @@ fn project_directory_symlinks_cannot_authorize_builtin_or_declared_resources() {
             .unwrap_err()
             .contains("outside trusted workspace")
     );
-    assert!(
-        resolve(&f.request, &f.host)
-            .unwrap_err()
-            .contains("not trusted")
-    );
+    assert!(!resolve(&f.request, &f.host).unwrap().trusted);
 }
 
 #[cfg(unix)]
@@ -3936,11 +3912,9 @@ mod session_resolution {
         assert_eq!(effects, [0; 13]);
         f.trust(TrustAction::Revoke);
         let prospective = manager.resolve_session(&input).unwrap();
-        assert!(
-            prospective
-                .admit(|| panic!("untrusted resolution must not capture credentials"))
-                .is_err()
-        );
+        let admitted = prospective.admit(|| f.credentials.clone()).unwrap();
+        assert!(!admitted.trusted);
+        assert!(admitted.project_context_files.is_empty());
     }
 
     #[test]
@@ -4554,4 +4528,79 @@ async fn app286_session_wire_results_compare_the_installed_route_without_rebindi
         assert_eq!(runtime.model_config(), model);
     }
     runtime.shutdown().await.unwrap();
+}
+
+#[test]
+fn readonly_project_trust_projection_does_not_activate_or_mutate_sources() {
+    let f = Fixture::new();
+    f.trust(TrustAction::Revoke);
+    let (manager, input) = f.request.session_input(&f.host).unwrap();
+    assert!(!manager.project_trusted(&input).unwrap());
+    f.project(
+        json!({"mcp_servers":{"project_server":{"enabled":true,"command":"must-never-spawn"}}}),
+    );
+    let bytes = std::fs::read(f.host.launch_directory.join("rustx.toml")).unwrap();
+    for _ in 0..3 {
+        assert!(!manager.project_trusted(&input).unwrap());
+        assert!(!manager.resolve_session(&input).unwrap().trusted);
+    }
+    assert_eq!(
+        std::fs::read(f.host.launch_directory.join("rustx.toml")).unwrap(),
+        bytes
+    );
+    f.trust(TrustAction::Grant);
+    assert!(manager.project_trusted(&input).unwrap());
+    f.trust(TrustAction::Revoke);
+    assert!(!manager.project_trusted(&input).unwrap());
+}
+
+#[tokio::test]
+async fn untrusted_cwd_composes_and_reload_cannot_activate_project_sources_or_gain_trust() {
+    let f = Fixture::new();
+    f.trust(TrustAction::Revoke);
+    std::fs::write(
+        f.host.launch_directory.join("rustx.toml"),
+        "invalid project = [",
+    )
+    .unwrap();
+    std::fs::write(f.host.launch_directory.join("AGENTS.md"), "UNTRUSTED").unwrap();
+    for (directory, filename) in [
+        ("agents", "bad.toml"),
+        ("workflows", "bad.yaml"),
+        ("skills/bad", "SKILL.md"),
+        ("tools/bad", "server.py"),
+    ] {
+        let directory = f.host.launch_directory.join(".agents").join(directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join(filename), "must never parse or execute").unwrap();
+    }
+    let launch = f.resolve();
+    assert!(!launch.trusted);
+    assert!(launch.config.mcp_servers.is_empty());
+    assert!(launch.project_context_files.is_empty());
+    assert!(
+        launch
+            .provenance
+            .values()
+            .all(|origin| !matches!(origin, Origin::Project { .. }))
+    );
+    let product = LocalSessionClient::compose(&launch, &LocalRuntimeDependencies::default())
+        .await
+        .unwrap();
+    let check = || {
+        let resources = product.runtime().runtime_resources();
+        assert!(resources.project_context_files().is_empty());
+        assert!(resources.subagents().definitions().next().is_none());
+        assert!(resources.workflows().entries().is_empty());
+    };
+    check();
+    product.runtime().reload_resources().await.unwrap();
+    check();
+    // Explicit grant is external to this already-admitted generation. Even now,
+    // reload must not read the malformed project document or any project resources.
+    f.trust(TrustAction::Grant);
+    product.runtime().reload_resources().await.unwrap();
+    check();
+    assert!(resolve(&f.request, &f.host).is_err());
+    product.runtime().shutdown().await.unwrap();
 }

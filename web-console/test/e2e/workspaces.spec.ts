@@ -1,0 +1,93 @@
+import { test, expect } from '@playwright/test';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { AppServerHost } from '../../../tui/src/app-server/host';
+import { startDogfood } from './dogfood-server';
+import { routeWorkspaceHost } from './workspace-host';
+
+test('two isolated Product Hosts/processes, untrusted cold Sessions and responsive Workspace navigation', async ({ page }) => {
+  const a = await startDogfood('web_console_dogfood', false), b = await startDogfood('web_console_dogfood', false);
+  const remoteA = await AppServerHost.connectRemote({ endpoint: a.endpoint, token: a.token });
+  const remoteB = await AppServerHost.connectRemote({ endpoint: b.endpoint, token: b.token });
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  try {
+    // Deliberately invalid/untrusted authored inputs must remain unread/inactive.
+    writeFileSync(join(a.workspaceA, 'rustx.toml'), 'invalid project = [');
+    for (const kind of ['agents', 'skills', 'workflows', 'tools']) {
+      mkdirSync(join(a.workspaceA, '.agents', kind), { recursive: true });
+      writeFileSync(join(a.workspaceA, '.agents', kind, 'invalid.toml'), 'must never activate');
+    }
+    writeFileSync(join(a.workspaceA, 'AGENTS.md'), 'UNTRUSTED_PROJECT_INSTRUCTIONS');
+    const wa = (await a.workspaceHost.host.listWorkspaces()).workspaces[0];
+    const wb = (await b.workspaceHost.host.listWorkspaces()).workspaces[0];
+    await expect(a.workspaceHost.host.resolveWorkspace(wb.id, a.endpoint)).rejects.toThrow('Unknown');
+    await expect(a.workspaceHost.host.resolveWorkspace(wa.id, b.endpoint)).rejects.toThrow('different rustX process');
+    const cwd = await a.workspaceHost.host.resolveWorkspace(wa.id, a.endpoint);
+    const created = await remoteA.createSession(cwd);
+    const id = created.session.id;
+    const read = () => remoteA.client.call('settings/read', { session_id: id }, 'settings');
+    const original = await read(); expect(original.settings.cwd).toBe(a.workspaceA); expect(original.project_trusted).toBe(false);
+    await expect(remoteB.readSession(id)).rejects.toThrow();
+    const listed = await remoteA.client.call('session/list', { offset: 0, limit: 32 }, 'sessions');
+    expect(listed.sessions.find(row => row.id === id)?.cwd).toBe(a.workspaceA);
+    expect(listed.residencies[id]).toBe('Unloaded');
+    expect((await remoteA.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.loaded).toBe(0);
+    await routeWorkspaceHost(page, a); await page.goto('/'); await expect(page).toHaveTitle(/rustX/);
+    await page.getByLabel('WebSocket endpoint').fill(a.endpoint); await page.getByLabel('Transport token').fill(a.token);
+    await page.getByRole('button', { name: 'Connect', exact: true }).click();
+    await expect(page.getByRole('button', { name: `Open ${id}`, exact: true })).toBeVisible();
+    await page.getByLabel('Choose Workspace').selectOption({ label: 'Workspace A' });
+    await expect(page.getByRole('button', { name: 'Workspace settings' })).toBeDisabled();
+    expect((await remoteA.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.loaded).toBe(0);
+    await page.getByRole('button', { name: `Open ${id}`, exact: true }).click();
+    await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
+    await expect(page.getByText(/Untrusted project source/)).toBeVisible();
+    expect(await read()).toEqual(original);
+    const resident = (await remoteA.client.call('server/diagnostics', {}, 'diagnostics')).snapshot;
+    expect(resident.loaded).toBe(1);
+    await page.getByRole('button', { name: 'Detach', exact: true }).click();
+    const attached = await remoteA.client.call('session/attach', { session_id: id }, 'attached');
+    expect(attached.snapshot.resources?.context_files).toEqual([]);
+    expect(JSON.stringify(attached.snapshot.resources)).not.toContain('UNTRUSTED_PROJECT_INSTRUCTIONS');
+    await remoteA.client.call('resources/reload', { target: attached.target }, 'resources_reloaded');
+    const refreshed = await remoteA.client.call('session/snapshot', { target: attached.target }, 'snapshot');
+    expect(refreshed.snapshot.resources?.context_files).toEqual([]);
+    await remoteA.client.call('session/detach', { target: attached.target }, 'detached');
+    await page.getByRole('button', { name: 'Attach / cold resume' }).click();
+    await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
+    await page.getByRole('button', { name: 'Flat view' }).click();
+    await expect(page.getByRole('button', { name: `Open ${id}`, exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Grouped view' }).click();
+    await page.getByRole('button', { name: 'Toggle Workspace A' }).click();
+    await expect(page.getByRole('button', { name: `Open ${id}`, exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Toggle Workspace A' }).click();
+    await page.screenshot({ path: 'test-results/workspaces-desktop.png', fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByRole('button', { name: 'Toggle Workspace A' }).scrollIntoViewIfNeeded();
+    await expect(page.getByRole('button', { name: `Open ${id}`, exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: 'test-results/workspaces-mobile.png', fullPage: true });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.getByLabel('Choose Workspace').selectOption({ label: 'Workspace B' });
+    expect((await remoteA.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.loaded).toBe(1);
+    await a.workspaceHost.host.renameWorkspace(wa.id, 'Renamed by Host');
+    await a.workspaceHost.host.reorderWorkspace(wa.id);
+    expect(await read()).toEqual(original);
+    await a.workspaceHost.host.removeWorkspace(wa.id);
+    await page.getByRole('button', { name: 'Refresh list' }).click();
+    await expect(page.getByRole('button', { name: `Open ${id}`, exact: true })).toBeVisible();
+    expect(await read()).toEqual(original);
+    expect((await remoteA.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.loaded).toBe(1);
+    expect((await b.workspaceHost.host.listWorkspaces()).workspaces[0]).toEqual(wb);
+    expect((await remoteB.listSessions()).sessions).toHaveLength(0);
+    const other = await remoteB.createSession(await b.workspaceHost.host.resolveWorkspace(wb.id, b.endpoint));
+    expect(other.session.id).toBe(id); // Native IDs are scoped to each process root.
+    expect((await remoteB.readSettings(id)).settings.cwd).toBe(b.workspaceA);
+    expect((await read()).settings.cwd).toBe(a.workspaceA);
+    expect(await a.workspaceHost.host.groupSessions([b.workspaceA], a.endpoint)).toEqual([null]);
+    expect(existsSync(join(a.directory, 'state', 'rustx', 'trust'))).toBe(false);
+    expect(readFileSync(join(a.workspaceA, 'rustx.toml'), 'utf8')).toBe('invalid project = [');
+    expect(errors).toEqual([]);
+  } finally { await remoteA.shutdown(); await remoteB.shutdown(); await a.stop(false); await b.stop(false); }
+});

@@ -9334,8 +9334,9 @@ it never holds a CandidateScope borrow while waiting.
 ## External source activation and credential authority (CFG-02)
 
 Configuration owns only enabled/disabled intent, not effective host states.
-The host derives activation after trust/resource authority evaluation. CFG-01
-rejects untrusted local launches before a coordinator is composed. Declared
+The native configuration owner derives activation after trust/resource authority
+evaluation. Untrusted cwd composition skips project sources while preserving
+User/built-in authority; Product Host Workspace authorization never grants trust. Declared
 managed Python identities are included in prospective availability even when
 absent; bounded discovery diagnoses missing enabled resources without preparation.
 

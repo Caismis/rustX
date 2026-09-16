@@ -95,7 +95,7 @@ model = "fixture/process-model"
 }
 
 #[test]
-fn untrusted_real_process_never_activates_project_content_or_publishes_a_session() {
+fn untrusted_real_process_uses_user_defaults_without_project_activation() {
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().join("workspace");
     std::fs::create_dir(&workspace).unwrap();
@@ -132,13 +132,16 @@ model = "fixture/process-model"
         .stdin(Stdio::null())
         .output()
         .unwrap();
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("--trust grant"));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(output.stdout.is_empty());
     assert!(!sentinel.exists(), "zero external starts");
     assert!(
-        !home.join(".local/state/rustx/workspaces").exists(),
-        "no Session, child or Workflow state"
+        !home.join(".local/state/rustx/trust").exists(),
+        "cwd use cannot grant native trust"
     );
     assert_eq!(
         server.accept().unwrap_err().kind(),
