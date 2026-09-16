@@ -106,26 +106,25 @@ dependency graph and lockfile are owned by pnpm.
 
 ## Running
 
-Local mode owns one `rustx app-server --listen stdio` child. Build the binary,
-configure the host model through Rust, and grant project trust:
+Use the canonical [development launcher](../DEVELOPMENT.md). It delegates to this
+TUI composition root; local mode owns one `rustx app-server --listen stdio` child.
+Build/install as described there, configure the host model through Rust, then run:
 
 ```sh
-cargo build --bin rustx
-./target/debug/rustx --workspace /path/to/project --trust grant
-pnpm --dir tui start --binary "$PWD/target/debug/rustx" --cwd /path/to/project
+pnpm --dir dev tui -- --user-settings /absolute/path/settings.toml --workspace /absolute/path/project
 ```
 
 Connect to an externally managed App Server with:
 
 ```sh
-pnpm --dir tui start --connect ws://127.0.0.1:8080 --token-file /private/user/socket-token --cwd /srv/project --session SESSION_ID
+pnpm --dir tui start --connect ws://127.0.0.1:8080 --token-file /private/user/socket-token --workspace /srv/project --session SESSION_ID
 ```
 
-Both modes use the same typed client and generated v4 DTOs. `--user-settings`,
+Both modes use the same typed client and generated v5 DTOs. `--user-settings`,
 `--models`, and `--runtime-root` bind the local child process. Session settings
-such as `--cwd`, `--config`, and `--model` travel through `session/create`;
-paths resolve on the server. Local mode may default `--cwd` from the TUI
-process cwd. Remote mode requires an explicit absolute server-side `--cwd`,
+such as `--workspace`, `--config`, and `--model` travel through `session/create`;
+paths resolve on the server. Local mode may default `--workspace` from the TUI
+process cwd. Remote mode requires an explicit absolute server-side `--workspace`,
 even with `--session`, since `/new` can create Sessions later. The TUI never reads runtime configuration or
 provider credentials. `--name` calls `session/name` for the initial Session.
 

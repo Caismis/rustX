@@ -21,3 +21,6 @@
 /test-support/fake-provider/.pytest_cache
 __pycache__/
 *.pyc
+
+# Development launcher
+/dev/node_modules

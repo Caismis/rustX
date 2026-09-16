@@ -58,16 +58,17 @@ field ownership, precedence, path semantics, defaults and trust.
 explains the redacted prospective next launch. Only explicit `doctor --probe`
 may connect or spawn diagnostic targets. See the [command and exit contract](docs/configuration-diagnostics.md).
 
-Build the runtime and install the reference TUI:
+See [Local development](DEVELOPMENT.md) for the canonical App Server, TUI, and complete Web launchers. Build the runtime and install the reference TUI:
 
 ```sh
 cargo build --bin rustx
+pnpm --dir dev install --frozen-lockfile
 pnpm --dir tui install --frozen-lockfile
 ./target/debug/rustx --workspace /path/to/project --trust grant
-pnpm --dir tui start --binary "$PWD/target/debug/rustx" --workspace /path/to/project
+pnpm --dir dev tui -- --workspace /absolute/path/to/project
 ```
 
-When launched from the project, `--workspace` is unnecessary. A project
+Supply `--workspace` explicitly with the development launcher. A project
 `rustx.toml` is optional, and runtime state defaults to the user state directory.
 Native-only startup needs neither Python nor MCP. The
 [advanced resource example](examples/local-runtime/README.md) also demonstrates
@@ -83,22 +84,19 @@ cannot publish another active Session.
 `rustx` is the runtime. `rustx-tui` is a reference client and presentation
 layer.
 
-The TUI spawns `rustx`, communicates with it through the Runtime Client protocol
+The TUI spawns `rustx`, communicates with it through the App Server protocol
 over stdio/JSONL, and projects runtime snapshots and events into a terminal
 interface. Model, Session, tool, capability, context, and execution semantics
 remain owned by the Rust runtime; the TUI does not implement a parallel
 runtime or session system. See [`tui/README.md`](tui/README.md) for the
 user-visible command surface.
 
-That current Runtime Client wire contract is temporary pre-#290 infrastructure.
-The [App Server protocol](docs/app-server-protocol.md) (#288) is the unified,
-transport-neutral client boundary. `rustx app-server --listen stdio` and
-`rustx app-server --listen ws://127.0.0.1:8080 --token-file <path>` provide the
-standalone server transports. Add `--user-settings <settings.toml>` to bind the
-canonical user source explicitly (otherwise the XDG default applies); #290 moves local TUI
-to stdio JSONL with a TUI-owned App Server child and existing/remote TUI to
-WebSocket with an externally managed server. Ordinary local use needs no loopback
-WebSocket. Connection detach is separate from owner-driven child-process shutdown.
+The [App Server protocol](docs/app-server-protocol.md) is the unified,
+transport-neutral client boundary. Direct `rustx app-server --listen stdio` and
+`rustx app-server --listen ws://127.0.0.1:8080 --token-file <path>` serve
+headless/integration use. Local TUI owns a stdio App Server child; remote TUI
+connects to an externally managed WebSocket server. Connection detach is separate
+from owner-driven process shutdown.
 
 The [Developer Web Console](web-console/README.md) uses this App Server directly.
 It adapts a pinned subset of DeepSeek Harness presentation source for concurrent

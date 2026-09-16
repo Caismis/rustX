@@ -32,16 +32,18 @@ import {
   forwardConfigurationCommand,
 } from "./configuration-command.ts";
 
-async function connect(parsed: TuiArguments): Promise<AppServerHost> {
+async function connect(parsed: TuiArguments, signal?: AbortSignal): Promise<AppServerHost> {
   if (parsed.mode.kind === "local") {
     return AppServerHost.spawnLocal({
       binary: parsed.mode.binary,
+      signal,
       launch: parsed.mode.launch,
     });
   }
   // At most one trailing newline, exactly as the server's own token file
   // contract allows. Nothing else about the value is interpreted here.
   const token = (await readFile(parsed.mode.tokenFile, "utf8")).replace(/\n$/, "");
+  signal?.throwIfAborted();
   return AppServerHost.connectRemote({
     endpoint: parsed.mode.endpoint,
     token,
@@ -65,38 +67,48 @@ async function main(argv: readonly string[]): Promise<number> {
     throw error;
   }
 
-  let host: AppServerHost;
+  const controller = new AbortController();
+  let host: AppServerHost | undefined;
+  let app: RustxTuiApp | undefined;
+  const stop = () => {
+    controller.abort();
+    if (app) void app.quit();
+    else if (host) void host.shutdown();
+  };
+  const message = (value: unknown) => {
+    if (typeof value === "object" && value !== null && "stop" in value && value.stop === true) stop();
+  };
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+  process.on("message", message);
+  process.on("disconnect", stop);
   try {
-    host = await connect(parsed);
+    host = await connect(parsed, controller.signal);
+    controller.signal.throwIfAborted();
+    const focus: StartupFocus = await prepareStartup(host, parsed);
+    controller.signal.throwIfAborted();
+    app = new RustxTuiApp({
+      host,
+      reconnect: parsed.mode.kind === "remote" ? () => connect(parsed, controller.signal) : undefined,
+      ...focus,
+      sessionSettings: parsed.sessionSettings,
+      cwd: parsed.sessionSettings.cwd,
+    });
+    return await app.run();
   } catch (error) {
-    process.stderr.write(`rustx-tui: ${(error as Error).message}\n`);
+    if (controller.signal.aborted) return 0;
+    const stderr = host?.stderrTail().text.trim();
+    process.stderr.write(`rustx-tui: ${(error as Error).message}${stderr ? `\n${stderr}` : ""}\n`);
     return 1;
+  } finally {
+    await host?.shutdown();
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+    process.off("message", message);
+    process.off("disconnect", stop);
   }
-
-  let focus: StartupFocus;
-  try {
-    focus = await prepareStartup(host, parsed);
-  } catch (error) {
-    const stderr = host.stderrTail().text.trim();
-    // A failed start still releases whatever this launch owns: an owned child
-    // is shut down, and an external server is only disconnected from.
-    await host.shutdown();
-    const detail = stderr.length > 0 ? `\n${stderr}` : "";
-    process.stderr.write(
-      `rustx-tui: could not open a Session: ${(error as Error).message}${detail}\n`,
-    );
-    return 1;
-  }
-
-  const app = new RustxTuiApp({
-    host,
-    reconnect: parsed.mode.kind === "remote" ? () => connect(parsed) : undefined,
-    ...focus,
-    sessionSettings: parsed.sessionSettings,
-    cwd: parsed.sessionSettings.cwd,
-  });
-  return app.run();
 }
 
 const code = await main(process.argv.slice(2));
+if (process.connected) process.disconnect();
 process.exitCode = code;

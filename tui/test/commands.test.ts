@@ -1444,7 +1444,7 @@ describe("CLI arguments", () => {
     "/m.toml",
     "--runtime-root",
     "/private/state",
-    "--cwd",
+    "--workspace",
     "/work/project",
     "--config",
     "/work/project/rustx.toml",
@@ -1517,16 +1517,16 @@ describe("CLI arguments", () => {
   it("defaults only local Session cwd from the controlled client cwd", (t) => {
     t.mock.method(process, "cwd", () => "/client/workspace");
     assert.equal(parseArguments(["--binary", "rustx"]).sessionSettings.cwd, "/client/workspace");
-    assert.equal(parseArguments(["--binary", "rustx", "--cwd", "/explicit/local"]).sessionSettings.cwd, "/explicit/local");
+    assert.equal(parseArguments(["--binary", "rustx", "--workspace", "/explicit/local"]).sessionSettings.cwd, "/explicit/local");
   });
 
   it("requires an explicit absolute remote cwd without consulting client cwd", (t) => {
     t.mock.method(process, "cwd", () => { throw new Error("remote parsing must not read client cwd"); });
     const remote = ["--connect", "wss://server.test", "--token-file", "/client/token"];
-    for (const suffix of [[], ["--cwd", "relative/project"], ["--cwd", ""]]) {
-      assert.throws(() => parseArguments([...remote, ...suffix]), /remote Session cwd requires an explicit --cwd absolute path on the App Server host/);
+    for (const suffix of [[], ["--workspace", "relative/project"], ["--workspace", ""]]) {
+      assert.throws(() => parseArguments([...remote, ...suffix]), /remote Session cwd requires an explicit --workspace absolute path on the App Server host/);
     }
-    assert.equal(parseArguments([...remote, "--cwd", "/server/work/../project"]).sessionSettings.cwd, "/server/work/../project");
+    assert.equal(parseArguments([...remote, "--workspace", "/server/work/../project"]).sessionSettings.cwd, "/server/work/../project");
   });
 
   it("parses an existing/remote App Server connection", () => {
@@ -1535,7 +1535,7 @@ describe("CLI arguments", () => {
       "ws://127.0.0.1:8080",
       "--token-file",
       "/private/user/socket-token",
-      "--cwd",
+      "--workspace",
       "/srv/project",
     ]);
     assert.equal(parsed.mode.kind, "remote");
@@ -1602,7 +1602,7 @@ describe("CLI arguments", () => {
       );
     }
     assert.equal(
-      parseArguments(["--connect", "wss://example.test", "--token-file", "/t", "--cwd", "/srv/project"])
+      parseArguments(["--connect", "wss://example.test", "--token-file", "/t", "--workspace", "/srv/project"])
         .mode.kind,
       "remote",
     );
@@ -1647,7 +1647,7 @@ describe("CLI arguments", () => {
     // There is no global active Session to continue, and conversation
     // inspection was a Runtime Client process capability with no App Server
     // method behind it. Both are unknown arguments rather than aliases.
-    for (const flag of ["--continue", "--inspect-conversation", "--workspace", "--trust"]) {
+    for (const flag of ["--continue", "--inspect-conversation", "--cwd", "--trust"]) {
       assert.throws(
         () => parseArguments(["--binary", "/usr/bin/rustx", flag, "x"]),
         /unknown argument/,

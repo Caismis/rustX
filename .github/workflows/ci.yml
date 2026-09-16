@@ -333,6 +333,12 @@ jobs:
       - name: Install the TUI client used by shared-server browser acceptance
         working-directory: tui
         run: pnpm install --frozen-lockfile
+      - name: Install and check development launchers
+        working-directory: dev
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm typecheck
+          pnpm test
       - name: Typecheck
         working-directory: web-console
         run: pnpm typecheck

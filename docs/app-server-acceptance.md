@@ -82,8 +82,8 @@ rustx init --template openai-chat --provider fixture --model-id integration-mode
   --context-window 128000 --max-output 4096 --tool-calls true --reasoning false \
   --compat 'chat_reasoning_replay = "omit"'
 rustx --workspace /tmp/rustx-dogfood-work --trust grant
-# From tui/ (or use the installed rustx-tui command):
-pnpm start --binary ../target/debug/rustx --cwd /tmp/rustx-dogfood-work \
+# From the repository root, through the canonical development owner:
+pnpm --dir dev tui -- --workspace /tmp/rustx-dogfood-work \
   --runtime-root /tmp/rustx-dogfood-runtime
 ```
 
@@ -120,7 +120,7 @@ Connect the browser at `http://127.0.0.1:5173`. Connect the ordinary remote TUI:
 ```sh
 # From tui/, substitute the printed values:
 pnpm start --connect ws://127.0.0.1:PORT --token-file /PRINTED/token-file \
-  --cwd /PRINTED/workspaceB --resume
+  --workspace /PRINTED/workspaceB --resume
 ```
 
 Keep A attached in the browser. Explicitly detach B there before choosing B in

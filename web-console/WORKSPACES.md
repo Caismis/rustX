@@ -13,7 +13,10 @@ resolution rechecks physical identity. The browser submits opaque registration o
 configured-location handles, never paths to authorize. `host/http.ts` exposes the
 small typed `src/workspaces/host.ts` contract using same-origin JSON POSTs.
 
-Create an operator-owned JSON file outside the repository/runtime root, e.g.:
+Normal local development uses [the dev launcher](../DEVELOPMENT.md), which owns
+the ephemeral config and metadata. The following describes the distinct case of
+an independently managed Product Host with persistent operator-owned metadata.
+Create its JSON file outside the repository/runtime root, e.g.:
 
 ```json
 {

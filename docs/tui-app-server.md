@@ -15,6 +15,9 @@ of what that server publishes.
         TUI-owned child process      existing / remote server
 ```
 
+For normal local development, use the [canonical launcher](../DEVELOPMENT.md).
+The underlying client contracts are described below.
+
 ## Two modes, one protocol
 
 ```sh
@@ -23,11 +26,11 @@ rustx-tui --binary /usr/local/bin/rustx \
           [--user-settings ~/.config/rustx/settings.toml] \
           [--models ~/.config/rustx/models.toml] \
           [--runtime-root ~/.local/state/rustx/app-server] \
-          [--cwd /work/project] [--config /work/project/rustx.toml]
+          [--workspace /work/project] [--config /work/project/rustx.toml]
 
 # existing / remote: the TUI connects to a server someone else runs
 rustx-tui --connect ws://127.0.0.1:8080 --token-file /private/user/socket-token \
-          --cwd /srv/project
+          --workspace /srv/project
 ```
 
 Local mode spawns exactly one `rustx app-server --listen stdio` child and speaks
@@ -49,12 +52,12 @@ Three groups, deliberately not mixed:
 | --- | --- | --- |
 | Mode | `--binary`, `--connect`, `--token-file` | which App Server, and who runs it |
 | Process bindings | `--user-settings`, `--models`, `--runtime-root` | the App Server **process**; local mode only |
-| Session settings | `--cwd`, `--config`, `--model`, `--name`, `--skill`, `--no-automatic-skills`, `--no-builtin-tools`, `--no-direct-tools`, `--tools`, `--exclude-tools` | `session/create` inputs |
+| Session settings | `--workspace`, `--config`, `--model`, `--name`, `--skill`, `--no-automatic-skills`, `--no-builtin-tools`, `--no-direct-tools`, `--tools`, `--exclude-tools` | `session/create` inputs |
 
 A Session cwd belongs to the App Server's filesystem namespace. In local
-self-hosted mode, omitted `--cwd` defaults to the TUI process cwd because the
+self-hosted mode, omitted `--workspace` defaults to the TUI process cwd because the
 owned child shares that filesystem. Every remote launch requires an explicit
-absolute `--cwd` on the **server host**, including launches using `--session`
+absolute `--workspace` on the **server host**, including launches using `--session`
 since `/new` can create Sessions later. The client passes that path unchanged;
 it never supplies its own cwd, home directory, or token-file location as a
 remote default. Missing or relative remote cwd fails before connecting.

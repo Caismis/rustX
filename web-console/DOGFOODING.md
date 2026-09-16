@@ -1,5 +1,11 @@
 # Full Web dogfooding (WEB-10)
 
+For normal local development with your own native settings, use the
+[canonical dev launcher](../DEVELOPMENT.md). This guide is the strict scripted
+acceptance environment; its fake provider, scenario assertions, trust setup and
+test Workspaces are intentionally fixture-only.
+
+
 This guide uses real rustX App Server, native Tools, the local Product Host and
 strict local provider scripts. No paid model or external MCP service is needed.
 The scripts validate exact prompt order. A fresh fixture for each chapter keeps
