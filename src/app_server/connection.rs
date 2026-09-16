@@ -23,11 +23,22 @@ fn valid_request_id(id: &RequestId) -> bool {
     !matches!(id, RequestId::Integer(n) if !(-9_007_199_254_740_991..=9_007_199_254_740_991).contains(n))
 }
 
-#[derive(Default)]
 struct RouteTable {
+    attachment_limit: usize,
     closed: bool,
     active: BTreeMap<SessionId, Arc<Route>>,
     reserved: std::collections::BTreeSet<SessionId>,
+}
+
+impl Default for RouteTable {
+    fn default() -> Self {
+        Self {
+            attachment_limit: MAX_ATTACHMENTS,
+            closed: false,
+            active: BTreeMap::new(),
+            reserved: std::collections::BTreeSet::new(),
+        }
+    }
 }
 
 struct AttachReservation {
@@ -49,7 +60,7 @@ impl AttachReservation {
         if routes.active.contains_key(session) || routes.reserved.contains(session) {
             return Err(domain(ErrorData::ControllerInUse));
         }
-        if routes.active.len() + routes.reserved.len() >= MAX_ATTACHMENTS {
+        if routes.active.len() + routes.reserved.len() >= routes.attachment_limit {
             host.attachment_capacity_refused();
             return Err(domain(ErrorData::AttachmentCapacity));
         }
@@ -140,6 +151,17 @@ impl AppServerConnection {
     pub(crate) fn attachment_counts(&self) -> (usize, usize) {
         let routes = self.routes.lock().expect("routes mutex");
         (routes.active.len(), routes.reserved.len())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_attachment_limit_for_test(host: AppServerHost, limit: usize) -> Self {
+        let connection = Self::new(host);
+        connection
+            .routes
+            .lock()
+            .expect("routes mutex")
+            .attachment_limit = limit;
+        connection
     }
 
     #[must_use]
@@ -1116,5 +1138,16 @@ fn source_settings_error(
         crate::local_runtime::session_runtime_manager::SourceSettingsError::Source(error) => {
             source_error(error)
         }
+    }
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    #[test]
+    fn production_route_table_starts_with_32_attachment_slots() {
+        let routes = super::RouteTable::default();
+        assert_eq!(routes.attachment_limit, 32);
+        assert!(routes.active.is_empty());
+        assert!(routes.reserved.is_empty());
     }
 }

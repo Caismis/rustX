@@ -421,26 +421,21 @@ async fn attach_session(
 async fn capacity_rejection_never_composes_and_unload_reclaims_without_notifications() {
     bounded(async {
         let f = Fixture::new().await;
-        f.manager
-            .registry
-            .0
-            .lock()
-            .unwrap()
-            .policy
-            .max_resident_runtimes = 64;
-        let connection = AppServerConnection::new(f.host.clone());
+        let connection = AppServerConnection::new_with_attachment_limit_for_test(f.host.clone(), 2);
         initialize(&connection).await;
-        let sessions = cold_sessions(&f, 34).await;
+        let sessions = cold_sessions(&f, 3).await;
+        assert_eq!(connection.attachment_counts(), (0, 0));
         let mut targets = Vec::new();
-        for session in &sessions[..32] {
+        for session in &sessions[..2] {
             targets.push(attach_session(&connection, session).await);
         }
-        assert_eq!(connection.attachment_counts(), (32, 0));
+        assert_eq!(connection.attachment_counts(), (2, 0));
+        assert_eq!(f.host.diagnostics().external_attachments, 2);
         assert_eq!(
             rejected(
                 &connection,
                 Method::SessionAttach {
-                    session_id: sessions[32].id.clone(),
+                    session_id: sessions[2].id.clone(),
                     node_id: None
                 }
             )
@@ -449,29 +444,49 @@ async fn capacity_rejection_never_composes_and_unload_reclaims_without_notificat
         );
         assert_eq!(
             f.manager
-                .probe(&sessions[32].active_conversation_id)
+                .probe(&sessions[2].active_conversation_id)
                 .compositions
                 .load(std::sync::atomic::Ordering::SeqCst),
             0
         );
         assert_eq!(
-            f.manager.residency(&sessions[32].active_conversation_id),
+            f.manager.residency(&sessions[2].active_conversation_id),
             super::ResidencyState::Unloaded
         );
-        for target in targets.drain(..2) {
+        assert_eq!(connection.attachment_counts(), (2, 0));
+        assert_eq!(f.host.diagnostics().external_attachments, 2);
+        for target in targets.drain(..1) {
             call(&connection, 301, Method::SessionUnload { target }).await;
         }
-        assert_eq!(connection.attachment_counts(), (30, 0));
+        assert_eq!(connection.attachment_counts(), (1, 0));
+        assert_eq!(f.host.diagnostics().external_attachments, 1);
         // No next_notification call: unload's response is the terminal acknowledgement.
-        for session in &sessions[32..] {
+        for session in &sessions[2..] {
             targets.push(attach_session(&connection, session).await);
         }
-        assert_eq!(connection.attachment_counts(), (32, 0));
+        assert_eq!(connection.attachment_counts(), (2, 0));
+        assert_eq!(f.host.diagnostics().external_attachments, 2);
+        assert_eq!(
+            f.manager
+                .probe(&sessions[2].active_conversation_id)
+                .compositions
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
         assert!(f.provider.request_bodies().is_empty());
         for target in targets {
             call(&connection, 302, Method::SessionUnload { target }).await;
         }
         assert_eq!(connection.attachment_counts(), (0, 0));
+        assert_eq!(f.host.diagnostics().external_attachments, 0);
+        for session in &sessions {
+            assert_eq!(
+                f.manager.residency(&session.active_conversation_id),
+                super::ResidencyState::Unloaded
+            );
+        }
+        connection.close();
+        assert_eq!(f.host.diagnostics().external_attachments, 0);
         f.close().await;
     })
     .await;
@@ -482,29 +497,26 @@ async fn concurrent_final_slot_is_reserved_before_composition() {
     bounded(async {
         use std::sync::Arc;
         let f = Fixture::new().await;
-        f.manager
-            .registry
-            .0
-            .lock()
-            .unwrap()
-            .policy
-            .max_resident_runtimes = 64;
-        let connection = Arc::new(AppServerConnection::new(f.host.clone()));
+        let connection = Arc::new(AppServerConnection::new_with_attachment_limit_for_test(
+            f.host.clone(),
+            2,
+        ));
         initialize(&connection).await;
-        let sessions = cold_sessions(&f, 33).await;
-        for session in &sessions[..31] {
+        let sessions = cold_sessions(&f, 3).await;
+        for session in &sessions[..1] {
             attach_session(&connection, session).await;
         }
+        assert_eq!(connection.attachment_counts(), (1, 0));
         let probes = [
-            f.manager.probe(&sessions[31].active_conversation_id),
-            f.manager.probe(&sessions[32].active_conversation_id),
+            f.manager.probe(&sessions[1].active_conversation_id),
+            f.manager.probe(&sessions[2].active_conversation_id),
         ];
         for probe in &probes {
             probe.before_compose.arm();
         }
         let barrier = Arc::new(tokio::sync::Barrier::new(3));
         let mut tasks = Vec::new();
-        for session in &sessions[31..] {
+        for session in &sessions[1..] {
             let worker = connection.clone();
             let barrier = barrier.clone();
             let session_id = session.id.clone();
@@ -527,7 +539,7 @@ async fn concurrent_final_slot_is_reserved_before_composition() {
             () = probes[0].before_compose.entered() => 0,
             () = probes[1].before_compose.entered() => 1,
         };
-        assert_eq!(connection.attachment_counts(), (31, 1));
+        assert_eq!(connection.attachment_counts(), (1, 1));
         let loser = tasks.remove(1 - winner).await.unwrap();
         assert!(matches!(
             loser,
@@ -545,12 +557,19 @@ async fn concurrent_final_slot_is_reserved_before_composition() {
                 .load(std::sync::atomic::Ordering::SeqCst),
             0
         );
+        assert_eq!(
+            f.manager
+                .residency(&sessions[2 - winner].active_conversation_id),
+            super::ResidencyState::Unloaded
+        );
+        assert_eq!(connection.attachment_counts(), (1, 1));
+        assert_eq!(f.host.diagnostics().external_attachments, 2);
         probes[winner].before_compose.release();
         assert!(matches!(
             tasks.remove(0).await.unwrap(),
             Response::Success(_)
         ));
-        assert_eq!(connection.attachment_counts(), (32, 0));
+        assert_eq!(connection.attachment_counts(), (2, 0));
         assert!(f.provider.request_bodies().is_empty());
         for session in &sessions {
             f.manager
@@ -558,6 +577,12 @@ async fn concurrent_final_slot_is_reserved_before_composition() {
                 .await
                 .unwrap();
         }
+        connection.close();
+        assert_eq!(connection.attachment_counts(), (0, 0));
+        assert_eq!(f.host.diagnostics().external_attachments, 0);
+        connection.close();
+        assert_eq!(connection.attachment_counts(), (0, 0));
+        assert_eq!(f.host.diagnostics().external_attachments, 0);
         f.close().await;
     })
     .await;
