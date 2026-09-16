@@ -133,7 +133,11 @@ describe('Goal dock binds GoalDomain state and native goal/control', () => {
     fireEvent.click(goalButton('Pause goal'));
     await waitFor(() => expect(dock('Goal').textContent).toContain('Paused Goal'));
     expect(dock('Goal').textContent).toContain('r4');
-    expect(goalButton('Resume goal')).toHaveProperty('disabled', false);
+    // The projected text and the control lock are two different signals: this
+    // text is published *by* the reread, and the dock unlocks only once the
+    // mutation itself settles afterwards. Gate on the unlock, never on its
+    // proxy, or the assertion lands inside that window.
+    await waitFor(() => expect(goalButton('Resume goal')).toHaveProperty('disabled', false));
     fireEvent.click(goalButton('Resume goal'));
     await waitFor(() => expect(dock('Goal').textContent).toContain('Ongoing Goal'));
     expect(goalControls()).toEqual([
