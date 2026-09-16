@@ -33,6 +33,12 @@ The fixture grants project trust unless launched with `--untrusted`. Its isolate
 HOME/config/state/runtime roots are removed on shutdown. Only fake credential
 references are used. Do not use this local trusted fixture as a remote auth service.
 
+The scenario is optional (default `web_console_dogfood`). For example,
+`pnpm --dir web-console dogfood:server --untrusted` starts that default without
+pre-granting native project trust. `--untrusted` may precede or follow the scenario;
+unknown flags and multiple scenarios are rejected. Host Workspace authorization
+is unchanged.
+
 For gate commands below, set `control` to the printed `providerControl` URL:
 
 ```sh
