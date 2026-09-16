@@ -4,7 +4,7 @@ use super::composition::StartupSession;
 use super::configuration::{
     AdmittedSessionConfig, ProspectiveSessionConfig, SessionConfigInput, SessionLocations,
     UserConfigManager, UserConfigSources, absolute, bind_user_source_path, canonical_directory,
-    canonical_settings_source, present_on_disk, trust_root,
+    canonical_settings_source, present_on_disk,
 };
 use super::diagnostics::LaunchFailure;
 use crate::bounded_file::read_bounded;
@@ -215,25 +215,8 @@ pub fn change_trust(
         models: host.config_directory.join("models.toml"),
         runtime_root: locations.runtime_root.clone(),
     };
-    let root = trust_root(&sources, &locations.workspace)?;
-    let record = root.join(identity);
-    match action {
-        TrustAction::Grant => {
-            std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-            match std::fs::create_dir(&record) {
-                Ok(()) => Ok(()),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && record.is_dir() => {
-                    Ok(())
-                }
-                Err(e) => Err(e.to_string()),
-            }
-        }
-        TrustAction::Revoke => match std::fs::remove_dir(&record) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e.to_string()),
-        },
-    }
+    super::configuration::TrustEpoch::acquire(&sources, &locations.workspace, &identity)?
+        .change(action)
 }
 
 /// Resolve inspection state without loading models or project configuration.

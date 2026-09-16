@@ -8,8 +8,8 @@ afterEach(cleanup);
 type Read = Extract<MethodResult, { type: 'source_settings' }>;
 const fixture = (): Read => ({ type: 'source_settings', session_revision: '7', session_selection: { model: 'native/a' }, projection: {
   catalog: { document: '/bound/models.toml', revision: 'catalog-1', models: { models: ['native/a', 'native/b'].map(model => ({ model, protocol: 'openai_chat_completions' as const, contextWindow: 128000, maxOutputTokens: 4096, declaredCapabilities: { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: false }, effectiveCapabilities: { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: false }, credentialSource: { type: 'environment' as const, variable: 'FIXTURE_KEY' } })) }, providers: {} },
-  user: { document: '/bound/settings.toml', revision: 'user-1', active: true, selection: { model: 'native/a' } },
-  workspace: { document: '/workspace/rustx.toml', revision: 'workspace-1', active: false, selection: null },
+  user: { document: '/bound/settings.toml', revision: 'user-1', active: true, authored: { model: 'native/a' } },
+  workspace: { document: '/workspace/rustx.toml', revision: 'workspace-1', active: false, authored: null },
   // Deliberately differs from authored inputs: rendering must use this projection.
   effective: { model: 'native/server-resolved' }, provenance: { 'agent.model.model': { kind: 'project', document: '/workspace/rustx.toml', base: '/workspace' } }, resolution_available: true,
 } });
@@ -38,7 +38,7 @@ it('sends the exact scope revision and adopts fresh authoritative state after sa
   fireEvent.change(screen.getByLabelText('User model'), { target: { value: 'native/b' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save User' }));
   await screen.findByText('native/new-effective');
-  expect(subject.request.mock.calls[1][0]).toMatchObject({ method: 'settings/sourcesWrite', params: { expected_revision: 'user-1', mutation: { kind: 'user_model', selection: { model: 'native/b' } } } });
+  expect(subject.request.mock.calls[1][0]).toMatchObject({ method: 'settings/sourcesWrite', params: { expected_revision: 'user-1', mutation: { kind: 'user_model', authored: { model: 'native/b' } } } });
   expect(screen.getByRole('status').textContent).toContain('Source committed');
 });
 it('surfaces typed conflict, preserves draft, rereads and only retries on explicit Save', async () => {
@@ -85,4 +85,47 @@ it('keeps catalog authoring User scoped and sends structured credential referenc
   expect(document.querySelector('input[type=password]')).toBeNull();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save User catalog' })));
   expect(subject.request.mock.calls[1][0]).toMatchObject({ method: 'settings/sourcesWrite', params: { expected_revision: 'catalog-1', mutation: { kind: 'catalog', providers: { added: { base_url: 'https://example.invalid/v1', credential: { type: 'environment', variable: 'ADDED_KEY' }, models: [{ id: 'custom', context_window: '128000', max_output_tokens: 4096 }] } } } } });
+});
+
+it('round trips partial source policy without materializing model or unrelated defaults', async () => {
+  const value = fixture();
+  value.projection.user.authored = { request_params: { temperature: 0.3 } };
+  const subject = client(async () => value);
+  render(<Settings client={subject.client} sessionId="A" />); await screen.findByText('native/server-resolved');
+  expect((screen.getByLabelText('User model') as HTMLSelectElement).value).toBe('');
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save User' })));
+  expect(subject.request.mock.calls[1][0]).toEqual({ method: 'settings/sourcesWrite', params: { session_id: 'A', expected_revision: 'user-1', mutation: { kind: 'user_model', authored: { request_params: { temperature: 0.3 } } } } });
+  fireEvent.change(screen.getByLabelText('User reasoning profile'), { target: { value: 'catalog_default' } });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save User' })));
+  expect(subject.request.mock.calls[3][0]).toMatchObject({ params: { mutation: { authored: { request_params: { temperature: 0.3 }, reasoning_profile: { mode: 'catalog_default' } } } } });
+});
+
+it('preserves Workspace omissions and removes only explicit fields or the entire selected layer on reset', async () => {
+  const value = fixture(); value.projection.workspace.active = true;
+  value.projection.workspace.authored = { max_output_tokens: { mode: 'catalog_default' }, summary_model: { mode: 'session' } };
+  const subject = client(async () => value);
+  render(<Settings client={subject.client} sessionId="A" />); await screen.findByText('native/server-resolved');
+  fireEvent.change(screen.getByLabelText('Workspace output policy'), { target: { value: '' } });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save Workspace' })));
+  expect(subject.request.mock.calls[1][0]).toEqual({ method: 'settings/sourcesWrite', params: { session_id: 'A', expected_revision: 'workspace-1', mutation: { kind: 'workspace_model', authored: { summary_model: { mode: 'session' } } } } });
+  fireEvent.click(screen.getByRole('button', { name: 'Reset Workspace' }));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save Workspace' })));
+  expect(subject.request.mock.calls[3][0]).toMatchObject({ params: { mutation: { kind: 'workspace_model', authored: null } } });
+});
+
+it('shows same-model prospective, current, and frozen request differences from native projections', async () => {
+  const value = fixture();
+  const invocation = (reasoningProfile: string, maxOutputTokens: number, temperature: number) => ({ model: 'native/a', protocol: 'openai_chat_completions' as const, contextWindow: 128000, modelMaxOutputTokens: 4096, maxOutputTokens, reasoningProfile, reasoningEnabled: true, requestParams: { temperature }, declaredCapabilities: { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: true }, capabilities: { inputModalities: ['text' as const], outputModalities: ['text' as const], toolCalls: true, reasoning: true } });
+  value.projection.effective = { model: 'native/a', reasoningProfile: 'new', maxOutputTokens: 1000 };
+  value.projection.effective_request = invocation('new', 1000, 0.8);
+  const subject = client(async () => value);
+  subject.client.getSnapshot = () => ({ views: { A: { attachment: 'attached', snapshot: { model: { configured: { model: 'native/a', reasoningProfile: 'current' }, effective: invocation('current', 2000, 0.5), summary: { mode: 'session' } }, attempt: { model: { primary: invocation('old', 3000, 0.2), summary: { mode: 'session' } } } } } } }) as unknown as ReturnType<AppServerClient['getSnapshot']>;
+  render(<Settings client={subject.client} sessionId="A" />);
+  const prospective = await screen.findByRole('region', { name: 'Prospective effective request' });
+  const current = screen.getByRole('region', { name: 'Runtime effective request' });
+  const frozen = screen.getByRole('region', { name: 'Frozen request' });
+  expect(prospective.textContent).toContain('native/a'); expect(current.textContent).toContain('native/a'); expect(frozen.textContent).toContain('native/a');
+  expect(prospective.textContent).toContain('new'); expect(prospective.textContent).toContain('1000'); expect(prospective.textContent).toContain('0.8');
+  expect(current.textContent).toContain('current'); expect(current.textContent).toContain('2000'); expect(current.textContent).toContain('0.5');
+  expect(frozen.textContent).toContain('old'); expect(frozen.textContent).toContain('3000'); expect(frozen.textContent).toContain('0.2');
 });

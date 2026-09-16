@@ -8272,15 +8272,24 @@ See [Agent Profiles](agent-profiles.md) for the exact scope and ownership rules.
 
 ### Settings source authoring
 
-- User-only Provider/catalog definitions cannot be introduced by Workspace or
-  Session selection. Native project trust is required independently of Host cwd
-  authorization; Settings reads never grant trust.
-- Native resolution owns both effective model/request policy and provenance.
-  Authored partial source fields remain distinguishable from resolved defaults.
-- Source revisions are per bound document; Session revisions remain in their
-  existing durable domain. Revision validation and native publication share the
-  same lock. Failed CAS publishes nothing, including for concurrent writers.
-- Source publication affects fresh/cold resolution. Loaded runtime and frozen
-  attempt observations are separate facts and are never fabricated from sources.
-- Web drafts contain credential references/retention markers, never credential
-  values. The native writer alone can retain a literal credential.
+- User/Workspace author canonical partial `ModelLayer`; omission is distinct from
+  explicit catalog-default/profile/limit. Session alone selects whole state.
+- Reset removes the chosen source model layer or Session selection. It never copies
+  Effective and never changes unrelated TOML settings.
+- One bounded native configuration phase owns merge, provenance, catalog validation
+  and context budgets; full Session resolution reuses it before resource preparation.
+- Workspace publication is authorized by trust at atomic rename. Grant/revoke and
+  source projection/publication share one per-workspace native trust epoch. Reads
+  cannot mix inactive Workspace status with Project-derived provenance.
+- Lock order: workspace trust, then sorted document locks. Session catalog locking
+  is limited to snapshot and revision/CAS operations, never source filesystem work.
+- Source reads recheck their captured Session revision once; changes fail typed.
+  Source commits with unavailable coherent readback report committed uncertainty.
+- User, Workspace, catalog and Session CAS domains are independent. Stale revisions
+  never publish; side-effecting commands are never automatically replayed.
+- Prospective/current/frozen model **request** state is native-projected and remains
+  distinguishable even when model identity is unchanged. Admitted attempts stay frozen.
+- Provider definitions and credentials remain User-only, catalog binding remains
+  bootstrap-owned, and no secret values are returned or persisted by Web.
+- Noncooperating filesystem editors may race the last fingerprint check and rename;
+  native locks do not claim stronger filesystem transactions.

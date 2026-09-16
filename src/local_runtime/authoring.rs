@@ -407,40 +407,6 @@ pub(super) fn deserialize_profile_model<'de, D: serde::Deserializer<'de>>(
         .map_err(serde::de::Error::custom)
 }
 impl ModelLayer {
-    #[must_use]
-    pub fn from_selection(value: SessionModelConfig) -> Self {
-        let profile = |name: Option<ReasoningProfileId>| {
-            name.map_or(ReasoningSelection::CatalogDefault {}, |name| {
-                ReasoningSelection::Profile { name }
-            })
-        };
-        let output = |tokens: Option<u32>| {
-            tokens.map_or(ModelOutput::CatalogDefault {}, |tokens| {
-                ModelOutput::Limit { tokens }
-            })
-        };
-        Self {
-            model: Some(value.model),
-            reasoning_profile: Some(profile(value.reasoning_profile)),
-            request_params: Some(RequestParamsToml(value.request_params)),
-            max_output_tokens: Some(output(value.max_output_tokens)),
-            summary_model: Some(match value.summary_model {
-                SummaryModelPolicy::Session => SummaryAuthoring::Session {},
-                SummaryModelPolicy::Explicit {
-                    model,
-                    reasoning_profile,
-                    request_params,
-                    max_output_tokens,
-                } => SummaryAuthoring::Explicit {
-                    model,
-                    reasoning_profile: Some(profile(reasoning_profile)),
-                    request_params: RequestParamsToml(request_params),
-                    max_output_tokens: Some(output(max_output_tokens)),
-                },
-            }),
-        }
-    }
-
     /// Resolve authored whole-state model fields.
     /// # Errors
     /// A primary model must be authored.

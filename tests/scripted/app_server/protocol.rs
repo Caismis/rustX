@@ -2185,7 +2185,12 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
                 session_id: id.clone(),
                 expected_revision: expected.clone(),
                 mutation: SourceMutation::UserModel {
-                    selection: selection.clone(),
+                    authored: Some(
+                        crate::local_runtime::configuration::settings::AuthoredModelSelection {
+                            model: Some(ModelRef::parse("local/b").unwrap()),
+                            ..Default::default()
+                        },
+                    ),
                 },
             },
         )
@@ -2194,14 +2199,17 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
             panic!()
         };
         assert_ne!(saved.user.revision, expected);
-        assert_eq!(saved.user.selection, selection);
+        assert_eq!(
+            saved.user.authored.as_ref().unwrap().model,
+            selection.as_ref().map(|s| s.model.clone())
+        );
         assert!(matches!(
             rejected(
                 &connection,
                 Method::SourcesWrite {
                     session_id: id.clone(),
                     expected_revision: expected,
-                    mutation: SourceMutation::UserModel { selection: None }
+                    mutation: SourceMutation::UserModel { authored: None }
                 }
             )
             .await,
@@ -2289,10 +2297,42 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolution() {
     use crate::local_runtime::configuration::settings::SourceMutation;
-    bounded(async {
+    bounded(Box::pin(async {
         let f = Fixture::new().await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
+        let (initial, _, _) = f
+            .manager
+            .source_settings(&f.sessions[0].id, None)
+            .await
+            .unwrap();
+        let mut providers = initial.catalog.providers;
+        providers.get_mut("local").unwrap().models[0].reasoning =
+            Some(crate::model::authoring::Reasoning {
+                default_profile: crate::model::catalog::ReasoningProfileId::new("old"),
+                profiles: ["old", "new"]
+                    .into_iter()
+                    .map(|name| {
+                        (
+                            crate::model::catalog::ReasoningProfileId::new(name),
+                            crate::model::authoring::Profile {
+                                enabled: false,
+                                request_params: crate::toml_authoring::RequestParamsToml::default(),
+                            },
+                        )
+                    })
+                    .collect(),
+            });
+        f.manager
+            .source_settings(
+                &f.sessions[0].id,
+                Some((
+                    initial.catalog.revision,
+                    SourceMutation::Catalog { providers },
+                )),
+            )
+            .await
+            .unwrap();
         let target = attach(&connection, &f, 0).await;
         call(
             &connection,
@@ -2320,7 +2360,13 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
             panic!()
         };
         let mut providers = projection.catalog.providers;
-        providers.get_mut("local").unwrap().models[0].max_output_tokens = 2048;
+        let model = &mut providers.get_mut("local").unwrap().models[0];
+        model.max_output_tokens = 2048;
+        model.reasoning.as_mut().unwrap().default_profile =
+            crate::model::catalog::ReasoningProfileId::new("new");
+        model.request_params = crate::toml_authoring::RequestParamsToml(
+            serde_json::from_value(serde_json::json!({"temperature": 0.8})).unwrap(),
+        );
         call(
             &connection,
             103,
@@ -2333,7 +2379,27 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
         .await;
         let after = runtime.client().snapshot().unwrap().0;
         assert_eq!(before.model, after.model);
-        assert_eq!(before.attempt.unwrap().model, after.attempt.unwrap().model);
+        assert_eq!(
+            before.attempt.as_ref().unwrap().model,
+            after.attempt.as_ref().unwrap().model
+        );
+        let (prospective, _, _) = f
+            .manager
+            .source_settings(&target.session_id, None)
+            .await
+            .unwrap();
+        let next = prospective.effective_request.unwrap();
+        let frozen = after.attempt.as_ref().unwrap().model.as_ref().unwrap();
+        assert_eq!(next.model, frozen.primary.model);
+        assert_eq!(next.max_output_tokens, 2048);
+        assert_eq!(frozen.primary.max_output_tokens, 4096);
+        assert_eq!(next.reasoning_profile.as_ref().unwrap().as_str(), "new");
+        assert_eq!(
+            frozen.primary.reasoning_profile.as_ref().unwrap().as_str(),
+            "old"
+        );
+        assert_eq!(next.request_params["temperature"], 0.8);
+        assert!(!frozen.primary.request_params.contains_key("temperature"));
         let cold = attach(&connection, &f, 1).await;
         let MethodResult::Models { catalog } =
             call(&connection, 104, Method::ModelCatalog { target: cold }).await
@@ -2350,6 +2416,125 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
             2048
         );
         f.gates[0].release();
+        f.close().await;
+    }))
+    .await;
+}
+
+fn source_gate(
+    f: &Fixture,
+    point: &'static str,
+) -> (
+    tokio::sync::oneshot::Receiver<()>,
+    std::sync::mpsc::Sender<()>,
+) {
+    let (entered, waiting) = tokio::sync::oneshot::channel();
+    let (release, resume) = std::sync::mpsc::channel();
+    f.manager.configuration.test_hooks.insert(point, move || {
+        entered.send(()).unwrap();
+        resume.recv().unwrap();
+    });
+    (waiting, release)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn web08_source_document_wait_releases_catalog_and_rejects_mixed_session_revision() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let id = f.sessions[0].id.clone();
+        let (before, revision, _) = f.manager.source_settings(&id, None).await.unwrap();
+        let document_lock = crate::local_runtime::settings::lock_document(std::path::Path::new(&before.user.document)).unwrap();
+        let (entered, resume) = source_gate(&f, "before_documents");
+        let manager = f.manager.clone();
+        let read_id = id.clone();
+        let read = tokio::spawn(async move { manager.source_settings(&read_id, None).await });
+        entered.await.unwrap();
+        resume.send(()).unwrap();
+        // Source worker owns trust and is about to wait on this held document lock.
+        // Unrelated catalog access and a durable same-Session commit both finish.
+        let mut catalog = f.manager.sessions.catalog.lock().await;
+        catalog.settings_revision(&f.sessions[1].id).unwrap();
+        let (_, mut settings) = catalog.lineage(&id, None).unwrap();
+        settings.model = Some(crate::model::session::SessionModelConfig::of(crate::model::catalog::ModelRef::parse("local/b").unwrap()));
+        let next = catalog.replace_settings(&id, revision, settings).unwrap();
+        drop(catalog);
+        assert!(!read.is_finished(), "held document lock prevents source completion");
+        drop(document_lock);
+        assert!(matches!(read.await.unwrap(), Err(super::super::SourceSettingsError::Session(crate::local_runtime::session::SessionError::StaleSettings { expected, actual })) if expected == revision && actual == next));
+        let (after, current, selected) = f.manager.source_settings(&id, None).await.unwrap();
+        assert_eq!(current, next);
+        assert_eq!(selected.unwrap().model.to_string(), "local/b");
+        assert_eq!(after.user.revision, before.user.revision);
+        f.close().await;
+    }).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn web08_selection_validation_releases_catalog_and_commits_with_original_cas() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let id = f.sessions[0].id.clone();
+        let (_, revision, _) = f.manager.source_settings(&id, None).await.unwrap();
+        let (entered, resume) = source_gate(&f, "validation_started");
+        let manager = f.manager.clone();
+        let select_id = id.clone();
+        let save = tokio::spawn(async move { manager.select_model(&select_id, revision, Some(crate::model::session::SessionModelConfig::of(crate::model::catalog::ModelRef::parse("local/b").unwrap()))).await });
+        entered.await.unwrap();
+        let mut catalog = f.manager.sessions.catalog.lock().await;
+        catalog.settings_revision(&f.sessions[1].id).unwrap();
+        let (_, settings) = catalog.lineage(&id, None).unwrap();
+        let unchanged = settings.model.clone();
+        let next = catalog.replace_settings(&id, revision, settings).unwrap();
+        drop(catalog);
+        resume.send(()).unwrap();
+        assert!(matches!(save.await.unwrap(), Err(super::super::SourceSettingsError::Session(crate::local_runtime::session::SessionError::StaleSettings { expected, actual })) if expected == revision && actual == next));
+        let (_, actual, selection) = f.manager.source_settings(&id, None).await.unwrap();
+        assert_eq!(actual, next);
+        assert_eq!(selection, unchanged);
+        f.close().await;
+    }).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn web08_source_commit_with_changed_session_is_uncertain_and_never_replayed() {
+    use crate::local_runtime::configuration::settings::{SettingsError, SourceMutation};
+    bounded(async {
+        let f = Fixture::new().await;
+        let id = f.sessions[0].id.clone();
+        let (before, revision, _) = f.manager.source_settings(&id, None).await.unwrap();
+        let (entered, resume) = source_gate(&f, "before_publication");
+        let mut providers = before.catalog.providers;
+        providers.get_mut("local").unwrap().models[0].max_output_tokens = 2048;
+        let manager = f.manager.clone();
+        let write_id = id.clone();
+        let write = tokio::spawn(async move {
+            manager
+                .source_settings(
+                    &write_id,
+                    Some((
+                        before.catalog.revision,
+                        SourceMutation::Catalog { providers },
+                    )),
+                )
+                .await
+        });
+        entered.await.unwrap();
+        let mut catalog = f.manager.sessions.catalog.lock().await;
+        let (_, settings) = catalog.lineage(&id, None).unwrap();
+        catalog.replace_settings(&id, revision, settings).unwrap();
+        drop(catalog);
+        resume.send(()).unwrap();
+        assert!(matches!(
+            write.await.unwrap(),
+            Err(super::super::SourceSettingsError::Source(
+                SettingsError::Committed
+            ))
+        ));
+        let (fresh, _, _) = f.manager.source_settings(&id, None).await.unwrap();
+        assert_eq!(
+            fresh.catalog.providers["local"].models[0].max_output_tokens,
+            2048
+        );
         f.close().await;
     })
     .await;

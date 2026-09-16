@@ -5,56 +5,82 @@ Branch: `feat/web-08-settings`.
 
 ## Ownership and concurrency
 
-The existing native `UserConfigManager` owns structured authoring on already-bound
-sources. `ModelLayer` remains the source syntax owner; `resolve_session` remains the
-only source/default precedence resolver. `ModelCatalog::view` is now shared by
-source settings and `ModelBindingRegistry`; the browser has no model registry.
+The existing native `UserConfigManager` owns source authoring. User and trusted
+Workspace are canonical partial `ModelLayer` values. Session is an intentional
+whole `SessionModelConfig`; these types are not interchangeable. Omitted source
+reasoning/output fields inherit, explicit `catalog_default` resets to the catalog,
+and named profiles/limits are explicit. Saving an unrelated field preserves all
+other omissions. `None` removes only the chosen model layer (or Session selection),
+never materializes effective state, and preserves unrelated TOML settings.
 
-The native projection carries exact User, Workspace and catalog content revisions,
-partial authored model fields, normalized selections, native provenance, prospective
-model/request values and trust. Session settings revision/selection are read while
-the native Session catalog mutex is retained across source projection. Runtime
-incarnation/current desired model and frozen attempt facts come from the existing
-runtime snapshot and are displayed separately.
+`resolve_configuration_candidate` is the single native source merge/default and
+provenance phase. It applies authorized source layers, the whole Session input,
+model catalog semantics and canonical context-budget validation. Full
+`resolve_session` reuses this result before `resolve_resources` prepares Skills,
+Workflows, Subagents and other launch resources. Settings does not prepare those
+resources. An intentionally invalid trusted Workflow cannot hide otherwise-valid
+model provenance or block a Workspace model save.
 
-Source CAS holds the persistent sibling document locks shared with the existing
-User-default writer across revision verification, canonical validation (including context budgets), temporary
-file sync and atomic rename. The rename is the publication linearization point.
-Competing cooperating writers cannot commit between the check and rename. A stale
-request leaves source bytes unchanged. Exact content fingerprints also reject
-edits after observable external file changes; a final reread refuses mixed source
-snapshots. Arbitrary external editors that ignore native locks can still race the
-last fingerprint check and rename. No distributed coordination or stronger
-filesystem transaction guarantee is claimed.
+`TrustEpoch` coordinates the existing membership-directory trust store through a
+persistent per-workspace lock beside the User state directory. Read-only analysis
+does not initialize durable state or trust membership. CLI grant/revoke now delegates to that native owner.
+Lock order: **workspace trust, then sorted/deduplicated source documents**. The
+membership create/remove is the grant/revoke linearization point; Workspace atomic
+rename is its publication point, under the same epoch. Revoke first means the save
+fails untrusted without publishing. Save owning the epoch means publication may
+finish before revoke. Read activity and Project-derived provenance use one epoch.
+Untrusted Workspace bytes are neither parsed nor exposed.
 
-Session selection CAS retains the existing Session catalog mutex through revision
-validation and catalog publication. The durable settings revision is independent
-of source file revisions. Reset persists omission. It never copies effective state
-into the reset scope. Session authoring is prospective, like existing Session
-settings replacement; live `/model` changes continue through the existing native
-model/persistence owner. Source writes never automatically reload or cancel work.
+
+Static launch/configuration analysis captures one atomic membership observation and
+passes that immutable decision through both native phases without creating lock or
+state files. Settings source reads and Workspace publication instead retain the
+shared trust lock through projection/publication. This preserves static CLI
+read-only behavior while source authoring and trust mutation remain serialized.
+
+Source CAS holds native document locks across exact-byte revision validation,
+staging/sync and atomic rename. User, Workspace, catalog and Session remain distinct
+CAS domains. External observed edits invalidate revisions. Noncooperating editors
+can still race the final fingerprint check/rename; no stronger filesystem
+transaction guarantee is claimed.
+
+The global Session catalog mutex never spans source filesystem work. Source reads
+capture `(revision, settings)`, release the mutex, obtain the native projection on
+a blocking worker, then check the revision once. A changed Session returns typed
+`stale_settings`; there is no unbounded retry. A source mutation that committed but
+cannot return a coherent combined projection reports committed uncertainty. It is
+never replayed. Session selection captures and verifies the expected revision,
+validates outside the catalog mutex on a blocking worker, then uses the **original**
+revision in existing `replace_settings` CAS. Reset can reveal unconfigured lower
+sources; it does not invent a default model.
+
+Loaded runtime configured/effective requests and frozen attempt primary/summary
+requests come from existing native snapshots. Source primary/summary projections
+remain prospective. The UI shows reasoning, effective output, request parameters,
+and summary policy so same-model divergence is visible. Detached/unloaded views
+do not claim current loaded state. Saves do not reload/cancel work; live `/model`
+ownership and admitted-attempt freezing remain unchanged.
 
 ## Protocol
 
-- `settings/sourcesRead { session_id }` returns `source_settings`: native projection,
-  Session revision and explicit selection.
-- `settings/sourcesWrite { session_id, expected_revision, mutation }` accepts typed
-  `catalog`, `user_model`, or `workspace_model` authoring and returns the new
-  projection. `selection: null` removes the selected scope. Catalog authoring has
-  no Workspace/Session variant and cannot change source bindings.
-- `settings/selectModel { session_id, expected_revision, selection }` validates a
-  whole Session model selection or omission and commits through existing Session
-  CAS, returning `settings_replaced`.
-- `source_conflict { scope, expected, actual }` is a structured source conflict.
-  Session conflicts remain `stale_settings`; trust failures are
-  `untrusted_workspace`. Native validation/I/O failures use existing structured
-  errors. A publication followed by an unreadable projection reports committed
-  uncertainty, never an instruction to blindly retry.
+- `settings/sourcesRead { session_id }` returns `source_settings` with native
+  projection and the exact Session revision/selection used for resolution.
+- `settings/sourcesWrite { session_id, expected_revision, mutation }` accepts
+  `catalog { providers }`, `user_model { authored: ModelLayer | null }`, or
+  `workspace_model { authored: ModelLayer | null }`. Only User can author Providers.
+- `settings/selectModel` retains `selection: SessionModelConfig | null` and the
+  existing Session revision, returning `settings_replaced`.
+- `SelectionSource.selection` and whole-state source mutation payloads are removed.
+  `SelectionSource.authored` is the canonical partial authoring contract. There are
+  no legacy/V2 variants or compatibility paths. `ModelLayer::from_selection` is gone.
+- `SourceSettings.effective_summary` adds native resolved summary request facts.
+- `source_conflict`, `untrusted_workspace`, and `stale_settings` remain structured.
+  Changed combined reads use `stale_settings`. Committed but unavailable readback
+  uses existing `committed_durability_uncertain`. Neither side-effecting method is
+  read-retriable or automatically replayed.
 
-The existing runtime model/catalog and durable Session settings APIs describe
-separate native facts, not competing configuration engines. Generated v5 schema,
-TypeScript, TUI loss classification/error handling and Web read classification
-are updated together.
+Rust types, generated v5 schema and TypeScript change together. Existing Web/TUI
+request classifications remain correct and require no additional error variants.
 
 ## UI and source reuse
 
@@ -80,72 +106,79 @@ owners are recorded in `web-console/PROVENANCE.md`.
 ![Settings and native provenance](images/web08-settings.png)
 ![User Provider catalog editor](images/web08-catalog.png)
 
-## Deterministic regressions
+## Deterministic regressions and linearization proof
 
-- `native_precedence_provenance_reset_and_separate_cas_domains`: Session > trusted
-  Workspace > User, native provenance, clearing fallthrough, separate source revisions.
-- `untrusted_workspace_and_unknown_model_fail_without_mutation`: no implicit trust
-  or unknown model mutation.
-- `competing_catalog_writers_have_one_publication_and_one_conflict`: barrier-started
-  writers share one revision; exactly one publishes and the loser changes nothing.
-- Catalog round-trip tests: structured add/edit/delete, invalid endpoint rejection,
-  stale/external revision rejection and native literal-secret retention without readback.
-- `web08_source_and_session_cas_cross_the_real_protocol_boundary`: read/write/reread,
-  source and Session typed conflicts, provenance serialization and no stale mutation.
-- `web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolution`:
-  a gated Provider attempt and loaded desired model stay unchanged while a cold
-  Session sees committed catalog limits.
-- Six Web tests cover backend effective/provenance rendering, native options,
-  exact revision submission, success refresh, preserved conflict drafts, Session
-  reset, uncertain response no-replay, loading/error/empty states.
-- Real-server browser Settings save/reset/catalog editing, desktop/mobile geometry
-  and zero Provider requests; the complete existing browser suite also runs.
+| Test | Synchronization and exact ordering | Commit/observation point |
+| --- | --- | --- |
+| `revoke_wins_before_workspace_publication_authority` | Save pauses before trust acquisition; native revoke completes; save resumes and refuses without source bytes | Membership removal precedes attempted Workspace publication |
+| `workspace_publication_owns_trust_until_after_commit` | Save pauses immediately before rename while owning epoch; an independent OS `try_lock` proves authority contention; revoke waits and completes after save | Atomic source rename under trust + document locks |
+| `reads_keep_one_trust_epoch_across_grant_and_revoke` | Read pauses after capturing epoch; grant/revoke runs concurrently; read returns matching activity and provenance, next read observes mutation | Epoch acquisition serializes membership observation through projection |
+| `competing_catalog_writers_have_one_publication_and_one_conflict` | Barrier starts writers using one revision; native lock serializes publication; one succeeds, one conflicts | Rename under exact revision/document lock |
+| `web08_source_document_wait_releases_catalog_and_rejects_mixed_session_revision` | Test holds source document lock; worker reaches document boundary; unrelated catalog operation and same-Session revision commit finish before source release | Final Session revision check rejects old projection; no mixed result |
+| `web08_selection_validation_releases_catalog_and_commits_with_original_cas` | Validation pauses outside catalog mutex; another Session operation and competing settings commit finish; validation resumes | Original expected revision in `replace_settings` rejects stale commit |
+| `web08_source_commit_with_changed_session_is_uncertain_and_never_replayed` | Source pauses before rename; Session revision commits; source publishes once; combined readback refuses | Source rename succeeded; final Session check yields committed uncertainty |
 
-## Validation commands
+All gates use channels/barriers or lock probes, never sleeps/timing assertions.
 
-From the repository root unless a directory is shown:
+Additional regressions:
 
-```sh
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo build --bins
-RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --workspace --all-targets --all-features
-RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --workspace --all-features
-cargo test --lib configuration::settings::tests --all-features
-cargo test --lib web08 --all-features
-cargo check --all-targets --all-features
-cargo run --example generate_app_server_protocol
-git diff --check
+- Partial User request-only and Workspace policy-only round trips retain absent
+  model/output/summary fields. Explicit catalog-default markers remain distinct
+  from omission. Reset preserves unrelated document fields and reveals lower state.
+- Native precedence/provenance and whole Session request override semantics remain
+  covered, as do independent stale source and Session CAS protocol failures.
+- Invalid Workflow blocks full Session preparation but not model projection/save.
+- Invalid models/context budgets and invalid catalog definitions fail before commit.
+- Literal secrets remain natively retained without projection readback; add/delete
+  and external-edit conflict regressions remain intact.
+- The gated admitted-attempt test keeps `local/a` unchanged while catalog profile,
+  output budget and parameters change. Prospective requests show new values while
+  loaded/frozen requests stay old; a cold Session sees the new catalog.
+- Web tests assert exact partial payloads, default/omission distinctions, reset,
+  backend options/provenance, explicit conflict retry, uncertain-write no-replay and
+  same-model prospective/current/frozen request differences.
+- Browser flow: Settings → Workspace output-only partial save → inherited identity
+  and changed prospective output, unchanged loaded output → selection/reset → User
+  catalog save/reread. Desktop/mobile screenshots and zero Provider requests.
 
-# test-support/fake-provider
-uv sync --frozen
-uv run --frozen pytest
+## Validation
 
-# web-console, tui, protocol/app-server
-pnpm install --frozen-lockfile
+Final command results are recorded in PR #325. Required commands cover formatting,
+Clippy, all Rust targets/features, doc tests, emulator pytest, frozen package
+installs, Web typecheck/tests/provenance/build/browser tests, TUI typecheck/tests,
+and protocol generation drift/typecheck. Focused owner and App Server race tests
+are rerun independently. Browser plugin is unavailable; the repository Playwright
+workflow exercises the real App Server and local fixture Provider.
 
-# web-console
-pnpm typecheck
-pnpm test
-pnpm exec vitest run test/settings.test.tsx
-pnpm check:provenance
-pnpm build
-pnpm exec playwright test settings.spec.ts
-pnpm test:e2e
+## Executed validation inventory (review fix)
 
-# tui
-pnpm typecheck
-RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test
+All commands below passed on the corrected implementation. Development failures in
+trust-lock placement, one new provenance assertion, compilation/linting, and a
+browser locator were fixed before the final complete runs; existing regression
+expectations were not weakened.
 
-# protocol/app-server
-node generate.mjs
-pnpm typecheck
-pnpm check
-```
+| Working directory | Command | Result |
+| --- | --- | --- |
+| Root | `cargo fmt --all -- --check` | Passed |
+| Root | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Passed |
+| Root | `cargo build --bins` | Passed |
+| Root | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --workspace --all-targets --all-features` | 3,707 passed; 6 existing ignored |
+| Root | `cargo test --doc --workspace --all-features` | 9 passed |
+| Root | `cargo check --all-targets --all-features` | Passed |
+| Root | `cargo test --lib configuration::settings --all-features` | 12 passed |
+| Root | `cargo test --lib web08 --all-features` | 5 passed |
+| Root | `cargo test --lib cfg235_minimal_init_validates --all-features` | 1 passed |
+| Root | `cargo test --lib dangling_optional_files --all-features` | 1 passed |
+| Root | `cargo run --example generate_app_server_protocol` | Generated schema/fixtures; repeated by protocol check |
+| Root | `git diff --check` | Passed |
+| `test-support/fake-provider` | `uv sync --frozen`; `uv run --frozen pytest` | Passed; 51 tests |
+| Web, TUI, protocol packages | `pnpm install --frozen-lockfile` | Passed in each package |
+| `web-console` | `pnpm typecheck`; `pnpm test` | Passed; 282 tests |
+| `web-console` | `pnpm exec vitest run test/settings.test.tsx` | 9 focused tests passed |
+| `web-console` | `pnpm check:provenance`; `pnpm build` | Passed; 73 source records, 100 notices |
+| `web-console` | `pnpm test:e2e` | 10 passed; real server; desktop/mobile |
+| `tui` | `pnpm typecheck`; `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test` | Passed; 816 tests |
+| `protocol/app-server` | `node generate.mjs`; `pnpm check`; `pnpm typecheck` | Passed; no generated drift |
 
-The Web package has no separate lint or formatting script. Production build reports
-its existing bundle-size advisory. During development, compiler/typecheck/lint
-failures were fixed; the first Settings browser attempt used an incorrect locator
-and was interrupted, and the next exposed a fixture teardown expectation for chat
-turns. The corrected Settings test asserts zero Provider requests. Final results
-are recorded in the PR; unrun checks are never represented as passes.
+No environmental validation blocker. Local tests ran on Linux; macOS coverage is
+provided by repository CI. The existing Vite large-bundle advisory is unchanged.

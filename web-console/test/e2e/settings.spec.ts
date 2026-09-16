@@ -19,6 +19,15 @@ test('native Settings source save, reset, catalog edit and responsive projection
     const settings = page.getByRole('region', { name: 'Settings', exact: true });
     await expect(settings.getByRole('heading', { name: 'Settings · Provider / Models' })).toBeVisible();
     await expect(settings.getByLabel('User model', { exact: true })).toHaveValue('fixture/console-model');
+    const workspace = settings.getByRole('group', { name: 'Workspace', exact: true });
+    await workspace.getByText('Partial source request policy', { exact: true }).click();
+    await workspace.getByRole('combobox', { name: 'Workspace output policy', exact: true }).selectOption('limit');
+    await workspace.getByRole('spinbutton', { name: 'Workspace output limit', exact: true }).fill('1024');
+    await workspace.getByRole('button', { name: 'Save Workspace', exact: true }).click();
+    await expect(settings.getByRole('status')).toContainText('Source committed');
+    await expect(workspace.getByLabel('Workspace model', { exact: true })).toHaveValue('');
+    await expect(settings.getByRole('region', { name: 'Prospective effective request', exact: true })).toContainText('1024');
+    await expect(settings.getByRole('region', { name: 'Runtime effective request', exact: true })).toContainText('4096');
     await settings.getByLabel('Workspace model', { exact: true }).selectOption('fixture/second-model');
     await settings.getByRole('button', { name: 'Save Workspace', exact: true }).click();
     await expect(settings.getByRole('status')).toContainText('Source committed');

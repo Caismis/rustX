@@ -37,7 +37,6 @@ pub struct SelectionSource {
     pub document: String,
     pub revision: String,
     pub active: bool,
-    pub selection: Option<SessionModelConfig>,
     pub authored: Option<AuthoredModelSelection>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -47,6 +46,7 @@ pub struct SourceSettings {
     pub workspace: SelectionSource,
     pub effective: Option<SessionModelConfig>,
     pub effective_request: Option<crate::model::invocation::ModelInvocationView>,
+    pub effective_summary: Option<crate::model::invocation::ModelInvocationView>,
     pub provenance: BTreeMap<String, Origin>,
     /// Invalid/incomplete current sources do not prevent repairing the catalog.
     pub resolution_available: bool,
@@ -58,10 +58,10 @@ pub enum SourceMutation {
         providers: BTreeMap<String, ProviderDraft>,
     },
     UserModel {
-        selection: Option<SessionModelConfig>,
+        authored: Option<AuthoredModelSelection>,
     },
     WorkspaceModel {
-        selection: Option<SessionModelConfig>,
+        authored: Option<AuthoredModelSelection>,
     },
 }
 impl SourceMutation {
@@ -103,26 +103,10 @@ fn selection(
     let layer = super::parse_layer(path, bytes.unwrap_or(b""), project)
         .map_err(|_| SettingsError::Invalid)?;
     let authored = layer.agent.as_ref().and_then(|a| a.model.clone());
-    let selection = if layer
-        .agent
-        .as_ref()
-        .and_then(|a| a.model.as_ref())
-        .and_then(|m| m.model.as_ref())
-        .is_some()
-    {
-        Some(
-            super::user_model_sections(layer)
-                .map_err(|_| SettingsError::Invalid)?
-                .0,
-        )
-    } else {
-        None
-    };
     Ok(SelectionSource {
         document: path.display().to_string(),
         revision: revision(bytes),
         active,
-        selection,
         authored,
     })
 }
@@ -168,9 +152,16 @@ impl UserConfigManager {
         input: &SessionConfigInput,
     ) -> Result<SourceSettings, SettingsError> {
         let paths = self.settings_paths(input)?;
-        let trusted = self
-            .project_trusted(input)
+        #[cfg(test)]
+        self.test_hooks.reach("before_trust");
+        let epoch = self
+            .trust_epoch(input)
             .map_err(|_| SettingsError::Invalid)?;
+        let trusted = epoch.trusted();
+        #[cfg(test)]
+        self.test_hooks.reach("trust_acquired");
+        #[cfg(test)]
+        self.test_hooks.reach("before_documents");
         let _locks = Self::settings_locks(&paths, trusted)?;
         self.source_settings_locked(input, &paths, trusted)
     }
@@ -212,7 +203,9 @@ impl UserConfigManager {
                 )
             })
             .collect();
-        let resolved = self.resolve_session(input).ok();
+        let resolved = self
+            .resolve_configuration_candidate(input, None, trusted)
+            .ok();
         // A noncooperating editor may change a source while it is being resolved.
         // Do not return a mixed projection assembled from different content.
         for (index, captured, scope) in [
@@ -232,13 +225,6 @@ impl UserConfigManager {
                 });
             }
         }
-        if trusted
-            && !self
-                .project_trusted(input)
-                .map_err(|_| SettingsError::Invalid)?
-        {
-            return Err(SettingsError::UntrustedWorkspace);
-        }
 
         Ok(SourceSettings {
             catalog: CatalogSettings {
@@ -256,6 +242,14 @@ impl UserConfigManager {
                 )
                 .ok()
                 .map(|(primary, _)| primary)
+            }),
+            effective_summary: resolved.as_ref().and_then(|r| {
+                crate::model::session::analyze_session_model_config(
+                    &r.models,
+                    r.config.initial_model(),
+                )
+                .ok()
+                .map(|(primary, summary)| summary.unwrap_or(primary))
             }),
             effective: resolved.as_ref().map(|r| r.config.initial_model().clone()),
             provenance: resolved
@@ -276,13 +270,20 @@ impl UserConfigManager {
         mutation: SourceMutation,
     ) -> Result<SourceSettings, SettingsError> {
         let paths = self.settings_paths(input)?;
-        let trusted = self
-            .project_trusted(input)
+        #[cfg(test)]
+        self.test_hooks.reach("before_trust");
+        let epoch = self
+            .trust_epoch(input)
             .map_err(|_| SettingsError::Invalid)?;
+        let trusted = epoch.trusted();
+        #[cfg(test)]
+        self.test_hooks.reach("trust_acquired");
         let scope = mutation.scope();
         if scope == SourceScope::Workspace && !trusted {
             return Err(SettingsError::UntrustedWorkspace);
         }
+        #[cfg(test)]
+        self.test_hooks.reach("before_documents");
         let _locks = Self::settings_locks(&paths, trusted)?;
         let target = &paths[match scope {
             SourceScope::User => 0,
@@ -302,10 +303,15 @@ impl UserConfigManager {
             SourceMutation::Catalog { providers } => {
                 catalog_candidate(original.as_deref(), providers)?
             }
-            SourceMutation::UserModel { selection }
-            | SourceMutation::WorkspaceModel { selection } => {
-                self.selection_candidate(input, &paths, scope, original.as_deref(), selection)?
-            }
+            SourceMutation::UserModel { authored }
+            | SourceMutation::WorkspaceModel { authored } => self.selection_candidate(
+                input,
+                &paths,
+                scope,
+                original.as_deref(),
+                authored,
+                trusted,
+            )?,
         };
         let mut staged = tempfile::NamedTempFile::new_in(target.parent().ok_or(SettingsError::Io)?)
             .map_err(|_| SettingsError::Io)?;
@@ -321,13 +327,8 @@ impl UserConfigManager {
                 actual,
             });
         }
-        if scope == SourceScope::Workspace
-            && !self
-                .project_trusted(input)
-                .map_err(|_| SettingsError::Invalid)?
-        {
-            return Err(SettingsError::UntrustedWorkspace);
-        }
+        #[cfg(test)]
+        self.test_hooks.reach("before_publication");
         staged.persist(target).map_err(|_| SettingsError::Io)?;
         self.source_settings_locked(input, &paths, trusted)
             .map_err(|_| SettingsError::Committed)
@@ -338,16 +339,10 @@ impl UserConfigManager {
         paths: &[std::path::PathBuf; 3],
         scope: SourceScope,
         original: Option<&[u8]>,
-        selection: Option<SessionModelConfig>,
+        authored: Option<AuthoredModelSelection>,
+        trusted: bool,
     ) -> Result<Vec<u8>, SettingsError> {
         let target = &paths[usize::from(scope != SourceScope::User)];
-        if let Some(selected) = &selection {
-            let bytes = read(&paths[2])?.ok_or(SettingsError::Invalid)?;
-            let models =
-                ModelCatalog::from_toml_slice(&bytes).map_err(|_| SettingsError::Invalid)?;
-            crate::model::session::analyze_session_model_config(&models, selected)
-                .map_err(|_| SettingsError::Invalid)?;
-        }
         let mut tree: toml_edit::DocumentMut = std::str::from_utf8(original.unwrap_or(b""))
             .map_err(|_| SettingsError::Invalid)?
             .parse()
@@ -358,9 +353,8 @@ impl UserConfigManager {
         let agent = tree["agent"]
             .as_table_like_mut()
             .ok_or(SettingsError::Invalid)?;
-        let selecting = selection.is_some();
-        if let Some(selected) = selection {
-            let authored = super::super::authoring::ModelLayer::from_selection(selected);
+        let selecting = authored.is_some();
+        if let Some(authored) = authored {
             let model: toml_edit::DocumentMut = toml::to_string(&authored)
                 .map_err(|_| SettingsError::Invalid)?
                 .parse()
@@ -370,31 +364,20 @@ impl UserConfigManager {
             agent.remove("model");
         }
         let bytes = tree.to_string().into_bytes();
-        let layer = super::parse_layer(target, &bytes, scope == SourceScope::Workspace)
+        super::parse_layer(target, &bytes, scope == SourceScope::Workspace)
             .map_err(|_| SettingsError::Invalid)?;
+        // A partial User layer may rely on Workspace/Session for model identity.
+        // Missing identity is repairable; all other canonical validation fails closed.
         if selecting {
-            if scope == SourceScope::User {
-                let models =
-                    ModelCatalog::from_toml_slice(&read(&paths[2])?.ok_or(SettingsError::Invalid)?)
-                        .map_err(|_| SettingsError::Invalid)?;
-                let (config, context) =
-                    super::user_model_sections(layer).map_err(|_| SettingsError::Invalid)?;
-                let (primary, summary) =
-                    crate::model::session::analyze_session_model_config(&models, &config)
-                        .map_err(|_| SettingsError::Invalid)?;
-                let summary = summary.as_ref().unwrap_or(&primary);
-                context
-                    .to_policy()
-                    .validate_budgets(
-                        (primary.context_window, primary.max_output_tokens),
-                        (summary.context_window, summary.max_output_tokens),
-                    )
-                    .map_err(|_| SettingsError::Invalid)?;
-            } else {
-                let mut prospective = input.clone();
-                prospective.model = None;
-                self.resolve_session_candidate(&prospective, Some((target, &bytes)))
-                    .map_err(|_| SettingsError::Invalid)?;
+            let mut prospective = input.clone();
+            prospective.model = None;
+            if let Err(error) = self.resolve_configuration_candidate(
+                &prospective,
+                Some((target, &bytes)),
+                trusted && scope == SourceScope::Workspace,
+            ) && !error.incomplete
+            {
+                return Err(SettingsError::Invalid);
             }
         }
         Ok(bytes)
@@ -495,17 +478,21 @@ mod tests {
         let input = SessionConfigInput::new(workspace);
         (root, owner, input)
     }
-    fn selected(id: &str) -> SessionModelConfig {
+    pub(super) fn selected(id: &str) -> SessionModelConfig {
         SessionModelConfig::of(crate::model::catalog::ModelRef::parse(id).unwrap())
     }
-    fn trust(owner: &UserConfigManager, input: &SessionConfigInput) {
-        let (locations, identity) = owner.resolve_locations(input).unwrap();
-        std::fs::create_dir_all(
-            super::super::trust_root(&owner.sources, &locations.workspace)
-                .unwrap()
-                .join(identity),
-        )
-        .unwrap();
+    pub(super) fn authored(id: &str) -> AuthoredModelSelection {
+        AuthoredModelSelection {
+            model: Some(crate::model::catalog::ModelRef::parse(id).unwrap()),
+            ..Default::default()
+        }
+    }
+    pub(super) fn trust(owner: &UserConfigManager, input: &SessionConfigInput) {
+        owner
+            .trust_epoch(input)
+            .unwrap()
+            .change(crate::local_runtime::launch::TrustAction::Grant)
+            .unwrap();
     }
     #[test]
     fn native_precedence_provenance_reset_and_separate_cas_domains() {
@@ -525,7 +512,7 @@ mod tests {
                 &input,
                 &first.workspace.revision,
                 SourceMutation::WorkspaceModel {
-                    selection: Some(selected("example/second")),
+                    authored: Some(authored("example/second")),
                 },
             )
             .unwrap();
@@ -563,10 +550,10 @@ mod tests {
             .write_source_settings(
                 &input,
                 &project.workspace.revision,
-                SourceMutation::WorkspaceModel { selection: None },
+                SourceMutation::WorkspaceModel { authored: None },
             )
             .unwrap();
-        assert!(cleared.workspace.selection.is_none());
+        assert!(cleared.workspace.authored.is_none());
         assert_eq!(
             cleared.effective.unwrap().model.to_string(),
             "example/demo-model"
@@ -576,7 +563,7 @@ mod tests {
                 &input,
                 &first.workspace.revision,
                 SourceMutation::WorkspaceModel {
-                    selection: Some(selected("example/second"))
+                    authored: Some(authored("example/second"))
                 }
             ),
             Err(SettingsError::Conflict {
@@ -612,7 +599,7 @@ mod tests {
                 &input,
                 "missing",
                 SourceMutation::WorkspaceModel {
-                    selection: Some(selected("example/second"))
+                    authored: Some(authored("example/second"))
                 }
             ),
             Err(SettingsError::UntrustedWorkspace)
@@ -622,7 +609,7 @@ mod tests {
                 &input,
                 &first.user.revision,
                 SourceMutation::UserModel {
-                    selection: Some(selected("example/unknown"))
+                    authored: Some(authored("example/unknown"))
                 }
             ),
             Err(SettingsError::Invalid)
@@ -761,6 +748,7 @@ mod concurrency_tests {
 
 #[cfg(test)]
 mod roundtrip_tests {
+    use super::tests::{authored, fixture, selected, trust};
     use super::*;
     #[test]
     fn structured_provider_add_delete_preserves_secret_and_external_changes_conflict() {
@@ -827,6 +815,320 @@ mod roundtrip_tests {
             external
         );
     }
+    #[test]
+    fn partial_layers_roundtrip_omissions_defaults_and_reset() {
+        let (_root, owner, mut input) = fixture();
+        trust(&owner, &input);
+        std::fs::write(
+            &owner.sources.settings,
+            "[agent.model.request_params]\ntemperature = 0.3\n[environment]\nKEEP = 'unchanged'\n",
+        )
+        .unwrap();
+        std::fs::write(
+            input.cwd.join("rustx.toml"),
+            "[agent.model]\nmodel = 'example/demo-model'\n",
+        )
+        .unwrap();
+        let before = owner.read_source_settings(&input).unwrap();
+        let partial = before.user.authored.clone().unwrap();
+        assert!(partial.model.is_none());
+        let after = owner
+            .write_source_settings(
+                &input,
+                &before.user.revision,
+                SourceMutation::UserModel {
+                    authored: Some(partial.clone()),
+                },
+            )
+            .unwrap();
+        assert_eq!(after.user.authored, Some(partial));
+        assert_eq!(
+            after.effective.as_ref().unwrap().request_params["temperature"],
+            0.3
+        );
+        let bytes = std::fs::read_to_string(&owner.sources.settings).unwrap();
+        assert!(bytes.contains("KEEP = 'unchanged'"));
+        assert!(!bytes.contains("reasoning_profile"));
+        assert!(!bytes.contains("max_output_tokens"));
+        assert!(!bytes.contains("model ="));
+        let mut layer = after.workspace.authored.clone().unwrap();
+        layer.max_output_tokens =
+            Some(super::super::super::authoring::ModelOutput::CatalogDefault {});
+        let explicit = owner
+            .write_source_settings(
+                &input,
+                &after.workspace.revision,
+                SourceMutation::WorkspaceModel {
+                    authored: Some(layer.clone()),
+                },
+            )
+            .unwrap();
+        assert_eq!(explicit.workspace.authored, Some(layer));
+        assert!(
+            explicit
+                .workspace
+                .authored
+                .as_ref()
+                .unwrap()
+                .reasoning_profile
+                .is_none()
+        );
+        assert!(
+            serde_json::to_value(&explicit.workspace.authored)
+                .unwrap()
+                .get("reasoning_profile")
+                .is_none()
+        );
+        assert_eq!(
+            serde_json::to_value(&explicit.workspace.authored).unwrap()["max_output_tokens"]["mode"],
+            "catalog_default"
+        );
+        input.model = Some(selected("example/second"));
+        let whole = owner.read_source_settings(&input).unwrap();
+        assert!(whole.effective.unwrap().request_params.is_empty());
+        input.model = None;
+        let reset_user = owner
+            .write_source_settings(
+                &input,
+                &explicit.user.revision,
+                SourceMutation::UserModel { authored: None },
+            )
+            .unwrap();
+        assert!(reset_user.user.authored.is_none());
+        assert!(reset_user.effective.unwrap().request_params.is_empty());
+        assert!(
+            std::fs::read_to_string(&owner.sources.settings)
+                .unwrap()
+                .contains("KEEP = 'unchanged'")
+        );
+        let reset_workspace = owner
+            .write_source_settings(
+                &input,
+                &explicit.workspace.revision,
+                SourceMutation::WorkspaceModel { authored: None },
+            )
+            .unwrap();
+        assert!(reset_workspace.workspace.authored.is_none());
+        assert!(!reset_workspace.resolution_available); // No invented default identity.
+    }
+
+    #[test]
+    fn workspace_policy_without_identity_preserves_omitted_and_explicit_defaults() {
+        let (_root, owner, input) = fixture();
+        trust(&owner, &input);
+        let before = owner.read_source_settings(&input).unwrap();
+        let partial = AuthoredModelSelection {
+            request_params: Some(crate::toml_authoring::RequestParamsToml(
+                serde_json::from_value(serde_json::json!({"temperature": 0.4})).unwrap(),
+            )),
+            ..Default::default()
+        };
+        let first = owner
+            .write_source_settings(
+                &input,
+                &before.workspace.revision,
+                SourceMutation::WorkspaceModel {
+                    authored: Some(partial.clone()),
+                },
+            )
+            .unwrap();
+        assert_eq!(first.workspace.authored, Some(partial.clone()));
+        assert!(matches!(
+            first.provenance["agent.model.model"],
+            Origin::User { .. }
+        ));
+        assert!(matches!(
+            first.provenance["agent.model.request_params"],
+            Origin::Project { .. }
+        ));
+        let mut explicit = partial;
+        explicit.reasoning_profile =
+            Some(super::super::super::authoring::ReasoningSelection::CatalogDefault {});
+        let second = owner
+            .write_source_settings(
+                &input,
+                &first.workspace.revision,
+                SourceMutation::WorkspaceModel {
+                    authored: Some(explicit.clone()),
+                },
+            )
+            .unwrap();
+        assert_eq!(second.workspace.authored, Some(explicit));
+        let bytes = std::fs::read_to_string(input.cwd.join("rustx.toml")).unwrap();
+        assert!(!bytes.contains("model ="));
+        assert!(!bytes.contains("max_output_tokens"));
+        assert!(!bytes.contains("summary_model"));
+        assert!(bytes.contains("catalog_default"));
+        let reset = owner
+            .write_source_settings(
+                &input,
+                &second.workspace.revision,
+                SourceMutation::WorkspaceModel { authored: None },
+            )
+            .unwrap();
+        assert!(reset.effective.unwrap().request_params.is_empty());
+        assert!(matches!(
+            reset.provenance["agent.model.model"],
+            Origin::User { .. }
+        ));
+    }
+
+    #[test]
+    fn model_projection_does_not_prepare_invalid_workflows() {
+        let (_root, owner, input) = fixture();
+        trust(&owner, &input);
+        std::fs::create_dir_all(input.cwd.join(".agents/workflows")).unwrap();
+        std::fs::write(
+            input.cwd.join(".agents/workflows/broken.yaml"),
+            "invalid: [",
+        )
+        .unwrap();
+        std::fs::write(
+            input.cwd.join("rustx.toml"),
+            "[agent.model]\nmodel = 'example/second'\n",
+        )
+        .unwrap();
+        let projection = owner.read_source_settings(&input).unwrap();
+        assert!(projection.resolution_available);
+        assert!(matches!(
+            projection.provenance["agent.model.model"],
+            Origin::Project { .. }
+        ));
+        assert_eq!(
+            projection.effective.unwrap().model.to_string(),
+            "example/second"
+        );
+        assert!(owner.resolve_session(&input).is_err());
+        owner
+            .write_source_settings(
+                &input,
+                &projection.workspace.revision,
+                SourceMutation::WorkspaceModel {
+                    authored: Some(authored("example/demo-model")),
+                },
+            )
+            .unwrap();
+    }
+
+    fn pause(
+        owner: &UserConfigManager,
+        point: &'static str,
+    ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        let (entered, waiting) = std::sync::mpsc::channel();
+        let (release, resume) = std::sync::mpsc::channel();
+        owner.test_hooks.insert(point, move || {
+            entered.send(()).unwrap();
+            resume.recv().unwrap();
+        });
+        (waiting, release)
+    }
+    fn change_trust(
+        owner: &UserConfigManager,
+        input: &SessionConfigInput,
+        action: crate::local_runtime::launch::TrustAction,
+    ) {
+        owner.trust_epoch(input).unwrap().change(action).unwrap();
+    }
+    #[test]
+    fn revoke_wins_before_workspace_publication_authority() {
+        use crate::local_runtime::launch::TrustAction;
+        let (_root, owner, input) = fixture();
+        change_trust(&owner, &input, TrustAction::Grant);
+        let before = owner.read_source_settings(&input).unwrap();
+        let (waiting, resume) = pause(&owner, "before_trust");
+        std::thread::scope(|threads| {
+            let save = threads.spawn(|| {
+                owner.write_source_settings(
+                    &input,
+                    &before.workspace.revision,
+                    SourceMutation::WorkspaceModel {
+                        authored: Some(authored("example/second")),
+                    },
+                )
+            });
+            waiting.recv().unwrap();
+            change_trust(&owner, &input, TrustAction::Revoke);
+            resume.send(()).unwrap();
+            assert!(matches!(
+                save.join().unwrap(),
+                Err(SettingsError::UntrustedWorkspace)
+            ));
+        });
+        assert!(!input.cwd.join("rustx.toml").exists());
+    }
+    #[test]
+    fn workspace_publication_owns_trust_until_after_commit() {
+        use crate::local_runtime::launch::TrustAction;
+        let (_root, owner, input) = fixture();
+        change_trust(&owner, &input, TrustAction::Grant);
+        let before = owner.read_source_settings(&input).unwrap();
+        let (waiting, resume) = pause(&owner, "before_publication");
+        std::thread::scope(|threads| {
+            let save = threads.spawn(|| {
+                owner.write_source_settings(
+                    &input,
+                    &before.workspace.revision,
+                    SourceMutation::WorkspaceModel {
+                        authored: Some(authored("example/second")),
+                    },
+                )
+            });
+            waiting.recv().unwrap();
+            // The actual persistent authority lock is held at publication.
+            let (_, identity) = owner.resolve_locations(&input).unwrap();
+            let target = super::super::TrustEpoch::lock_target(&owner.sources, &identity).unwrap();
+            let name = target.file_name().unwrap().to_string_lossy();
+            let path = target.with_file_name(format!(".{name}.lock"));
+            let probe = std::fs::File::open(path).unwrap();
+            assert!(probe.try_lock().is_err());
+            let revoke = threads.spawn(|| change_trust(&owner, &input, TrustAction::Revoke));
+            resume.send(()).unwrap();
+            let saved = save.join().unwrap().unwrap();
+            assert!(saved.workspace.active);
+            assert!(matches!(
+                saved.provenance["agent.model.model"],
+                Origin::Project { .. }
+            ));
+            revoke.join().unwrap();
+        });
+        assert!(!owner.project_trusted(&input).unwrap());
+        assert!(input.cwd.join("rustx.toml").exists());
+    }
+    #[test]
+    fn reads_keep_one_trust_epoch_across_grant_and_revoke() {
+        use crate::local_runtime::launch::TrustAction;
+        let (_root, owner, input) = fixture();
+        std::fs::write(
+            input.cwd.join("rustx.toml"),
+            "[agent.model]\nmodel = 'example/second'\n",
+        )
+        .unwrap();
+        for (initial, action) in [(false, TrustAction::Grant), (true, TrustAction::Revoke)] {
+            let (waiting, resume) = pause(&owner, "trust_acquired");
+            std::thread::scope(|threads| {
+                let read = threads.spawn(|| owner.read_source_settings(&input));
+                waiting.recv().unwrap();
+                let mutation = threads.spawn(|| change_trust(&owner, &input, action));
+                resume.send(()).unwrap();
+                let read = read.join().unwrap().unwrap();
+                assert_eq!(read.workspace.active, initial);
+                assert_eq!(
+                    matches!(read.provenance["agent.model.model"], Origin::Project { .. }),
+                    initial
+                );
+                mutation.join().unwrap();
+            });
+            let after = owner.read_source_settings(&input).unwrap();
+            assert_eq!(after.workspace.active, !initial);
+            assert_eq!(
+                matches!(
+                    after.provenance["agent.model.model"],
+                    Origin::Project { .. }
+                ),
+                !initial
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -849,7 +1151,10 @@ mod context_tests {
                 &input,
                 &before.user.revision,
                 SourceMutation::UserModel {
-                    selection: Some(selected)
+                    authored: Some(AuthoredModelSelection {
+                        model: Some(selected.model),
+                        ..Default::default()
+                    })
                 }
             ),
             Err(SettingsError::Invalid)

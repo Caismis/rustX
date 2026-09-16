@@ -612,11 +612,11 @@ export type SourceMutation =
       kind: 'catalog';
     }
   | {
-      selection?: SessionModelConfig | null;
+      authored?: ModelLayer | null;
       kind: 'user_model';
     }
   | {
-      selection?: SessionModelConfig | null;
+      authored?: ModelLayer | null;
       kind: 'workspace_model';
     };
 /**
@@ -680,6 +680,45 @@ export type ChatToolProtocol = 'native' | 'qwen_xml';
  * requires the encrypted-reasoning `include` value.
  */
 export type ResponsesStorageMode = 'stored' | 'stateless';
+/**
+ * A fully qualified catalog model reference: `provider-id/model-id`.
+ *
+ * The first `/` separates the provider from the model. The model ID itself
+ * may contain additional `/` characters, as is common for Hugging Face
+ * identities such as `Qwen/Qwen3`, but no model-ID segment may be empty.
+ *
+ * This is the explicit model-identity domain of the runtime. Concatenated
+ * strings never travel through the runtime in its place: a reference either
+ * resolves to exactly one catalog model or it fails.
+ */
+export type ModelRef = string;
+export type ReasoningSelection =
+  | {
+      mode: 'catalog_default';
+    }
+  | {
+      name: ReasoningProfileId;
+      mode: 'profile';
+    };
+export type ModelOutput =
+  | {
+      mode: 'catalog_default';
+    }
+  | {
+      tokens: number;
+      mode: 'limit';
+    };
+export type SummaryAuthoring =
+  | {
+      mode: 'session';
+    }
+  | {
+      model: ModelRef;
+      reasoning_profile?: ReasoningSelection | null;
+      request_params?: RequestParamsToml;
+      max_output_tokens?: ModelOutput | null;
+      mode: 'explicit';
+    };
 /**
  * Success and failure are exclusive, including on deserialization.
  */
@@ -898,18 +937,6 @@ export type ServerLifecycle = 'Accepting' | 'Draining' | 'Terminated';
  * Residency only; execution and interaction state remain runtime-owned.
  */
 export type ResidencyState = 'Unloaded' | 'Loading' | 'Loaded' | 'Unloading';
-/**
- * A fully qualified catalog model reference: `provider-id/model-id`.
- *
- * The first `/` separates the provider from the model. The model ID itself
- * may contain additional `/` characters, as is common for Hugging Face
- * identities such as `Qwen/Qwen3`, but no model-ID segment may be empty.
- *
- * This is the explicit model-identity domain of the runtime. Concatenated
- * strings never travel through the runtime in its place: a reference either
- * resolves to exactly one catalog model or it fails.
- */
-export type ModelRef = string;
 /**
  * Already-captured finite mutation for the disk writer and published result.
  * Clients request a `DefaultTarget`; they never supply this as a save input.
@@ -2045,33 +2072,6 @@ export type SkillDiagnostic =
  * acceptance of a conversation receives `1`.
  */
 export type InboundSequence = string;
-export type ReasoningSelection =
-  | {
-      mode: 'catalog_default';
-    }
-  | {
-      name: ReasoningProfileId;
-      mode: 'profile';
-    };
-export type ModelOutput =
-  | {
-      mode: 'catalog_default';
-    }
-  | {
-      tokens: number;
-      mode: 'limit';
-    };
-export type SummaryAuthoring =
-  | {
-      mode: 'session';
-    }
-  | {
-      model: ModelRef;
-      reasoning_profile?: ReasoningSelection | null;
-      request_params?: RequestParamsToml;
-      max_output_tokens?: ModelOutput | null;
-      mode: 'explicit';
-    };
 /**
  * Values are never included: provenance cannot expose credentials or environment values.
  */
@@ -3299,6 +3299,13 @@ export interface Compat {
   chat_reasoning_replay?: ChatReasoningReplay | null;
   chat_tool_protocol?: ChatToolProtocol | null;
   responses_storage?: ResponsesStorageMode | null;
+}
+export interface ModelLayer {
+  model?: ModelRef | null;
+  reasoning_profile?: ReasoningSelection | null;
+  request_params?: RequestParamsToml | null;
+  max_output_tokens?: ModelOutput | null;
+  summary_model?: SummaryAuthoring | null;
 }
 export interface Success {
   jsonrpc: JsonRpcVersion;
@@ -7351,6 +7358,7 @@ export interface SourceSettings {
   workspace: SelectionSource;
   effective?: SessionModelConfig | null;
   effective_request?: ModelInvocationView2 | null;
+  effective_summary?: ModelInvocationView2 | null;
   provenance: {
     [k: string]: Origin;
   };
@@ -7371,15 +7379,7 @@ export interface SelectionSource {
   document: string;
   revision: string;
   active: boolean;
-  selection?: SessionModelConfig | null;
   authored?: ModelLayer | null;
-}
-export interface ModelLayer {
-  model?: ModelRef | null;
-  reasoning_profile?: ReasoningSelection | null;
-  request_params?: RequestParamsToml | null;
-  max_output_tokens?: ModelOutput | null;
-  summary_model?: SummaryAuthoring | null;
 }
 /**
  * The redacted client-facing projection of one resolved model invocation.

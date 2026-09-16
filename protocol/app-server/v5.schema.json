@@ -2835,10 +2835,10 @@
         {
           "type": "object",
           "properties": {
-            "selection": {
+            "authored": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/SessionModelConfig"
+                  "$ref": "#/$defs/ModelLayer"
                 },
                 {
                   "type": "null"
@@ -2858,10 +2858,10 @@
         {
           "type": "object",
           "properties": {
-            "selection": {
+            "authored": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/SessionModelConfig"
+                  "$ref": "#/$defs/ModelLayer"
                 },
                 {
                   "type": "null"
@@ -3266,6 +3266,191 @@
           "description": "Zero provider retention (`store: false`).",
           "type": "string",
           "const": "stateless"
+        }
+      ]
+    },
+    "ModelLayer": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reasoning_profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningSelection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_params": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequestParamsToml"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max_output_tokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelOutput"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary_model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SummaryAuthoring"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ReasoningSelection": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "catalog_default"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/ReasoningProfileId"
+            },
+            "mode": {
+              "type": "string",
+              "const": "profile"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "name"
+          ]
+        }
+      ]
+    },
+    "ModelOutput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "catalog_default"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "tokens": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "mode": {
+              "type": "string",
+              "const": "limit"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "tokens"
+          ]
+        }
+      ]
+    },
+    "SummaryAuthoring": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "session"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "model": {
+              "$ref": "#/$defs/ModelRef"
+            },
+            "reasoning_profile": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ReasoningSelection"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "request_params": {
+              "$ref": "#/$defs/RequestParamsToml",
+              "default": {}
+            },
+            "max_output_tokens": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelOutput"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "mode": {
+              "type": "string",
+              "const": "explicit"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "model"
+          ]
         }
       ]
     },
@@ -13672,6 +13857,16 @@
             }
           ]
         },
+        "effective_summary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelInvocationView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "provenance": {
           "type": "object",
           "additionalProperties": {
@@ -13729,16 +13924,6 @@
         "active": {
           "type": "boolean"
         },
-        "selection": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SessionModelConfig"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "authored": {
           "anyOf": [
             {
@@ -13754,191 +13939,6 @@
         "document",
         "revision",
         "active"
-      ]
-    },
-    "ModelLayer": {
-      "type": "object",
-      "properties": {
-        "model": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ModelRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "reasoning_profile": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ReasoningSelection"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "request_params": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RequestParamsToml"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "max_output_tokens": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ModelOutput"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "summary_model": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SummaryAuthoring"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "ReasoningSelection": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "mode": {
-              "type": "string",
-              "const": "catalog_default"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "mode"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "name": {
-              "$ref": "#/$defs/ReasoningProfileId"
-            },
-            "mode": {
-              "type": "string",
-              "const": "profile"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "mode",
-            "name"
-          ]
-        }
-      ]
-    },
-    "ModelOutput": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "mode": {
-              "type": "string",
-              "const": "catalog_default"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "mode"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "tokens": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0,
-              "maximum": 4294967295
-            },
-            "mode": {
-              "type": "string",
-              "const": "limit"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "mode",
-            "tokens"
-          ]
-        }
-      ]
-    },
-    "SummaryAuthoring": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "mode": {
-              "type": "string",
-              "const": "session"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "mode"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "model": {
-              "$ref": "#/$defs/ModelRef"
-            },
-            "reasoning_profile": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ReasoningSelection"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "request_params": {
-              "$ref": "#/$defs/RequestParamsToml",
-              "default": {}
-            },
-            "max_output_tokens": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ModelOutput"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "mode": {
-              "type": "string",
-              "const": "explicit"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "mode",
-            "model"
-          ]
-        }
       ]
     },
     "Origin": {

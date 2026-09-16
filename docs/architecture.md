@@ -9517,38 +9517,63 @@ canonical history.
 
 ### Structured Settings source authoring (WEB-08)
 
-`UserConfigManager` owns the bound User catalog and User/trusted-project source
-selection authoring. `configuration::settings` is an extension of that native
-owner, not an App Server configuration engine. It reuses canonical TOML parsing,
-`ModelLayer`, catalog validation and `resolve_session` provenance. The canonical
-`ModelCatalog::view` serves both source authoring and live binding registries.
-Credential values never enter source projections; a literal credential marker
-means retain the native value, and environment references carry names only.
+`UserConfigManager` owns bound User catalog and User/trusted-Workspace source
+authoring. User and Workspace use canonical **partial `ModelLayer`** values:
+omitted fields inherit, while explicit catalog-default/profile/output-limit
+markers retain their native meanings. Session alone selects a whole
+`SessionModelConfig`. Source mutations accept `authored: Option<ModelLayer>`;
+reset removes only that source's `agent.model`, preserving unrelated TOML fields.
+Session reset removes its whole selection. No reset copies effective values.
 
-`settings/sourcesRead` projects authored layers, source revisions, native trust,
-prospective resolved model/request policy, and provenance alongside the exact
-Session selection/revision used to resolve it. `settings/sourcesWrite` accepts
-only a User catalog replacement or User/Workspace whole-model selection/reset.
-User settings, project settings and catalog each retain their own SHA-256 content
-identity (with a distinct missing identity). The persistent document locks shared
-with the default writer span revision verification, validation, staging and atomic
-rename. Cooperating native writers therefore have one publication winner. Changes
-observed from external editors invalidate an older revision. External editors that
-ignore the native lock can race the final fingerprint check and rename; these
-locks do not claim filesystem transactions against arbitrary uncooperative writes.
+`resolve_configuration_candidate` is the shared bounded native source/configuration
+phase: authorized parsing, canonical merge/defaults/provenance, catalog validation,
+Session whole-state application and context-budget validation. `resolve_session`
+uses that result before `resolve_resources` loads Skills, Workflows, Subagents and
+other launch resources. Source reads and staged source/Session validation use the
+same configuration phase, so a broken unrelated Workflow cannot block Settings.
+The canonical `ModelCatalog::view` serves both source authoring and live bindings.
+Provider authority remains User-only; source bindings are bootstrap-owned.
 
-`settings/selectModel` validates and persists a whole Session selection or omission
-under the existing Session catalog mutex and revision check. It changes prospective
-Session authoring; loaded runtimes retain their admitted configuration, and the
-existing live model command continues through the live model/persistence owner.
-The UI separately labels prospective source values, current desired runtime model,
-and frozen attempt model. Source saves never automatically reload a runtime.
-Session omission exposes the next authorized source on fresh/cold resolution;
-no effective selection is copied into an unset source.
+A native `TrustEpoch` owns a persistent per-workspace lock beside the User state directory.
+CLI grant/revoke and source reads/publication use this same owner. Lock order is
+**workspace trust → sorted, deduplicated source document locks**. No source worker
+holds the Session catalog mutex. Workspace publication is authorized by trust at
+its atomic rename linearization point: revoke before acquisition refuses the save;
+a save owning the epoch may publish before revoke acquires it. Reads retain one
+epoch through trust/activity, resolution and projection. Untrusted content is not
+parsed. Opening Settings never grants membership.
 
-The Web Console edits structured drafts and sends generated protocol commands.
-On a conflict it preserves the draft, rereads authoritative state and requires an
-explicit retry. An uncertain response is repaired by read, never replay. Provider
-probe/discovery and secret entry are absent because no bounded Product Host API
-owns them. The pinned Harness reuse is presentation-only and recorded in the
-shared Web source inventory.
+User settings, Workspace settings and catalog retain independent exact-byte SHA-256
+revisions (including missing identity). Document locks span revision verification,
+validation, staging and atomic rename. Stale writers publish nothing. Observed
+external edits conflict; noncooperating editors can still race the last fingerprint
+check and rename. No transaction guarantee against arbitrary filesystem writers
+is claimed.
+
+The Session catalog mutex only captures `(revision, settings)` and checks/commits
+Session CAS. `select_model` validates outside it on a blocking worker, then commits
+with the original revision through `replace_settings`. `source_settings` takes one
+finite Session snapshot, performs source I/O outside the catalog mutex, then checks
+the Session revision once. Changed reads return `stale_settings`; a source commit
+whose combined projection cannot be returned reports committed uncertainty. It is
+never replayed. These are independent revision domains.
+
+Settings displays prospective primary/summary request policy, loaded runtime
+configured/effective policy, and admitted-attempt frozen primary/summary facts from
+native projections, including same-model profile/output/request differences.
+Detached/unloaded observations are not presented as current runtime state. Saves
+remain prospective and do not reload or rewrite admitted work; live `/model` stays
+with its existing owner.
+
+Web edits structured drafts and sends generated commands. Conflicts preserve drafts,
+reread authority, and require explicit retry/discard. Uncertain writes are reread,
+never replayed. Literal credentials are retention markers without readback;
+environment references contain names only. No browser secret persistence, Provider
+calls, raw TOML, precedence implementation, or catalog registry exists. Harness
+reuse remains presentation-only with its existing source provenance records.
+
+Static launch/configuration analysis captures one atomic membership observation and
+passes that immutable decision through both native phases without creating lock or
+state files. Settings source reads and Workspace publication instead retain the
+shared trust lock through projection/publication. This preserves static CLI
+read-only behavior while source authoring and trust mutation remain serialized.

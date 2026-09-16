@@ -96,6 +96,32 @@ pub struct UserConfigManager {
     models_origin: Origin,
     runtime_root_origin: Origin,
     catalog_required: bool,
+    #[cfg(test)]
+    pub(crate) test_hooks: ConfigurationHooks,
+}
+
+#[cfg(test)]
+type ConfigurationHookMap = BTreeMap<&'static str, Box<dyn FnOnce() + Send>>;
+#[cfg(test)]
+#[derive(Clone, Default)]
+pub(crate) struct ConfigurationHooks(std::sync::Arc<std::sync::Mutex<ConfigurationHookMap>>);
+#[cfg(test)]
+impl std::fmt::Debug for ConfigurationHooks {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ConfigurationHooks")
+    }
+}
+#[cfg(test)]
+impl ConfigurationHooks {
+    pub(crate) fn insert(&self, point: &'static str, hook: impl FnOnce() + Send + 'static) {
+        self.0.lock().unwrap().insert(point, Box::new(hook));
+    }
+    pub(crate) fn reach(&self, point: &'static str) {
+        let hook = self.0.lock().unwrap().remove(point);
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
 }
 
 /// Intentional inputs for one prospective Session. Omission remains omission.
@@ -197,6 +223,8 @@ impl UserConfigManager {
             models_origin: explicit.clone(),
             runtime_root_origin: explicit,
             catalog_required: true,
+            #[cfg(test)]
+            test_hooks: ConfigurationHooks::default(),
         })
     }
 
@@ -349,9 +377,20 @@ pub struct AdmittedSessionConfig {
     prospective: Box<ProspectiveSessionConfig>,
 }
 
+/// Canonical source/configuration capture before any launch resource preparation.
+pub(crate) struct ResolvedConfiguration {
+    locations: SessionLocations,
+    identity: String,
+    trusted: bool,
+    pub(crate) config: CurrentRuntimeConfig,
+    pub(crate) models: ModelCatalog,
+    pub(crate) provenance: BTreeMap<String, Origin>,
+    documents: Vec<(PathBuf, bool, Origin)>,
+    project_resources: Vec<PathBuf>,
+}
+
 /// Immutable prospective Session settings and statically resolved resources.
-/// No execution authority or credential snapshot. Admission adds credentials;
-/// native composition owns external preparation and generation publication.
+/// Admission adds credentials; native composition owns external preparation.
 #[derive(Clone)]
 pub struct ProspectiveSessionConfig {
     pub(crate) root_agent_project_files: Vec<crate::runtime::resources::ProjectContextFile>,
@@ -514,7 +553,7 @@ impl ProspectiveSessionConfig {
             // Reload owns only resource inputs. Startup/Session defaults remain
             // the launch capture, even when disk defaults have since changed.
             layer.resources_only();
-            rebase_paths(&mut layer, origin, &self.workspace)?;
+            rebase_paths(&mut layer, origin, &self.workspace, true)?;
             merged.overlay(layer, origin, &mut provenance);
         }
 
@@ -557,13 +596,16 @@ impl UserConfigManager {
     /// Invalid location or trust-store ownership is rejected.
     pub fn project_trusted(&self, request: &SessionConfigInput) -> Result<bool, String> {
         let (locations, identity) = self.resolve_locations(request)?;
-        self.location_trusted(&locations.workspace, &identity)
-    }
-
-    fn location_trusted(&self, workspace: &Path, identity: &str) -> Result<bool, String> {
-        Ok(trust_root(&self.sources, workspace)?
+        // One atomic membership observation. Static analysis must not allocate
+        // state/coordination files; its captured decision is reused throughout.
+        Ok(trust_root(&self.sources, &locations.workspace)?
             .join(identity)
             .is_dir())
+    }
+
+    fn trust_epoch(&self, request: &SessionConfigInput) -> Result<TrustEpoch, String> {
+        let (locations, identity) = self.resolve_locations(request)?;
+        TrustEpoch::acquire(&self.sources, &locations.workspace, &identity)
     }
 
     /// Resolve current canonical sources for exactly this Session context.
@@ -575,15 +617,28 @@ impl UserConfigManager {
         &self,
         request: &SessionConfigInput,
     ) -> Result<ProspectiveSessionConfig, LaunchFailure> {
-        self.resolve_session_candidate(request, None)
+        let trusted = self.project_trusted(request)?;
+        let resolved = self.resolve_configuration_candidate(request, None, trusted)?;
+        self.resolve_resources(request, resolved)
     }
 
-    // Validate a staged source through the same resolver before publishing bytes.
-    fn resolve_session_candidate(
+    pub(crate) fn resolve_configuration(
+        &self,
+        request: &SessionConfigInput,
+    ) -> Result<ResolvedConfiguration, LaunchFailure> {
+        #[cfg(test)]
+        self.test_hooks.reach("validation_started");
+        let trusted = self.project_trusted(request)?;
+        self.resolve_configuration_candidate(request, None, trusted)
+    }
+
+    // One source merge/provenance phase, shared by launch and staged authoring.
+    fn resolve_configuration_candidate(
         &self,
         request: &SessionConfigInput,
         candidate: Option<(&Path, &[u8])>,
-    ) -> Result<ProspectiveSessionConfig, LaunchFailure> {
+        trusted: bool,
+    ) -> Result<ResolvedConfiguration, LaunchFailure> {
         let read = |path: &Path, required, project| match candidate {
             Some((target, bytes))
                 if normalize_missing(path).is_ok_and(|canonical| canonical == target) =>
@@ -604,7 +659,6 @@ impl UserConfigManager {
 
         // Even an empty project needs trust for project activation. Later file
         // creation or reload cannot widen the captured source authority.
-        let trusted = self.location_trusted(&locations.workspace, &identity)?;
         let project = if trusted {
             read(&project_path, request.config.is_some(), true)?
         } else {
@@ -693,7 +747,12 @@ impl UserConfigManager {
                 },
             ),
         ] {
-            project_resources.extend(rebase_paths(&mut layer, &origin, &locations.workspace)?);
+            project_resources.extend(rebase_paths(
+                &mut layer,
+                &origin,
+                &locations.workspace,
+                false,
+            )?);
             merged.overlay(layer, &origin, &mut provenance);
         }
         if !request.skill_paths.is_empty() {
@@ -798,6 +857,38 @@ impl UserConfigManager {
         );
         provenance.insert("runtime_root".into(), self.runtime_root_origin.clone());
         provenance.insert("models".into(), self.models_origin.clone());
+        Ok(ResolvedConfiguration {
+            locations,
+            identity,
+            trusted,
+            config,
+            models,
+            provenance,
+            documents,
+            project_resources,
+        })
+    }
+
+    fn resolve_resources(
+        &self,
+        request: &SessionConfigInput,
+        resolved: ResolvedConfiguration,
+    ) -> Result<ProspectiveSessionConfig, LaunchFailure> {
+        let ResolvedConfiguration {
+            locations,
+            identity,
+            trusted,
+            config,
+            models,
+            provenance,
+            documents,
+            project_resources,
+        } = resolved;
+        let host = &self.sources;
+        for path in &project_resources {
+            crate::runtime::resources::validate_project_resource_path(&locations.workspace, path)
+                .map_err(LaunchFailure::resource)?;
+        }
         // The session Skill source policy decides *where* packages may be
         // discovered. `--no-automatic-skills` is the launch-level off switch for automatic
         // discovery; the policy itself never names a rustX configuration
@@ -1191,6 +1282,7 @@ fn rebase_paths(
     layer: &mut RuntimeLayer,
     origin: &Origin,
     workspace: &Path,
+    validate_resources: bool,
 ) -> Result<Vec<PathBuf>, String> {
     let mut resources = Vec::new();
     let base = match origin {
@@ -1205,8 +1297,10 @@ fn rebase_paths(
         }
         let resolved = absolute(base, value);
         if matches!(origin, Origin::Project { .. }) {
-            crate::runtime::resources::validate_project_resource_path(workspace, &resolved)
-                .map_err(|e| e.to_string())?;
+            if validate_resources {
+                crate::runtime::resources::validate_project_resource_path(workspace, &resolved)
+                    .map_err(|e| e.to_string())?;
+            }
             resources.push(resolved.clone());
         }
         *value = resolved;
@@ -1238,6 +1332,66 @@ fn rebase_paths(
 
 pub(super) fn authoring_schema() -> Value {
     serde_json::to_value(schemars::schema_for!(RuntimeLayer)).expect("schema serializes")
+}
+
+/// Per-workspace authority epoch. Lock order: trust, sorted source documents;
+/// never acquire a Session catalog mutex while holding either filesystem lock.
+/// Membership create/remove and Workspace rename linearize under this guard.
+pub(super) struct TrustEpoch {
+    _lock: std::fs::File,
+    record: PathBuf,
+}
+impl TrustEpoch {
+    pub(super) fn acquire(
+        sources: &UserConfigSources,
+        workspace: &Path,
+        identity: &str,
+    ) -> Result<Self, String> {
+        let root = trust_root(sources, workspace)?;
+        // Coordination is a persistent sibling of the state directory, not a
+        // trust member. Read-only analysis must not initialize durable state.
+        let target = Self::lock_target(sources, identity)?;
+        std::fs::create_dir_all(target.parent().ok_or("trust lock has no parent")?)
+            .map_err(|e| e.to_string())?;
+        let record = root.join(identity);
+        let lock = super::settings::lock_document(&target).map_err(|e| e.to_string())?;
+        Ok(Self {
+            _lock: lock,
+            record,
+        })
+    }
+    fn lock_target(sources: &UserConfigSources, identity: &str) -> Result<PathBuf, String> {
+        let name = sources
+            .state_directory
+            .file_name()
+            .ok_or("state directory has no name")?;
+        Ok(sources
+            .state_directory
+            .with_file_name(format!("{}.trust-{identity}", name.to_string_lossy())))
+    }
+    fn trusted(&self) -> bool {
+        self.record.is_dir()
+    }
+    pub(super) fn change(&self, action: super::launch::TrustAction) -> Result<(), String> {
+        match action {
+            super::launch::TrustAction::Grant => {
+                std::fs::create_dir_all(self.record.parent().ok_or("trust record has no parent")?)
+                    .map_err(|e| e.to_string())?;
+                match std::fs::create_dir(&self.record) {
+                    Ok(()) => Ok(()),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && self.trusted() => {
+                        Ok(())
+                    }
+                    Err(e) => Err(e.to_string()),
+                }
+            }
+            super::launch::TrustAction::Revoke => match std::fs::remove_dir(&self.record) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(e.to_string()),
+            },
+        }
+    }
 }
 
 pub(super) fn trust_root(host: &UserConfigSources, workspace: &Path) -> Result<PathBuf, String> {
