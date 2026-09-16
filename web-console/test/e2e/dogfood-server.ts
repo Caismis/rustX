@@ -32,7 +32,8 @@ export async function startDogfood(scenario = 'web_console_dogfood', trusted = t
   const workspaceA = join(directory, 'A'), workspaceB = join(directory, 'B');
   mkdirSync(workspaceA); mkdirSync(workspaceB);
   const binary = process.env.RUSTX_BINARY ?? resolve(root, 'target/debug/rustx');
-  const env = { ...process.env, XDG_CONFIG_HOME: taskConfig, XDG_STATE_HOME: join(directory, 'state'), RUSTX_CONSOLE_FIXTURE_KEY: 'fake-provider-only' };
+  const fixtureHome = join(directory, 'home'); mkdirSync(fixtureHome);
+  const env = { ...process.env, HOME: fixtureHome, XDG_CONFIG_HOME: taskConfig, XDG_STATE_HOME: join(directory, 'state'), RUSTX_CONSOLE_FIXTURE_KEY: 'fake-provider-only' };
   const provider = spawn('uv', ['run', '--project', resolve(root, 'test-support/fake-provider'), '--frozen', 'fake-provider', '--scenario', scenario, '--port', '0'], { stdio: ['pipe', 'pipe', 'pipe'] });
   let providerErrors = ''; provider.stderr.on('data', chunk => { providerErrors = (providerErrors + String(chunk)).slice(-16_384); });
   let app: ChildProcess | undefined;

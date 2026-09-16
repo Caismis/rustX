@@ -1163,8 +1163,11 @@
         "../../client/app-server",
         "../../presentation/primitives/Button",
         "./CatalogEditor",
+        "./Integrations",
         "./RequestPolicy",
+        "./SessionIntegrations",
         "./Settings.module.css",
+        "./mcp-outcome",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
@@ -1218,6 +1221,56 @@
         "Harness Host/Remote settings and credentials",
         "Cordis plugin runtime",
         "Harness source merge and model catalog authority"
+      ]
+    },
+    {
+      "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
+      "destination": "web-console/src/app/settings/Integrations.tsx",
+      "treatment": "adapted scope-bound disclosure cards, independent authored drafts, provenance and runtime facts; native Rust owns semantics",
+      "upstream_sha256": "0437a264aa8a9806fabc5f3691420a01d379782a20417fb5a3abe9defba0a174",
+      "retained_dependencies": [
+        "../../../../protocol/app-server/v5",
+        "../../presentation/primitives/Button",
+        "./Settings.module.css",
+        "react"
+      ],
+      "excluded_dependencies": [
+        "Cordis and dynamic plugin runtime",
+        "Harness Settings schema and source resolver",
+        "Harness backend credential and MCP authority"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.module.css",
+          "upstream_sha256": "fcde749f0cc6dba596f52875501d0872d019d558f7ee76b52aafbc813aebad17",
+          "treatment": "inspected presentation pattern; rewritten for native Rust Settings"
+        },
+        {
+          "upstream": "packages/client/ui-settings-plugins/src/client/PluginCard.tsx",
+          "upstream_sha256": "c70e35e3434b661d5e3ee41de45738a73aed6df6728104e2f97264a72ad6fc0b",
+          "treatment": "inspected presentation pattern; rewritten for native Rust Settings"
+        },
+        {
+          "upstream": "packages/client/ui-settings-plugins/src/client/PluginCard.module.css",
+          "upstream_sha256": "69205cfd07b6d2682ad2a7d6e1dc2c84f109adfdb7c406041a83d488f72623f2",
+          "treatment": "inspected presentation pattern; rewritten for native Rust Settings"
+        },
+        {
+          "upstream": "packages/client/ui-settings-plugins/src/client/card-form.ts",
+          "upstream_sha256": "2ca81b1339a4ab4a51399179c1b26eb40382017cd7f92939f759269fa92f2c89",
+          "treatment": "inspected presentation pattern; rewritten for native Rust Settings"
+        },
+        {
+          "upstream": "packages/client/ui-settings-plugins/src/client/fields.tsx",
+          "upstream_sha256": "a1d68a227d2f8bfa4e58c49dd6a1ea78f9000c7bcc9698ebc2188b1cc2d04092",
+          "treatment": "inspected presentation pattern; rewritten for native Rust Settings"
+        },
+        {
+          "upstream": "packages/client/ui-settings-plugins/src/client/fields.module.css",
+          "upstream_sha256": "4992001b68c2f2974fb57253f2ad62474b7330320139df4e5d446a5404856654",
+          "treatment": "inspected presentation pattern; rewritten for native Rust Settings"
+        }
       ]
     }
   ],
@@ -1400,6 +1453,28 @@
     "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
     "packages/client/ui-settings-models/src/client/ProviderEditor.tsx",
     "packages/client/ui-settings-models/src/client/EditorFooter.tsx",
-    "packages/client/ui-settings-models/src/client/ModelsSection.module.css"
+    "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
+    "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
+    "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.module.css",
+    "packages/client/ui-settings-plugins/src/client/PluginCard.tsx",
+    "packages/client/ui-settings-plugins/src/client/PluginCard.module.css",
+    "packages/client/ui-settings-plugins/src/client/card-form.ts",
+    "packages/client/ui-settings-plugins/src/client/fields.tsx",
+    "packages/client/ui-settings-plugins/src/client/fields.module.css",
+    "packages/client/ui-settings/src/client/settings-contract.ts",
+    "packages/client/ui-settings/src/client/schema.ts",
+    "packages/client/ui-settings-plugins/src/client/PluginsSettingsSection.tsx",
+    "packages/client/ui-settings-plugins/README.md",
+    "packages/client/ui-settings-plugins/tests/fields.client.spec.tsx",
+    "packages/client/ui-settings-plugins/tests/apply.client.spec.ts",
+    "packages/client/ui-settings-plugin-inventory/tests/components.client.spec.tsx",
+    "packages/client/ui-settings-plugin-inventory/README.md",
+    "packages/mcp/mcp-client/src/index.ts",
+    "packages/mcp/mcp-client/README.md",
+    "packages/client/ui-primitives/src/Tag.tsx",
+    "packages/client/ui-primitives/src/Tag.module.css",
+    "packages/client/ui-primitives/src/StateDot.tsx",
+    "packages/mcp/mcp-client/src/transport.ts",
+    "packages/mcp/mcp-client/tests/apply.spec.ts"
   ]
 }

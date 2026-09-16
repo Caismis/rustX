@@ -12,3 +12,7 @@
 .settings dl { display: grid; grid-template-columns: minmax(140px, 1fr) 2fr; gap: 8px; }
 .settings dd { margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 640px) { .settings { padding: 12px; } .grid, .settings dl { grid-template-columns: 1fr; } }
+
+.settings textarea { box-sizing: border-box; width: 100%; min-height: 80px; padding: 8px; color: inherit; background: inherit; border: 1px solid var(--dsw-alias-border-l2, #d8dce2); border-radius: 8px; }
+.settings p { overflow-wrap: anywhere; }
+.settings [hidden] { display: none; }

@@ -237,7 +237,7 @@ pub(super) struct McpAuthoring {
     pub cwd: Option<PathBuf>,
 }
 impl McpAuthoring {
-    fn resolve(self) -> McpServerDocument {
+    pub(super) fn resolve(self) -> McpServerDocument {
         McpServerDocument {
             sensitive_env: self.sensitive_env.unwrap_or_default(),
             sensitive_headers: self.sensitive_headers.unwrap_or_default(),

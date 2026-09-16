@@ -2,6 +2,7 @@
 //! No provider, Session runtime, or external source is prepared here.
 //! Source content is reread per call; admitted configurations own their capture.
 
+pub mod integrations;
 pub mod settings;
 
 use crate::bounded_file::read_bounded;
@@ -377,6 +378,16 @@ pub struct AdmittedSessionConfig {
     prospective: Box<ProspectiveSessionConfig>,
 }
 
+/// Shared authority, source overlay and path capture, before domain validation.
+struct LayerCapture {
+    locations: SessionLocations,
+    identity: String,
+    merged: RuntimeLayer,
+    provenance: BTreeMap<String, Origin>,
+    documents: Vec<(PathBuf, bool, Origin)>,
+    project_resources: Vec<PathBuf>,
+}
+
 /// Canonical source/configuration capture before any launch resource preparation.
 pub(crate) struct SourceCapture {
     locations: SessionLocations,
@@ -682,12 +693,12 @@ impl UserConfigManager {
 
     // One strict source parse, authority, overlay and provenance owner. Lowering
     // is structural; semantic validation belongs to the consuming domain.
-    fn capture_sources(
+    fn capture_layers(
         &self,
         request: &SessionConfigInput,
         candidate: Option<(&Path, &[u8])>,
         trusted: bool,
-    ) -> Result<SourceCapture, LaunchFailure> {
+    ) -> Result<LayerCapture, LaunchFailure> {
         let read = |path: &Path, required, project| match candidate {
             Some((target, bytes))
                 if normalize_missing(path).is_ok_and(|canonical| canonical == target) =>
@@ -716,7 +727,6 @@ impl UserConfigManager {
         // Binding authoring remains strictly validated, but cannot rebind this manager.
         user.models = None;
         user.runtime_root = None;
-        let models_path = host.models.clone();
         let trust_directory = trust_root(host, &locations.workspace)?;
         if locations.runtime_root.starts_with(&trust_directory)
             || trust_directory.starts_with(&locations.runtime_root)
@@ -728,34 +738,6 @@ impl UserConfigManager {
         {
             return Err("runtime_root must be disjoint from the workspace".into());
         }
-        let model_bytes = read_bounded(&models_path).map_err(|detail| {
-            let mut error = LaunchFailure::at(
-                Some(models_path.clone()),
-                "$",
-                "model catalog is unavailable",
-                "run rustx init or correct the explicit catalog path",
-                detail,
-            );
-            error.incomplete = !self.catalog_required && !models_path.exists();
-            error.partial = Some(Box::new(super::diagnostics::PartialProjection::new(
-                &locations,
-                trusted,
-                Value::Null,
-            )));
-            error
-        })?;
-        let model_document: crate::model::authoring::Catalog =
-            crate::toml_authoring::parse_detailed(&model_bytes)
-                .map_err(|error| LaunchFailure::parse(&models_path, error))?;
-        let models = ModelCatalog::from_document(model_document.into()).map_err(|e| {
-            LaunchFailure::at(
-                Some(models_path.clone()),
-                "providers",
-                "invalid model catalog semantics",
-                "correct explicit model limits, protocol, compatibility, and capabilities",
-                e.to_string(),
-            )
-        })?;
         let mut documents = vec![
             (
                 user_path.clone(),
@@ -804,6 +786,61 @@ impl UserConfigManager {
             )?);
             merged.overlay(layer, &origin, &mut provenance);
         }
+        Ok(LayerCapture {
+            locations,
+            identity,
+            merged,
+            provenance,
+            documents,
+            project_resources,
+        })
+    }
+
+    fn capture_sources(
+        &self,
+        request: &SessionConfigInput,
+        candidate: Option<(&Path, &[u8])>,
+        trusted: bool,
+    ) -> Result<SourceCapture, LaunchFailure> {
+        let LayerCapture {
+            locations,
+            identity,
+            mut merged,
+            mut provenance,
+            documents,
+            project_resources,
+        } = self.capture_layers(request, candidate, trusted)?;
+        let launch = locations.workspace.clone();
+        let user_path = self.sources.settings.clone();
+        let models_path = self.sources.models.clone();
+        let model_bytes = read_bounded(&models_path).map_err(|detail| {
+            let mut error = LaunchFailure::at(
+                Some(models_path.clone()),
+                "$",
+                "model catalog is unavailable",
+                "run rustx init or correct the explicit catalog path",
+                detail,
+            );
+            error.incomplete = !self.catalog_required && !models_path.exists();
+            error.partial = Some(Box::new(super::diagnostics::PartialProjection::new(
+                &locations,
+                trusted,
+                Value::Null,
+            )));
+            error
+        })?;
+        let model_document: crate::model::authoring::Catalog =
+            crate::toml_authoring::parse_detailed(&model_bytes)
+                .map_err(|error| LaunchFailure::parse(&models_path, error))?;
+        let models = ModelCatalog::from_document(model_document.into()).map_err(|e| {
+            LaunchFailure::at(
+                Some(models_path.clone()),
+                "providers",
+                "invalid model catalog semantics",
+                "correct explicit model limits, protocol, compatibility, and capabilities",
+                e.to_string(),
+            )
+        })?;
         if !request.skill_paths.is_empty() {
             provenance.insert(
                 "skills".into(),

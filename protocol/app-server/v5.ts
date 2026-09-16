@@ -606,6 +606,22 @@ export type ReviewDecision =
     };
 export type SourceMutation =
   | {
+      id: McpServerId;
+      authored?: InvocationPolicyDocument | null;
+      kind: 'mcp_policy';
+    }
+  | {
+      scope: IntegrationScope;
+      id: McpServerId;
+      authored?: McpDraft | null;
+      kind: 'mcp';
+    }
+  | {
+      scope: IntegrationScope;
+      control: IntegrationControl;
+      kind: 'integration';
+    }
+  | {
       providers: {
         [k: string]: ProviderDraft;
       };
@@ -619,6 +635,66 @@ export type SourceMutation =
       authored?: ModelLayer | null;
       kind: 'workspace_model';
     };
+/**
+ * Identifies an MCP server bound to the runtime.
+ */
+export type McpServerId = string;
+/**
+ * Exactly the two persistent configuration authorities. Never Session or Effective.
+ */
+export type IntegrationScope = 'user' | 'workspace';
+/**
+ * The transport an `mcpServers` entry selects explicitly.
+ */
+export type McpTransportType = 'http' | 'stdio';
+/**
+ * A validated reference, written as `$ENV_VAR` only in declared secret fields.
+ */
+export type EnvironmentReference = string;
+export type IntegrationControl =
+  | {
+      selected?: SubagentName[] | null;
+      kind: 'agents';
+    }
+  | {
+      selected?: WorkflowId[] | null;
+      kind: 'workflows';
+    }
+  | {
+      disabled?: string[] | null;
+      kind: 'skill_visibility';
+    }
+  | {
+      selected?: AutomaticSkillSource[] | null;
+      kind: 'skill_sources';
+    }
+  | {
+      identity: NativeExtension;
+      enabled: boolean;
+      kind: 'extension';
+    }
+  | {
+      kind: 'reset_extensions';
+    };
+/**
+ * The canonical typed name of one admitted subagent definition.
+ *
+ * The keyspace is deliberately narrow: lowercase ASCII letters, digits,
+ * `-`, and `_`, starting with a letter. A name is the model-facing routing
+ * token, the durable ownership identity, and the Runtime Client projection
+ * identity, so an ambiguous or shell-shaped spelling is rejected at the
+ * configuration boundary rather than normalized later.
+ */
+export type SubagentName = string;
+/**
+ * The only source identities `[skills].sources` may name.
+ *
+ * `explicit` is deliberately absent: explicit Skill paths are a launch
+ * authority (`--skill`), not a scannable automatic root, so naming one here
+ * would be a second way to spell the same thing.
+ */
+export type AutomaticSkillSource = 'global' | 'workspace';
+export type NativeExtension = 'agent_status' | 'todo' | 'goal';
 /**
  * The model interaction protocol an adapter must speak.
  */
@@ -958,10 +1034,6 @@ export type SettingsBoundary =
   | 'frozen_admission'
   | 'client_local'
   | 'next_launch';
-/**
- * Identifies an MCP server bound to the runtime.
- */
-export type McpServerId = string;
 /**
  * Identifies one attempt to execute an agent manifest.
  */
@@ -1688,16 +1760,6 @@ export type AgentIdentity =
       name: SubagentName;
     };
 /**
- * The canonical typed name of one admitted subagent definition.
- *
- * The keyspace is deliberately narrow: lowercase ASCII letters, digits,
- * `-`, and `_`, starting with a letter. A name is the model-facing routing
- * token, the durable ownership identity, and the Runtime Client projection
- * identity, so an ambiguous or shell-shaped spelling is rejected at the
- * configuration boundary rather than normalized later.
- */
-export type SubagentName = string;
-/**
  * Where a tool comes from.
  */
 export type ToolOrigin =
@@ -1736,7 +1798,6 @@ export type AgentToolSelection =
  * matches these variants, never display strings.
  */
 export type ToolSourceId = string;
-export type NativeExtension = 'agent_status' | 'todo' | 'goal';
 /**
  * Typed native facts retained with the generation, never emitted per model turn.
  */
@@ -3242,6 +3303,43 @@ export interface CustomAnswer {
    * The bounded user-entered answer.
    */
   answer: string;
+}
+/**
+ * One tool invocation policy document.
+ */
+export interface InvocationPolicyDocument {
+  /**
+   * Foreground/background ownership policy.
+   */
+  execution?: 'foreground_only' | 'background_only' | 'model_selectable';
+  /**
+   * In-batch scheduling policy.
+   */
+  concurrency?: 'sequential' | 'parallel';
+  /**
+   * Human approval behavior for otherwise eligible calls.
+   */
+  approval?: 'never' | 'always';
+}
+/**
+ * Native transport fields plus reference-only credentials. Existing ordinary
+ * environment/header values stay private and may only be retained or removed.
+ */
+export interface McpDraft {
+  enabled?: boolean | null;
+  transport?: McpTransportType | null;
+  command?: string | null;
+  args: string[];
+  cwd?: string | null;
+  url?: string | null;
+  retained_env: string[];
+  retained_headers: string[];
+  sensitive_env: {
+    [k: string]: EnvironmentReference;
+  };
+  sensitive_headers: {
+    [k: string]: EnvironmentReference;
+  };
 }
 export interface ProviderDraft {
   base_url: string;
@@ -6819,7 +6917,13 @@ export interface RoutedInteraction {
          */
         child_conversation_id: string;
         /**
-         * The frozen named definition used by the child.
+         * The canonical typed name of one admitted subagent definition.
+         *
+         * The keyspace is deliberately narrow: lowercase ASCII letters, digits,
+         * `-`, and `_`, starting with a letter. A name is the model-facing routing
+         * token, the durable ownership identity, and the Runtime Client projection
+         * identity, so an ambiguous or shell-shaped spelling is rejected at the
+         * configuration boundary rather than normalized later.
          */
         agent_name: string;
         type: 'subagent';
@@ -7353,6 +7457,7 @@ export interface TodoTask {
   } | null;
 }
 export interface SourceSettings {
+  integrations: IntegrationSettings;
   catalog: CatalogSettings;
   user: SelectionSource;
   workspace: SelectionSource;
@@ -7367,7 +7472,134 @@ export interface SourceSettings {
    */
   resolution_available: boolean;
 }
+export interface IntegrationSettings {
+  /**
+   * User-owned policy, independent of MCP definition precedence.
+   */
+  mcp_tool_policies: {
+    [k: string]: InvocationPolicyDocument;
+  };
+  mcp: McpIdentityView[];
+  mcp_valid: boolean;
+  user: IntegrationSelections;
+  workspace: IntegrationSelections;
+  prospective: IntegrationSelections;
+  provenance: {
+    [k: string]: Origin;
+  };
+  /**
+   * Static native resource projection, not runtime admission or connection proof.
+   */
+  inventory?: CapabilityInspection1 | null;
+  agents: AgentDefinitionSource[];
+}
+export interface McpIdentityView {
+  id: McpServerId;
+  user?: McpDraft | null;
+  workspace?: McpDraft | null;
+  winning?: Origin | null;
+  activation?: SourceActivation | null;
+}
+export interface IntegrationSelections {
+  agents?: SubagentName[] | null;
+  workflows?: WorkflowId[] | null;
+  disabled_skills?: string[] | null;
+  skill_sources?: AutomaticSkillSource[] | null;
+  extensions?: NativeAgentExtensionsDocument | null;
+}
+/**
+ * The closed authored composition surface of native Agent Extensions.
+ *
+ * Every member is a concrete named extension in a closed record.
+ * Unknown extension names are rejected. Runtime TOML layers use the separate
+ * `snake_case` authoring boundary; resource and wire documents retain their
+ * own serialization contract.
+ */
+export interface NativeAgentExtensionsDocument {
+  agent_status?: AgentStatusExtensionDocument;
+  todo?: TodoExtensionDocument;
+  goal?: GoalExtensionDocument;
+}
+/**
+ * The Agent Status extension: optional provider-independent runtime
+ * context for an already-established model step.
+ */
+export interface AgentStatusExtensionDocument {
+  /**
+   * Whether this composition includes the Agent Status extension at all.
+   *
+   * With `false` the runtime composes no status engine: the Agent Loop
+   * emits no Agent Status and is otherwise a completely ordinary
+   * `ConversationRuntime`.
+   */
+  enabled?: boolean;
+  time?: TimeStatusConfig;
+  background?: BackgroundStatusConfig;
+}
+/**
+ * The Time contributor configuration.
+ */
+export interface TimeStatusConfig {
+  /**
+   * Whether Time participates in an available Agent Status opportunity.
+   */
+  enabled?: boolean;
+  /**
+   * The optional IANA timezone used only by Time presentation. Omitting it
+   * renders UTC.
+   */
+  timezone?: string | null;
+}
+/**
+ * The Background contributor configuration.
+ */
+export interface BackgroundStatusConfig {
+  /**
+   * Whether Background participates in an available Agent Status opportunity.
+   */
+  enabled?: boolean;
+}
+/**
+ * The Todo extension: the conversation-owned task list, its
+ * model-facing `todo` Tool, and its bounded status presentation
+ * (Issue #259).
+ */
+export interface TodoExtensionDocument {
+  /**
+   * Whether this composition includes the Todo extension at all.
+   */
+  enabled?: boolean;
+}
+/**
+ * Root-only persistent Goal pursuit, disabled by default.
+ */
+export interface GoalExtensionDocument {
+  enabled?: boolean;
+}
+export interface CapabilityInspection1 {
+  main?: AgentInspection | null;
+  agents: {
+    [k: string]: AgentInspection;
+  };
+  workflows: {
+    [k: string]: WorkflowInspection;
+  };
+  sources: {
+    [k: string]: SourceInspection;
+  };
+  skills: SkillProvenance[];
+  skill_diagnostics: SkillDiagnostic[];
+}
+export interface AgentDefinitionSource {
+  name: SubagentName;
+  selected: string;
+  shadowed?: string | null;
+}
 export interface CatalogSettings {
+  /**
+   * Catalog-domain validity; unavailable catalogs do not block MCP authoring.
+   */
+  valid: boolean;
   document: string;
   revision: string;
   providers: {
@@ -7508,7 +7740,13 @@ export interface RoutedInteraction1 {
          */
         child_conversation_id: string;
         /**
-         * The frozen named definition used by the child.
+         * The canonical typed name of one admitted subagent definition.
+         *
+         * The keyspace is deliberately narrow: lowercase ASCII letters, digits,
+         * `-`, and `_`, starting with a letter. A name is the model-facing routing
+         * token, the durable ownership identity, and the Runtime Client projection
+         * identity, so an ambiguous or shell-shaped spelling is rejected at the
+         * configuration boundary rather than normalized later.
          */
         agent_name: string;
         type: 'subagent';

@@ -2421,7 +2421,20 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
             },
         )
         .await;
+        // WEB-09 source save must preserve the same loaded/frozen generations.
+        f.manager.source_settings(&target.session_id, Some((projection.user.revision,
+            SourceMutation::Mcp {
+                scope: crate::local_runtime::configuration::integrations::IntegrationScope::User,
+                id: crate::runtime::identity::McpServerId::new("web09-inert"),
+                authored: Some(crate::local_runtime::configuration::integrations::McpDraft {
+                    enabled: Some(false), command: Some("never-start-inert-fixture".into()), ..Default::default()
+                }),
+            }
+        ))).await.unwrap();
         let after = runtime.client().snapshot().unwrap().0;
+        assert_eq!(before.resources, after.resources);
+        assert_eq!(before.capabilities, after.capabilities);
+        assert_eq!(before.attempt.as_ref().unwrap().execution_settings, after.attempt.as_ref().unwrap().execution_settings);
         assert_eq!(before.model, after.model);
         assert_eq!(
             before.attempt.as_ref().unwrap().model,
@@ -2579,6 +2592,105 @@ async fn web08_source_commit_with_changed_session_is_uncertain_and_never_replaye
             fresh.catalog.providers["local"].models[0].max_output_tokens,
             2048
         );
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn web09_mcp_cas_and_committed_uncertainty_use_existing_settings_boundary() {
+    use crate::local_runtime::configuration::{
+        integrations::{IntegrationScope, McpDraft},
+        settings::{SettingsError, SourceMutation},
+    };
+    bounded(async {
+        let f = Fixture::new().await;
+        let id = f.sessions[0].id.clone();
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let (before, revision, _) = f.manager.source_settings(&id, None).await.unwrap();
+        let mutation = SourceMutation::Mcp {
+            scope: IntegrationScope::User,
+            id: crate::runtime::identity::McpServerId::new("fixture"),
+            authored: Some(McpDraft {
+                command: Some("never-start-disabled-fixture".into()),
+                enabled: Some(false),
+                ..Default::default()
+            }),
+        };
+        let (entered, resume) = source_gate(&f, "before_publication");
+        let manager = f.manager.clone();
+        let write_id = id.clone();
+        let expected = before.user.revision.clone();
+        let write = tokio::spawn(async move {
+            manager
+                .source_settings(&write_id, Some((expected, mutation)))
+                .await
+        });
+        entered.await.unwrap();
+        let mut catalog = f.manager.sessions.catalog.lock().await;
+        let (_, settings) = catalog.lineage(&id, None).unwrap();
+        catalog.replace_settings(&id, revision, settings).unwrap();
+        drop(catalog);
+        resume.send(()).unwrap();
+        assert!(matches!(
+            write.await.unwrap(),
+            Err(super::super::SourceSettingsError::Source(
+                SettingsError::Committed
+            ))
+        ));
+        let MethodResult::SourceSettings {
+            projection: fresh, ..
+        } = call(
+            &connection,
+            1,
+            Method::SourcesRead {
+                session_id: id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!()
+        };
+        assert_eq!(fresh.integrations.mcp[0].id.as_str(), "fixture");
+        assert!(matches!(
+            rejected(
+                &connection,
+                Method::SourcesWrite {
+                    session_id: id.clone(),
+                    expected_revision: before.user.revision,
+                    mutation: SourceMutation::Mcp {
+                        scope: IntegrationScope::User,
+                        id: crate::runtime::identity::McpServerId::new("fixture"),
+                        authored: None
+                    }
+                }
+            )
+            .await,
+            ErrorData::SourceConflict { .. }
+        ));
+        let MethodResult::SourceSettings {
+            projection: deleted,
+            ..
+        } = call(
+            &connection,
+            2,
+            Method::SourcesWrite {
+                session_id: id,
+                expected_revision: fresh.user.revision,
+                mutation: SourceMutation::Mcp {
+                    scope: IntegrationScope::User,
+                    id: crate::runtime::identity::McpServerId::new("fixture"),
+                    authored: None,
+                },
+            },
+        )
+        .await
+        else {
+            panic!()
+        };
+        assert!(deleted.integrations.mcp.is_empty());
+        assert!(f.provider.request_bodies().is_empty());
         f.close().await;
     })
     .await;

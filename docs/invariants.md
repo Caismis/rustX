@@ -8295,3 +8295,20 @@ See [Agent Profiles](agent-profiles.md) for the exact scope and ownership rules.
   bootstrap-owned, and no secret values are returned or persisted by Web.
 - Noncooperating filesystem editors may race the last fingerprint check and rename;
   native locks do not claim stronger filesystem transactions.
+
+### Integration Settings (WEB-09)
+
+- `capture_layers` is the shared source authority/overlay seam. MCP projection
+  validates only the canonical MCP semantic domain; full Session admission still
+  validates models, runtime configuration and resources.
+- MCP edits address one User/trusted-Workspace identity and exact source revision.
+  Same-name replacement is whole-entry. No Session definition authority exists.
+- Workspace trust/provenance and source publication share the WEB-08 trust epoch;
+  Host cwd admission grants no project configuration or credential authority.
+- MCP Tool policy has a distinct User-only mutation. A winning Workspace definition
+  cannot widen this policy or inherit User credentials.
+- Native integration inventories distinguish resource provenance, authored root
+  selections, prospective state, loaded resources and frozen admission.
+- Extension member changes preserve the exact same-scope collection; cross-scope
+  composition remains whole-dimension replacement. Runtime Todo/Goal state never
+  enters configuration.
