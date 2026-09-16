@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v4';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v5';
 import { interactionKey, OutcomeUncertain } from '../src/client/app-server';
 import { conversation } from '../src/bindings/projection';
 import { capabilities, endpoint, interaction, Server, snapshot, TOKEN } from './fixture';
@@ -12,7 +12,7 @@ describe('native App Server connection', () => {
     const s = server(); await s.connect();
     expect(s.client.getSnapshot().connection).toBe('connected');
     expect(s.client.getSnapshot().capabilities).toEqual(capabilities);
-    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 4 } });
+    expect(s.requests[0].request).toMatchObject({ method: 'initialize', params: { protocol_version: 5 } });
     expect(JSON.stringify(s.client.log.getSnapshot())).not.toContain(TOKEN);
   });
   it('rejects incompatible versions and missing native capabilities', async () => {
@@ -289,5 +289,43 @@ describe('native App Server connection', () => {
   it('rejects unsafe endpoint credential paths before opening a socket', async () => {
     const s = server(); await expect(s.client.connect(`${endpoint}?token=secret`, TOKEN)).rejects.toThrow('no credentials');
     expect(s.sockets).toEqual([]);
+  });
+});
+
+describe('exact inbound mutation transport repair', () => {
+  const expected = { sequence: '4', message_id: 'pending-4', revision: '0' };
+  const pending = (text: string, revision = '0'): RuntimeClientSnapshot => ({ ...snapshot('A'), inbound: { pending: [{ sequence: '4', revision, message: { id: 'pending-4', source: 'human', content: [{ type: 'text', text }] } }] } });
+  it('waits for a post-response snapshot rather than projecting success', async () => {
+    const s = server(); s.snapshots.set('A', pending('old')); await s.attached('A');
+    s.handlers.set('inbound/edit', () => { s.snapshots.set('A', pending('edited', '1')); return { type: 'inbound_mutation', outcome: { status: 'applied' } }; });
+    s.held.add('session/snapshot');
+    const work = s.client.editInbound('A', expected, 'edited');
+    const read = await s.waitFor('session/snapshot');
+    expect(s.client.getSnapshot().views.A.snapshot?.inbound.pending?.[0].revision).toBe('0');
+    s.reply(read); expect(await work).toEqual({ status: 'known', outcome: { status: 'applied' }, observed: true });
+    expect(s.client.getSnapshot().views.A.snapshot?.inbound.pending?.[0].revision).toBe('1');
+  });
+  it('lost committed remove is uncertain, never replayed, and repaired on reconnect', async () => {
+    const s = server(); s.snapshots.set('A', pending('remove')); await s.attached('A');
+    s.handlers.set('inbound/remove', () => { s.snapshots.set('A', snapshot('A')); return { type: 'inbound_mutation', outcome: { status: 'applied' } }; });
+    s.held.add('inbound/remove');
+    const work = s.client.removeInbound('A', expected);
+    const request = await s.waitFor('inbound/remove', 1); s.commit(request);
+    s.socket.close(); expect(await work).toEqual({ status: 'uncertain' });
+    await s.connect();
+    expect(s.client.getSnapshot().views.A.snapshot?.inbound.pending ?? []).toEqual([]);
+    expect(s.requests.filter(item => item.request.method === 'inbound/remove')).toHaveLength(1);
+  });
+  it('late mutation response cannot update a newly attached Session', async () => {
+    const s = server(); s.snapshots.set('A', pending('old')); await s.attached('A', 'B');
+    s.held.add('inbound/edit');
+    const work = s.client.editInbound('A', expected, 'old connection draft');
+    const request = await s.waitFor('inbound/edit', 1); const old = s.socket;
+    old.close(); expect(await work).toEqual({ status: 'uncertain' });
+    await s.connect();
+    old.success(request, { type: 'inbound_mutation', outcome: { status: 'applied' } });
+    expect(s.client.getSnapshot().views.B.snapshot?.conversation_id).toBe('conversation-B');
+    expect(s.client.getSnapshot().views.A.snapshot?.inbound.pending?.[0].revision).toBe('0');
+    expect(s.requests.filter(item => item.request.method === 'inbound/edit')).toHaveLength(1);
   });
 });

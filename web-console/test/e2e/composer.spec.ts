@@ -61,8 +61,33 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     expect(await order()).toEqual(['To-dos', 'Goal', 'Queue', 'Composer']);
     await aligned([todo, goal, queue]);
 
+    // Native mutation while the provider gate prevents claim. Both controls
+    // must converge by authoritative reread; no extra provider step is allowed.
+    await queue.getByRole('button', { name: 'Edit', exact: true }).click();
+    await queue.getByRole('textbox', { name: 'Edit queued message' }).fill('Edited during the Goal round');
+    await queue.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(queue.locator('[data-inbound-sequence]')).toContainText('Edited during the Goal round');
+    await expect(queue.getByRole('textbox')).toHaveCount(0);
+    await queue.getByRole('button', { name: 'Remove', exact: true }).click();
+    await expect(queue).toHaveCount(0);
+    await message.fill('Queued during the Goal round'); await page.getByRole('button', { name: 'Queue', exact: true }).click();
+    await expect(queue.locator('[data-inbound-sequence]')).toContainText('Queued during the Goal round');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await aligned([todo, goal, queue]);
+    await expect(queue.getByRole('button', { name: 'Edit', exact: true })).toBeVisible();
+    await expect(queue.getByRole('button', { name: 'Remove', exact: true })).toBeVisible();
+    await page.screenshot({ path: 'test-results/queue-mobile.png', fullPage: true });
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await queue.getByRole('button', { name: 'Edit', exact: true }).click();
+    await queue.getByRole('textbox', { name: 'Edit queued message' }).fill('Draft that must not change admitted work');
     await fixture.release('goal-round');
     await expect(page.getByText('Queued input handled.', { exact: true })).toBeVisible();
+    // Claim won while the editor was open. Preserve the draft, disable Save,
+    // and never send it into canonical or already-admitted work.
+    await expect(queue.getByRole('textbox', { name: 'Edit queued message' })).toHaveValue('Draft that must not change admitted work');
+    await expect(queue.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+    await expect(queue.getByRole('button', { name: 'Remove', exact: true })).toHaveCount(0);
+    await queue.getByRole('button', { name: 'Cancel edit', exact: true }).click();
     await expect(queue).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeVisible();
 

@@ -267,3 +267,21 @@ Excluded semantic owners: Harness Session Controller queue store and `updateQueu
 slots and registration order, Harness locale runtime, Tooltip. The binding module,
 client Goal control, provisional-echo settlement, fixture, deterministic tests and
 the real-server scenario are rustX-authored.
+
+### WEB-06 exact pending controls
+
+Reverified the detached reference at
+`c291e7961a515f6d7af9304e7fd1d257929aef26`. Reinspected
+`packages/client/ui-conversation/src/client/queue/QueueDock.tsx`, its CSS,
+`tests/queue-dock.client.spec.tsx`, `src/client/input/queue-store.ts` and
+`src/client/contract/queue.ts`. Adapted row Edit/Remove, blank-save and IME guards,
+edit cancellation, busy disclosure, and compact action styling. rustX keeps its
+standalone Todo → Goal → Queue → Composer geometry and wraps actions on narrow
+screens. The shared source inventory records these adaptations.
+
+Harness Session Controller `updateQueue`, placement/steering, Host ownership,
+queue identity/storage, and optimistic/local submission authority remain
+excluded. rustX controls use exact native pending sequence/MessageId/revision,
+retain stale drafts, and reread after responses. Nonrepresentable typed content
+cannot be edited; upload references are preserved. No per-row Steer is exposed
+because native Queue and Steer do not define separate durable delivery classes.

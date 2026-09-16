@@ -746,6 +746,8 @@ pub struct InboundDiagnostics {
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct InboundItemView {
+    /// Native compare-and-set revision.
+    pub revision: u64,
     /// The mailbox-assigned inbound sequence.
     pub sequence: InboundSequence,
     /// The canonical inbound message.

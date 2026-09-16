@@ -1,12 +1,18 @@
 import { TRACE_LIMIT, TRACE_PAGE_SIZE, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterests, type TraceCache } from './trace';
 import type {
-  AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
+  PendingInboundRef, PendingMutationOutcome, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
-} from '../../../protocol/app-server/v4';
+} from '../../../protocol/app-server/v5';
 import { UPLOAD_MAX_BYTES, UPLOAD_BATCH_MAX_BYTES, DRAFT_MAX_FILES } from './uploads';
 import { HISTORY_LIMIT, HISTORY_PAGE_SIZE, prependTranscript, refreshTranscript, replaceTranscript, type TranscriptCache } from './transcript';
 import { ProtocolLog, type WireContext } from './protocol-log';
+
+export type InboundControlOutcome =
+  | { status: 'known'; outcome: PendingMutationOutcome; observed: boolean }
+  | { status: 'uncertain' }
+  | { status: 'obsolete' }
+  | { status: 'rejected'; reason: string; observed: boolean };
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'resynchronizing' | 'stale' | 'incompatible' | 'error';
 export interface SessionView {
@@ -153,7 +159,7 @@ export class AppServerClient {
     const generation = this.state.generation;
     this.publish({ connection: reconnect ? 'reconnecting' : 'connecting', capabilities: undefined, error: undefined });
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v4', `rustx-token.${token}`]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v5', `rustx-token.${token}`]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -171,12 +177,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 4, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 5, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (hello.protocol_version !== 4 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v4 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (hello.protocol_version !== 5 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v5 with native multi-Session, headless interactions, and single-controller admission is required.');
       }
       this.initialized = true;
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
@@ -318,6 +324,10 @@ export class AppServerClient {
       this.retireAttachmentWork(target.session_id);
       this.setSession(target.session_id, { attachment: 'stale', target: undefined, error: 'Attachment closed by server; reattach to inspect residency.' });
     } else {
+      if (value.method === 'session/event' && value.params.event.type === 'pending_inbound_changed') {
+        void this.rereadPending(target.session_id, () => this.current(generation) && sameTarget(this.state.views[target.session_id]?.target, target));
+        return;
+      }
       if (value.method === 'session/resyncRequired') this.resubscribe.add(target.session_id);
       void this.refresh(target.session_id).catch(() => {});
     }
@@ -591,6 +601,37 @@ export class AppServerClient {
   private async reread(id: string, current: () => boolean) {
     try { await this.refresh(id); } catch { return false; }
     return current() && this.state.views[id]?.attachment === 'attached';
+  }
+  async editInbound(id: string, expected: PendingInboundRef, text: string): Promise<InboundControlOutcome> {
+    return this.controlInbound(id, target => ({ method: 'inbound/edit', params: { target, expected, text } }));
+  }
+  async removeInbound(id: string, expected: PendingInboundRef): Promise<InboundControlOutcome> {
+    return this.controlInbound(id, target => ({ method: 'inbound/remove', params: { target, expected } }));
+  }
+  private async controlInbound(id: string, operation: (target: AttachmentTarget) => Request1): Promise<InboundControlOutcome> {
+    const generation = this.state.generation;
+    let target: AttachmentTarget;
+    try { target = this.target(id); } catch (error) { return { status: 'rejected', reason: String(error), observed: false }; }
+    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
+    try {
+      const result = await this.request(operation(target), 'inbound_mutation');
+      if (!current()) return { status: 'obsolete' };
+      if (result.outcome.status === 'durability_uncertain') return { status: 'uncertain' };
+      return { status: 'known', outcome: result.outcome, observed: await this.rereadPending(id, current) };
+    } catch (error) {
+      if (!current()) return isOutcomeUncertain(error) ? { status: 'uncertain' } : { status: 'obsolete' };
+      if (isOutcomeUncertain(error)) return { status: 'uncertain' };
+      return { status: 'rejected', reason: String(error), observed: await this.rereadPending(id, current) };
+    }
+  }
+  /** Pending edits/removals invalidate historical windows too. Replace after
+   * the final coalesced read, so an older in-flight response cannot restore a
+   * removed row through the normal append-only transcript merge. */
+  private async rereadPending(id: string, current: () => boolean) {
+    const observed = await this.reread(id, current);
+    const view = this.state.views[id];
+    if (observed && view?.snapshot) this.setSession(id, { history: replaceTranscript(view.snapshot.transcript, view.history) });
+    return observed;
   }
   async cancelTurn(id: string) { return this.request({ method: 'turn/cancel', params: { target: this.target(id) } }, 'cancellation_accepted'); }
   async answer(id: string, interaction: InteractionRef, response?: InteractionResponse) {

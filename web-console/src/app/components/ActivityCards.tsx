@@ -1,4 +1,4 @@
-import type { RuntimeClientSubagent, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v4';
+import type { RuntimeClientSubagent, WorkflowRunView, WorkflowRunId } from '../../../../protocol/app-server/v5';
 
 const label = (value: string) => value.replaceAll('_', ' ');
 const detail = (value: string) => value.length > 1024 ? `${value.slice(0, 1024)}…` : value;

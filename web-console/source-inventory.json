@@ -42,7 +42,7 @@
       "treatment": "rewritten selectors with native Dialog and typed rustX dispatch",
       "upstream_sha256": "c6a89ae2771f36ff6da26886fbc6719369f41f9eae004e52561644c788df153f",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v4",
+        "../../../../protocol/app-server/v5",
         "../../bindings/projection",
         "../../client/app-server",
         "../../presentation/primitives/Button",
@@ -349,7 +349,7 @@
       "treatment": "substantially refactored: presentation extracted; native rustX bindings Session upload receipts replace the obsolete artifact carrier; draft states remain presentation-only.",
       "upstream_sha256": "98fd669d20af309e31bf2cf0cc591b247905acf9ae02c98a3248c02429742477",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v4",
+        "../../../../protocol/app-server/v5",
         "../../client/app-server",
         "../../client/uploads",
         "../../presentation/attachments/AttachmentCard",
@@ -451,7 +451,7 @@
       "treatment": "substantially refactored: presentation extracted; native rustX bindings",
       "upstream_sha256": "9a3f529576191c8424544273c562e6f84741bd667b2a8efefac9c26dbaf82a02",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v4",
+        "../../../../protocol/app-server/v5",
         "../../bindings/questionnaire",
         "../../presentation/primitives/Button",
         "../../presentation/primitives/icons",
@@ -880,7 +880,7 @@
       "upstream_sha256": "8761d0bbd471440ce331db1e4537e42cc630969244290f8b66cab090457ac70f",
       "destination": "web-console/src/app/Trajectory.tsx",
       "retained_dependencies": [
-        "../../../protocol/app-server/v4",
+        "../../../protocol/app-server/v5",
         "../client/trace",
         "../presentation/primitives/Button",
         "../presentation/primitives/Input",
@@ -996,7 +996,7 @@
       "treatment": "adapted: collapsed per-status summary, bounded expanded list and status glyph family; binds rustX TodoTask identity/status, adds a composed-empty strip, blocked_by and active_form",
       "upstream_sha256": "1d1e9d87c12b505fc8bc2bdf9973fc349fb80b9385419e0247420ecdb1fc2f4a",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v4",
+        "../../../../protocol/app-server/v5",
         "../../bindings/composer-context",
         "../../presentation/primitives/icons",
         "./TodoDock.module.css",
@@ -1028,7 +1028,7 @@
       "treatment": "adapted: strip, phase labels, single-flight icon actions and inline Enter/Escape edit form; binds rustX GoalView armed flag, adds budget editor, rounds/revision meta and lost-response uncertainty; no create or clear control",
       "upstream_sha256": "fcd9ec77f6e40cf4220a883f276d59be5641768a606ff128a5aa209222a637fa",
       "retained_dependencies": [
-        "../../../../protocol/app-server/v4",
+        "../../../../protocol/app-server/v5",
         "../../bindings/composer-context",
         "../../client/app-server",
         "../../presentation/primitives/icons",
@@ -1059,9 +1059,10 @@
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.tsx",
       "destination": "web-console/src/app/composer/QueueDock.tsx",
-      "treatment": "adapted: single-row strip, collapsible count header and sending echo rows; binds native inbound rows and MessageId-settled echoes",
+      "treatment": "adapted: collapsible queue, inline text editing, remove, busy controls and preserved drafts; native exact pending CAS and authoritative readback",
       "upstream_sha256": "682d5bb4aa11478acbac0f2e21ed1e129baddd18cbff732c64ae5bdb95fb738e",
       "retained_dependencies": [
+        "../../../../protocol/app-server/v5",
         "../../bindings/composer-context",
         "../../client/app-server",
         "../../presentation/primitives/icons",
@@ -1071,15 +1072,15 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
         "Harness Session Controller queue snapshot and updateQueue",
-        "edit, remove and per-row steer actions (WEB-06)",
         "attachment thumbnails and image loading",
-        "Cordis slot registration"
+        "Cordis slot registration",
+        "Harness per-row steer/reclassification and queue storage"
       ]
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.module.css",
       "destination": "web-console/src/app/composer/QueueDock.module.css",
-      "treatment": "adapted: standalone card instead of the input-card tuck; attachment and editor rules removed",
+      "treatment": "adapted: standalone card, editor and row actions with wrapping mobile controls; no input-card tuck or attachment thumbnail rules",
       "upstream_sha256": "7b1a8a0d48ac401316db13d8d8b51530b15174ab6b6c49b699beef3967d42f81",
       "retained_dependencies": [
         "CSS modules",
@@ -1227,6 +1228,9 @@
     "packages/client/ui-conversation/tests/queue-dock.client.spec.tsx",
     "packages/client/ui-conversation/tests/skeleton.client.spec.tsx",
     "packages/client/ui-conversation/tests/input-bar.client.spec.tsx",
-    "packages/client/ui-primitives/src/icons/index.tsx"
+    "packages/client/ui-primitives/src/icons/index.tsx",
+    "packages/client/ui-conversation/src/client/input/queue-store.ts",
+    "packages/client/ui-conversation/src/client/input/submission-policy.ts",
+    "packages/client/ui-conversation/src/client/input/facade.ts"
   ]
 }

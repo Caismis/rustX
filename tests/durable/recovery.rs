@@ -3345,25 +3345,6 @@ fn a_durably_settled_subagent_needs_no_recovery() {
     );
 }
 
-/// The durable answer obligation of one adoption, built from exactly the
-/// pending items the adoption transaction will consume.
-fn adoption_of(
-    store: &SqliteConversationStore,
-    watermark: rustx::runtime::inbound::InboundSequence,
-) -> rustx::events::types::RuntimeEventEnvelope {
-    rustx::durable::inbox::inbound_adoption_event(
-        store.conversation_id(),
-        None,
-        store
-            .load_pending()
-            .expect("pending")
-            .into_iter()
-            .filter(|item| item.sequence <= watermark)
-            .map(|item| item.message_id)
-            .collect(),
-    )
-}
-
 /// Adopts everything through `watermark`, together with the durable answer
 /// obligation the adoption transaction requires.
 fn adopt_through(
@@ -3371,6 +3352,9 @@ fn adopt_through(
     watermark: rustx::runtime::inbound::InboundSequence,
 ) -> Vec<MessageBlock> {
     store
-        .adopt_pending_batch(watermark, adoption_of(store, watermark))
+        .adopt_pending_batch(watermark, None)
         .expect("adopt")
+        .into_iter()
+        .map(|item| MessageBlock::User(item.message))
+        .collect()
 }

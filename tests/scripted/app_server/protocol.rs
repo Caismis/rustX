@@ -70,7 +70,7 @@ async fn initialize(connection: &AppServerConnection) {
         connection,
         0,
         Method::Initialize(InitializeParams {
-            protocol_version: 4,
+            protocol_version: 5,
             client: ClientIdentity {
                 name: "scripted".into(),
                 version: "1".into(),
@@ -680,7 +680,7 @@ async fn initialize_and_malformed_wire_are_transactional() {
         let bad_version = connection.handle_json(r#"{"jsonrpc":"2.0","id":"version","method":"initialize","params":{"protocol_version":2,"client":{"name":"test","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#).await.unwrap();
         let Response::Failure(failure) = bad_version else { panic!("version mismatch") };
         assert_eq!(failure.id, Some(RequestId::String("version".into())));
-        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 4, .. })));
+        assert!(matches!(failure.error.data, Some(ErrorData::UnsupportedVersion { supported: 5, .. })));
         initialize(&connection).await;
         for (json, expected_code) in [
             (r#"{"jsonrpc":"2.0","id":1,"method":"missing","params":{}}"#, -32601),
@@ -1915,6 +1915,204 @@ async fn restored_destination_receipts_admit_a_turn_after_source_deletion() {
             .unload(&destination.active_conversation_id)
             .await
             .unwrap();
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exact_pending_mutations_are_routed_cas_bound_and_do_not_cancel_attempts() {
+    use crate::durable::inbox::{PendingInboundRef, PendingMutationOutcome as Outcome};
+    bounded(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let a = attach(&connection, &f, 0).await;
+        let b = attach(&connection, &f, 1).await;
+        let content = |text: &str| {
+            vec![UserInputBlock::Text(crate::message::content::TextBlock {
+                text: text.into(),
+            })]
+        };
+        call(
+            &connection,
+            700,
+            Method::TurnStart {
+                target: a.clone(),
+                content: content("request-A"),
+            },
+        )
+        .await;
+        f.gates[0].wait_entered().await;
+        let MethodResult::InboundAccepted {
+            message_id,
+            inbound_sequence,
+        } = call(
+            &connection,
+            701,
+            Method::TurnSteer {
+                target: a.clone(),
+                content: content("pending original"),
+            },
+        )
+        .await
+        else {
+            panic!("accepted")
+        };
+        let expected = PendingInboundRef {
+            sequence: inbound_sequence,
+            message_id,
+            revision: 0,
+        };
+        assert!(matches!(
+            call(
+                &connection,
+                702,
+                Method::InboundRemove {
+                    target: b,
+                    expected: expected.clone()
+                }
+            )
+            .await,
+            MethodResult::InboundMutation {
+                outcome: Outcome::NotPending
+            }
+        ));
+        let mut wrong = a.clone();
+        wrong.conversation_id = crate::runtime::identity::ConversationId::new("wrong");
+        assert_eq!(
+            rejected(
+                &connection,
+                Method::InboundRemove {
+                    target: wrong,
+                    expected: expected.clone()
+                }
+            )
+            .await,
+            ErrorData::StaleAttachment
+        );
+        let mut wrong_incarnation = a.clone();
+        wrong_incarnation.runtime_incarnation = serde_json::from_str("0").unwrap();
+        let mut wrong_attachment = a.clone();
+        wrong_attachment.attachment_id = crate::runtime_client::AttachmentId::new("obsolete");
+        let mut wrong_session = a.clone();
+        wrong_session.session_id = f.sessions[1].id.clone();
+        for target in [wrong_incarnation, wrong_attachment, wrong_session] {
+            assert_eq!(
+                rejected(
+                    &connection,
+                    Method::InboundEdit {
+                        target,
+                        expected: expected.clone(),
+                        text: "must not commit".into(),
+                    }
+                )
+                .await,
+                ErrorData::StaleAttachment
+            );
+        }
+        assert!(matches!(
+            call(
+                &connection,
+                703,
+                Method::InboundEdit {
+                    target: a.clone(),
+                    expected: expected.clone(),
+                    text: "edited pending".into()
+                }
+            )
+            .await,
+            MethodResult::InboundMutation {
+                outcome: Outcome::Applied
+            }
+        ));
+        assert!(matches!(
+            call(
+                &connection,
+                704,
+                Method::InboundRemove {
+                    target: a.clone(),
+                    expected: expected.clone()
+                }
+            )
+            .await,
+            MethodResult::InboundMutation {
+                outcome: Outcome::Conflict
+            }
+        ));
+        let MethodResult::Snapshot { snapshot, .. } = call(
+            &connection,
+            705,
+            Method::SessionSnapshot {
+                target: a.clone(),
+                trace_records: vec![],
+            },
+        )
+        .await
+        else {
+            panic!("snapshot")
+        };
+        assert_eq!(snapshot.inbound.pending.len(), 1);
+        assert_eq!(snapshot.inbound.pending[0].revision, 1);
+        assert_eq!(
+            snapshot.inbound.pending[0].message.content,
+            input("edited pending")
+        );
+        let expected = PendingInboundRef {
+            revision: 1,
+            ..expected
+        };
+        assert!(matches!(
+            call(
+                &connection,
+                706,
+                Method::InboundRemove {
+                    target: a.clone(),
+                    expected: expected.clone()
+                }
+            )
+            .await,
+            MethodResult::InboundMutation {
+                outcome: Outcome::Applied
+            }
+        ));
+        assert!(matches!(
+            call(
+                &connection,
+                707,
+                Method::InboundRemove {
+                    target: a.clone(),
+                    expected
+                }
+            )
+            .await,
+            MethodResult::InboundMutation {
+                outcome: Outcome::NotPending
+            }
+        ));
+        let MethodResult::Snapshot { snapshot, .. } = call(
+            &connection,
+            708,
+            Method::SessionSnapshot {
+                target: a.clone(),
+                trace_records: vec![],
+            },
+        )
+        .await
+        else {
+            panic!("snapshot")
+        };
+        assert!(snapshot.inbound.pending.is_empty());
+        assert!(
+            f.manager
+                .load(&a.session_id, None)
+                .await
+                .unwrap()
+                .inspect_runtime()
+                .unwrap()
+                .has_current_attempt()
+        );
+        assert_eq!(f.provider.request_bodies().len(), 1);
         f.close().await;
     })
     .await;

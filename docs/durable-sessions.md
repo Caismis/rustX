@@ -116,7 +116,7 @@ record. Recovery never rediscovers a new deletion workset.
 Deletion preview, execution, and recovery on `SessionController` remain
 crate-private. `DeletionScope`, `DeletionRecord`, previews, blockers, and internal
 results are not public native DTOs: their frozen scopes are cleanup authority.
-App Server v4 exposes bounded public control-plane projections. Compile-fail API
+App Server v5 exposes bounded public control-plane projections. Compile-fail API
 regressions enforce this boundary.
 
 ## Schema

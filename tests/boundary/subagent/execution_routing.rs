@@ -859,7 +859,7 @@ async fn two_concurrent_children_of_one_agent_stay_unambiguously_correlated() {
     );
     let adopted = plane
         .store
-        .adopt_pending_batch(batch.watermark, batch.adoption_event(None))
+        .adopt_pending_batch(batch.watermark, None)
         .expect("adoption");
     assert_eq!(adopted.len(), 4);
 

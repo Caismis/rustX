@@ -6,6 +6,7 @@ import { startDogfood } from './dogfood-server';
 test('typed selectors, native upload-bearing retry branch, original lineage and independent Fork', async ({ page }) => {
   const fixture = await startDogfood('web_commands');
   let passed = false;
+  let phase = 'original turn setup';
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
@@ -51,11 +52,27 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await expect(page.getByText('Uploaded', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(page.getByText('Original native answer', { exact: true })).toBeVisible(); await settled();
+    phase = 'selecting exact historical Retry boundary';
     await page.getByRole('button', { name: 'Retry / Regenerate', exact: true }).click();
     await page.getByRole('dialog', { name: 'Retry / Regenerate', exact: true }).getByRole('option', { name: /Regenerate my uploaded note/ }).click();
+    phase = 'awaiting validated retry provider request (branch → unload → attach → turn/start)';
+    await test.step('native retry reaches the provider with validated editor content', async () => {
+      // The gate is reached only after the real provider validates model, native
+      // upload-bearing input and absence of old output. Its existing deadline is
+      // deadlock protection, not a five-second budget for the entire transition.
+      expect(await fixture.gate('retry-request-reached')).toMatchObject({ kind: 'gate_reached', name: 'retry-request-reached', requestIndex: 1 });
+      phase = 'validated retry request reached; checking attached native lineage while provider is parked';
+      await expect(facts).toContainText(originalId);
+      await expect(facts).not.toContainText(`"ConversationId": "${originalConversation}"`);
+      expect(JSON.parse(await facts.innerText()).SessionId).toBe(originalId);
+      expect(JSON.parse(await facts.innerText()).ConversationId).not.toBe(originalConversation);
+      await expect(page.locator('.attempt-status')).toContainText('running');
+      await expect(page.getByText('Regenerated native answer', { exact: true })).toHaveCount(0);
+    });
+    phase = 'validated retry request reached; awaiting provider output and canonical settlement';
+    await fixture.release('retry-request-reached');
     await expect(page.getByText('Regenerated native answer', { exact: true })).toBeVisible(); await settled();
-    expect(JSON.parse(await facts.innerText()).SessionId).toBe(originalId);
-    expect(JSON.parse(await facts.innerText()).ConversationId).not.toBe(originalConversation);
+    phase = 'retry settled; verifying original lineage and independent Fork';
     const transcript = page.getByLabel('Canonical conversation');
     await expect(transcript.getByText('Original native answer', { exact: true })).toHaveCount(0);
     await expect(transcript.getByText('Regenerate my uploaded note', { exact: true })).toHaveCount(1);
@@ -89,5 +106,22 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: 'test-results/commands-selector-mobile.png' });
     expect(errors).toEqual([]); passed = true;
-  } finally { await fixture.stop(passed); }
+  } catch (error) {
+    // Capture before shutdown: teardown closes the socket and can otherwise
+    // obscure whether branch, attach, admission or provider settlement stalled.
+    await test.info().attach('retry-native-frontier', {
+      contentType: 'application/json',
+      body: JSON.stringify({ phase, diagnostics: fixture.diagnostics(),
+        facts: await facts.innerText(),
+        notices: await page.locator('.notice').allTextContents(),
+        wire: await page.locator('.protocol-log pre').allTextContents(),
+        provider: await Promise.allSettled(['state', 'requests', 'observations'].map(path => fixture.control(path))),
+      }, null, 2),
+    });
+    throw error;
+  } finally {
+    const report = await fixture.stop(passed);
+    await test.info().attach('retry-native-fixture-report', { contentType: 'application/json',
+      body: JSON.stringify({ phase, report, diagnostics: fixture.diagnostics() }, null, 2) });
+  }
 });

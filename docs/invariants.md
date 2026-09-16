@@ -1,5 +1,14 @@
 # Runtime Invariants
 
+Pending Inbound owns accepted queue mutation. `(ConversationId, InboundSequence,
+MessageId)` identifies one occurrence, and its native revision is a compare-and-set
+precondition. Mutation and canonical claim are ordered by the durable transaction.
+Claim constructs its own answer obligation and returns the exact committed rows;
+execution and observers never consume a selected payload after commit. Removal
+retires only a pending transcript reference and never cancels execution or edits
+canonical history. Lost responses are uncertain: clients reread and never replay.
+See [exact pending controls](app-server-protocol.md#exact-pending-inbound-controls-web-06).
+
 `RuntimeClientProjection` exclusively owns externally visible Goal snapshot state
 and its cursor: bootstrap includes Goal at the inactive runtime cut; all live
 Goal changes, including activation-only disarm, fold through the observation

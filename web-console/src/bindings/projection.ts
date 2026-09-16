@@ -1,4 +1,4 @@
-import type { RuntimeClientSnapshot } from '../../../protocol/app-server/v4';
+import type { RuntimeClientSnapshot } from '../../../protocol/app-server/v5';
 import type { SessionView } from '../client/app-server';
 /** Select only canonical snapshot messages. Streaming is a separately labelled
  * server projection and disappears when its canonical identity is committed. */

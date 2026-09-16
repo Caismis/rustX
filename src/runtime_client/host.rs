@@ -416,6 +416,31 @@ impl ClientInner {
         guard
     }
 
+    /// Snapshot repair reads pending authority even if a committed mutation's
+    /// immediate publication failed. Lock projection first: a snapshot must
+    /// never hold native publication while waiting for the host lock.
+    fn lock_snapshot_state(&self) -> Result<MutexGuard<'_, ClientState>, RuntimeClientError> {
+        let mut state = self.lock_state();
+        if let Some(runtime) = &self.runtime {
+            runtime
+                .tool_runtime()
+                .mailbox()
+                .with_pending_snapshot(|items| {
+                    // A background/native semantic batch can commit before its
+                    // installation publishes. Preserve the complete preceding cut.
+                    if !self.pending.has_unpublished() {
+                        // Never consult Workflow owners under this publication cut.
+                        state.apply_pending(&self.pending);
+                        state.projection.repair_pending(items);
+                    }
+                })
+                .map_err(|error| RuntimeClientError::RuntimeFailure {
+                    message: format!("durable pending snapshot failed: {error}"),
+                })?;
+        }
+        Ok(state)
+    }
+
     /// A bound live projection can expose interactions to a future client.
     /// Admission follows runtime binding, never external attachment presence.
     pub(crate) fn admits_interaction_publication(&self) -> bool {
@@ -609,7 +634,7 @@ impl ClientInner {
         let read_only_attachment = self.read_only || read_only_attachment;
         self.ensure_session_runtime_live()?;
         self.ensure_worker();
-        let mut state = self.lock_state();
+        let mut state = self.lock_snapshot_state()?;
         if !read_only_attachment && let Some(existing) = &state.control_attachment {
             return Err(RuntimeClientError::AttachmentInUse {
                 existing_attachment_id: existing.attachment_id.clone(),
@@ -727,6 +752,33 @@ impl ClientInner {
             });
         }
         self.submit_session_inbound(content)
+    }
+
+    pub(crate) fn edit_pending(
+        &self,
+        expected: &crate::durable::inbox::PendingInboundRef,
+        text: &str,
+    ) -> Result<crate::durable::inbox::PendingMutationOutcome, RuntimeClientError> {
+        self.ensure_writable_runtime()?;
+        let runtime = self.runtime.as_ref().expect("writable runtime");
+        Ok(runtime
+            .tool_runtime()
+            .mailbox()
+            .edit_pending(expected, text)
+            .unwrap_or(crate::durable::inbox::PendingMutationOutcome::DurabilityUncertain))
+    }
+
+    pub(crate) fn remove_pending(
+        &self,
+        expected: &crate::durable::inbox::PendingInboundRef,
+    ) -> Result<crate::durable::inbox::PendingMutationOutcome, RuntimeClientError> {
+        self.ensure_writable_runtime()?;
+        let runtime = self.runtime.as_ref().expect("writable runtime");
+        Ok(runtime
+            .tool_runtime()
+            .mailbox()
+            .remove_pending(expected)
+            .unwrap_or(crate::durable::inbox::PendingMutationOutcome::DurabilityUncertain))
     }
 
     pub(crate) fn submit_session_inbound(
@@ -980,7 +1032,7 @@ impl ClientInner {
             });
         }
         self.ensure_session_runtime_live()?;
-        let mut state = self.lock_state();
+        let mut state = self.lock_snapshot_state()?;
         if self.read_only {
             self.refresh_durable_projection(&mut state)?;
         } else {
@@ -4686,6 +4738,71 @@ mod tests {
         .await;
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn pending_snapshot_and_reattach_repair_a_committed_unpublished_mutation() {
+        let (release_tx, release_rx) = model_release();
+        let (_, fixture) = host_fixture(
+            vec![vec![
+                GatedStep::Emit(ModelEvent::Started),
+                GatedStep::ParkUntilReleased(release_rx),
+                GatedStep::Emit(ModelEvent::Completed {
+                    finish_reason: ModelFinishReason::Stop,
+                    usage: None,
+                }),
+            ]],
+            ToolRegistry::new(),
+            status_engine(),
+        )
+        .await;
+        let mailbox = fixture.runtime.tool_runtime().mailbox();
+        mailbox
+            .enqueue(inbound_text("admitted", "running"))
+            .unwrap();
+        await_request_history_len(&fixture.host, 1).await;
+        let sequence = mailbox
+            .enqueue(inbound_text("pending-repair", "old"))
+            .unwrap();
+        let (attachment, _) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let (before, _) = fixture.host.snapshot().unwrap();
+        assert_eq!(before.inbound.pending.len(), 1);
+        let store = fixture.runtime.tool_runtime().durable_store();
+        let expected = crate::durable::inbox::PendingInboundRef {
+            sequence,
+            message_id: MessageId::new("pending-repair"),
+            revision: 0,
+        };
+        // Exercise the gap directly: durable commit exists, its mailbox
+        // publication does not. A native snapshot must repair it from storage.
+        store.edit_pending(&expected, "committed edit").unwrap();
+        let (repaired, _) = fixture.host.snapshot().unwrap();
+        assert_eq!(repaired.inbound.pending[0].revision, 1);
+        assert_eq!(
+            repaired.inbound.pending[0].message.content,
+            inbound_text("x", "committed edit").content
+        );
+        store
+            .remove_pending(&crate::durable::inbox::PendingInboundRef {
+                revision: 1,
+                ..expected
+            })
+            .unwrap();
+        attachment.detach();
+        let (_, initialized) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let RuntimeClientResult::Initialized { snapshot, .. } = initialized else {
+            panic!("initialized")
+        };
+        assert!(snapshot.inbound.pending.is_empty());
+        assert!(!format!("{:?}", snapshot.transcript).contains("pending-repair"));
+        release_tx.send(true).unwrap();
+        fixture.runtime.shutdown().await.unwrap();
+    }
+
     /// Detaching never cancels conversation-owned background work and
     /// never drains mailbox contents: the mailbox is drained only by the
     /// conversation runtime's admission/safe-boundary authority, never by
@@ -4761,6 +4878,36 @@ mod tests {
             }
             tokio::task::yield_now().await;
         }
+        // Exact pending removal cannot cancel the parked attempt or the
+        // independently committed background execution.
+        let mailbox = fixture.runtime.tool_runtime().mailbox();
+        let sequence = mailbox
+            .enqueue(inbound_text("msg-remove", "remove only this occurrence"))
+            .unwrap();
+        let before_background = fixture
+            .runtime
+            .tool_runtime()
+            .background()
+            .snapshot(&execution_id);
+        assert_eq!(
+            mailbox
+                .remove_pending(&crate::durable::inbox::PendingInboundRef {
+                    sequence,
+                    message_id: MessageId::new("msg-remove"),
+                    revision: 0,
+                })
+                .unwrap(),
+            crate::durable::inbox::PendingMutationOutcome::Applied
+        );
+        assert_eq!(
+            fixture
+                .runtime
+                .tool_runtime()
+                .background()
+                .snapshot(&execution_id),
+            before_background
+        );
+        assert!(fixture.runtime.has_current_attempt());
         // A second mailbox item stays pending while the attempt runs.
         fixture
             .runtime

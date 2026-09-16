@@ -198,6 +198,8 @@ pub(crate) enum ConversationObservation {
     InboundEnqueued(InboundItem),
     /// One mailbox finite drain (authoritative batch).
     InboundDrained(InboundBatch),
+    /// Durable pending readback following an exact mutation.
+    PendingInboundChanged(Vec<InboundItem>),
     /// One background registry transition snapshot.
     Background(BackgroundExecutionSnapshot),
     /// One live, not-yet-durable foreground tool progress report (Issue

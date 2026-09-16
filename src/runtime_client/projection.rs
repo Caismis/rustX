@@ -684,6 +684,12 @@ impl RuntimeClientProjection {
                     evicted_status_message_id,
                 }]
             }
+            ConversationObservation::PendingInboundChanged(items) => {
+                self.snapshot.inbound.pending = items.iter().map(inbound_item_view).collect();
+                vec![RuntimeClientEvent::PendingInboundChanged {
+                    pending: self.snapshot.inbound.pending.clone(),
+                }]
+            }
             ConversationObservation::InboundEnqueued(item) => {
                 self.snapshot.inbound.pending.push(inbound_item_view(&item));
                 let transcript_cursor = item
@@ -696,7 +702,10 @@ impl RuntimeClientProjection {
                 }]
             }
             ConversationObservation::InboundDrained(batch) => {
-                self.snapshot.inbound.pending.clear();
+                self.snapshot
+                    .inbound
+                    .pending
+                    .retain(|item| item.sequence > batch.watermark());
                 self.snapshot.inbound.last_drain = Some(InboundDrainView {
                     watermark: batch.watermark(),
                     count: batch.items().len(),
@@ -1721,6 +1730,14 @@ impl RuntimeClientProjection {
         Ok((snapshot, cursor, self.journal_through))
     }
 
+    /// Repairs missed committed pending notifications from durable authority.
+    pub(crate) fn repair_pending(&mut self, items: Vec<InboundItem>) {
+        let pending: Vec<_> = items.iter().map(inbound_item_view).collect();
+        if self.snapshot.inbound.pending != pending {
+            self.apply(ConversationObservation::PendingInboundChanged(items));
+        }
+    }
+
     /// Replaces only the derived durable transcript page with a fresh
     /// authoritative read. The Surface projection and Runtime Client cursor
     /// remain untouched: transcript paging is a separate durable cursor
@@ -1969,6 +1986,7 @@ fn client_failure(failure: &AttemptFailure) -> RuntimeClientAttemptFailure {
 /// One pending inbound item of the diagnostics view.
 fn inbound_item_view(item: &InboundItem) -> InboundItemView {
     InboundItemView {
+        revision: item.revision(),
         sequence: item.sequence(),
         message: item.message().clone(),
     }

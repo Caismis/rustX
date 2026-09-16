@@ -99,3 +99,18 @@
 
 .header .status { flex: 1 1 auto; }
 .pendingRow .preview { color: var(--dsw-alias-label-tertiary); }
+
+/* Harness row actions adapted to explicit native CAS controls. */
+.actions { display: flex; flex: none; align-items: center; gap: 6px; flex-wrap: wrap; }
+.action { min-height: 32px; padding: 4px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; cursor: pointer; }
+.action:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
+.action:disabled { opacity: .45; cursor: default; }
+.action:focus-visible { outline: 2px solid var(--dsw-alias-label-tertiary); }
+.editPanel, .notice { padding: 8px 12px; font-size: 13px; }
+.editor { box-sizing: border-box; width: 100%; min-height: 32px; margin: 6px 0; border: 1px solid var(--dsw-alias-border-l1); border-radius: 6px; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); }
+@media (max-width: 600px) {
+  .row { flex-wrap: wrap; gap: 6px; }
+  .preview { flex-basis: 65%; }
+  .actions { margin-left: auto; }
+  .action { min-height: 40px; }
+}

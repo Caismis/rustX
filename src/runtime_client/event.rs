@@ -377,6 +377,11 @@ pub enum RuntimeClientEvent {
     /// Human and runtime-originated producers share the one inbound
     /// ordering domain; the event carries the authoritative mailbox
     /// sequence and the canonical message.
+    /// Pending authority changed; reread the snapshot and transcript.
+    PendingInboundChanged {
+        /// Complete committed pending projection, in durable sequence order.
+        pending: Vec<super::snapshot::InboundItemView>,
+    },
     InboundEnqueued {
         /// The mailbox-assigned inbound sequence.
         sequence: InboundSequence,

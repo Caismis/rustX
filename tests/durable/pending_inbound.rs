@@ -170,7 +170,7 @@ fn finite_watermark_excludes_post_watermark_arrivals() {
     // The selected batch is frozen: adoption through its watermark adopts
     // exactly A and B, never C.
     let adopted = store
-        .adopt_pending_batch(batch.watermark, adoption_of(&store, batch.watermark))
+        .adopt_pending_batch(batch.watermark, None)
         .expect("adopt");
     assert_eq!(adopted.len(), 2);
     let remaining = store
@@ -194,7 +194,7 @@ fn adoption_is_atomic_and_exactly_once_across_reopen() {
         .expect("select")
         .expect("batch");
     let adopted = store
-        .adopt_pending_batch(batch.watermark, adoption_of(&store, batch.watermark))
+        .adopt_pending_batch(batch.watermark, None)
         .expect("adopt");
     assert_eq!(adopted.len(), 2);
     drop(store);
@@ -222,10 +222,7 @@ fn adoption_is_atomic_and_exactly_once_across_reopen() {
     );
     // Adopting the same watermark again finds nothing pending.
     let again = reopened
-        .adopt_pending_batch(
-            rustx::runtime::inbound::InboundSequence::new(2),
-            adoption_of(&reopened, rustx::runtime::inbound::InboundSequence::new(2)),
-        )
+        .adopt_pending_batch(rustx::runtime::inbound::InboundSequence::new(2), None)
         .expect("adopt again");
     assert!(
         again.is_empty(),
@@ -261,7 +258,7 @@ fn producer_correlation_retry_is_exactly_once() {
     // Adopt, then retry again: the retry still resolves to the same
     // acceptance and produces no new pending/canonical delivery.
     store
-        .adopt_pending_batch(first.sequence, adoption_of(&store, first.sequence))
+        .adopt_pending_batch(first.sequence, None)
         .expect("adopt");
     let after_adopt = store
         .accept_inbound(InboundDraft {
@@ -405,10 +402,7 @@ fn canonical_ledger_preserves_intervening_assistant_and_tool_facts_across_reopen
     // Inbound batch 1.
     store.accept_inbound(human("A")).expect("accept A");
     store
-        .adopt_pending_batch(
-            rustx::runtime::inbound::InboundSequence::new(1),
-            adoption_of(&store, rustx::runtime::inbound::InboundSequence::new(1)),
-        )
+        .adopt_pending_batch(rustx::runtime::inbound::InboundSequence::new(1), None)
         .expect("adopt A");
     // Intervening canonical facts (assistant + tool) between the two
     // inbound adoptions, appended through the canonical durability seam.
@@ -419,10 +413,7 @@ fn canonical_ledger_preserves_intervening_assistant_and_tool_facts_across_reopen
     // Inbound batch 2.
     store.accept_inbound(human("B")).expect("accept B");
     store
-        .adopt_pending_batch(
-            rustx::runtime::inbound::InboundSequence::new(2),
-            adoption_of(&store, rustx::runtime::inbound::InboundSequence::new(2)),
-        )
+        .adopt_pending_batch(rustx::runtime::inbound::InboundSequence::new(2), None)
         .expect("adopt B");
     drop(store);
 
@@ -778,10 +769,7 @@ fn initial_history_identity_is_exact() {
     // live execution does (adopted inbound, assistant facts, ...).
     store.accept_inbound(human("C")).expect("accept C");
     store
-        .adopt_pending_batch(
-            rustx::runtime::inbound::InboundSequence::new(1),
-            adoption_of(&store, rustx::runtime::inbound::InboundSequence::new(1)),
-        )
+        .adopt_pending_batch(rustx::runtime::inbound::InboundSequence::new(1), None)
         .expect("adopt C");
     drop(store);
 
@@ -889,10 +877,7 @@ fn ledger_without_bootstrap_identity_fails_closed() {
     // inbound appends to the Ledger directly).
     store.accept_inbound(human("A")).expect("accept A");
     store
-        .adopt_pending_batch(
-            rustx::runtime::inbound::InboundSequence::new(1),
-            adoption_of(&store, rustx::runtime::inbound::InboundSequence::new(1)),
-        )
+        .adopt_pending_batch(rustx::runtime::inbound::InboundSequence::new(1), None)
         .expect("adopt A");
     assert_eq!(store.load_canonical().expect("load").len(), 1);
 
@@ -988,21 +973,319 @@ fn recovery_safety_fails_closed_on_incomplete_or_compacted_prefixes() {
         .expect("durable Surface history makes compaction restart-safe");
 }
 
-/// The durable answer obligation of one adoption, built from exactly the
-/// pending items the adoption transaction will consume.
-fn adoption_of(
-    store: &SqliteConversationStore,
-    watermark: rustx::runtime::inbound::InboundSequence,
-) -> rustx::events::types::RuntimeEventEnvelope {
-    rustx::durable::inbox::inbound_adoption_event(
-        store.conversation_id(),
-        None,
+// WEB-06: sequential claim/mutation outcomes and concurrent mutation CAS.
+// Forced concurrent claim/mutation writer orders live in
+// durable::sqlite::pending_transaction_tests; these public-contract tests
+// require no test hooks. No mailbox, transport, or browser mutex is involved.
+fn pending_ref(item: &AcceptedInbound) -> rustx::durable::inbox::PendingInboundRef {
+    rustx::durable::inbox::PendingInboundRef {
+        sequence: item.sequence,
+        message_id: item.message_id.clone(),
+        revision: 0,
+    }
+}
+
+#[test]
+fn mutation_edit_before_claim_uses_committed_content_and_exact_obligation() {
+    use rustx::durable::inbox::PendingMutationOutcome as Outcome;
+    let (store, _) = file_store();
+    let accepted = store.accept_inbound(human("old")).unwrap();
+    let selection = store.select_pending_batch().unwrap().unwrap();
+    assert_eq!(
+        store.edit_pending(&pending_ref(&accepted), "edited"),
+        Ok(Outcome::Applied)
+    );
+    let receipt = store
+        .adopt_pending_batch(selection.watermark, None)
+        .unwrap();
+    assert_eq!(receipt[0].message.content, text_blocks("edited"));
+    assert_eq!(receipt[0].revision, 1);
+    assert_eq!(
+        store.load_canonical().unwrap(),
+        vec![MessageBlock::User(receipt[0].message.clone())]
+    );
+    let events = store.read_events(None, 64).unwrap().events;
+    assert!(events.iter().any(|event| matches!(&event.event, rustx::events::types::RuntimeEvent::InboundTurnAdopted { message_ids } if message_ids == &vec![accepted.message_id.clone()])));
+}
+
+#[test]
+fn mutation_claim_before_edit_or_remove_is_permanently_stale() {
+    use rustx::durable::inbox::PendingMutationOutcome as Outcome;
+    let (store, _) = file_store();
+    let accepted = store.accept_inbound(human("original")).unwrap();
+    store.adopt_pending_batch(accepted.sequence, None).unwrap();
+    let before = store.load_canonical().unwrap();
+    assert_eq!(
+        store.edit_pending(&pending_ref(&accepted), "replacement"),
+        Ok(Outcome::NotPending)
+    );
+    assert_eq!(
+        store.remove_pending(&pending_ref(&accepted)),
+        Ok(Outcome::NotPending)
+    );
+    assert_eq!(store.load_canonical().unwrap(), before);
+}
+
+#[test]
+fn mutation_remove_after_selection_excludes_obligation_and_transcript() {
+    use rustx::durable::inbox::PendingMutationOutcome as Outcome;
+    let (store, _) = file_store();
+    let removed = store.accept_inbound(human("remove")).unwrap();
+    let retained = store.accept_inbound(human("retain")).unwrap();
+    let selection = store.select_pending_batch().unwrap().unwrap();
+    assert_eq!(
+        store.remove_pending(&pending_ref(&removed)),
+        Ok(Outcome::Applied)
+    );
+    let receipt = store
+        .adopt_pending_batch(selection.watermark, None)
+        .unwrap();
+    assert_eq!(receipt.len(), 1);
+    assert_eq!(receipt[0].message_id, retained.message_id);
+    let events = store.read_events(None, 64).unwrap().events;
+    assert!(events.iter().any(|event| matches!(&event.event, rustx::events::types::RuntimeEvent::InboundTurnAdopted { message_ids } if message_ids == &vec![retained.message_id.clone()])));
+    let page = store.load_transcript_page(None, 64).unwrap();
+    assert!(!format!("{page:?}").contains(removed.message_id.as_str()));
+}
+
+#[test]
+fn mutation_remove_entire_selection_claims_nothing_and_creates_no_obligation() {
+    let (store, _) = file_store();
+    let accepted = store.accept_inbound(human("remove")).unwrap();
+    let selection = store.select_pending_batch().unwrap().unwrap();
+    store.remove_pending(&pending_ref(&accepted)).unwrap();
+    assert!(
         store
-            .load_pending()
-            .expect("pending")
-            .into_iter()
-            .filter(|item| item.sequence <= watermark)
-            .map(|item| item.message_id)
-            .collect(),
-    )
+            .adopt_pending_batch(selection.watermark, None)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(store.read_events(None, 64).unwrap().events.is_empty());
+    assert!(store.load_canonical().unwrap().is_empty());
+    assert!(store.load_pending().unwrap().is_empty());
+    assert!(
+        store
+            .load_transcript_page(None, 64)
+            .unwrap()
+            .entries
+            .is_empty()
+    );
+}
+
+#[test]
+fn mutation_competing_edits_have_one_cas_winner_across_connections() {
+    use rustx::durable::inbox::PendingMutationOutcome as Outcome;
+    let (store, path) = file_store();
+    let accepted = store.accept_inbound(human("old")).unwrap();
+    let barrier = Arc::new(std::sync::Barrier::new(3));
+    let threads: Vec<_> = ["A", "B"]
+        .into_iter()
+        .map(|text| {
+            let store =
+                SqliteConversationStore::open(ConversationId::new("conv-1"), &path).unwrap();
+            let barrier = barrier.clone();
+            let expected = pending_ref(&accepted);
+            std::thread::spawn(move || {
+                barrier.wait();
+                store.edit_pending(&expected, text).unwrap()
+            })
+        })
+        .collect();
+    barrier.wait();
+    let outcomes: Vec<_> = threads
+        .into_iter()
+        .map(|thread| thread.join().unwrap())
+        .collect();
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|result| **result == Outcome::Applied)
+            .count(),
+        1
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|result| **result == Outcome::Conflict)
+            .count(),
+        1
+    );
+    assert_eq!(store.load_pending().unwrap()[0].revision, 1);
+}
+
+#[test]
+fn mutation_edit_remove_and_duplicate_remove_obey_cas_order() {
+    use rustx::durable::inbox::PendingMutationOutcome as Outcome;
+    for edit_first in [true, false] {
+        let (store, _) = file_store();
+        let accepted = store.accept_inbound(human("old")).unwrap();
+        let expected = pending_ref(&accepted);
+        if edit_first {
+            assert_eq!(
+                store.edit_pending(&expected, "edited"),
+                Ok(Outcome::Applied)
+            );
+            assert_eq!(store.remove_pending(&expected), Ok(Outcome::Conflict));
+            let updated = rustx::durable::inbox::PendingInboundRef {
+                revision: 1,
+                ..expected.clone()
+            };
+            assert_eq!(store.remove_pending(&updated), Ok(Outcome::Applied));
+        } else {
+            assert_eq!(store.remove_pending(&expected), Ok(Outcome::Applied));
+            assert_eq!(
+                store.edit_pending(&expected, "edited"),
+                Ok(Outcome::NotPending)
+            );
+        }
+        assert_eq!(store.remove_pending(&expected), Ok(Outcome::NotPending));
+        let later = store
+            .accept_inbound(InboundDraft {
+                message_id: Some(expected.message_id.clone()),
+                ..human("later")
+            })
+            .unwrap();
+        assert!(later.sequence > expected.sequence);
+        assert_eq!(
+            store.edit_pending(&expected, "stale"),
+            Ok(Outcome::NotPending)
+        );
+        assert_eq!(store.load_pending().unwrap()[0].message, later.message);
+    }
+}
+
+#[test]
+fn mutation_response_loss_and_reopen_expose_exact_committed_outcome() {
+    use rustx::durable::inbox::PendingMutationOutcome as Outcome;
+    let (store, path) = file_store();
+    let edited = store.accept_inbound(human("old")).unwrap();
+    let removed = store.accept_inbound(human("gone")).unwrap();
+    // Commit, deliberately discard responses, then destroy process-local owners.
+    let _ = store
+        .edit_pending(&pending_ref(&edited), "durable")
+        .unwrap();
+    let _ = store.remove_pending(&pending_ref(&removed)).unwrap();
+    drop(store);
+    let reopened = SqliteConversationStore::open(ConversationId::new("conv-1"), &path).unwrap();
+    let pending = reopened.load_pending().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].message.content, text_blocks("durable"));
+    assert_eq!(pending[0].revision, 1);
+    assert_eq!(
+        reopened.edit_pending(&pending_ref(&edited), "replay"),
+        Ok(Outcome::Conflict)
+    );
+    assert_eq!(
+        reopened.remove_pending(&pending_ref(&removed)),
+        Ok(Outcome::NotPending)
+    );
+}
+
+#[test]
+fn mutation_failed_sql_transaction_changes_neither_payload_nor_revision() {
+    let (store, path) = file_store();
+    let accepted = store.accept_inbound(human("old")).unwrap();
+    let connection = rusqlite::Connection::open(path).unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_pending_update AFTER UPDATE ON pending_inbound BEGIN SELECT RAISE(ABORT, 'test rollback'); END;").unwrap();
+    assert!(
+        store
+            .edit_pending(&pending_ref(&accepted), "never committed")
+            .is_err()
+    );
+    let pending = store.load_pending().unwrap();
+    assert_eq!(pending[0].message, accepted.message);
+    assert_eq!(pending[0].revision, 0);
+}
+
+#[test]
+fn mutation_exact_identity_isolates_conversations_and_protects_typed_content() {
+    use rustx::durable::inbox::PendingMutationOutcome as Outcome;
+    let (store, _) = file_store();
+    let other = SqliteConversationStore::in_memory(ConversationId::new("other")).unwrap();
+    let accepted = store.accept_inbound(human("A")).unwrap();
+    let other_accepted = other.accept_inbound(human("B")).unwrap();
+    assert_eq!(
+        other.remove_pending(&pending_ref(&accepted)),
+        Ok(Outcome::NotPending)
+    );
+    assert_eq!(
+        other.load_pending().unwrap()[0].message,
+        other_accepted.message
+    );
+    let mixed = store
+        .accept_inbound(InboundDraft {
+            content: [text_blocks("first"), text_blocks("second")].concat(),
+            ..human("unused")
+        })
+        .unwrap();
+    assert_eq!(
+        store.edit_pending(&pending_ref(&mixed), "flattened"),
+        Ok(Outcome::InvalidItem)
+    );
+    assert_eq!(store.load_pending().unwrap()[1].message, mixed.message);
+    let notification = store
+        .accept_inbound(runtime("background finished"))
+        .unwrap();
+    assert_eq!(
+        store.remove_pending(&pending_ref(&notification)),
+        Ok(Outcome::InvalidItem)
+    );
+}
+
+#[test]
+fn mutation_concurrent_edit_remove_and_two_removes_have_one_winner() {
+    use rustx::durable::inbox::PendingMutationOutcome as Outcome;
+    for edit in [true, false] {
+        let (store, path) = file_store();
+        let accepted = store.accept_inbound(human("old")).unwrap();
+        let other = SqliteConversationStore::open(ConversationId::new("conv-1"), &path).unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let contender = {
+            let barrier = barrier.clone();
+            let expected = pending_ref(&accepted);
+            std::thread::spawn(move || {
+                barrier.wait();
+                if edit {
+                    other.edit_pending(&expected, "edited")
+                } else {
+                    other.remove_pending(&expected)
+                }
+                .unwrap()
+            })
+        };
+        barrier.wait();
+        let first = store.remove_pending(&pending_ref(&accepted)).unwrap();
+        let second = contender.join().unwrap();
+        assert_eq!(
+            [&first, &second]
+                .into_iter()
+                .filter(|result| **result == Outcome::Applied)
+                .count(),
+            1
+        );
+        assert!(matches!(
+            first,
+            Outcome::Applied | Outcome::Conflict | Outcome::NotPending
+        ));
+        assert!(matches!(second, Outcome::Applied | Outcome::NotPending));
+    }
+}
+
+#[test]
+fn mutation_uploaded_reference_is_never_flattened_by_text_edit() {
+    use rustx::durable::inbox::PendingMutationOutcome as Outcome;
+    let (store, _) = file_store();
+    let mut draft = human("keep upload");
+    draft.content.push(UserContentBlock::UploadedFile(
+        rustx::message::content::UploadedFileRef {
+            batch_id: "session-owned-batch".into(),
+            name: "report.pdf".into(),
+        },
+    ));
+    let accepted = store.accept_inbound(draft).unwrap();
+    assert_eq!(
+        store.edit_pending(&pending_ref(&accepted), "unsafe"),
+        Ok(Outcome::InvalidItem)
+    );
+    assert_eq!(store.load_pending().unwrap()[0].message, accepted.message);
 }

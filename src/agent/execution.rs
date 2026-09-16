@@ -2137,14 +2137,13 @@ impl<'a> AgentExecution<'a> {
         };
         // Prepare the canonical transition **before** the durable adoption
         // commit: validate every fallible in-memory condition now, so the
-        // post-commit installation is infallible (Finding 2). The prepared
-        // values bind each exact drained message. A validation failure leaves
+        // post-commit installation is infallible (Finding 2). These checks
+        // validate stable identities; committed receipts supply the content. A validation failure leaves
         // every item pending and adopts nothing.
-        let mut prepared = Vec::with_capacity(batch.items().len());
         for item in batch.items() {
             let block = crate::durable::inbox::canonical_block(item.message());
             match self.conversation.prepare_commit(&block) {
-                Ok(commit) => prepared.push(commit),
+                Ok(_) => {}
                 Err(error) => {
                     return Err(Terminal::Failed {
                         failure: AttemptFailure::Runtime {
@@ -2158,37 +2157,30 @@ impl<'a> AgentExecution<'a> {
                 }
             }
         }
+        let adopted = mailbox
+            .adopt_pending_batch(&batch, Some(self.request.attempt_id.clone()))
+            .map_err(|error| {
+                self.durable_failure_terminal("a selected inbound batch cannot be adopted", &error)
+            })?;
+        if adopted.is_empty() {
+            return Ok(false);
+        }
+        let prepared: Vec<_> = adopted
+            .iter()
+            .map(|item| {
+                self.conversation
+                    .prepare_commit(&crate::durable::inbox::canonical_block(item.message()))
+                    .expect("adopted identity was validated under exclusive ownership")
+            })
+            .collect();
         let fresh = FreshInboundTurn::new(
-            prepared
+            adopted
                 .iter()
-                .map(|commit| commit.message_id().clone())
+                .map(|item| item.message().id.clone())
                 .collect(),
         )
-        .map_err(|error| Terminal::Failed {
-            failure: AttemptFailure::Runtime {
-                error: RuntimeError::ContractViolation {
-                    message: format!(
-                        "a selected inbound batch cannot form a fresh inbound turn: {error}"
-                    ),
-                },
-            },
-        })?;
-        // Canonical adoption: the durable ledger append and the pending
-        // removal commit in one transaction. A durable adoption failure is
-        // a durable-authority failure (Issue #63): the settled result
-        // carries it to the coordinator.
-        // The adoption fact is owned by the attempt that drains at this safe
-        // boundary: the obligation it opens is discharged by this attempt's
-        // next model request start, or by its own terminal — never by the
-        // model request that already answered the *previous* turn.
-        if let Err(error) =
-            mailbox.adopt_pending_batch(&batch, Some(self.request.attempt_id.clone()))
-        {
-            return Err(
-                self.durable_failure_terminal("a selected inbound batch cannot be adopted", &error)
-            );
-        }
-        for (commit, item) in prepared.into_iter().zip(batch.items()) {
+        .expect("nonempty ordered committed identities");
+        for (commit, item) in prepared.into_iter().zip(&adopted) {
             // Infallible: every adopted identity was validated above under
             // exclusive ownership of the conversation state.
             let block = commit.message().clone();

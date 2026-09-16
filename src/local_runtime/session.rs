@@ -3154,14 +3154,7 @@ model = "provider/model"
         // The Agent Loop's atomic adoption transition: canonical append,
         // Surface advance, and Pending removal in one commit.
         let adopted = store
-            .adopt_pending_batch(
-                accepted.sequence,
-                crate::durable::inbox::inbound_adoption_event(
-                    store.conversation_id(),
-                    None,
-                    vec![accepted.message_id.clone()],
-                ),
-            )
+            .adopt_pending_batch(accepted.sequence, None)
             .expect("adopt pending inbound");
         assert_eq!(adopted.len(), 1);
         assert!(

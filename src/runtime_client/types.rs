@@ -356,7 +356,8 @@ pub enum RuntimeClientSessionRequest {
 /// Version 35 adds the bounded native Trace snapshot window and invalidation.
 /// Version 34 clients are rejected; Trace introduces no execution authority.
 /// Version 36 adds typed Session workspace uploads to canonical presentation.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 36;
+/// Version 37 adds exact pending revisions and committed mutation projections.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 37;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1420,7 +1421,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 36);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 37);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

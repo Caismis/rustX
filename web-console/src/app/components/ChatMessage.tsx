@@ -1,4 +1,4 @@
-import type { MessageBlock, UserContentBlock, AssistantContentBlock, InFlightBlock } from '../../../../protocol/app-server/v4';
+import type { MessageBlock, UserContentBlock, AssistantContentBlock, InFlightBlock } from '../../../../protocol/app-server/v5';
 import { json } from '../../bindings/projection';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
