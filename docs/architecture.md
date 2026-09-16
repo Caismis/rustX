@@ -4145,7 +4145,16 @@ KNOWN_VERSIONS`, newest first, through `ClientLifecycleMode::Auto`: rmcp
 probes the MCP 2026-07-28 inline `server/discover` lifecycle, walks the
 offered list down whenever the peer answers `UNSUPPORTED_PROTOCOL_VERSION`,
 and falls back to the legacy `initialize` handshake only when the peer proves
-it does not know `server/discover`. rustX then validates the negotiated
+it does not know `server/discover`. Negotiation is for peers whose revision
+rustX does not know. A managed Python server — any id in the reserved
+`python:` namespace — instead uses the explicit
+`ClientLifecycleMode::Discover` lifecycle, because rustX materialized it
+against a pinned inline-lifecycle FastMCP and already knows the revision it
+speaks: exactly one handshake request is issued and no probe window applies.
+Every other peer retains `Auto` unchanged. (See
+[pr-321-mcp-handshake-flake.md](pr-321-mcp-handshake-flake.md) for the rmcp
+defect this also avoids; it is rationale, not contract.) rustX then
+validates the negotiated
 revision against its own offered set — the legacy handshake lets a server
 echo any revision — and a peer with no shared revision fails with a bounded
 `McpError::ProtocolCompatibility` naming both sides. The negotiated revision
@@ -4639,8 +4648,9 @@ and the frozen child crossing preserve that semantic source identity; the
 transport binding never becomes the Agent/Workflow selection vocabulary. The revision a managed
 package speaks is therefore a property of that generic connection, not of the
 package: the rustX-owned peer (FastMCP 4, Issue #241) answers the modern
-`server/discover` probe, so a managed child negotiates MCP `2026-07-28`
-exactly like any other modern peer, and rustX's negotiated fallback to
+`server/discover` probe, so a managed child is offered
+`ClientLifecycleMode::Discover` and negotiates MCP `2026-07-28` with one
+handshake request and no probe deadline, and rustX's negotiated fallback to
 genuinely older external peers is unchanged and unrelated to this pin. One
 folder is one server
 identity, and multiple tools of one folder arrive through one `tools/list`;

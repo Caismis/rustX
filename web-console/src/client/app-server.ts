@@ -1,6 +1,6 @@
 import { TRACE_LIMIT, TRACE_PAGE_SIZE, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterests, type TraceCache } from './trace';
 import type {
-  AttachmentTarget, InteractionRef, InteractionResponse, MethodResult, Notification,
+  AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request, Request1, Response, RuntimeClientCursor, RuntimeClientSnapshot,
   SessionPersistentState, SessionSummary, ServerCapabilities, UserInputBlock, UploadReceipt, UploadedFile,
 } from '../../../protocol/app-server/v4';
@@ -21,8 +21,25 @@ export interface SessionView {
   cursor?: RuntimeClientCursor;
   history?: TranscriptCache;
   settings?: SessionPersistentState;
+  /** Accepted, not yet projected submissions of this connection. Presentation only. */
+  submissions?: readonly Submission[];
   error?: string;
 }
+/** Exists only after `inbound_accepted` names the server MessageId, which is its
+ * sole identity; settles when an authoritative snapshot contains that MessageId. */
+export interface Submission {
+  messageId: string;
+  content: readonly UserInputBlock[];
+}
+/** Settled local outcome of one CAS-bound native Goal control. A known outcome is
+ * not projection convergence: `observed` reports whether an authoritative snapshot
+ * read after the outcome succeeded. `uncertain` means the response was lost;
+ * `obsolete` means the connection or attachment changed and nothing may apply. */
+export type GoalControlOutcome =
+  | { status: 'applied'; observed: boolean }
+  | { status: 'rejected'; reason: string; observed: boolean }
+  | { status: 'uncertain' }
+  | { status: 'obsolete' };
 export interface UncertainOperation {
   id: string;
   method: Request1['method'];
@@ -68,6 +85,16 @@ export function isOutcomeUncertain(error: unknown): boolean {
 }
 export class RpcFailure extends Error {
   constructor(readonly error: Extract<Response, { error: unknown }>['error']) { super(`${error.message} (${error.code})${error.data ? `: ${JSON.stringify(error.data)}` : ''}`); }
+}
+/** GoalDomain serializes its bounded rejection into the error message. Only the
+ * reason is displayed; its embedded `current` is never adopted as authority. */
+function goalRefusal(error: unknown) {
+  if (!(error instanceof RpcFailure)) return error instanceof Error ? error.message : String(error);
+  try {
+    const rejection: unknown = JSON.parse(error.error.message);
+    if (rejection && typeof rejection === 'object' && 'reason' in rejection && typeof rejection.reason === 'string') return rejection.reason;
+  } catch { /* Non-Goal refusal: show the transport message. */ }
+  return error.message;
 }
 const READS = new Set<Request1['method']>([
   'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/tree', 'session/deletePreview',
@@ -193,7 +220,7 @@ export class AppServerClient {
     for (const item of uncertain) if (item.interactionKey) operations[item.interactionKey] = { sessionId: item.sessionId!, status: 'uncertain' };
     this.publish({ connection, generation: this.state.generation + 1, uncertain, interactionOperations: operations,
       views: Object.fromEntries(Object.entries(this.state.views).map(([id, view]) => [id, {
-        ...view, history: undefined, target: undefined, attachment: view.target || ['attaching', 'attached', 'resynchronizing'].includes(view.attachment) ? 'stale' : view.attachment,
+        ...view, history: undefined, target: undefined, submissions: undefined, attachment: view.target || ['attaching', 'attached', 'resynchronizing'].includes(view.attachment) ? 'stale' : view.attachment,
       }])),
     });
     oldSocket?.close();
@@ -351,7 +378,7 @@ export class AppServerClient {
       target = result.target;
       if (result.target.session_id !== id || result.target.conversation_id !== result.snapshot.conversation_id) throw new Error('Mismatched attachment identity.');
       this.setSession(id, { target: result.target, snapshot: result.snapshot, cursor: result.cursor, history: replaceTranscript(result.snapshot.transcript, this.state.views[id]?.history), trace: replaceTrace(result.snapshot.trace, this.state.views[id]?.trace), attachment: 'attached' });
-      this.reconcileInteractions(id);
+      this.reconcileInteractions(id); this.settleSubmissions(id);
       const settings = await this.request({ method: 'settings/read', params: { session_id: id } }, 'settings');
       if (!current() || !sameTarget(this.state.views[id]?.target, result.target)) return;
       this.setSession(id, { settings: settings.settings });
@@ -386,7 +413,7 @@ export class AppServerClient {
         if (result.snapshot.conversation_id !== target.conversation_id) throw new Error('Mismatched snapshot conversation.');
         if (BigInt(result.cursor) >= BigInt(this.state.views[id].cursor ?? '0')) {
           this.setSession(id, { snapshot: result.snapshot, cursor: result.cursor, history: refreshTranscript(this.state.views[id]?.history, result.snapshot.transcript), trace: refreshTrace(this.state.views[id]?.trace, result.snapshot.trace, result.snapshot.trace_updates), error: undefined });
-          this.reconcileInteractions(id);
+          this.reconcileInteractions(id); this.settleSubmissions(id);
         }
         if (resync) await this.request({ method: 'session/subscribe', params: { target, after_cursor: result.cursor } }, 'subscribed');
         if (current()) this.setSession(id, { attachment: 'attached' });
@@ -487,14 +514,65 @@ export class AppServerClient {
     if (!this.current(generation) || !sameTarget(this.state.views[id]?.target, target)) throw new Error('Upload outcome belongs to an obsolete view. Remove this draft selection; do not replay it.');
     return uploaded.files;
   }
-  async send(id: string, text: string, steer = false, receipts: readonly UploadReceipt[] = []) {
+  async send(id: string, text: string, receipts: readonly UploadReceipt[] = []) {
     const target = this.target(id);
+    const generation = this.state.generation;
+    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
     if (receipts.length > DRAFT_MAX_FILES || receipts.some(receipt => receipt.session_id !== id)) throw new Error('Invalid Session upload receipts.');
     const content: UserInputBlock[] = [
       ...receipts.map(receipt => ({ type: 'upload' as const, ...receipt })),
       ...(text ? [{ type: 'text' as const, text }] : []),
     ];
-    return this.request({ method: steer ? 'turn/steer' : 'turn/start', params: { target, content } }, 'inbound_accepted');
+    // `turn/start` and `turn/steer` share one native inbound owner: an idle runtime
+    // admits a fresh attempt, a running one drains the mailbox at a safe boundary.
+    // Until acknowledged, the request is composer transport state only (and a lost
+    // response stays an uncertain diagnostic): it has no identity to queue under.
+    const accepted = await this.request({ method: 'turn/start', params: { target, content } }, 'inbound_accepted');
+    if (current() && !this.state.views[id].submissions?.some(item => item.messageId === accepted.message_id)) {
+      this.setSession(id, { submissions: [...(this.state.views[id].submissions ?? []), { messageId: accepted.message_id, content }] });
+      this.settleSubmissions(id);
+    }
+    return accepted;
+  }
+  /** An accepted submission settles only when an authoritative snapshot names its
+   * exact MessageId: pending in the mailbox (the native row replaces it) or adopted
+   * into canonical messages. No text, order or queue-length matching. */
+  private settleSubmissions(id: string) {
+    const view = this.state.views[id];
+    if (!view?.submissions?.length || !view.snapshot) return;
+    const observed = new Set([
+      ...(view.snapshot.inbound.pending ?? []).map(item => item.message.id),
+      ...view.snapshot.messages.map(message => message.id),
+      ...(view.snapshot.transcript.entries ?? []).flatMap(entry => entry.item.type === 'message' ? [entry.item.message.id] : []),
+    ]);
+    const remaining = view.submissions.filter(item => !observed.has(item.messageId));
+    if (remaining.length !== view.submissions.length) this.setSession(id, { submissions: remaining });
+  }
+  /** One CAS-bound Goal control. `expected` is the authoritative GoalRef the caller
+   * rendered. A known outcome (applied or refused) is not projection convergence:
+   * `observed` is true only when a snapshot read requested after the outcome
+   * succeeded for this attachment. A lost response stays uncertain. Nothing is
+   * retried and no newer revision is ever substituted. */
+  async controlGoal(id: string, expected: GoalRef, mutation: GoalMutation): Promise<GoalControlOutcome> {
+    const generation = this.state.generation;
+    let target: AttachmentTarget;
+    try { target = this.target(id); } catch (error) { return { status: 'rejected', reason: error instanceof Error ? error.message : String(error), observed: false }; }
+    const current = () => this.current(generation) && sameTarget(this.state.views[id]?.target, target);
+    try {
+      await this.request({ method: 'goal/control', params: { target, control: { action: 'mutate', expected, mutation } } }, 'goal');
+    } catch (error) {
+      if (error instanceof OutcomeUncertain) return { status: 'uncertain' };
+      if (!current()) return { status: 'obsolete' };
+      return { status: 'rejected', reason: goalRefusal(error), observed: await this.reread(id, current) };
+    }
+    if (!current()) return { status: 'obsolete' };
+    return { status: 'applied', observed: await this.reread(id, current) };
+  }
+  /** `refresh` re-marks the view dirty, so even a coalesced in-flight refresh
+   * completes a snapshot request issued after this call before resolving. */
+  private async reread(id: string, current: () => boolean) {
+    try { await this.refresh(id); } catch { return false; }
+    return current() && this.state.views[id]?.attachment === 'attached';
   }
   async cancelTurn(id: string) { return this.request({ method: 'turn/cancel', params: { target: this.target(id) } }, 'cancellation_accepted'); }
   async answer(id: string, interaction: InteractionRef, response?: InteractionResponse) {
@@ -553,7 +631,7 @@ export class AppServerClient {
   }
   private retireAttachmentWork(id: string) {
     this.refreshes.delete(id); this.dirty.delete(id); this.resubscribe.delete(id);
-    this.setSession(id, { history: undefined });
+    this.setSession(id, { history: undefined, submissions: undefined });
   }
   clearError() { this.publish({ error: undefined }); }
   acknowledgeDiagnostic(id: string) {

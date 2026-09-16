@@ -161,10 +161,11 @@ still publishes. Exactly-one settlement remains runtime-owned.
 The inspector exposes Session/Conversation identity, attachment/runtime incarnation,
 connection generation, cwd, observed residency, safe model/settings generation,
 active attempt, pending interactions, Subagents, Workflows and background counts.
-Native Tool calls/results use extracted disclosure cards. Todo, Goal, Workflow,
-Subagent, inbound and background/status values use simple JSON disclosure where
-specialized Harness semantics do not fit. Live versus last-observed values are
-labelled. Unknown residency is not inferred as unloaded.
+Native Tool calls/results use extracted disclosure cards. Current Todo, Goal and
+pending inbound state render as the composer context docks ([COMPOSER.md](COMPOSER.md)).
+Workflow, Subagent and background/status values keep their cards or JSON
+disclosure. Live versus last-observed values are labelled. Unknown residency is not
+inferred as unloaded.
 
 The raw log observes actual incoming/outgoing JSON-RPC text **before adaptation**.
 Responses retain their correlated method and Session where known. Filters match
@@ -182,10 +183,11 @@ The log is disposable diagnostics, never durable history. No fetch or remote
 telemetry is used by it.
 
 Supported native gestures: list/create/open, delete preview and revision-checked
-delete, start/steer/cancel, answer/decline/cancel interactions, resync, detach,
-unload/cold attach, disconnect/reconnect. No workspace manager, editor, terminal,
-provider setup, file navigation/upload, Harness commands, queue/retry, fork,
-policy preset, plugin controls or unsupported status actions remain. Conversation
+delete, one Send/Queue delivery action and cancel, Goal pause/resume/edit,
+answer/decline/cancel interactions, resync, detach, unload/cold attach,
+disconnect/reconnect. No workspace manager, editor, terminal, provider setup, file
+navigation, Harness commands, client-owned queue editing or retry, fork, policy
+preset, plugin controls or unsupported status actions remain. Conversation
 text remains plain text in native projections. Assistant text uses the incremental
 Markdown foundation; reasoning/Tool/other blocks retain disclosures. Image loading
 and paginated transcript products belong to later WEB slices.

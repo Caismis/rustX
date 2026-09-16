@@ -140,6 +140,32 @@ export class Server {
       case 'session/unload': this.targets.get(socket)!.delete(id); this.loaded.delete(id); result = { type: 'unloaded' }; break;
       case 'turn/start': case 'turn/steer': result = { type: 'inbound_accepted', message_id: 'accepted-user', inbound_sequence: '1' }; break;
       case 'turn/cancel': result = { type: 'cancellation_accepted', attempt_id: 'attempt-A' }; break;
+      case 'goal/control': {
+        // Deterministic stand-in for GoalDomain CAS: stale refs refuse with the
+        // native serialized rejection; only a successful mutation bumps revision.
+        const next = structuredClone(this.snapshots.get(id)!);
+        const control = request.params.control;
+        const current = next.goal?.current;
+        if (control.action !== 'mutate' || !next.goal || !current) throw new RpcFailure({ code: -32602, message: JSON.stringify({ reason: 'No current Goal', current: null }), data: { kind: 'invalid_params' } });
+        if (current.reference.id !== control.expected.id || current.reference.revision !== control.expected.revision) {
+          throw new RpcFailure({ code: -32602, message: JSON.stringify({ reason: 'Stale GoalRef; observe current state before trying again', current }), data: { kind: 'invalid_params' } });
+        }
+        const mutation = control.mutation;
+        if (mutation.action === 'pause') { current.phase = 'paused'; next.goal.armed = false; }
+        else if (mutation.action === 'resume') { current.phase = 'active'; current.blocked_reason = null; next.goal.armed = true; }
+        else if (mutation.action === 'edit') current.objective = mutation.objective;
+        else if (mutation.action === 'budget') {
+          // GoalDomain, not the browser, owns the 1..=100 range and consumption floor.
+          if (mutation.rounds < 1 || mutation.rounds > 100 || mutation.rounds < current.autonomous_rounds_consumed) {
+            throw new RpcFailure({ code: -32602, message: JSON.stringify({ reason: 'Invalid Goal transition or value', current }), data: { kind: 'invalid_params' } });
+          }
+          current.autonomous_round_budget = mutation.rounds;
+        }
+        else throw new Error(`Fixture Goal mutation ${mutation.action} is a model declaration, not a Web control`);
+        current.reference = { ...current.reference, revision: String(BigInt(current.reference.revision) + 1n) };
+        this.snapshots.set(id, next); this.cursor++;
+        result = { type: 'goal', view: next.goal }; break;
+      }
       case 'interaction/respond': case 'interaction/cancel': {
         const next = structuredClone(this.snapshots.get(id)!);
         next.pending_interactions = next.pending_interactions?.filter(item => item.interaction.interaction_id !== request.params.interaction.interaction_id);

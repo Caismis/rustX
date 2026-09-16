@@ -580,3 +580,173 @@ now awaits the existing native attempt-settlement signal before checking the
 projected drain. The detached-running/mailbox-preservation assertions are
 unchanged; no delay, retry or assertion weakening was added. This is the same
 COMMIT/publication distinction enforced by the production cut contract.
+
+## WEB-04 composer context docks (#307) — 2026-09-15; rebased 2026-09-16
+
+Base: `origin/main` `289bd22e`. PR #320 (#319) is merged, so this slice sits on
+Session-owned workspace uploads and **App Server v4**. It was first validated on
+`e256998f` (WEB-03), then rebased onto `289bd22e` and revalidated end to end; every
+command below is the rebased-head run, not the pre-rebase one. The Harness checkout
+was reverified at `c291e7961a515f6d7af9304e7fd1d257929aef26`. Ownership is recorded
+in [COMPOSER.md](COMPOSER.md) and provenance in [PROVENANCE.md](PROVENANCE.md).
+
+### Owner audit
+
+- Todo: `snapshot.todos` (`Option<TodoSnapshot>`) is present exactly when Todo is
+  composed; `effective_extensions.todo` agrees. No Todo mutation exists.
+- Goal: `snapshot.goal` (`Option<GoalView>`), `goal_changed` invalidation and
+  `goal/control`. Stale CAS is `InvalidParams` with a serialized `GoalRejection`.
+  GoalDomain names pause, resume, objective and budget as user controls.
+- Queue: `snapshot.inbound.pending` and `snapshot.attempt`. `turn/start` and
+  `turn/steer` dispatch to the same native `submit_inbound`.
+- No App Server protocol, Rust owner or schema change. Generated v4 DTOs did not drift.
+
+### Deterministic evidence (`test/composer-context.test.tsx`, 26 tests)
+
+Todo absent/empty/tasks and native order, deleted tombstones hidden, projection-only
+updates with historical `todo` Tool facts present, no Todo mutation or configuration
+and storage writes; Goal active/paused/blocked/complete/absent, exact user controls,
+pause/resume/objective/budget `goal/control` requests with the rendered GoalRef, no
+configuration writes, open draft kept across revision-only change and dropped on
+authoritative objective change, activation-only change without revision change;
+Queue rows from pending inbound in sequence order, Send/Queue label from the attempt
+with only `turn/start`; stack order and independent appear/disappear without
+disclosure or draft leakage, per-Session isolation, reconnect rebuilding from a
+changed server snapshot, shared column CSS. Race and loss cases use held fixture
+responses, injected read failures and socket close, never sleeps.
+
+### PR #321 review corrections
+
+**Queue identity.** A `turn/start` in flight is composer transport state only. A
+provisional Queue row is created only from `inbound_accepted`, keyed by its server
+`MessageId`, and settles only when an authoritative snapshot contains that id.
+Regressions: a held request shows *Awaiting acknowledgement…* with no Queue row,
+count or client submission; acknowledgement creates exactly one row keyed by
+`accepted-user`; identical text under another id does not settle it; the exact id
+does; a lost acknowledgement leaves only the `turn/start` uncertain diagnostic, and
+reconnect shows the committed native row with one request and no echo; disconnect
+clears only accepted presentation rows and sends nothing.
+
+**Goal convergence.** `controlGoal` separates outcome from authority: `observed` is
+true only when a snapshot read issued after the outcome succeeded. The dock stays
+locked after any unobserved or uncertain outcome until the client replaces the
+snapshot. Regressions: applied + successful reread unlocks; applied + failed reread
+keeps r3 rendered and every control disabled, a click sends no second control, and a
+later event read renders r4 and unlocks; stale refusal + successful reread renders
+the new Goal with one request; stale refusal + failed reread keeps the reason, locks
+the old GoalRef, and recovers only on a later read; a component test proves the dock
+itself stays locked for unobserved applied/refused outcomes until a new observation;
+lost response stays uncertain with one request; an obsolete result leaves the dock
+unlocked and silent.
+
+**Goal validation ownership and protocol representability.** The Web budget form owns
+input grammar and wire representability only; the hardcoded native ceiling and
+consumption floor stay removed. `GoalMutation::Budget.rounds` is a Rust `u32`
+(`src/goal.rs`), so the draft is parsed through `BigInt` and refused above
+`4294967295`: a syntactically positive integer the protocol integer cannot hold never
+becomes a typed mutation, and so can never round, reach `Infinity` or serialize as
+JSON `null`. Regressions: `''`, `'0'`, `'2.5'`, `'1e3'`, `'+12'`, `'04'`,
+`4294967296`, `4294967300`, and 40-digit and 400-digit decimals all leave the form
+invalid and emit no `goal/control` at all; `4294967295` is representable, so the
+browser sends it and the request serializes as exactly `"rounds":4294967295` for
+GoalDomain to refuse. The fixture still refuses as GoalDomain does: 150 and a value
+below consumption are sent, refused with the typed reason and unlock after reread;
+the next deliberate value is applied. Source check confirms no `MAX_ROUND_BUDGET`
+and no consumption floor remain in the dock.
+
+### Real App Server acceptance (`test/e2e/composer.spec.ts`)
+
+Scenario `web_composer_context` enables `agent.extensions.todo` and
+`agent.extensions.goal`. The browser observes a composed-empty Todo strip; the model
+creates native tasks and a Goal (budget 1). While the native continuation round is
+gated, the browser sees Ongoing Goal at 1/1 rounds, the **Queue** label, and a pending
+inbound row with no echo; order is Todo, Goal, Queue, Composer and all docks align
+with the composer card. After release, pause, resume, pause, budget 3 and objective
+edit each advance the durable revision by one through `goal/control`; focus returns
+to the edit control. Settings and localStorage contain no Todo, Goal or queue text;
+the Goal extension flag is unchanged. Disconnect disables controls; reconnect and
+reload rebuild the same revision, Todo list and empty queue; alignment holds at
+1440px and 390px with no horizontal overflow. The provider scenario must be fully
+consumed, so no unexpected continuation round was admitted.
+
+### Commands (Linux, rebased feature worktree)
+
+Every row below is a rebased-head run. The Rust rows are not optional for this
+slice: #320 brought substantial Rust, runtime and protocol change into the base,
+and this branch now carries a Rust change of its own — the managed MCP handshake
+fix recorded in
+[pr-321-mcp-handshake-flake.md](../docs/pr-321-mcp-handshake-flake.md). The
+`--lib` count below includes that fix's new regression test, so it is one higher
+than the pre-fix figure quoted in the contention note above.
+
+| Directory | Exact command | Result |
+| --- | --- | --- |
+| root | `cargo fmt --all -- --check` | Passed |
+| root | `git diff --check` | Passed |
+| root | `cargo clippy --all-targets --all-features -- -D warnings` | Passed |
+| root | `cargo build --bins` | Passed |
+| root | `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 2,850 passed; 0 failed; 1 ignored; 226 boundary tests filtered out |
+| root | `cargo test --test contracts --test provider --all-features` | 25 contracts + 166 provider passed; five opt-in live-provider tests ignored |
+| root | `cargo test --lib --all-features -- boundary_suites::` | 226 passed, 0 failed |
+| root | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance` | 401 passed, 0 failed: durable 116, process 52, subagent 53, tools 157, conformance 23 |
+| test-support/fake-provider | `uv sync --frozen`; `uv run --frozen pytest` | 51 passed |
+| protocol/app-server | `pnpm install --frozen-lockfile` | Passed |
+| protocol/app-server | `pnpm check` | Passed; generated v4 schema/TypeScript showed no drift |
+| protocol/app-server | `pnpm typecheck` | Passed |
+| web-console | `pnpm install --frozen-lockfile` | Passed |
+| web-console | `pnpm typecheck` | Passed |
+| web-console | `pnpm test` | 181 passed, 15 files (26 composer-context tests) |
+| web-console | `pnpm check:provenance` | 64 source records and 100 production package notices passed |
+| web-console | `pnpm build` (via `pnpm test:e2e`) | Passed; existing non-fatal bundle-size advisory |
+| web-console | `RUSTX_BINARY=../target/debug/rustx pnpm test:e2e` | 7 passed against the real App Server, including `composer.spec.ts` |
+| tui | `pnpm install --frozen-lockfile` | Passed (required by web-console typecheck) |
+| tui | `pnpm typecheck` | Passed |
+| tui | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test` | 816 passed, zero skipped |
+
+This is the Linux lane only; it makes no claim about the macOS-only
+platform-boundary job, which GitHub Actions runs on the pushed head.
+
+### Host-contention flake, recorded rather than waived
+
+One early local run of `cargo test --lib --bins --examples --all-features -- --skip
+boundary_suites::` reported `2848 passed; 1 failed` while the TUI integration suite
+and the browser e2e run — both of which spawn the real `rustx` binary and the
+provider emulator — were executing concurrently on the same host. Re-run alone, the
+identical command reports `2849 passed; 0 failed; 1 ignored; 226 filtered out`,
+matching `main`'s own CI at `289bd22e` exactly (2849 passed, 0 failed, 1 ignored,
+226 filtered) and so confirming the same test set. This branch changes no Rust
+source, manifest or toolchain — only `web-console/` and one fake-provider Python
+scenario — so the transient failure was host contention, not a branch regression.
+Nothing was retried until green, no test was skipped, weakened or excluded, and no
+sleep was added; GitHub Actions on the pushed head remains the authoritative gate.
+
+### Rebase onto App Server v4 `main`
+
+This branch was rebased onto `289bd22e` (PR #320 merged), and every row above is the
+rebased-head run, not the pre-rebase one. Conflicts were resolved by ownership rather
+than by taking either side wholesale:
+
+- `src/client/app-server.ts` keeps #320's `upload()` and receipt-carrying `send()`,
+  and #321's accepted-`MessageId` submissions, `settleSubmissions` and `controlGoal`
+  convergence. `send()` lost its `steer` flag and always calls `turn/start`.
+- `src/app/components/InputBar.tsx` keeps #320's upload lifecycle (transfer-refusal,
+  receipt retention, uncertain outcomes, paste/drop) and #321's single Send/Queue
+  action; the Steer button is gone.
+- `src/app/App.tsx` keeps `onUpload` wired through the `ComposerContextStack`.
+- `test/artifacts.test.tsx` keeps #320's `session/upload` tests; the deleted
+  `artifact/upload` modality-preflight tests were not resurrected.
+- `CHAT.md` keeps #320's attachment section.
+
+Every #321 import of `protocol/app-server/v3` moved to the post-#320 generated `v4`,
+including the two `retained_dependencies` records in `source-inventory.json`, which
+`pnpm check:provenance` re-verifies against each file's actual imports.
+`Submission.content` is now `UserInputBlock[]`, matching what `send()` actually
+builds. No v3/v4 or old/new upload compatibility path exists.
+
+Because #320 carries substantial Rust, runtime and protocol change, the full Rust
+contract and boundary suites were run locally on the rebased head rather than
+skipped. That proved necessary: CI's macOS lane then exposed a real handshake
+defect on the managed MCP path, so this branch also carries a Rust fix and its
+diff is no longer Web-only. The defect, its root cause in rmcp's `Auto`
+lifecycle, the fix and its residual risk are recorded in
+[pr-321-mcp-handshake-flake.md](../docs/pr-321-mcp-handshake-flake.md).
