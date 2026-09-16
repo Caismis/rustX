@@ -26,6 +26,41 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      # The one Rust cache policy, applied identically to every Rust-bearing
+      # lane. Four properties matter and all four are deliberate:
+      #
+      # 1. It runs *after* the toolchain step, so the resolved compiler is part
+      #    of the cache identity. The key the action builds already covers the
+      #    runner OS and architecture, the rustc version and host triple,
+      #    `rust-toolchain.toml`, the Cargo manifests and lockfile, and the
+      #    build-relevant CARGO/CC/CFLAGS/CXX/CMAKE/RUST* environment. Linux
+      #    and macOS artifacts therefore can never share a lineage.
+      #
+      # 2. `shared-key` names one stable lineage per semantic lane, replacing
+      #    the action's automatic job-id component with a readable name. Lanes
+      #    deliberately do NOT share a key with each other: GitHub cache
+      #    entries are immutable and these jobs start concurrently, so a single
+      #    shared key would let whichever lane finishes first freeze its own
+      #    (smallest) `target/` as the entry every other lane then restores and
+      #    can never correct. Per-lane lineages mean each lane stops rebuilding
+      #    its own unchanged dependency graph on every run, which is the actual
+      #    optimization; cross-populating siblings within one cold run is not a
+      #    goal.
+      #
+      # 3. Only the dependency graph is cached. The action excludes workspace
+      #    crates by default and that default is kept, so no rustX artifact is
+      #    ever restored from a cache — the crate and its test code are always
+      #    compiled from the checked-out source in every run.
+      #
+      # 4. The cache is an optimization and never a semantic authority. A cold,
+      #    evicted, or stale cache changes nothing about which tests are
+      #    selected or what they prove; it only changes how much dependency
+      #    compilation is repeated. A completely cold runner remains valid.
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: quality
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -59,19 +94,33 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # One lineage per lane; see the policy note in the `quality` job.
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-contracts
+
       # `cargo test --bins` builds the bin *test harnesses* but does not
       # place the binaries at `target/debug/`, where the bash tool's unit
       # tests look for `bash-supervisor` at runtime — so build them first.
       - name: Build the binaries the boundary-owning unit tests exec
         run: cargo build --bins
 
-      # Source-module unit tests + bin unit tests + examples + the scripted
-      # contract suites (agent/, context/, runtime_client/, capability/,
-      # interaction/, background/, tools/). The in-crate boundary
-      # conformance suites are selected OUT by their `boundary_suites::`
-      # prefix; they run in the boundary jobs.
+      # Source-module unit tests + the scripted contract suites (agent/,
+      # context/, runtime_client/, capability/, interaction/, background/,
+      # tools/). The in-crate boundary conformance suites are selected OUT by
+      # their `boundary_suites::` prefix; they run in the boundary jobs.
+      #
+      # `--bins` and `--examples` are deliberately absent. Neither the three
+      # binaries nor the three examples define a single `#[test]`, so those
+      # selectors only linked six extra harnesses that each reported
+      # "0 passed" — measured at ~41s of pure link time per run with nothing
+      # to execute. Compilation of those targets is not lost: the `quality`
+      # lane type-checks every one of them through
+      # `cargo clippy --all-targets`, and `app-server-protocol` actually
+      # builds and runs the `generate_app_server_protocol` example.
       - name: Run unit tests and the in-crate contract suites
-        run: 'cargo test --lib --bins --examples --all-features -- --skip boundary_suites::'
+        run: 'cargo test --lib --all-features -- --skip boundary_suites::'
 
       # contracts/: pure serialization/configuration fixture contracts.
       # provider/: adapter request serialization, stream parsing, error
@@ -98,6 +147,12 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      # One lineage per lane; see the policy note in the `quality` job.
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-boundaries
 
       - name: Install Python 3.12
         uses: actions/setup-python@v5
@@ -174,6 +229,14 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # One lineage per lane; see the policy note in the `quality` job. This is
+      # the macOS lineage: it shares nothing with any Linux lane, because the
+      # action's key carries the runner OS, architecture and host triple.
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-platform-boundaries
+
       # The conformance target launches the provider emulator with `uv run`.
       - name: Install Python 3.12
         uses: actions/setup-python@v5
@@ -199,8 +262,13 @@ jobs:
       # App Server scripted contracts live under the manager's cfg(test) module
       # to reach its private owner gates; their physical test class is still
       # deterministic and Linux-only, despite this different name prefix.
+      #
+      # `--bins` is deliberately absent: none of the three binaries defines a
+      # `#[test]`, so it only linked three harnesses that each reported
+      # "0 passed". The binaries themselves are still built by the step above,
+      # which is what the tests actually need — they exec them by path.
       - name: Run unit tests and the in-crate boundary suites
-        run: 'cargo test --lib --bins --all-features -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::'
+        run: 'cargo test --lib --all-features -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::'
 
       - name: Run the external boundary targets
         env:
@@ -279,6 +347,15 @@ jobs:
         working-directory: tui
         run: pnpm typecheck
 
+      # One lineage per lane; see the policy note in the `quality` job. This
+      # lane has no toolchain action of its own — it uses the runner's
+      # preinstalled Rust, which the cache key still identifies by `rustc -vV`
+      # — so the cache step sits immediately before the one cargo command.
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: tui
+
       # The integration suite drives the real binary over the real stdio
       # transport, so it must exist before the tests run.
       - name: Build the rustx binary
@@ -297,6 +374,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # One lineage per lane; see the policy note in the `quality` job. This
+      # lane is Rust-bearing despite its Node surface: `pnpm check` shells out
+      # to `cargo run --example generate_app_server_protocol`.
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: app-server-protocol
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -348,6 +432,11 @@ jobs:
       # These tools serve only the browser integration fixture. Rust-only jobs
       # above remain independent of Node and of this frontend package.
       - uses: dtolnay/rust-toolchain@stable
+      # One lineage per lane; see the policy note in the `quality` job.
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: web-console
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
