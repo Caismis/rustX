@@ -1,0 +1,46 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted provider cards and footer from ui-settings-models; see PROVENANCE.md. */
+import { RequestPolicy } from './RequestPolicy';
+import { useState } from 'react';
+import type { CatalogSettings, Model, ProviderDraft } from '../../../../protocol/app-server/v5';
+import { Button } from '../../presentation/primitives/Button';
+import css from './Settings.module.css';
+
+export function CatalogEditor({ catalog, disabled, change, save }: { catalog: CatalogSettings; disabled: boolean; change: (catalog: CatalogSettings) => void; save: () => void }) {
+  const [identity, setIdentity] = useState('');
+  const provider = (id: string, value: ProviderDraft) => change({ ...catalog, providers: { ...catalog.providers, [id]: value } });
+  return <fieldset disabled={disabled} className={css.catalog}><legend>User Provider / model catalog</legend>
+    <p className={css.hint}>{catalog.document}<br />Catalog revision: {catalog.revision}<br />Only the bound User catalog is writable. Binding path is process-owned.</p>
+    <p>Credential references only. Supply secret material outside the Web UI; existing secret values are never returned.</p>
+    {!Object.keys(catalog.providers).length && <p>No Providers configured. Add one to begin.</p>}
+    {Object.entries(catalog.providers).map(([id, item]) => <article className={css.card} key={id}><header><h3>{id}</h3><Button onClick={() => { const providers = { ...catalog.providers }; delete providers[id]; change({ ...catalog, providers }); }}>Delete Provider {id}</Button></header>
+      <label>Endpoint · {id}<input value={item.base_url} onChange={e => provider(id, { ...item, base_url: e.target.value })} /></label>
+      {item.credential.type === 'literal' ? <p>Native literal credential configured · retained without readback<Button onClick={() => provider(id, { ...item, credential: { type: 'environment', variable: '' } })}>Replace with environment reference</Button></p> : <label>Credential environment reference · {id}<input autoComplete="off" value={item.credential.variable} onChange={e => provider(id, { ...item, credential: { type: 'environment', variable: e.target.value } })} /></label>}
+      {item.models.map((model, index) => <ModelEditor key={index} model={model} change={next => provider(id, { ...item, models: item.models.map((old, i) => i === index ? next : old) })} remove={() => provider(id, { ...item, models: item.models.filter((_, i) => i !== index) })} />)}
+      <Button onClick={() => provider(id, { ...item, models: [...item.models, { id: '', protocol: 'openai_chat_completions', context_window: '0', max_output_tokens: 0, capabilities: { input_modalities: [], output_modalities: [], tool_calls: false, reasoning: false } }] })}>Add model to {id}</Button>
+    </article>)}
+    <div className={css.card}><label>New Provider identity<input value={identity} onChange={e => setIdentity(e.target.value)} /></label><Button disabled={!identity || identity in catalog.providers} onClick={() => { provider(identity, { base_url: '', credential: { type: 'environment', variable: '' }, models: [] }); setIdentity(''); }}>Add Provider</Button></div>
+    <div className={css.actions}><Button variant="primary" onClick={save}>{disabled ? 'Saving…' : 'Save User catalog'}</Button></div>
+    <p className={css.hint}>Rust validates the complete catalog before publication. Deleting the last Provider/model may be rejected by native catalog rules. New content applies to fresh / cold resolution; admitted attempts keep their frozen catalog.</p>
+  </fieldset>;
+}
+function ModelEditor({ model, change, remove }: { model: Model; change: (value: Model) => void; remove: () => void }) {
+  return <details className={css.model} open><summary>{model.id || 'New model'}</summary><div className={css.grid}>
+    <label>Model identity<input value={model.id} onChange={e => change({ ...model, id: e.target.value })} /></label>
+    <label>Protocol<select value={model.protocol} onChange={e => change({ ...model, protocol: e.target.value as Model['protocol'] })}>{(['openai_chat_completions', 'openai_responses', 'anthropic_messages'] as const).map(protocol => <option key={protocol}>{protocol}</option>)}</select></label>
+    <label>Context window<input type="number" min="1" value={model.context_window} onChange={e => change({ ...model, context_window: e.target.value })} /></label>
+    <label>Maximum output tokens<input type="number" min="1" value={model.max_output_tokens} onChange={e => change({ ...model, max_output_tokens: Number(e.target.value) })} /></label>
+  </div><fieldset><legend>Explicit capabilities</legend>{(['tool_calls', 'reasoning'] as const).map(key => <label key={key}><input type="checkbox" checked={model.capabilities[key]} onChange={e => change({ ...model, capabilities: { ...model.capabilities, [key]: e.target.checked } })} />{key}</label>)}
+    {(['input_modalities', 'output_modalities'] as const).map(key => <div key={key}>{key}{(['text', 'image', 'file'] as const).map(modality => <label key={modality}><input type="checkbox" checked={model.capabilities[key].includes(modality)} onChange={e => change({ ...model, capabilities: { ...model.capabilities, [key]: e.target.checked ? [...model.capabilities[key], modality] : model.capabilities[key].filter(value => value !== modality) } })} />{modality}</label>)}</div>)}
+    </fieldset>
+    <details><summary>Reasoning profiles</summary><label>Default profile<input value={model.reasoning?.default_profile ?? ''} onChange={e => change({ ...model, reasoning: { default_profile: e.target.value, profiles: model.reasoning?.profiles ?? {} } })} /></label>
+      {Object.entries(model.reasoning?.profiles ?? {}).map(([id, profile]) => <div key={id}><label><input type="checkbox" checked={profile.enabled} onChange={e => change({ ...model, reasoning: { ...model.reasoning!, profiles: { ...model.reasoning!.profiles, [id]: { ...profile, enabled: e.target.checked } } } })} />{id}</label><RequestPolicy value={profile.request_params ?? {}} change={request_params => change({ ...model, reasoning: { ...model.reasoning!, profiles: { ...model.reasoning!.profiles, [id]: { ...profile, request_params } } } })} /><Button onClick={() => { const profiles = { ...model.reasoning!.profiles }; delete profiles[id]; change({ ...model, reasoning: { ...model.reasoning!, profiles } }); }}>Delete profile {id}</Button></div>)}
+      <ProfileAdder add={id => change({ ...model, reasoning: { default_profile: model.reasoning?.default_profile ?? id, profiles: { ...model.reasoning?.profiles, [id]: { enabled: true, request_params: {} } } } })} /><Button onClick={() => change({ ...model, reasoning: null })}>Remove reasoning profiles</Button>
+    </details><details><summary>Request defaults and protocol compatibility</summary><RequestPolicy value={model.request_params ?? {}} change={request_params => change({ ...model, request_params })} />
+    <label>Chat reasoning replay<select value={model.compat?.chat_reasoning_replay ?? ''} onChange={e => change({ ...model, compat: { ...model.compat, chat_reasoning_replay: (e.target.value || null) as NonNullable<Model['compat']>['chat_reasoning_replay'] } })}><option value="">Unspecified</option><option value="omit">omit</option><option value="reasoning_content">reasoning_content</option><option value="reasoning">reasoning</option></select></label>
+    <label>Chat output field<select value={model.compat?.chat_max_tokens_field ?? ''} onChange={e => change({ ...model, compat: { ...model.compat, chat_max_tokens_field: (e.target.value || null) as NonNullable<Model['compat']>['chat_max_tokens_field'] } })}><option value="">Unspecified</option><option value="max_tokens">max_tokens</option><option value="max_completion_tokens">max_completion_tokens</option></select></label>
+    <label>Chat stream usage<select value={model.compat?.chat_stream_usage ?? ''} onChange={e => change({ ...model, compat: { ...model.compat, chat_stream_usage: (e.target.value || null) as NonNullable<Model['compat']>['chat_stream_usage'] } })}><option value="">Unspecified</option><option value="supported">supported</option><option value="unsupported">unsupported</option></select></label>
+    <label>Chat tool protocol<select value={model.compat?.chat_tool_protocol ?? ''} onChange={e => change({ ...model, compat: { ...model.compat, chat_tool_protocol: (e.target.value || null) as NonNullable<Model['compat']>['chat_tool_protocol'] } })}><option value="">Unspecified</option><option value="native">native</option><option value="qwen_xml">qwen_xml</option></select></label>
+    <label>Responses storage<select value={model.compat?.responses_storage ?? ''} onChange={e => change({ ...model, compat: { ...model.compat, responses_storage: (e.target.value || null) as NonNullable<Model['compat']>['responses_storage'] } })}><option value="">Unspecified</option><option value="stateless">stateless</option><option value="stored">stored</option></select></label>
+    </details><Button onClick={remove}>Delete model {model.id}</Button></details>;
+}
+function ProfileAdder({ add }: { add: (id: string) => void }) { const [id, setId] = useState(''); return <div className={css.actions}><input aria-label="New reasoning profile" value={id} onChange={e => setId(e.target.value)} /><Button disabled={!id} onClick={() => { add(id); setId(''); }}>Add profile</Button></div>; }

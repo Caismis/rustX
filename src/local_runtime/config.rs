@@ -585,11 +585,7 @@ impl CurrentRuntimeConfig {
                 detail: "agent_id must be non-empty".to_owned(),
             });
         }
-        if self.context.summary_output_cap == Some(0) {
-            return Err(CurrentRuntimeConfigError::Invalid {
-                detail: "context.summary_output_cap must be positive when present".to_owned(),
-            });
-        }
+        self.context.validate()?;
         self.timeout_policy()?;
         if self.agent.model.is_none() {
             return Err(CurrentRuntimeConfigError::Invalid {
@@ -854,6 +850,15 @@ pub struct ContextPolicyDocument {
 }
 
 impl ContextPolicyDocument {
+    pub(crate) fn validate(&self) -> Result<(), CurrentRuntimeConfigError> {
+        if self.summary_output_cap == Some(0) {
+            return Err(CurrentRuntimeConfigError::Invalid {
+                detail: "context.summary_output_cap must be positive when present".to_owned(),
+            });
+        }
+        Ok(())
+    }
+
     /// The native context policy represented by this document.
     #[must_use]
     pub const fn to_policy(&self) -> SessionContextPolicy {

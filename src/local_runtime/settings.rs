@@ -67,7 +67,7 @@ pub(super) fn lock_document(target: &Path) -> std::io::Result<File> {
     Ok(file)
 }
 
-fn read_document(path: &Path) -> Result<Option<Vec<u8>>, RuntimeClientError> {
+pub(super) fn read_document(path: &Path) -> Result<Option<Vec<u8>>, RuntimeClientError> {
     match std::fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => Err(failure(
             "default document must be a regular file, not a symlink",
@@ -79,7 +79,7 @@ fn read_document(path: &Path) -> Result<Option<Vec<u8>>, RuntimeClientError> {
         Err(error) => Err(io_failure(error)),
     }
 }
-fn revision(bytes: Option<&[u8]>) -> String {
+pub(super) fn revision(bytes: Option<&[u8]>) -> String {
     bytes.map_or_else(
         || "missing".into(),
         |bytes| format!("sha256:{:x}", Sha256::digest(bytes)),

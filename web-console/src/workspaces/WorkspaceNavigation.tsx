@@ -23,8 +23,9 @@ export function sessionObservation(view: SessionView | undefined, connected: boo
   if (activeAttempt(view.snapshot)) return 'Running';
   return 'Loaded / attached';
 }
-export function WorkspaceNavigation({ host, client, state, endpoint, navigation, workspace, selected, selectWorkspace, openSession, createSession, forkSession, deleteSession, creating, metadataChanged }: {
+export function WorkspaceNavigation({ host, client, state, endpoint, navigation, workspace, selected, selectWorkspace, openSession, createSession, forkSession, deleteSession, creating, metadataChanged, openSettings }: {
   host: ProductHostWorkspaces; client: AppServerClient; state: ClientView; endpoint: string; navigation: NavigationEpoch;
+  openSettings: () => void;
   creating: boolean; metadataChanged: (removed?: string) => void;
   workspace?: string; selected?: string; selectWorkspace: (id?: string) => void;
   openSession: (id: string) => void; createSession: (id: string) => void; forkSession: (id: string) => void; deleteSession: (id: string) => void;
@@ -35,7 +36,7 @@ export function WorkspaceNavigation({ host, client, state, endpoint, navigation,
   const [query, setQuery] = useState(''), [offset, setOffset] = useState(0);
   const [hostError, setHostError] = useState('');
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [reload, setReload] = useState(0);
-  const [dialog, setDialog] = useState<{ kind: 'workspace' | 'session' | 'remove' | 'add' | 'settings'; id: string; name: string }>();
+  const [dialog, setDialog] = useState<{ kind: 'workspace' | 'session' | 'remove' | 'add'; id: string; name: string }>();
   const [name, setName] = useState('');
   const connected = state.connection === 'connected';
   const route = state.endpoint ?? endpoint;
@@ -90,7 +91,7 @@ export function WorkspaceNavigation({ host, client, state, endpoint, navigation,
     {catalog?.picker.kind === 'unavailable' && <small className="muted">{catalog.picker.reason}</small>}
     {catalog && !bound && <p role="status">This Workspace Host belongs to {catalog.endpoint}. Connect to that process to use its registrations.</p>}
     {workspace && <div className={css.trust}><small>Host authorization: registered</small><small>{trustLabel}</small>
-      <Button size="sm" disabled={trust !== true} onClick={() => setDialog({ kind: 'settings', id: workspace, name: '' })}>Workspace settings</Button></div>}
+      <Button size="sm" disabled={trust !== true} onClick={openSettings}>Workspace settings</Button></div>}
     <Input aria-label="Search Session metadata" placeholder="Search Session metadata" value={query} disabled={!connected} onChange={event => search(event.target.value)} />
     <div className="row"><Button size="sm" disabled={!connected} onClick={() => { setReload(value => value + 1); search(query, offset); }}>Refresh list</Button><small className="muted">32 summaries per page</small></div>
     {hostError && <p role="status">{hostError}</p>}
@@ -110,9 +111,8 @@ export function WorkspaceNavigation({ host, client, state, endpoint, navigation,
       </div>)}<div className={css.group}><h3>Ungrouped Sessions</h3>{sessionRows(null)}</div></> : sessionRows()}
     </div>
     <div className="row"><Button size="sm" disabled={!connected || offset === 0} onClick={() => search(query, Math.max(0, offset - 32))}>Previous</Button><Button size="sm" disabled={!connected || state.nextOffset == null} onClick={() => search(query, state.nextOffset!)}>Next</Button></div>
-    {dialog && <Dialog open title={dialog.kind === 'add' ? 'Add Workspace' : dialog.kind === 'remove' ? `Unregister ${dialog.name}?` : dialog.kind === 'settings' ? 'Workspace source status' : `Rename ${dialog.kind}`} onClose={() => setDialog(undefined)}>
-      {dialog.kind === 'settings' ? <p>Native current source trust: {trustLabel}. Loaded resource activation belongs to its admitted native generation; inspect Resources for effective state.</p>
-        : dialog.kind === 'add' ? <><p>Choose a location authorized by this Product Host.</p>{catalog?.picker.kind === 'configured' && catalog.picker.locations.map(location => <Button key={location.id} disabled={busy} onClick={() => void mutate(() => host.adoptWorkspace(location.id))}>{location.displayName}</Button>)}</>
+    {dialog && <Dialog open title={dialog.kind === 'add' ? 'Add Workspace' : dialog.kind === 'remove' ? `Unregister ${dialog.name}?` : `Rename ${dialog.kind}`} onClose={() => setDialog(undefined)}>
+      {dialog.kind === 'add' ? <><p>Choose a location authorized by this Product Host.</p>{catalog?.picker.kind === 'configured' && catalog.picker.locations.map(location => <Button key={location.id} disabled={busy} onClick={() => void mutate(() => host.adoptWorkspace(location.id))}>{location.displayName}</Button>)}</>
           : dialog.kind === 'remove' ? <><p>Only the navigation registration is removed. Sessions, cwd, history, project trust, and running work remain untouched.</p><Button disabled={busy} onClick={() => void mutate(() => host.removeWorkspace(dialog.id), dialog.id)}>Unregister</Button></>
             : <form onSubmit={event => { event.preventDefault(); const current = navigation.capture(); void mutate(async () => {
               if (dialog.kind === 'workspace') await host.renameWorkspace(dialog.id, name);

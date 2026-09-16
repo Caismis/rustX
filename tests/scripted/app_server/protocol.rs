@@ -421,26 +421,21 @@ async fn attach_session(
 async fn capacity_rejection_never_composes_and_unload_reclaims_without_notifications() {
     bounded(async {
         let f = Fixture::new().await;
-        f.manager
-            .registry
-            .0
-            .lock()
-            .unwrap()
-            .policy
-            .max_resident_runtimes = 64;
-        let connection = AppServerConnection::new(f.host.clone());
+        let connection = AppServerConnection::new_with_attachment_limit_for_test(f.host.clone(), 2);
         initialize(&connection).await;
-        let sessions = cold_sessions(&f, 34).await;
+        let sessions = cold_sessions(&f, 3).await;
+        assert_eq!(connection.attachment_counts(), (0, 0));
         let mut targets = Vec::new();
-        for session in &sessions[..32] {
+        for session in &sessions[..2] {
             targets.push(attach_session(&connection, session).await);
         }
-        assert_eq!(connection.attachment_counts(), (32, 0));
+        assert_eq!(connection.attachment_counts(), (2, 0));
+        assert_eq!(f.host.diagnostics().external_attachments, 2);
         assert_eq!(
             rejected(
                 &connection,
                 Method::SessionAttach {
-                    session_id: sessions[32].id.clone(),
+                    session_id: sessions[2].id.clone(),
                     node_id: None
                 }
             )
@@ -449,29 +444,49 @@ async fn capacity_rejection_never_composes_and_unload_reclaims_without_notificat
         );
         assert_eq!(
             f.manager
-                .probe(&sessions[32].active_conversation_id)
+                .probe(&sessions[2].active_conversation_id)
                 .compositions
                 .load(std::sync::atomic::Ordering::SeqCst),
             0
         );
         assert_eq!(
-            f.manager.residency(&sessions[32].active_conversation_id),
+            f.manager.residency(&sessions[2].active_conversation_id),
             super::ResidencyState::Unloaded
         );
-        for target in targets.drain(..2) {
+        assert_eq!(connection.attachment_counts(), (2, 0));
+        assert_eq!(f.host.diagnostics().external_attachments, 2);
+        for target in targets.drain(..1) {
             call(&connection, 301, Method::SessionUnload { target }).await;
         }
-        assert_eq!(connection.attachment_counts(), (30, 0));
+        assert_eq!(connection.attachment_counts(), (1, 0));
+        assert_eq!(f.host.diagnostics().external_attachments, 1);
         // No next_notification call: unload's response is the terminal acknowledgement.
-        for session in &sessions[32..] {
+        for session in &sessions[2..] {
             targets.push(attach_session(&connection, session).await);
         }
-        assert_eq!(connection.attachment_counts(), (32, 0));
+        assert_eq!(connection.attachment_counts(), (2, 0));
+        assert_eq!(f.host.diagnostics().external_attachments, 2);
+        assert_eq!(
+            f.manager
+                .probe(&sessions[2].active_conversation_id)
+                .compositions
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
         assert!(f.provider.request_bodies().is_empty());
         for target in targets {
             call(&connection, 302, Method::SessionUnload { target }).await;
         }
         assert_eq!(connection.attachment_counts(), (0, 0));
+        assert_eq!(f.host.diagnostics().external_attachments, 0);
+        for session in &sessions {
+            assert_eq!(
+                f.manager.residency(&session.active_conversation_id),
+                super::ResidencyState::Unloaded
+            );
+        }
+        connection.close();
+        assert_eq!(f.host.diagnostics().external_attachments, 0);
         f.close().await;
     })
     .await;
@@ -482,29 +497,26 @@ async fn concurrent_final_slot_is_reserved_before_composition() {
     bounded(async {
         use std::sync::Arc;
         let f = Fixture::new().await;
-        f.manager
-            .registry
-            .0
-            .lock()
-            .unwrap()
-            .policy
-            .max_resident_runtimes = 64;
-        let connection = Arc::new(AppServerConnection::new(f.host.clone()));
+        let connection = Arc::new(AppServerConnection::new_with_attachment_limit_for_test(
+            f.host.clone(),
+            2,
+        ));
         initialize(&connection).await;
-        let sessions = cold_sessions(&f, 33).await;
-        for session in &sessions[..31] {
+        let sessions = cold_sessions(&f, 3).await;
+        for session in &sessions[..1] {
             attach_session(&connection, session).await;
         }
+        assert_eq!(connection.attachment_counts(), (1, 0));
         let probes = [
-            f.manager.probe(&sessions[31].active_conversation_id),
-            f.manager.probe(&sessions[32].active_conversation_id),
+            f.manager.probe(&sessions[1].active_conversation_id),
+            f.manager.probe(&sessions[2].active_conversation_id),
         ];
         for probe in &probes {
             probe.before_compose.arm();
         }
         let barrier = Arc::new(tokio::sync::Barrier::new(3));
         let mut tasks = Vec::new();
-        for session in &sessions[31..] {
+        for session in &sessions[1..] {
             let worker = connection.clone();
             let barrier = barrier.clone();
             let session_id = session.id.clone();
@@ -527,7 +539,7 @@ async fn concurrent_final_slot_is_reserved_before_composition() {
             () = probes[0].before_compose.entered() => 0,
             () = probes[1].before_compose.entered() => 1,
         };
-        assert_eq!(connection.attachment_counts(), (31, 1));
+        assert_eq!(connection.attachment_counts(), (1, 1));
         let loser = tasks.remove(1 - winner).await.unwrap();
         assert!(matches!(
             loser,
@@ -545,12 +557,19 @@ async fn concurrent_final_slot_is_reserved_before_composition() {
                 .load(std::sync::atomic::Ordering::SeqCst),
             0
         );
+        assert_eq!(
+            f.manager
+                .residency(&sessions[2 - winner].active_conversation_id),
+            super::ResidencyState::Unloaded
+        );
+        assert_eq!(connection.attachment_counts(), (1, 1));
+        assert_eq!(f.host.diagnostics().external_attachments, 2);
         probes[winner].before_compose.release();
         assert!(matches!(
             tasks.remove(0).await.unwrap(),
             Response::Success(_)
         ));
-        assert_eq!(connection.attachment_counts(), (32, 0));
+        assert_eq!(connection.attachment_counts(), (2, 0));
         assert!(f.provider.request_bodies().is_empty());
         for session in &sessions {
             f.manager
@@ -558,6 +577,12 @@ async fn concurrent_final_slot_is_reserved_before_composition() {
                 .await
                 .unwrap();
         }
+        connection.close();
+        assert_eq!(connection.attachment_counts(), (0, 0));
+        assert_eq!(f.host.diagnostics().external_attachments, 0);
+        connection.close();
+        assert_eq!(connection.attachment_counts(), (0, 0));
+        assert_eq!(f.host.diagnostics().external_attachments, 0);
         f.close().await;
     })
     .await;
@@ -2136,6 +2161,424 @@ async fn exact_pending_mutations_are_routed_cas_bound_and_do_not_cancel_attempts
                 .has_current_attempt()
         );
         assert_eq!(f.provider.request_bodies().len(), 1);
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
+    use crate::local_runtime::configuration::settings::{SourceMutation, SourceScope};
+    use crate::model::{catalog::ModelRef, session::SessionModelConfig};
+    bounded(async {
+        let f = Fixture::new().await;
+        // Authorized, canonical TOML; only full-runtime Workflow semantics fail.
+        std::fs::write(
+            f.workspaces[0].join("rustx.toml"),
+            "[agent]\nworkflows = ['check', 'check']\n",
+        )
+        .unwrap();
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let id = f.sessions[0].id.clone();
+        let MethodResult::SourceSettings {
+            projection,
+            session_revision,
+            ..
+        } = call(
+            &connection,
+            1,
+            Method::SourcesRead {
+                session_id: id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!()
+        };
+        assert!(projection.resolution_available);
+        assert!(projection.workspace.active);
+        assert!(
+            projection
+                .catalog
+                .models
+                .models
+                .iter()
+                .any(|m| m.model.to_string() == "local/b")
+        );
+        let expected = projection.user.revision.clone();
+        let selection = Some(SessionModelConfig::of(ModelRef::parse("local/b").unwrap()));
+        let MethodResult::SourceSettings {
+            projection: saved, ..
+        } = call(
+            &connection,
+            2,
+            Method::SourcesWrite {
+                session_id: id.clone(),
+                expected_revision: expected.clone(),
+                mutation: SourceMutation::UserModel {
+                    authored: Some(
+                        crate::local_runtime::configuration::settings::AuthoredModelSelection {
+                            model: Some(ModelRef::parse("local/b").unwrap()),
+                            ..Default::default()
+                        },
+                    ),
+                },
+            },
+        )
+        .await
+        else {
+            panic!()
+        };
+        assert_ne!(saved.user.revision, expected);
+        assert_eq!(
+            saved.user.authored.as_ref().unwrap().model,
+            selection.as_ref().map(|s| s.model.clone())
+        );
+        assert!(matches!(
+            rejected(
+                &connection,
+                Method::SourcesWrite {
+                    session_id: id.clone(),
+                    expected_revision: expected,
+                    mutation: SourceMutation::UserModel { authored: None }
+                }
+            )
+            .await,
+            ErrorData::SourceConflict {
+                scope: SourceScope::User,
+                ..
+            }
+        ));
+        let MethodResult::SourceSettings {
+            projection: fresh, ..
+        } = call(
+            &connection,
+            3,
+            Method::SourcesRead {
+                session_id: id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!()
+        };
+        assert_eq!(fresh.user, saved.user);
+        let MethodResult::SettingsReplaced { revision } = call(
+            &connection,
+            4,
+            Method::SelectModel {
+                session_id: id.clone(),
+                expected_revision: session_revision,
+                selection: selection.clone(),
+            },
+        )
+        .await
+        else {
+            panic!()
+        };
+        assert!(revision > session_revision);
+        assert!(matches!(
+            rejected(
+                &connection,
+                Method::SelectModel {
+                    session_id: id.clone(),
+                    expected_revision: session_revision,
+                    selection: None
+                }
+            )
+            .await,
+            ErrorData::StaleSettings { .. }
+        ));
+        let MethodResult::SourceSettings {
+            session_selection,
+            projection,
+            ..
+        } = call(
+            &connection,
+            5,
+            Method::SourcesRead {
+                session_id: id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!()
+        };
+        assert_eq!(session_selection, selection);
+        assert!(matches!(
+            projection.provenance["agent.model.model"],
+            crate::local_runtime::configuration::Origin::Explicit { .. }
+        ));
+        call(
+            &connection,
+            6,
+            Method::SelectModel {
+                session_id: id,
+                expected_revision: revision,
+                selection: None,
+            },
+        )
+        .await;
+        let error = f
+            .manager
+            .configuration
+            .resolve_session(
+                &crate::local_runtime::configuration::SessionConfigInput::new(
+                    f.workspaces[0].clone(),
+                ),
+            )
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("duplicate"), "{error}");
+        assert!(f.provider.request_bodies().is_empty());
+        f.close().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolution() {
+    use crate::local_runtime::configuration::settings::SourceMutation;
+    bounded(Box::pin(async {
+        let f = Fixture::new().await;
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let (initial, _, _) = f
+            .manager
+            .source_settings(&f.sessions[0].id, None)
+            .await
+            .unwrap();
+        let mut providers = initial.catalog.providers;
+        providers.get_mut("local").unwrap().models[0].reasoning =
+            Some(crate::model::authoring::Reasoning {
+                default_profile: crate::model::catalog::ReasoningProfileId::new("old"),
+                profiles: ["old", "new"]
+                    .into_iter()
+                    .map(|name| {
+                        (
+                            crate::model::catalog::ReasoningProfileId::new(name),
+                            crate::model::authoring::Profile {
+                                enabled: false,
+                                request_params: crate::toml_authoring::RequestParamsToml::default(),
+                            },
+                        )
+                    })
+                    .collect(),
+            });
+        f.manager
+            .source_settings(
+                &f.sessions[0].id,
+                Some((
+                    initial.catalog.revision,
+                    SourceMutation::Catalog { providers },
+                )),
+            )
+            .await
+            .unwrap();
+        let target = attach(&connection, &f, 0).await;
+        call(
+            &connection,
+            101,
+            Method::TurnStart {
+                target: target.clone(),
+                content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
+                    text: "request-A".into(),
+                })],
+            },
+        )
+        .await;
+        f.gates[0].wait_entered().await;
+        let runtime = f.manager.load(&target.session_id, None).await.unwrap();
+        let before = runtime.client().snapshot().unwrap().0;
+        let MethodResult::SourceSettings { projection, .. } = call(
+            &connection,
+            102,
+            Method::SourcesRead {
+                session_id: target.session_id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!()
+        };
+        let mut providers = projection.catalog.providers;
+        let model = &mut providers.get_mut("local").unwrap().models[0];
+        model.max_output_tokens = 2048;
+        model.reasoning.as_mut().unwrap().default_profile =
+            crate::model::catalog::ReasoningProfileId::new("new");
+        model.request_params = crate::toml_authoring::RequestParamsToml(
+            serde_json::from_value(serde_json::json!({"temperature": 0.8})).unwrap(),
+        );
+        call(
+            &connection,
+            103,
+            Method::SourcesWrite {
+                session_id: target.session_id.clone(),
+                expected_revision: projection.catalog.revision,
+                mutation: SourceMutation::Catalog { providers },
+            },
+        )
+        .await;
+        let after = runtime.client().snapshot().unwrap().0;
+        assert_eq!(before.model, after.model);
+        assert_eq!(
+            before.attempt.as_ref().unwrap().model,
+            after.attempt.as_ref().unwrap().model
+        );
+        let (prospective, _, _) = f
+            .manager
+            .source_settings(&target.session_id, None)
+            .await
+            .unwrap();
+        let next = prospective.effective_request.unwrap();
+        let frozen = after.attempt.as_ref().unwrap().model.as_ref().unwrap();
+        assert_eq!(next.model, frozen.primary.model);
+        assert_eq!(next.max_output_tokens, 2048);
+        assert_eq!(frozen.primary.max_output_tokens, 4096);
+        assert_eq!(next.reasoning_profile.as_ref().unwrap().as_str(), "new");
+        assert_eq!(
+            frozen.primary.reasoning_profile.as_ref().unwrap().as_str(),
+            "old"
+        );
+        assert_eq!(next.request_params["temperature"], 0.8);
+        assert!(!frozen.primary.request_params.contains_key("temperature"));
+        let cold = attach(&connection, &f, 1).await;
+        let MethodResult::Models { catalog } =
+            call(&connection, 104, Method::ModelCatalog { target: cold }).await
+        else {
+            panic!()
+        };
+        assert_eq!(
+            catalog
+                .models
+                .iter()
+                .find(|m| m.model.to_string() == "local/a")
+                .unwrap()
+                .max_output_tokens,
+            2048
+        );
+        f.gates[0].release();
+        f.close().await;
+    }))
+    .await;
+}
+
+fn source_gate(
+    f: &Fixture,
+    point: &'static str,
+) -> (
+    tokio::sync::oneshot::Receiver<()>,
+    std::sync::mpsc::Sender<()>,
+) {
+    let (entered, waiting) = tokio::sync::oneshot::channel();
+    let (release, resume) = std::sync::mpsc::channel();
+    f.manager.configuration.test_hooks.insert(point, move || {
+        entered.send(()).unwrap();
+        resume.recv().unwrap();
+    });
+    (waiting, release)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn web08_source_document_wait_releases_catalog_and_rejects_mixed_session_revision() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let id = f.sessions[0].id.clone();
+        let (before, revision, _) = f.manager.source_settings(&id, None).await.unwrap();
+        let document_lock = crate::local_runtime::settings::lock_document(std::path::Path::new(&before.user.document)).unwrap();
+        let (entered, resume) = source_gate(&f, "before_documents");
+        let manager = f.manager.clone();
+        let read_id = id.clone();
+        let read = tokio::spawn(async move { manager.source_settings(&read_id, None).await });
+        entered.await.unwrap();
+        resume.send(()).unwrap();
+        // Source worker owns trust and is about to wait on this held document lock.
+        // Unrelated catalog access and a durable same-Session commit both finish.
+        let mut catalog = f.manager.sessions.catalog.lock().await;
+        catalog.settings_revision(&f.sessions[1].id).unwrap();
+        let (_, mut settings) = catalog.lineage(&id, None).unwrap();
+        settings.model = Some(crate::model::session::SessionModelConfig::of(crate::model::catalog::ModelRef::parse("local/b").unwrap()));
+        let next = catalog.replace_settings(&id, revision, settings).unwrap();
+        drop(catalog);
+        assert!(!read.is_finished(), "held document lock prevents source completion");
+        drop(document_lock);
+        assert!(matches!(read.await.unwrap(), Err(super::super::SourceSettingsError::Session(crate::local_runtime::session::SessionError::StaleSettings { expected, actual })) if expected == revision && actual == next));
+        let (after, current, selected) = f.manager.source_settings(&id, None).await.unwrap();
+        assert_eq!(current, next);
+        assert_eq!(selected.unwrap().model.to_string(), "local/b");
+        assert_eq!(after.user.revision, before.user.revision);
+        f.close().await;
+    }).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn web08_selection_validation_releases_catalog_and_commits_with_original_cas() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let id = f.sessions[0].id.clone();
+        let (_, revision, _) = f.manager.source_settings(&id, None).await.unwrap();
+        let (entered, resume) = source_gate(&f, "validation_started");
+        let manager = f.manager.clone();
+        let select_id = id.clone();
+        let save = tokio::spawn(async move { manager.select_model(&select_id, revision, Some(crate::model::session::SessionModelConfig::of(crate::model::catalog::ModelRef::parse("local/b").unwrap()))).await });
+        entered.await.unwrap();
+        let mut catalog = f.manager.sessions.catalog.lock().await;
+        catalog.settings_revision(&f.sessions[1].id).unwrap();
+        let (_, settings) = catalog.lineage(&id, None).unwrap();
+        let unchanged = settings.model.clone();
+        let next = catalog.replace_settings(&id, revision, settings).unwrap();
+        drop(catalog);
+        resume.send(()).unwrap();
+        assert!(matches!(save.await.unwrap(), Err(super::super::SourceSettingsError::Session(crate::local_runtime::session::SessionError::StaleSettings { expected, actual })) if expected == revision && actual == next));
+        let (_, actual, selection) = f.manager.source_settings(&id, None).await.unwrap();
+        assert_eq!(actual, next);
+        assert_eq!(selection, unchanged);
+        f.close().await;
+    }).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn web08_source_commit_with_changed_session_is_uncertain_and_never_replayed() {
+    use crate::local_runtime::configuration::settings::{SettingsError, SourceMutation};
+    bounded(async {
+        let f = Fixture::new().await;
+        let id = f.sessions[0].id.clone();
+        let (before, revision, _) = f.manager.source_settings(&id, None).await.unwrap();
+        let (entered, resume) = source_gate(&f, "before_publication");
+        let mut providers = before.catalog.providers;
+        providers.get_mut("local").unwrap().models[0].max_output_tokens = 2048;
+        let manager = f.manager.clone();
+        let write_id = id.clone();
+        let write = tokio::spawn(async move {
+            manager
+                .source_settings(
+                    &write_id,
+                    Some((
+                        before.catalog.revision,
+                        SourceMutation::Catalog { providers },
+                    )),
+                )
+                .await
+        });
+        entered.await.unwrap();
+        let mut catalog = f.manager.sessions.catalog.lock().await;
+        let (_, settings) = catalog.lineage(&id, None).unwrap();
+        catalog.replace_settings(&id, revision, settings).unwrap();
+        drop(catalog);
+        resume.send(()).unwrap();
+        assert!(matches!(
+            write.await.unwrap(),
+            Err(super::super::SourceSettingsError::Source(
+                SettingsError::Committed
+            ))
+        ));
+        let (fresh, _, _) = f.manager.source_settings(&id, None).await.unwrap();
+        assert_eq!(
+            fresh.catalog.providers["local"].models[0].max_output_tokens,
+            2048
+        );
         f.close().await;
     })
     .await;

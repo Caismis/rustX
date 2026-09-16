@@ -491,6 +491,10 @@ export function describeRpcError(error: RpcError): string {
       return `unknown session ${data.session_id}`;
     case "unknown_node":
       return `unknown node ${data.node_id} in session ${data.session_id}`;
+    case "source_conflict":
+      return `${data.scope} source changed (expected ${data.expected}, found ${data.actual})`;
+    case "untrusted_workspace":
+      return "Workspace configuration is not trusted by rustX";
     case "stale_settings":
       return `settings changed underneath this edit (expected revision ${data.expected}, found ${data.actual})`;
     case "interaction_not_pending":

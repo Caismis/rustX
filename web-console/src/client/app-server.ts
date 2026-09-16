@@ -114,7 +114,7 @@ function goalRefusal(error: unknown) {
 const READS = new Set<Request1['method']>([
   'artifact/read', 'initialize', 'server/info', 'session/list', 'session/read', 'session/tree', 'session/deletePreview',
   'session/snapshot', 'session/transcript', 'session/trace', 'settings/read', 'settings/model', 'settings/models',
-  'resources/read', 'background/status', 'subagent/status', 'settings/defaults', 'session/boundaries',
+  'settings/sourcesRead', 'resources/read', 'background/status', 'subagent/status', 'settings/defaults', 'session/boundaries',
 ]);
 export const interactionKey = (ref: InteractionRef) => JSON.stringify([ref.conversation_id, ref.interaction_id]);
 export const sameTarget = (a?: AttachmentTarget, b?: AttachmentTarget) => !!a && !!b &&

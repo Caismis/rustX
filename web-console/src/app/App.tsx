@@ -1,3 +1,4 @@
+import { Settings } from './settings/Settings';
 import { HttpWorkspaceHost, type ProductHostWorkspaces } from '../workspaces/host';
 import { WorkspaceNavigation } from '../workspaces/WorkspaceNavigation';
 import { createWorkspaceSession, WorkspaceSessionNavigation } from '../workspaces/navigation';
@@ -43,7 +44,7 @@ function readPreferences(): { endpoint: string; tabs: string[] } {
 const defaultWorkspaceHost = new HttpWorkspaceHost();
 export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: AppServerClient; workspaceHost?: ProductHostWorkspaces }) {
   const state = useSyncExternalStore(client.subscribe, client.getSnapshot);
-  const [conversationMode, setConversationMode] = useState<'chat' | 'trajectory'>('chat');
+  const [conversationMode, setConversationMode] = useState<'chat' | 'trajectory' | 'settings'>('chat');
   const [preferences] = useState(readPreferences);
   const [endpoint, setEndpoint] = useState(preferences.endpoint);
   const [token, setToken] = useState('');
@@ -169,7 +170,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
       <Button variant="outline" disabled={state.connection === 'disconnected'} onClick={() => { navigation.invalidate(); client.disconnect(); }}>Disconnect</Button>
       <Button variant="outline" disabled={busy || !token} onClick={() => connect(true)}>Reconnect</Button>
     </section>
-    <WorkspaceNavigation host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
+    <WorkspaceNavigation openSettings={() => setConversationMode('settings')} host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
       creating={creating === state.generation} metadataChanged={removed => { if (selected) focusSession(selected, { preserveDraft: true }); else if (removed) setFocus(value => value.workspaceId === removed ? {} : value); }}
       workspace={workspace} selected={selected} selectWorkspace={id => { navigation.invalidate(); setCommand(undefined); setRestored(undefined); setFocus({ workspaceId: id, generation: state.generation }); }}
       openSession={open} createSession={createInWorkspace} deleteSession={deletePreview}
@@ -210,8 +211,8 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
           <Button size="sm" disabled={!attached} onClick={() => run(() => client.release(view.id, true))}>Unload runtime</Button></div>
       </section>
       {view.attachment !== 'attached' && <p className="notice">{view.attachment}: last observed values may be stale. Execution and pending interactions remain server-owned. {view.error}</p>}
-      <div className="row" role="tablist" aria-label="Conversation view"><Button role="tab" aria-selected={conversationMode === 'chat'} onClick={() => setConversationMode('chat')}>Chat</Button><Button role="tab" aria-selected={conversationMode === 'trajectory'} onClick={() => setConversationMode('trajectory')}>Trajectory</Button></div>
-      <ArtifactContext.Provider value={artifacts}>{conversationMode === 'trajectory' && view.trace ? <Trajectory key={view.id} cache={view.trace} onSelect={id => client.selectTrace(view.id, id)} loadEarlier={() => run(() => client.loadEarlierTrace(view.id))} latest={() => client.latestTrace(view.id)} /> : <ChatViewport key={`${view.id}:${view.target?.attachment_id ?? state.generation}`}>
+      <div className="row" role="tablist" aria-label="Conversation view"><Button role="tab" aria-selected={conversationMode === 'chat'} onClick={() => setConversationMode('chat')}>Chat</Button><Button role="tab" aria-selected={conversationMode === 'trajectory'} onClick={() => setConversationMode('trajectory')}>Trajectory</Button><Button role="tab" aria-selected={conversationMode === 'settings'} onClick={() => setConversationMode('settings')}>Settings</Button></div>
+      <ArtifactContext.Provider value={artifacts}>{conversationMode === 'settings' ? <Settings key={`${view.id}:${state.generation}`} client={client} sessionId={view.id} /> : conversationMode === 'trajectory' && view.trace ? <Trajectory key={view.id} cache={view.trace} onSelect={id => client.selectTrace(view.id, id)} loadEarlier={() => run(() => client.loadEarlierTrace(view.id))} latest={() => client.latestTrace(view.id)} /> : <ChatViewport key={`${view.id}:${view.target?.attachment_id ?? state.generation}`}>
         {view.snapshot && <><Conversation snapshot={view.snapshot} history={view.history} loadEarlier={() => run(() => client.loadEarlier(view.id))} latest={() => client.latestTranscript(view.id)}
           lineageSwitchSafe={lineageSwitchSafe(view)} historicalDisabled={composerDisabled || commandOpen} onHistorical={(id, messageId) => invokeCommand({ id, messageId })} /><RuntimeFacts snapshot={view.snapshot} />
           <div className="attempt-status" role="status">Attempt: {view.snapshot.attempt ? `${view.snapshot.attempt.attempt_id} · ${view.snapshot.attempt.phase.type}` : 'none observed'}{view.snapshot.attempt?.phase.type === 'settled' && ` · ${view.snapshot.attempt.phase.outcome.type}`}</div>
@@ -219,7 +220,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
         </>}
       </ChatViewport>}</ArtifactContext.Provider>
       {/* Keyed by Session: no dock or draft state crosses Session views. */}
-      <ComposerContextStack key={view.id}
+      {conversationMode !== 'settings' && <ComposerContextStack key={view.id}
         todo={<TodoDock state={todoDock(view.snapshot)} />}
         goal={<GoalDock state={goalDock(view.snapshot)} observation={view.snapshot} disabled={composerDisabled}
           mutate={(expected, mutation) => client.controlGoal(view.id, expected, mutation)} />}
@@ -233,7 +234,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
             try { await client.send(view.id, text, receipts, delivery); return generation === client.getSnapshot().generation; }
             catch (cause) { if (generation === client.getSnapshot().generation) setError(String(cause)); return false; }
             finally { if (generation === client.getSnapshot().generation) setSending(current => { const next = { ...current }; delete next[view.id]; return next; }); }
-          }} />} />
+          }} />} />}
       {commandOpen && <CommandPanel key={`${command.generation}:${command.sessionId}:${command.request.id}:${command.request.messageId ?? ''}`} request={command.request} client={client} sessionId={command.sessionId} current={() => command.current() && client.getSnapshot().generation === command.generation}
         succeeded={() => { setConsumed(previous => ({ id: command.request.id, sequence: (previous?.sequence ?? 0) + 1 })); }}
         close={() => {

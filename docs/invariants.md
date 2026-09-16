@@ -8269,3 +8269,29 @@ See [Agent Profiles](agent-profiles.md) for the exact scope and ownership rules.
   entry may receive native lifecycle repairs without becoming a history segment.
 - Trace is read-only. Removing Web Trajectory changes no execution, canonical
   history, cancellation, settlement or recovery semantics.
+
+### Settings source authoring
+
+- User/Workspace author canonical partial `ModelLayer`; omission is distinct from
+  explicit catalog-default/profile/limit. Session alone selects whole state.
+- Reset removes the chosen source model layer or Session selection. It never copies
+  Effective and never changes unrelated TOML settings.
+- One native source capture owns strict parsing, authority, overlay and provenance.
+  Model resolution validates catalog/request/summary/context semantics only. Full
+  Session resolution reuses it, then validates all runtime domains before resource
+  preparation. Valid Settings model state does not imply runtime admissibility.
+- Workspace publication is authorized by trust at atomic rename. Grant/revoke and
+  source projection/publication share one per-workspace native trust epoch. Reads
+  cannot mix inactive Workspace status with Project-derived provenance.
+- Lock order: workspace trust, then sorted document locks. Session catalog locking
+  is limited to snapshot and revision/CAS operations, never source filesystem work.
+- Source reads recheck their captured Session revision once; changes fail typed.
+  Source commits with unavailable coherent readback report committed uncertainty.
+- User, Workspace, catalog and Session CAS domains are independent. Stale revisions
+  never publish; side-effecting commands are never automatically replayed.
+- Prospective/current/frozen model **request** state is native-projected and remains
+  distinguishable even when model identity is unchanged. Admitted attempts stay frozen.
+- Provider definitions and credentials remain User-only, catalog binding remains
+  bootstrap-owned, and no secret values are returned or persisted by Web.
+- Noncooperating filesystem editors may race the last fingerprint check and rename;
+  native locks do not claim stronger filesystem transactions.

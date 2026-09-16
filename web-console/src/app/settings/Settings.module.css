@@ -1,0 +1,14 @@
+/* Copyright (c) 2026 DeepSeek. MIT. Adapted from ui-settings-models/ModelsSection.module.css. */
+.settings { max-width: 960px; margin: 0 auto; padding: 24px; overflow: auto; width: 100%; box-sizing: border-box; }
+.settings header, .actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.card { border: 1px solid var(--dsw-alias-border-l2, #d8dce2); border-radius: 12px; padding: 20px; margin: 16px 0; min-width: 0; }
+.settings label { display: flex; gap: 8px; margin: 12px 0; align-items: center; flex-wrap: wrap; }
+.settings input:not([type=checkbox]), .settings select { box-sizing: border-box; width: 100%; min-width: 0; padding: 8px 12px; border: 1px solid var(--dsw-alias-border-l2, #d8dce2); border-radius: 8px; color: inherit; background: var(--dsw-alias-bg-base, white); font: inherit; }
+.hint { color: var(--dsw-alias-label-secondary, #666); font-size: 12px; overflow-wrap: anywhere; }
+.catalog { border: 0; padding: 0; min-width: 0; }
+.model { border-top: 1px solid var(--dsw-alias-border-l2, #d8dce2); padding: 16px 0; }
+.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.error { color: #a22; border-left: 3px solid currentColor; padding-left: 12px; }
+.settings dl { display: grid; grid-template-columns: minmax(140px, 1fr) 2fr; gap: 8px; }
+.settings dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 640px) { .settings { padding: 12px; } .grid, .settings dl { grid-template-columns: 1fr; } }

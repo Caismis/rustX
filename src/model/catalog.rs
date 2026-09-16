@@ -789,6 +789,44 @@ pub struct ModelCatalog {
 }
 
 impl ModelCatalog {
+    /// Canonical credential-free catalog projection for authoring and live selection.
+    #[must_use]
+    pub fn view(&self) -> ModelCatalogView {
+        let mut models = Vec::new();
+        for reference in self.model_refs() {
+            let provider = &self.providers[&reference.provider];
+            let model = &provider.models[&reference.model];
+            models.push(CatalogModelView {
+                model: reference,
+                protocol: model.protocol,
+                context_window: model.context_window,
+                max_output_tokens: model.max_output_tokens,
+                declared_capabilities: model.capabilities.clone(),
+                effective_capabilities: super::invocation::effective_capabilities(
+                    &model.capabilities,
+                    model.protocol,
+                ),
+                reasoning_profiles: model
+                    .reasoning
+                    .as_ref()
+                    .map(|reasoning| {
+                        reasoning
+                            .profiles
+                            .iter()
+                            .map(|(id, profile)| ReasoningProfileView {
+                                id: id.clone(),
+                                enabled: profile.enabled,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                default_reasoning_profile: model.default_reasoning_profile().cloned(),
+                credential_source: provider.api_key.view(),
+            });
+        }
+        ModelCatalogView { models }
+    }
+
     /// Parses and validates a catalog from TOML bytes.
     ///
     /// Strict `snake_case` authoring types resolve into native configuration.

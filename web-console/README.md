@@ -315,3 +315,33 @@ Additional browser contracts use an isolated Vite fixture on port 5174, excluded
 from the production entry tree, to exercise native focus and layout at 390/900/1440px.
 See [PROVENANCE.md](PROVENANCE.md) for the source/closure audit and
 [VALIDATION.md](VALIDATION.md) for WEB-01 evidence.
+
+## Provider / Models Settings (WEB-08)
+
+Open a Session, then choose **Settings**, or use **Workspace settings** for an
+attached trusted Workspace. The three selection cards have independent Save and
+Reset actions. **Reset** stages omission; **Save** removes that scope's authored
+selection. The effective card uses native prospective resolution, while current
+runtime and admitted attempt models come from the runtime snapshot.
+
+The User catalog editor supports explicit Provider endpoints/credential references,
+model protocols, limits, capabilities, request defaults, compatibility and reasoning
+profiles. It writes only the already-bound User catalog. There is no provider secret
+input, discovery request or connection probe. Supply secrets outside Web Console.
+Rust validates the complete catalog on Save. Native types have no separate display
+name fields, so Provider/model identities are displayed directly.
+
+Source commits are prospective: use the existing **Unload runtime** and
+**Attach / cold resume** actions when you explicitly want cold resolution. Live
+model switching remains available through the existing `/model` command and native
+live model owner. Neither source saving nor Settings navigation cancels an attempt.
+
+A conflict preserves the draft and refreshes authoritative effective state and the
+scope revision. Review it before choosing Save again, or **Reload / discard draft**.
+A lost response is uncertain; the client rereads and never replays a save. Document
+CAS covers cooperating native writers; tools editing files outside rustX should
+honor its persistent sibling document lock to avoid a race with publication.
+
+Browser coverage (`pnpm test:e2e`) includes a real-server Settings save/reset/catalog
+round-trip, desktop/mobile layout and a zero-Provider-request assertion. Images are
+written to `test-results/settings-{desktop,catalog,mobile}.png`.

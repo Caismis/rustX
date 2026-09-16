@@ -10,7 +10,7 @@ use crate::toml_authoring::RequestParamsToml;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Catalog {
     #[serde(default = "version")]
@@ -20,7 +20,7 @@ pub struct Catalog {
 fn version() -> u32 {
     MODEL_CATALOG_SCHEMA_VERSION
 }
-#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Provider {
     pub base_url: String,
@@ -28,7 +28,7 @@ pub struct Provider {
     pub api_key: CredentialSource,
     pub models: Vec<Model>,
 }
-#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Model {
     pub id: String,
@@ -43,7 +43,7 @@ pub struct Model {
     #[serde(default)]
     pub compat: Compat,
 }
-#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Capabilities {
     pub input_modalities: BTreeSet<Modality>,
@@ -51,7 +51,7 @@ pub struct Capabilities {
     pub tool_calls: bool,
     pub reasoning: bool,
 }
-#[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Compat {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -65,13 +65,13 @@ pub struct Compat {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub responses_storage: Option<ResponsesStorageMode>,
 }
-#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Reasoning {
     pub default_profile: ReasoningProfileId,
     pub profiles: BTreeMap<ReasoningProfileId, Profile>,
 }
-#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
     pub enabled: bool,
