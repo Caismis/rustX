@@ -32,7 +32,8 @@ export async function startDogfood(scenario = 'web_console_dogfood', trusted = t
   const workspaceA = join(directory, 'A'), workspaceB = join(directory, 'B');
   mkdirSync(workspaceA); mkdirSync(workspaceB);
   const binary = process.env.RUSTX_BINARY ?? resolve(root, 'target/debug/rustx');
-  const env = { ...process.env, XDG_CONFIG_HOME: taskConfig, XDG_STATE_HOME: join(directory, 'state'), RUSTX_CONSOLE_FIXTURE_KEY: 'fake-provider-only' };
+  const fixtureHome = join(directory, 'home'); mkdirSync(fixtureHome);
+  const env = { ...process.env, HOME: fixtureHome, XDG_CONFIG_HOME: taskConfig, XDG_STATE_HOME: join(directory, 'state'), RUSTX_CONSOLE_FIXTURE_KEY: 'fake-provider-only' };
   const provider = spawn('uv', ['run', '--project', resolve(root, 'test-support/fake-provider'), '--frozen', 'fake-provider', '--scenario', scenario, '--port', '0'], { stdio: ['pipe', 'pipe', 'pipe'] });
   let providerErrors = ''; provider.stderr.on('data', chunk => { providerErrors = (providerErrors + String(chunk)).slice(-16_384); });
   let app: ChildProcess | undefined;
@@ -78,6 +79,10 @@ enabled = true
       { id: 'root-a', cwd: workspaceA, displayName: 'Workspace A' }, { id: 'root-b', cwd: workspaceB, displayName: 'Workspace B' },
     ] });
     return { workspaceHost, workspaceHostUrl: workspaceHost.url, directory, endpoint, token, tokenFile, workspaceA, workspaceB, providerUrl, settings, writeSettings, control,
+      revokeWorkspaceTrust: () => {
+        const result = spawnSync(binary, ['--workspace', workspaceA, '--trust', 'revoke'], { env, encoding: 'utf8' });
+        if (result.status !== 0) throw new Error(`Trust revoke failed: ${result.stderr}`);
+      },
       gate: (name: string) => control(`observations/await?kind=gate_reached&name=${name}&timeoutMs=30000`),
       release: (name: string) => control(`gates/${name}/release`, 'POST'),
       diagnostics: () => ({ providerErrors, appErrors }),

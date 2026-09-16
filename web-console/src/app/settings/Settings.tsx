@@ -1,4 +1,7 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from ui-settings-general/SettingsRoot and ui-settings-models/ProviderEditor; see PROVENANCE.md. */
+import { observesSourceMutation } from './source-outcome';
+import { SessionIntegrations } from './SessionIntegrations';
+import { Integrations } from './Integrations';
 import { RequestPolicy } from './RequestPolicy';
 import { useEffect, useRef, useState } from 'react';
 import type { MethodResult, ModelCatalogView, Request1, SessionModelConfig, ModelLayer, ModelInvocationView } from '../../../../protocol/app-server/v5';
@@ -10,6 +13,9 @@ import css from './Settings.module.css';
 type Read = Extract<MethodResult, { type: 'source_settings' }>;
 type Scope = 'user' | 'workspace' | 'session';
 export function Settings({ client, sessionId }: { client: AppServerClient; sessionId: string }) {
+  const [draftReset, setDraftReset] = useState(0);
+  const [integrationsOpened, setIntegrationsOpened] = useState(false);
+  const [section, setSection] = useState<'models' | 'integrations'>('models');
   const [state, setState] = useState<Read>();
   const [draft, setDraft] = useState<Read>();
   const [busy, setBusy] = useState(false), [message, setMessage] = useState(''), [error, setError] = useState('');
@@ -18,26 +24,41 @@ export function Settings({ client, sessionId }: { client: AppServerClient; sessi
   const read = () => client.request({ method: 'settings/sourcesRead', params: { session_id: sessionId } }, 'source_settings');
   const load = async () => {
     setError('');
-    try { const value = await read(); if (alive.current) { setState(value); setDraft(structuredClone(value)); } }
+    try { const value = await read(); if (alive.current) { setState(value); setDraft(structuredClone(value)); setDraftReset(epoch => epoch + 1); } }
     catch (cause) { if (alive.current) setError(String(cause)); }
   };
   useEffect(() => { alive.current = true; void load(); return () => { alive.current = false; }; }, [client, sessionId]);
   const save = async (operation: Request1) => {
-    if (writing.current) return;
-    const invalid = root.current?.querySelector<HTMLInputElement>('input:invalid');
-    if (invalid) { invalid.reportValidity(); return; }
+    if (writing.current) return false;
+    const invalid = [...(root.current?.querySelectorAll<HTMLInputElement>('input:invalid') ?? [])].find(input => !input.closest('[hidden]'));
+    if (invalid) { invalid.reportValidity(); return false; }
     writing.current = true; setBusy(true); setError(''); setMessage('');
+    let committed = false;
     try {
       if (operation.method === 'settings/selectModel') await client.request(operation, 'settings_replaced');
       else await client.request(operation, 'source_settings');
+      committed = true;
       const fresh = await read();
       if (alive.current) { setState(fresh); setDraft(structuredClone(fresh)); setMessage('Source committed. Applies on fresh / cold Session resolution. Loaded runtimes and admitted attempts are unchanged.'); }
+      return true;
     } catch (cause) {
-      if (!alive.current) return;
+      if (!alive.current) return false;
+      const uncertain = committed || isOutcomeUncertain(cause);
       const conflict = cause instanceof RpcFailure && ['source_conflict', 'stale_settings'].includes(cause.error.data?.kind ?? '');
-      setError(conflict ? 'Conflict: this scope changed. Your draft is preserved. Review the refreshed effective state, then explicitly retry Save or discard the draft.' : isOutcomeUncertain(cause) ? 'Save outcome uncertain. No request was replayed. Reconnect, then reload authoritative settings before retrying.' : `Save failed: ${String(cause)}`);
+      setError(conflict ? 'Conflict: this scope changed. Your draft is preserved. Review the refreshed effective state, then explicitly retry Save or discard the draft.' : uncertain ? 'Save outcome uncertain. No request was replayed. Reconnect, then reload authoritative settings before retrying.' : `Save failed: ${String(cause)}`);
       // A repair read is safe; never replay a side-effecting request.
-      try { const fresh = await read(); if (alive.current) setState(fresh); } catch { /* Keep the error and draft visible until an explicit reload. */ }
+      try {
+        const fresh = await read();
+        if (alive.current) {
+          setState(fresh);
+          if (uncertain && operation.method === 'settings/sourcesWrite' && observesSourceMutation(fresh.projection, operation.params.mutation)) {
+            setDraft(structuredClone(fresh)); setError('');
+            setMessage('Authoritative reread matches the requested source state. No write was replayed. Loaded runtimes and admitted attempts are unchanged.');
+            return true;
+          }
+        }
+      } catch { /* Keep the error and draft visible until an explicit reload. */ }
+      return false;
     } finally { writing.current = false; if (alive.current) setBusy(false); }
   };
   const view = client.getSnapshot().views[sessionId];
@@ -51,8 +72,11 @@ export function Settings({ client, sessionId }: { client: AppServerClient; sessi
   const submitSelection = (scope: Scope) => scope === 'session'
     ? save({ method: 'settings/selectModel', params: { session_id: sessionId, expected_revision: state.session_revision, selection: draft.session_selection ?? null } })
     : save({ method: 'settings/sourcesWrite', params: { session_id: sessionId, expected_revision: projection[scope].revision, mutation: { kind: scope === 'user' ? 'user_model' : 'workspace_model', authored: authored[scope].authored ?? null } } });
-  return <section ref={root} className={css.settings} aria-label="Settings"><header><h2>Settings · Provider / Models</h2><Button disabled={busy} onClick={() => void load()}>Reload / discard draft</Button></header>
+  return <section ref={root} className={css.settings} aria-label="Settings"><header><h2>Settings · {section === 'models' ? 'Provider / Models' : 'Integrations'}</h2><Button disabled={busy} onClick={() => void load()}>Reload / discard draft</Button></header>
     {error && <p role="alert" className={css.error}>{error}</p>}{message && <p role="status">{message}</p>}
+    <nav aria-label="Settings sections"><Button aria-pressed={section === 'models'} onClick={() => setSection('models')}>Provider / Models</Button><Button aria-pressed={section === 'integrations'} onClick={() => { setIntegrationsOpened(true); setSection('integrations'); }}>Integrations</Button></nav>
+    <div hidden={section !== 'integrations'}><Integrations key={`source:${draftReset}`} source={projection} snapshot={snapshot} busy={busy} save={(scope, mutation, expectedRevision) => save({ method: 'settings/sourcesWrite', params: { session_id: sessionId, expected_revision: expectedRevision ?? projection[scope].revision, mutation } })} />{integrationsOpened && <SessionIntegrations key={`session:${draftReset}`} client={client} sessionId={sessionId} />}</div>
+    <div hidden={section !== 'models'}>
     <article className={css.card}><h3>Prospective source resolution</h3><dl><dt>Prospective model</dt><dd>{projection.effective?.model ?? 'Unconfigured or invalid sources'}</dd><dt>Winning source</dt><dd>{effectiveSource}{origin && 'document' in origin ? ` · ${origin.document}` : ''}</dd><dt>Effective output limit</dt><dd>{projection.effective_request?.maxOutputTokens ?? 'Unavailable'}</dd><dt>Effective reasoning profile</dt><dd>{projection.effective_request?.reasoningProfile ?? 'None'}</dd></dl>
       <details><summary>Effective request policy and provenance</summary><dl>{Object.entries(projection.effective_request?.requestParams ?? {}).map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{JSON.stringify(value)}</dd></div>)}</dl>{Object.entries(projection.provenance).filter(([name]) => name.startsWith('agent.model.')).map(([name, source]) => <p key={name}>{name}: {source.kind}{'document' in source ? ` · ${source.document}` : ''}</p>)}<p>Runtime incarnation: {client.getSnapshot().views[sessionId]?.target?.runtime_incarnation ?? 'unavailable'}</p></details>
       {!projection.resolution_available && <p role="alert">Native resolution is unavailable. Review catalog and source selections before cold loading.</p>}
@@ -60,6 +84,7 @@ export function Settings({ client, sessionId }: { client: AppServerClient; sessi
       <h3>Current loaded runtime</h3>{snapshot?.model ? <><ConfiguredSelection value={snapshot.model.configured} /><RequestFacts title="Runtime effective request" request={snapshot.model.effective} summaryPolicy={snapshot.model.summary.mode} summary={snapshot.model.summary.mode === 'explicit' ? snapshot.model.summary : undefined} /></> : <p>No loaded runtime observation</p>}
       <h3>Current admitted attempt (frozen)</h3>{snapshot?.attempt?.model ? <RequestFacts title="Frozen request" request={snapshot.attempt.model.primary} summaryPolicy={snapshot.attempt.model.summary.mode} summary={snapshot.attempt.model.summary.mode === 'explicit' ? snapshot.attempt.model.summary : undefined} /> : <p>No admitted attempt observed</p>}
       <p className={css.hint}>Native Rust resolves all values and provenance. Source edits do not rewrite already loaded runtimes or frozen attempts.</p></article>
+    {!projection.catalog.valid && <p role="alert">Model catalog validation is unavailable. MCP source authoring uses its own native semantic domain.</p>}
     <h3>Model selection</h3>
     {(['user', 'workspace', 'session'] as const).map(scope => {
       const value = scope === 'session' ? draft.session_selection : authored[scope].authored, label = scope === 'user' ? 'User' : scope === 'workspace' ? 'Workspace' : 'Session';
@@ -77,6 +102,7 @@ export function Settings({ client, sessionId }: { client: AppServerClient; sessi
     })}
     <CatalogEditor catalog={{ ...draft.projection.catalog, revision: projection.catalog.revision }} disabled={busy} change={catalog => setDraft(current => current && ({ ...current, projection: { ...current.projection, catalog } }))}
       save={() => void save({ method: 'settings/sourcesWrite', params: { session_id: sessionId, expected_revision: projection.catalog.revision, mutation: { kind: 'catalog', providers: authored.catalog.providers } } })} />
+    </div>
   </section>;
 }
 function SelectionDetails({ value, models, change }: { value: SessionModelConfig; models: ModelCatalogView; change: (value: SessionModelConfig) => void }) {

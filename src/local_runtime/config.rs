@@ -569,11 +569,6 @@ impl CurrentRuntimeConfig {
     ///
     /// Returns the first validation failure.
     pub fn validate(&self) -> Result<(), CurrentRuntimeConfigError> {
-        if self.mcp_servers.len() > 128 {
-            return Err(CurrentRuntimeConfigError::Invalid {
-                detail: "configuration supports at most 128 MCP sources".into(),
-            });
-        }
         if self.schema_version != CURRENT_RUNTIME_SCHEMA_VERSION {
             return Err(CurrentRuntimeConfigError::UnsupportedSchemaVersion {
                 supported: CURRENT_RUNTIME_SCHEMA_VERSION,
@@ -646,7 +641,7 @@ impl CurrentRuntimeConfig {
     }
 
     /// Validates one independent profile admission domain.
-    fn validate_subagent_admission(
+    pub(super) fn validate_subagent_admission(
         label: &str,
         admission: &[SubagentName],
     ) -> Result<(), CurrentRuntimeConfigError> {
@@ -748,73 +743,94 @@ impl CurrentRuntimeConfig {
     /// ambiguous, contradictory, or incomplete, or when the policy overlay
     /// names a server that `mcpServers` does not declare.
     pub fn mcp_bindings(&self) -> Result<McpServerBindings, CurrentRuntimeConfigError> {
-        for server_id in self.mcp_tool_policies.keys() {
-            if !self.mcp_servers.contains_key(server_id) {
-                return Err(CurrentRuntimeConfigError::Invalid {
-                    detail: format!(
-                        "mcp_tool_policies names {server_id}, which mcp_servers does not declare"
-                    ),
-                });
-            }
-        }
-        self.mcp_servers
-            .iter()
-            .map(|(server_id, document)| {
-                if server_id.as_str().is_empty() {
-                    return Err(CurrentRuntimeConfigError::Invalid {
-                        detail: "mcp_servers keys must be non-empty server identities".to_owned(),
-                    });
-                }
-                // The `python:` MCP server namespace is structurally
-                // reserved for rustX-managed Python packages (Issue #174):
-                // every discovered package synthesizes `python:<folder>`,
-                // and one `McpServerId` can never have two owners. This is
-                // validated here, at configuration normalization, before
-                // any capability preparation — not arbitrated at runtime.
-                if server_id
-                    .as_str()
-                    .starts_with(crate::tools::python::MANAGED_MCP_NAMESPACE)
-                {
-                    return Err(CurrentRuntimeConfigError::Invalid {
-                        detail: format!(
-                            "mcp_servers.{server_id}: the \"{}\" MCP server namespace is reserved \
-                             for automatically discovered managed Python tool packages \
-                             (each `.agents/tools/<folder>/` synthesizes \
-                             \"{0}<folder>\"); configure this server under a different id",
-                            crate::tools::python::MANAGED_MCP_NAMESPACE,
-                        ),
-                    });
-                }
-                let transport = document.to_transport().map_err(|detail| {
-                    CurrentRuntimeConfigError::Invalid {
-                        detail: format!("mcp_servers.{server_id}: {detail}"),
-                    }
-                })?;
-                Ok((
-                    server_id.clone(),
-                    McpServerBinding {
-                        credentials: crate::credentials::SourceCredentials {
-                            environment: document.sensitive_env.clone(),
-                            headers: document.sensitive_headers.clone(),
-                            ..Default::default()
-                        },
-                        activation: document.activation(),
-                        resource_workspace: None,
-                        transport,
-                        policy: self
-                            .mcp_tool_policies
-                            .get(server_id)
-                            .copied()
-                            .unwrap_or_default()
-                            .to_policy(),
-                    },
-                ))
-            })
-            .collect()
+        resolve_mcp_bindings(&self.mcp_servers, &self.mcp_tool_policies)
     }
 }
 
-fn validate_unique_workflow_ids(
+pub(super) fn resolve_mcp_bindings(
+    servers: &BTreeMap<McpServerId, McpServerDocument>,
+    policies: &BTreeMap<McpServerId, InvocationPolicyDocument>,
+) -> Result<McpServerBindings, CurrentRuntimeConfigError> {
+    if servers.len() > 128 {
+        return Err(CurrentRuntimeConfigError::Invalid {
+            detail: "configuration supports at most 128 MCP sources".into(),
+        });
+    }
+
+    for server_id in policies.keys() {
+        if !servers.contains_key(server_id) {
+            return Err(CurrentRuntimeConfigError::Invalid {
+                detail: format!(
+                    "mcp_tool_policies names {server_id}, which mcp_servers does not declare"
+                ),
+            });
+        }
+    }
+    servers
+        .iter()
+        .map(|(server_id, document)| {
+            let transport = resolve_mcp_entry(server_id, document)?;
+            Ok((
+                server_id.clone(),
+                McpServerBinding {
+                    credentials: crate::credentials::SourceCredentials {
+                        environment: document.sensitive_env.clone(),
+                        headers: document.sensitive_headers.clone(),
+                        ..Default::default()
+                    },
+                    activation: document.activation(),
+                    resource_workspace: None,
+                    transport,
+                    policy: policies
+                        .get(server_id)
+                        .copied()
+                        .unwrap_or_default()
+                        .to_policy(),
+                },
+            ))
+        })
+        .collect()
+}
+
+/// Validate and normalize one definition independently of policy target closure.
+/// Runtime binding and authored (including shadowed) entries share this owner.
+pub(super) fn resolve_mcp_entry(
+    server_id: &McpServerId,
+    document: &McpServerDocument,
+) -> Result<McpTransportConfig, CurrentRuntimeConfigError> {
+    if server_id.as_str().is_empty() {
+        return Err(CurrentRuntimeConfigError::Invalid {
+            detail: "mcp_servers keys must be non-empty server identities".to_owned(),
+        });
+    }
+    // The `python:` MCP server namespace is structurally
+    // reserved for rustX-managed Python packages (Issue #174):
+    // every discovered package synthesizes `python:<folder>`,
+    // and one `McpServerId` can never have two owners. This is
+    // validated here, at configuration normalization, before
+    // any capability preparation — not arbitrated at runtime.
+    if server_id
+        .as_str()
+        .starts_with(crate::tools::python::MANAGED_MCP_NAMESPACE)
+    {
+        return Err(CurrentRuntimeConfigError::Invalid {
+            detail: format!(
+                "mcp_servers.{server_id}: the \"{}\" MCP server namespace is reserved \
+                             for automatically discovered managed Python tool packages \
+                             (each `.agents/tools/<folder>/` synthesizes \
+                             \"{0}<folder>\"); configure this server under a different id",
+                crate::tools::python::MANAGED_MCP_NAMESPACE,
+            ),
+        });
+    }
+    document
+        .to_transport()
+        .map_err(|detail| CurrentRuntimeConfigError::Invalid {
+            detail: format!("mcp_servers.{server_id}: {detail}"),
+        })
+}
+
+pub(super) fn validate_unique_workflow_ids(
     label: &str,
     ids: &[WorkflowId],
 ) -> Result<(), CurrentRuntimeConfigError> {
@@ -1206,13 +1222,31 @@ impl McpServerDocument {
             true,
         )
     }
-    /// The runtime transport this entry normalizes to.
-    ///
-    /// # Errors
-    ///
-    /// Returns a human-readable detail when the entry is ambiguous,
-    /// contradictory, or incomplete.
-    pub fn to_transport(&self) -> Result<McpTransportConfig, String> {
+    fn validate_transport_values(&self) -> Result<(), String> {
+        if self.cwd.as_ref().is_some_and(|path| {
+            path.as_os_str().is_empty() || path.as_os_str().as_encoded_bytes().contains(&0)
+        }) {
+            return Err("cwd must be a non-empty path without NUL".into());
+        }
+        if self.env.iter().any(|(key, value)| {
+            !crate::credentials::valid_environment_name(key) || value.contains('\0')
+        }) || self.args.iter().any(|value| value.contains('\0'))
+            || self
+                .command
+                .as_ref()
+                .is_some_and(|value| value.contains('\0'))
+        {
+            return Err("invalid stdio environment, argument or command".into());
+        }
+        let mut ordinary_headers = std::collections::BTreeSet::new();
+        for (key, value) in &self.headers {
+            if http::HeaderName::try_from(key).is_err()
+                || http::HeaderValue::try_from(value).is_err()
+                || !ordinary_headers.insert(key.to_ascii_lowercase())
+            {
+                return Err("invalid or duplicate HTTP header".into());
+            }
+        }
         for key in self.sensitive_env.keys() {
             if !crate::credentials::valid_environment_name(key) || self.env.contains_key(key) {
                 return Err(
@@ -1235,6 +1269,16 @@ impl McpServerDocument {
                 );
             }
         }
+        Ok(())
+    }
+    /// The runtime transport this entry normalizes to.
+    ///
+    /// # Errors
+    ///
+    /// Returns a human-readable detail when the entry is ambiguous,
+    /// contradictory, or incomplete.
+    pub fn to_transport(&self) -> Result<McpTransportConfig, String> {
+        self.validate_transport_values()?;
         let has_http_fields =
             self.url.is_some() || !self.headers.is_empty() || !self.sensitive_headers.is_empty();
         let has_stdio_fields = self.command.is_some()
@@ -1272,8 +1316,18 @@ impl McpServerDocument {
                     .url
                     .as_deref()
                     .ok_or_else(|| "is an http entry but declares no url".to_owned())?;
-                if endpoint.trim().is_empty() {
-                    return Err("url must be a non-empty endpoint".to_owned());
+                let parsed = url::Url::parse(endpoint)
+                    .map_err(|_| "url must be a non-empty valid HTTP(S) endpoint")?;
+                if !matches!(parsed.scheme(), "http" | "https")
+                    || parsed.host_str().is_none()
+                    || !parsed.username().is_empty()
+                    || parsed.password().is_some()
+                    || parsed.fragment().is_some()
+                {
+                    return Err(
+                        "MCP URL requires HTTP(S), a host, and no embedded credentials or fragment"
+                            .into(),
+                    );
                 }
                 Ok(McpTransportConfig::StreamableHttp {
                     endpoint: endpoint.to_owned(),

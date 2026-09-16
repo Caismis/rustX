@@ -1,0 +1,91 @@
+// @vitest-environment jsdom
+import { afterEach, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type { SourceSettings, SourceMutation } from '../../protocol/app-server/v5';
+import { Integrations } from '../src/app/settings/Integrations';
+afterEach(cleanup);
+const entry = { enabled: false, transport: 'stdio' as const, command: 'native-command', args: [], cwd: null, url: null, retained_env: ['TOKEN'], retained_headers: [], sensitive_env: { KEY: '$HOST_KEY' }, sensitive_headers: {} };
+const source = (): SourceSettings => ({ catalog: { valid: true, document: '/models', revision: 'c1', models: { models: [] }, providers: {} }, user: { document: '/settings', revision: 'u1', active: true, authored: null }, workspace: { document: '/workspace/rustx.toml', revision: 'w1', active: true, authored: null }, resolution_available: true, provenance: {}, integrations: { mcp_tool_policies: {}, mcp_valid: true, mcp: [{ id: 'native', policy_state: 'absent', user: entry, workspace: { ...entry, command: 'project', sensitive_env: {}, retained_env: [] }, winning: { kind: 'project', document: '/workspace/rustx.toml', base: '/workspace' }, activation: null }], user: {}, workspace: {}, prospective: {}, provenance: {}, inventory: null, agents: [] } });
+it('edits the exact shadowed User identity, retains draft across refresh, and explicitly retries', async () => {
+  const save = vi.fn<(_: 'user' | 'workspace', mutation: SourceMutation, revision?: string) => Promise<boolean>>().mockResolvedValueOnce(false).mockResolvedValue(true);
+  const value = source(); const view = render(<Integrations source={value} busy={false} save={save} />);
+  expect(screen.getByText('Definition winner: Workspace')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Edit User · native' }));
+  fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'draft-command' } });
+  fireEvent.change(screen.getByLabelText('Transport'), { target: { value: '' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save MCP' })); await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  const fresh = source(); fresh.user.revision = 'u2'; fresh.integrations.mcp[0].user!.command = 'concurrent';
+  view.rerender(<Integrations source={fresh} busy={false} save={save} />);
+  expect((screen.getByLabelText('Command') as HTMLInputElement).value).toBe('draft-command');
+  expect((screen.getByLabelText('Integration scope') as HTMLSelectElement).disabled).toBe(true);
+  expect(save.mock.calls[0]).toMatchObject(['user', { kind: 'mcp', scope: 'user', id: 'native', authored: { command: 'draft-command', transport: null } }, 'u1']);
+  fireEvent.click(screen.getByRole('button', { name: 'Save MCP' })); await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+  expect(save.mock.calls[1][2]).toBe('u2');
+  await waitFor(() => expect(screen.queryByLabelText('Command')).toBeNull());
+});
+it('untrusted Workspace stays read-only and secret references never create password storage', () => {
+  const value = source(); value.workspace.active = false;
+  render(<Integrations source={value} busy={false} save={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText('Integration scope'), { target: { value: 'workspace' } });
+  expect((screen.getByRole('button', { name: 'Add Workspace MCP server' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByText(/Host cwd authorization/)).toBeTruthy();
+  expect(document.querySelector('input[type=password]')).toBeNull(); expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
+});
+it('deletes only the selected authored entry and sends extension member mutations', async () => {
+  const save = vi.fn().mockResolvedValue(true);
+  render(<Integrations source={source()} busy={false} save={save} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Edit User · native' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Delete authored MCP entry' }));
+  await waitFor(() => expect(save).toHaveBeenCalledWith('user', { kind: 'mcp', scope: 'user', id: 'native', authored: null }, 'u1'));
+  fireEvent.click(screen.getByLabelText('goal'));
+  expect(save).toHaveBeenLastCalledWith('user', { kind: 'integration', scope: 'user', control: { kind: 'extension', identity: 'goal', enabled: true } });
+});
+
+it('pins a User policy draft before authority changes, preserves conflict, and retries explicitly', async () => {
+  const save = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true);
+  const value = source();
+  const view = render(<Integrations source={value} busy={false} save={save} />);
+  fireEvent.change(screen.getByLabelText('Approval · native'), { target: { value: 'always' } });
+  const fresh = source(); fresh.user.revision = 'u2';
+  fresh.integrations.mcp_tool_policies.native = { approval: 'never', execution: 'background_only', concurrency: 'parallel' };
+  view.rerender(<Integrations source={fresh} busy={false} save={save} />);
+  expect((screen.getByLabelText('Approval · native') as HTMLSelectElement).value).toBe('always');
+  expect((screen.getByLabelText('Execution · native') as HTMLSelectElement).value).toBe('foreground_only');
+  fireEvent.click(screen.getByRole('button', { name: 'Save User Tool policy' }));
+  await screen.findByRole('button', { name: 'Retry User Tool policy' });
+  expect(save.mock.calls[0]).toEqual(['user', { kind: 'mcp_policy', id: 'native', authored: { approval: 'always', execution: 'foreground_only', concurrency: 'sequential' } }, 'u1']);
+  expect(screen.getByText(/Scope: User · Target: mcp_tool_policies.native/)).toBeTruthy();
+  expect((screen.getByLabelText('Approval · native') as HTMLSelectElement).value).toBe('always');
+  fireEvent.click(screen.getByRole('button', { name: 'Retry User Tool policy' }));
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+  expect(save.mock.calls[1]).toEqual([...save.mock.calls[0].slice(0, 2), 'u2']);
+});
+it('keeps dangling User policy visible and resettable after the native trust projection changes', async () => {
+  const value = source(); value.integrations.mcp[0].user = null;
+  value.integrations.mcp[0].policy_state = 'valid';
+  value.integrations.mcp_tool_policies.native = { approval: 'always', execution: 'foreground_only', concurrency: 'sequential' };
+  const save = vi.fn().mockResolvedValue(true);
+  const view = render(<Integrations source={value} busy={false} save={save} />);
+  expect(screen.getByText('Definition winner: Workspace')).toBeTruthy();
+  expect(screen.getByText('User Tool policy: authored')).toBeTruthy();
+  const revoked = structuredClone(value); revoked.workspace.active = false;
+  revoked.integrations.mcp_valid = false;
+  revoked.integrations.mcp[0] = { id: 'native', user: null, workspace: null, winning: null, activation: null, policy_state: 'dangling' };
+  view.rerender(<Integrations source={revoked} busy={false} save={save} />);
+  expect(screen.getByText('Authorized MCP definition: absent')).toBeTruthy();
+  expect(screen.getByText('User Tool policy: authored — dangling')).toBeTruthy();
+  expect(screen.getByText(/Current MCP domain: invalid/)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Reset User Tool policy' }));
+  await waitFor(() => expect(save).toHaveBeenCalledWith('user', { kind: 'mcp_policy', id: 'native', authored: null }, 'u1'));
+});
+it('discard abandons the pinned policy draft and uses current User authority for the next edit', () => {
+  const view = render(<Integrations source={source()} busy={false} save={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText('Approval · native'), { target: { value: 'always' } });
+  const fresh = source(); fresh.user.revision = 'u2';
+  view.rerender(<Integrations source={fresh} busy={false} save={vi.fn()} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Discard policy draft' }));
+  expect((screen.getByLabelText('Approval · native') as HTMLSelectElement).value).toBe('never');
+  expect(screen.queryByText(/Draft revision: u1/)).toBeNull();
+  fireEvent.change(screen.getByLabelText('Approval · native'), { target: { value: 'always' } });
+  expect(screen.getByText(/Draft revision: u2/)).toBeTruthy();
+});

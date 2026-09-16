@@ -27,6 +27,8 @@ pub struct ProviderDraft {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CatalogSettings {
+    /// Catalog-domain validity; unavailable catalogs do not block MCP authoring.
+    pub valid: bool,
     pub document: String,
     pub revision: String,
     pub providers: BTreeMap<String, ProviderDraft>,
@@ -41,6 +43,7 @@ pub struct SelectionSource {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SourceSettings {
+    pub integrations: super::integrations::IntegrationSettings,
     pub catalog: CatalogSettings,
     pub user: SelectionSource,
     pub workspace: SelectionSource,
@@ -54,6 +57,19 @@ pub struct SourceSettings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SourceMutation {
+    McpPolicy {
+        id: crate::runtime::identity::McpServerId,
+        authored: Option<super::super::config::InvocationPolicyDocument>,
+    },
+    Mcp {
+        scope: super::integrations::IntegrationScope,
+        id: crate::runtime::identity::McpServerId,
+        authored: Option<super::integrations::McpDraft>,
+    },
+    Integration {
+        scope: super::integrations::IntegrationScope,
+        control: super::integrations::IntegrationControl,
+    },
     Catalog {
         providers: BTreeMap<String, ProviderDraft>,
     },
@@ -67,8 +83,10 @@ pub enum SourceMutation {
 impl SourceMutation {
     fn scope(&self) -> SourceScope {
         match self {
+            Self::Mcp { scope, .. } | Self::Integration { scope, .. } => scope.source(),
+
             Self::Catalog { .. } => SourceScope::Catalog,
-            Self::UserModel { .. } => SourceScope::User,
+            Self::McpPolicy { .. } | Self::UserModel { .. } => SourceScope::User,
             Self::WorkspaceModel { .. } => SourceScope::Workspace,
         }
     }
@@ -182,13 +200,14 @@ impl UserConfigManager {
                 providers: BTreeMap::new(),
             },
         };
-        let models = if bytes.is_none() {
-            crate::model::catalog::ModelCatalogView { models: Vec::new() }
-        } else {
-            ModelCatalog::from_document(document.clone().into())
-                .map_err(|_| SettingsError::Invalid)?
-                .view()
-        };
+        let validated_models = bytes
+            .as_ref()
+            .and_then(|_| ModelCatalog::from_document(document.clone().into()).ok());
+        let catalog_valid = validated_models.is_some();
+        let models = validated_models.map_or_else(
+            || crate::model::catalog::ModelCatalogView { models: Vec::new() },
+            |models| models.view(),
+        );
         let providers = document
             .providers
             .into_iter()
@@ -204,6 +223,12 @@ impl UserConfigManager {
             })
             .collect();
         let resolved = self.resolve_model_candidate(input, None, trusted).ok();
+        let integrations = self.integration_settings(
+            input,
+            user.as_deref().unwrap_or(b""),
+            workspace.as_deref().unwrap_or(b""),
+            trusted,
+        )?;
         // A noncooperating editor may change a source while it is being resolved.
         // Do not return a mixed projection assembled from different content.
         for (index, captured, scope) in [
@@ -225,7 +250,9 @@ impl UserConfigManager {
         }
 
         Ok(SourceSettings {
+            integrations,
             catalog: CatalogSettings {
+                valid: catalog_valid,
                 document: paths[2].display().to_string(),
                 revision: revision(bytes.as_deref()),
                 providers,
@@ -261,6 +288,7 @@ impl UserConfigManager {
     /// to fresh/cold resolution; admitted runtimes and attempts remain frozen.
     /// # Errors
     /// Stale revisions, untrusted projects and invalid candidates never publish.
+    #[allow(clippy::too_many_lines)] // Keep authority, staging, CAS and publication order reviewable together.
     pub fn write_source_settings(
         &self,
         input: &SessionConfigInput,
@@ -298,6 +326,62 @@ impl UserConfigManager {
             });
         }
         let candidate = match mutation {
+            SourceMutation::McpPolicy { id, authored } => {
+                let mut tree = source_tree(original.as_deref())?;
+                if let Some(policy) = authored {
+                    table(&mut tree, "mcp_tool_policies")?
+                        .insert(id.as_str(), serialized_table(&policy)?);
+                } else if let Some(policies) = tree.get_mut("mcp_tool_policies") {
+                    let policies = policies.as_table_like_mut().ok_or(SettingsError::Invalid)?;
+                    policies.remove(id.as_str());
+                    if policies.is_empty() {
+                        tree.remove("mcp_tool_policies");
+                    }
+                }
+                let bytes = tree.to_string().into_bytes();
+                self.resolve_mcp_candidate(input, Some((target, &bytes)), trusted)?;
+                bytes
+            }
+            SourceMutation::Mcp {
+                scope,
+                id,
+                authored,
+            } => {
+                let mut tree = source_tree(original.as_deref())?;
+                let layer = super::parse_layer(
+                    target,
+                    original.as_deref().unwrap_or(b""),
+                    scope == super::integrations::IntegrationScope::Workspace,
+                )
+                .map_err(|_| SettingsError::Invalid)?;
+                if let Some(draft) = authored {
+                    let entry =
+                        draft.author(layer.mcp_servers.as_ref().and_then(|m| m.get(&id)), scope)?;
+                    // Validate the exact authored entry even if Workspace shadows it.
+                    crate::local_runtime::config::resolve_mcp_entry(&id, &entry.clone().resolve())
+                        .map_err(|_| SettingsError::Invalid)?;
+                    table(&mut tree, "mcp_servers")?.insert(id.as_str(), serialized_table(&entry)?);
+                } else if let Some(servers) = tree.get_mut("mcp_servers") {
+                    let servers = servers.as_table_like_mut().ok_or(SettingsError::Invalid)?;
+                    servers.remove(id.as_str());
+                    // Removing the last authored entry restores inheritance, not an empty-map clear.
+                    if servers.is_empty() {
+                        tree.remove("mcp_servers");
+                    }
+                }
+                let bytes = tree.to_string().into_bytes();
+                self.resolve_mcp_candidate(input, Some((target, &bytes)), trusted)?;
+                bytes
+            }
+            SourceMutation::Integration { scope: _, control } => {
+                let mut tree = source_tree(original.as_deref())?;
+                mutate_integration(&mut tree, control)?;
+                let bytes = tree.to_string().into_bytes();
+                let layer = super::parse_layer(target, &bytes, scope == SourceScope::Workspace)
+                    .map_err(|_| SettingsError::Invalid)?;
+                validate_selections(&layer)?;
+                bytes
+            }
             SourceMutation::Catalog { providers } => {
                 catalog_candidate(original.as_deref(), providers)?
             }
@@ -382,6 +466,109 @@ impl UserConfigManager {
     }
 }
 
+fn source_tree(bytes: Option<&[u8]>) -> Result<toml_edit::DocumentMut, SettingsError> {
+    std::str::from_utf8(bytes.unwrap_or(b""))
+        .map_err(|_| SettingsError::Invalid)?
+        .parse()
+        .map_err(|_| SettingsError::Invalid)
+}
+fn table<'a>(
+    tree: &'a mut toml_edit::DocumentMut,
+    name: &str,
+) -> Result<&'a mut dyn toml_edit::TableLike, SettingsError> {
+    if !tree.contains_key(name) {
+        tree[name] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+    tree[name].as_table_like_mut().ok_or(SettingsError::Invalid)
+}
+fn serialized_table(value: &impl Serialize) -> Result<toml_edit::Item, SettingsError> {
+    let tree: toml_edit::DocumentMut = toml::to_string(value)
+        .map_err(|_| SettingsError::Invalid)?
+        .parse()
+        .map_err(|_| SettingsError::Invalid)?;
+    Ok(toml_edit::Item::Table(tree.as_table().clone()))
+}
+fn selection_array<T: Serialize>(
+    agent: &mut dyn toml_edit::TableLike,
+    field: &str,
+    values: Option<Vec<T>>,
+) -> Result<(), SettingsError> {
+    if let Some(values) = values {
+        let mut array = toml_edit::Array::new();
+        for value in values {
+            let value = serde_json::to_value(value).map_err(|_| SettingsError::Invalid)?;
+            array.push(value.as_str().ok_or(SettingsError::Invalid)?);
+        }
+        agent.insert(field, toml_edit::value(array));
+    } else {
+        agent.remove(field);
+    }
+    Ok(())
+}
+fn mutate_integration(
+    tree: &mut toml_edit::DocumentMut,
+    control: super::integrations::IntegrationControl,
+) -> Result<(), SettingsError> {
+    use super::integrations::IntegrationControl as C;
+    use crate::runtime::capability_inspection::NativeExtension;
+    match control {
+        C::SkillSources { selected } => {
+            selection_array(table(tree, "skills")?, "sources", selected)
+        }
+        C::Agents { selected } => selection_array(table(tree, "agent")?, "agents", selected),
+        C::Workflows { selected } => selection_array(table(tree, "agent")?, "workflows", selected),
+        C::SkillVisibility { disabled } => {
+            selection_array(table(tree, "agent")?, "disabled_skills", disabled)
+        }
+        C::ResetExtensions => {
+            table(tree, "agent")?.remove("extensions");
+            Ok(())
+        }
+        C::Extension { identity, enabled } => {
+            let layer: super::super::authoring::RuntimeLayer =
+                crate::toml_authoring::parse(tree.to_string().as_bytes())
+                    .map_err(|_| SettingsError::Invalid)?;
+            let mut extensions = layer.agent.and_then(|a| a.extensions).unwrap_or_default();
+            match identity {
+                NativeExtension::Todo => extensions.todo.enabled = enabled,
+                NativeExtension::Goal => extensions.goal.enabled = enabled,
+                NativeExtension::AgentStatus => extensions.agent_status.enabled = enabled,
+            }
+            table(tree, "agent")?.insert("extensions", serialized_table(&extensions)?);
+            Ok(())
+        }
+    }
+}
+fn validate_selections(layer: &super::super::authoring::RuntimeLayer) -> Result<(), SettingsError> {
+    use super::super::config::{
+        CurrentRuntimeConfig, SkillsDocument, validate_unique_workflow_ids,
+    };
+    if let Some(agent) = &layer.agent {
+        if let Some(values) = &agent.agents {
+            CurrentRuntimeConfig::validate_subagent_admission("agent.agents", values)
+                .map_err(|_| SettingsError::Invalid)?;
+        }
+        if let Some(values) = &agent.workflows {
+            validate_unique_workflow_ids("agent.workflows", values)
+                .map_err(|_| SettingsError::Invalid)?;
+        }
+        if let Some(values) = &agent.disabled_skills {
+            for name in values {
+                crate::skills::package::validate_skill_name(name)
+                    .map_err(|_| SettingsError::Invalid)?;
+            }
+        }
+    }
+    if let Some(values) = layer.skills.as_ref().and_then(|s| s.sources.as_ref()) {
+        SkillsDocument {
+            sources: values.clone(),
+        }
+        .selected()
+        .map_err(|_| SettingsError::Invalid)?;
+    }
+    Ok(())
+}
+
 fn catalog_candidate(
     original: Option<&[u8]>,
     providers: BTreeMap<String, ProviderDraft>,
@@ -436,9 +623,9 @@ fn catalog_candidate(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
-    pub(super) fn fixture() -> (tempfile::TempDir, UserConfigManager, SessionConfigInput) {
+    pub(crate) fn fixture() -> (tempfile::TempDir, UserConfigManager, SessionConfigInput) {
         let root = tempfile::tempdir().unwrap();
         let root_path = root.path().canonicalize().unwrap();
         let home = root_path.join("home");
@@ -485,7 +672,7 @@ mod tests {
             ..Default::default()
         }
     }
-    pub(super) fn trust(owner: &UserConfigManager, input: &SessionConfigInput) {
+    pub(crate) fn trust(owner: &UserConfigManager, input: &SessionConfigInput) {
         owner
             .trust_epoch(input)
             .unwrap()

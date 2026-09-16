@@ -2815,6 +2815,85 @@
         {
           "type": "object",
           "properties": {
+            "id": {
+              "$ref": "#/$defs/McpServerId"
+            },
+            "authored": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/InvocationPolicyDocument"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "mcp_policy"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/IntegrationScope"
+            },
+            "id": {
+              "$ref": "#/$defs/McpServerId"
+            },
+            "authored": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/McpDraft"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "mcp"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "scope",
+            "id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/IntegrationScope"
+            },
+            "control": {
+              "$ref": "#/$defs/IntegrationControl"
+            },
+            "kind": {
+              "type": "string",
+              "const": "integration"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "scope",
+            "control"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "providers": {
               "type": "object",
               "additionalProperties": {
@@ -2878,6 +2957,341 @@
             "kind"
           ]
         }
+      ]
+    },
+    "McpServerId": {
+      "description": "Identifies an MCP server bound to the runtime.",
+      "type": "string"
+    },
+    "InvocationPolicyDocument": {
+      "description": "One tool invocation policy document.",
+      "type": "object",
+      "properties": {
+        "execution": {
+          "description": "Foreground/background ownership policy.",
+          "$ref": "#/$defs/ExecutionPolicyDocument",
+          "default": "foreground_only"
+        },
+        "concurrency": {
+          "description": "In-batch scheduling policy.",
+          "$ref": "#/$defs/ConcurrencyPolicyDocument",
+          "default": "sequential"
+        },
+        "approval": {
+          "description": "Human approval behavior for otherwise eligible calls.",
+          "$ref": "#/$defs/ApprovalPolicyDocument",
+          "default": "never"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecutionPolicyDocument": {
+      "description": "The configurable execution-ownership policy of one tool.",
+      "oneOf": [
+        {
+          "description": "Attempt-owned execution only.",
+          "type": "string",
+          "const": "foreground_only"
+        },
+        {
+          "description": "Conversation-owned execution only.",
+          "type": "string",
+          "const": "background_only"
+        },
+        {
+          "description": "The model selects the execution mode per invocation.",
+          "type": "string",
+          "const": "model_selectable"
+        }
+      ]
+    },
+    "ConcurrencyPolicyDocument": {
+      "description": "The configurable in-batch scheduling policy of one tool.",
+      "oneOf": [
+        {
+          "description": "Calls within one batch run one at a time.",
+          "type": "string",
+          "const": "sequential"
+        },
+        {
+          "description": "Calls within one batch may run concurrently.",
+          "type": "string",
+          "const": "parallel"
+        }
+      ]
+    },
+    "ApprovalPolicyDocument": {
+      "description": "The configurable HITL approval policy of one Tool.",
+      "oneOf": [
+        {
+          "description": "Execute without an approval interaction.",
+          "type": "string",
+          "const": "never"
+        },
+        {
+          "description": "Require an approval interaction before execution.",
+          "type": "string",
+          "const": "always"
+        }
+      ]
+    },
+    "IntegrationScope": {
+      "description": "Exactly the two persistent configuration authorities. Never Session or Effective.",
+      "type": "string",
+      "enum": [
+        "user",
+        "workspace"
+      ]
+    },
+    "McpDraft": {
+      "description": "Native transport fields plus reference-only credentials. Existing ordinary\nenvironment/header values stay private and may only be retained or removed.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "transport": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/McpTransportType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "command": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retained_env": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "retained_headers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sensitive_env": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/EnvironmentReference"
+          }
+        },
+        "sensitive_headers": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/EnvironmentReference"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "args",
+        "retained_env",
+        "retained_headers",
+        "sensitive_env",
+        "sensitive_headers"
+      ]
+    },
+    "McpTransportType": {
+      "description": "The transport an `mcpServers` entry selects explicitly.",
+      "oneOf": [
+        {
+          "description": "Streamable HTTP. This is the canonical spelling for a remote server.",
+          "type": "string",
+          "const": "http"
+        },
+        {
+          "description": "A locally launched stdio server.",
+          "type": "string",
+          "const": "stdio"
+        }
+      ]
+    },
+    "EnvironmentReference": {
+      "description": "A validated reference, written as `$ENV_VAR` only in declared secret fields.",
+      "type": "string",
+      "pattern": "^\\$[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "IntegrationControl": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "selected": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/$defs/SubagentName"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "agents"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "selected": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/$defs/WorkflowId"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "workflows"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "disabled": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "skill_visibility"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "selected": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/$defs/AutomaticSkillSource"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "skill_sources"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "identity": {
+              "$ref": "#/$defs/NativeExtension"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "kind": {
+              "type": "string",
+              "const": "extension"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "identity",
+            "enabled"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "reset_extensions"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "SubagentName": {
+      "description": "The canonical typed name of one admitted subagent definition.\n\nThe keyspace is deliberately narrow: lowercase ASCII letters, digits,\n`-`, and `_`, starting with a letter. A name is the model-facing routing\ntoken, the durable ownership identity, and the Runtime Client projection\nidentity, so an ambiguous or shell-shaped spelling is rejected at the\nconfiguration boundary rather than normalized later.",
+      "type": "string"
+    },
+    "AutomaticSkillSource": {
+      "description": "The only source identities `[skills].sources` may name.\n\n`explicit` is deliberately absent: explicit Skill paths are a launch\nauthority (`--skill`), not a scannable automatic root, so naming one here\nwould be a second way to spell the same thing.",
+      "oneOf": [
+        {
+          "description": "`<home>/.agents/skills`.",
+          "type": "string",
+          "const": "global"
+        },
+        {
+          "description": "`<workspace>/.agents/skills`.",
+          "type": "string",
+          "const": "workspace"
+        }
+      ]
+    },
+    "NativeExtension": {
+      "type": "string",
+      "enum": [
+        "agent_status",
+        "todo",
+        "goal"
       ]
     },
     "ProviderDraft": {
@@ -5363,10 +5777,6 @@
           "additionalProperties": false
         }
       ]
-    },
-    "McpServerId": {
-      "description": "Identifies an MCP server bound to the runtime.",
-      "type": "string"
     },
     "RuntimeClientSkill": {
       "description": "One external Skill catalog entry.",
@@ -11864,10 +12274,6 @@
         }
       ]
     },
-    "SubagentName": {
-      "description": "The canonical typed name of one admitted subagent definition.\n\nThe keyspace is deliberately narrow: lowercase ASCII letters, digits,\n`-`, and `_`, starting with a letter. A name is the model-facing routing\ntoken, the durable ownership identity, and the Runtime Client projection\nidentity, so an ambiguous or shell-shaped spelling is rejected at the\nconfiguration boundary rather than normalized later.",
-      "type": "string"
-    },
     "InteractionRequest": {
       "description": "One live interaction request projected to a Runtime Client.",
       "type": "object",
@@ -12681,14 +13087,6 @@
       "required": [
         "identity",
         "active"
-      ]
-    },
-    "NativeExtension": {
-      "type": "string",
-      "enum": [
-        "agent_status",
-        "todo",
-        "goal"
       ]
     },
     "AgentProfileDiagnostic": {
@@ -13828,6 +14226,9 @@
     "SourceSettings": {
       "type": "object",
       "properties": {
+        "integrations": {
+          "$ref": "#/$defs/IntegrationSettings"
+        },
         "catalog": {
           "$ref": "#/$defs/CatalogSettings"
         },
@@ -13879,6 +14280,7 @@
         }
       },
       "required": [
+        "integrations",
         "catalog",
         "user",
         "workspace",
@@ -13886,48 +14288,112 @@
         "resolution_available"
       ]
     },
-    "CatalogSettings": {
+    "IntegrationSettings": {
       "type": "object",
       "properties": {
-        "document": {
-          "type": "string"
-        },
-        "revision": {
-          "type": "string"
-        },
-        "providers": {
+        "mcp_tool_policies": {
+          "description": "User-owned policy, independent of MCP definition precedence.",
           "type": "object",
           "additionalProperties": {
-            "$ref": "#/$defs/ProviderDraft"
+            "$ref": "#/$defs/InvocationPolicyDocument"
           }
         },
-        "models": {
-          "$ref": "#/$defs/ModelCatalogView"
+        "mcp": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/McpIdentityView"
+          }
+        },
+        "mcp_valid": {
+          "type": "boolean"
+        },
+        "user": {
+          "$ref": "#/$defs/IntegrationSelections"
+        },
+        "workspace": {
+          "$ref": "#/$defs/IntegrationSelections"
+        },
+        "prospective": {
+          "$ref": "#/$defs/IntegrationSelections"
+        },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Origin"
+          }
+        },
+        "inventory": {
+          "description": "Static native resource projection, not runtime admission or connection proof.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CapabilityInspection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgentDefinitionSource"
+          }
         }
       },
       "required": [
-        "document",
-        "revision",
-        "providers",
-        "models"
+        "mcp_tool_policies",
+        "mcp",
+        "mcp_valid",
+        "user",
+        "workspace",
+        "prospective",
+        "provenance",
+        "agents"
       ]
     },
-    "SelectionSource": {
+    "McpIdentityView": {
       "type": "object",
       "properties": {
-        "document": {
-          "type": "string"
+        "id": {
+          "$ref": "#/$defs/McpServerId"
         },
-        "revision": {
-          "type": "string"
+        "policy_state": {
+          "$ref": "#/$defs/McpPolicyState"
         },
-        "active": {
-          "type": "boolean"
-        },
-        "authored": {
+        "user": {
           "anyOf": [
             {
-              "$ref": "#/$defs/ModelLayer"
+              "$ref": "#/$defs/McpDraft"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/McpDraft"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "winning": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Origin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "activation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceActivation"
             },
             {
               "type": "null"
@@ -13936,9 +14402,17 @@
         }
       },
       "required": [
-        "document",
-        "revision",
-        "active"
+        "id",
+        "policy_state"
+      ]
+    },
+    "McpPolicyState": {
+      "description": "User policy relationship to the authorized merged definition domain.",
+      "type": "string",
+      "enum": [
+        "absent",
+        "valid",
+        "dangling"
       ]
     },
     "Origin": {
@@ -14012,6 +14486,252 @@
             "base"
           ]
         }
+      ]
+    },
+    "IntegrationSelections": {
+      "type": "object",
+      "properties": {
+        "agents": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/SubagentName"
+          }
+        },
+        "workflows": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/WorkflowId"
+          }
+        },
+        "disabled_skills": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "skill_sources": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/AutomaticSkillSource"
+          }
+        },
+        "extensions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeAgentExtensionsDocument"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "NativeAgentExtensionsDocument": {
+      "description": "The closed authored composition surface of native Agent Extensions.\n\nEvery member is a concrete named extension in a closed record.\nUnknown extension names are rejected. Runtime TOML layers use the separate\n`snake_case` authoring boundary; resource and wire documents retain their\nown serialization contract.",
+      "type": "object",
+      "properties": {
+        "agent_status": {
+          "description": "The Agent Status extension: optional provider-independent runtime\ncontext for an already-established model step.",
+          "$ref": "#/$defs/AgentStatusExtensionDocument",
+          "default": {
+            "enabled": false,
+            "time": {
+              "enabled": true
+            },
+            "background": {
+              "enabled": true
+            }
+          }
+        },
+        "todo": {
+          "description": "The Todo extension: the conversation-owned task list, its\nmodel-facing `todo` Tool, and its bounded status presentation\n(Issue #259).",
+          "$ref": "#/$defs/TodoExtensionDocument",
+          "default": {
+            "enabled": false
+          }
+        },
+        "goal": {
+          "description": "Root-only persistent Goal pursuit, disabled by default.",
+          "$ref": "#/$defs/GoalExtensionDocument",
+          "default": {
+            "enabled": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentStatusExtensionDocument": {
+      "description": "The authored Agent Status extension.\n\n`enabled` composes the extension in or out of the runtime as a whole;\n`time` and `background` remain the two bounded status contributors, with\nexactly the semantics they had before the migration.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether this composition includes the Agent Status extension at all.\n\nWith `false` the runtime composes no status engine: the Agent Loop\nemits no Agent Status and is otherwise a completely ordinary\n`ConversationRuntime`.",
+          "type": "boolean",
+          "default": true
+        },
+        "time": {
+          "description": "The Time contributor configuration.",
+          "$ref": "#/$defs/TimeStatusConfig",
+          "default": {
+            "enabled": true
+          }
+        },
+        "background": {
+          "description": "The Background contributor configuration.",
+          "$ref": "#/$defs/BackgroundStatusConfig",
+          "default": {
+            "enabled": true
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "TimeStatusConfig": {
+      "description": "Configuration of the bounded Time status contributor.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether Time participates in an available Agent Status opportunity.",
+          "type": "boolean",
+          "default": true
+        },
+        "timezone": {
+          "description": "The optional IANA timezone used only by Time presentation. Omitting it\nrenders UTC.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "BackgroundStatusConfig": {
+      "description": "Configuration of the bounded Background status contributor.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether Background participates in an available Agent Status opportunity.",
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "TodoExtensionDocument": {
+      "description": "The authored Todo extension (Issue #259).\n\nTodo is *one* capability with several faces, and `enabled` composes all\nof them together or none of them:\n\n```text\nenabled = true    conversation-owned ConversationTodoList authority\n                  the model-facing `todo` Tool\n                  the bounded read-only Todo status presentation\n                  the Runtime Client / TUI Todo projection\n\nenabled = false   none of the above for this runtime; canonical history\n                  keeps every Todo ToolCall/ToolResult it already holds\n```\n\nIt carries no contributor settings today. That is a statement about the\nextension, not a placeholder: the list's bounds, transitions, and\ndependency rules are owned by\n[`ConversationTodoList`](crate::tools::todo::ConversationTodoList) and are\nnot launch configuration.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether this composition includes the Todo extension at all.",
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "GoalExtensionDocument": {
+      "description": "Authored opt-in Goal composition.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentDefinitionSource": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/SubagentName"
+        },
+        "selected": {
+          "type": "string"
+        },
+        "shadowed": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "selected"
+      ]
+    },
+    "CatalogSettings": {
+      "type": "object",
+      "properties": {
+        "valid": {
+          "description": "Catalog-domain validity; unavailable catalogs do not block MCP authoring.",
+          "type": "boolean"
+        },
+        "document": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "providers": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ProviderDraft"
+          }
+        },
+        "models": {
+          "$ref": "#/$defs/ModelCatalogView"
+        }
+      },
+      "required": [
+        "valid",
+        "document",
+        "revision",
+        "providers",
+        "models"
+      ]
+    },
+    "SelectionSource": {
+      "type": "object",
+      "properties": {
+        "document": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "authored": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelLayer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "document",
+        "revision",
+        "active"
       ]
     },
     "Failure": {

@@ -324,3 +324,23 @@ CSS, docs and excluded dependencies. rustX uses its existing React shell/primiti
 no Harness settings mirror, source merge, credentials service or catalog is imported.
 Native typed projections replace all upstream configuration authority. There is no
 secret input because the Product Host has no write-only credential API.
+
+## WEB-09 integration settings
+
+Verified the pinned Harness checkout at
+`c291e7961a515f6d7af9304e7fd1d257929aef26`. Inspected the Settings
+scope/contract/schema, plugin card/form fields and tests/CSS, plugin inventory
+component/tests/CSS/docs, shared Tag/StateDot primitives, and MCP client
+configuration/transport/lifecycle tests/docs. No MCP-specific TSX component was
+found under `packages/client` at this pin.
+
+`Integrations.tsx` adapts disclosure cards, explicit save/discard, scoped inventory
+identity and separate activation/runtime facts. Existing Settings primitives and
+CSS provide the shell and responsive layout. All inspected paths are recorded in
+`source-inventory.json`; adapted sources have hashes and dependency closure.
+Session selection controls and native/protocol tests are rustX-authored.
+
+Excluded: Harness namespace/schema engine, Cordis services, dynamic plugin loader,
+plugin activation/runtime, configuration merge, credential store and MCP client.
+The browser uses rustX Settings CAS and native inventory. There is no secret input,
+source content editor, browser-direct MCP connection or plugin backend.
