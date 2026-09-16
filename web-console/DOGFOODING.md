@@ -1,0 +1,237 @@
+# Full Web dogfooding (WEB-10)
+
+This guide uses real rustX App Server, native Tools, the local Product Host and
+strict local provider scripts. No paid model or external MCP service is needed.
+The scripts validate exact prompt order. A fresh fixture for each chapter keeps
+configuration experiments from changing a later script's required model.
+
+## Prepare and start
+
+From the repository root, using Node 24+, the pinned pnpm, Rust and uv:
+
+```sh
+cargo build --bins
+pnpm --dir web-console install --frozen-lockfile
+pnpm --dir tui install --frozen-lockfile
+(cd test-support/fake-provider && uv sync --frozen)
+pnpm --dir web-console build
+pnpm --dir web-console dogfood:server web_console_dogfood
+```
+
+The launcher prints `endpoint`, `tokenFile`, `hostConfigFile`, `workspaceA/B`,
+`settings`, and `providerControl`. In a **second terminal**, substitute the printed
+Host path (the launcher itself relinquishes its Host before printing):
+
+```sh
+RUSTX_WORKSPACE_HOST_CONFIG=/printed/host-config.json pnpm --dir web-console preview --port 4173 --strictPort
+```
+
+Open `http://127.0.0.1:4173`. Read the printed token file locally, enter the endpoint
+and transport token, and Connect. Workspace A and B must appear. If they do not,
+check the Host environment variable; do not bypass authorization by entering cwd.
+The fixture grants project trust unless launched with `--untrusted`. Its isolated
+HOME/config/state/runtime roots are removed on shutdown. Only fake credential
+references are used. Do not use this local trusted fixture as a remote auth service.
+
+The scenario is optional (default `web_console_dogfood`). For example,
+`pnpm --dir web-console dogfood:server --untrusted` starts that default without
+pre-granting native project trust. `--untrusted` may precede or follow the scenario;
+unknown flags and multiple scenarios are rejected. Host Workspace authorization
+is unchanged.
+
+For gate commands below, set `control` to the printed `providerControl` URL:
+
+```sh
+control=http://127.0.0.1:PRINTED_PORT/__control
+# Example: curl -fsS -X POST "$control/gates/finish-a/release"
+```
+
+Stop the Web server **before** Ctrl+C in the fixture terminal. The fixture checks
+all scripted provider requests and cleans up. Ending a scenario early reports an
+incomplete script; that is not passing execution acceptance. Configuration-only
+exploration intentionally leaves the provider script unconsumed.
+
+## 1. Two Workspaces, concurrent Sessions, recovery and frozen configuration
+
+1. Select Workspace A and Create Session; record its native SessionId from the
+   inspector. Create B in Workspace B; keep both views open.
+2. Send `Long action in A` in A. Observe `A is running.`. The named `finish-a`
+   provider gate now holds work open. In B send `Use B while A runs`; observe
+   `B stayed responsive.`. Confirm the inspector's SessionId/cwd changes with the
+   selected view, while A's work remains running.
+3. In A switch Chat → Trajectory. Inspect the running model request: an unavailable
+   end/duration is unavailable, not zero or a client timer. Switch to Settings,
+   choose Workspace model `fixture/second-model`, Save Workspace. Prospective
+   effective changes; current loaded and frozen admitted request stay
+   `fixture/console-model`. Reset Workspace then Save Workspace to remove that
+   authored selection. Return to Chat.
+4. Disconnect/reconnect, then reload and re-enter the token. A is still running;
+   the browser neither replays the prompt nor cancels it. Close A's view, then:
+   `curl -fsS -X POST "$control/gates/finish-a/release"`.
+   Open A again; its settled answer occurs once. B's history stays independent.
+5. In A send `Approval please`. Reload while approval is pending; reconnect and
+   Allow once. Inspect the real bash Tool input/result and `Approval completed.`.
+   Send `Questionnaire please`, reload/reconnect, choose Keep native and submit.
+6. Send `Publish while detached`. After `Preparing a question.`, Detach A. Release
+   `publish-question` using the same gate URL pattern. Attach A; answer the native
+   question and observe `Detached question completed.`.
+7. In Settings save User model `fixture/second-model`. Current runtime remains
+   unchanged. Explicitly Unload runtime, then Attach / cold resume. The native
+   runtime incarnation changes; model and durable history/cwd are reconstructed.
+   This is explicit idle unload. Automatic idle-eviction timing is tested with the
+   native manual clock, not a wall-clock wait in this guide.
+8. Search Session metadata, try grouped/flat navigation, rename/reorder and
+   unregister Workspace B. Its Session still exists and can be opened as an
+   authorized unregistered cwd. No unregister operation cancels/deletes it.
+
+## 2. Transcript, Markdown, images, Trace and bounded windows
+
+Restart both servers with `dogfood:server web_chat_history` and the new Host config.
+Create A. Send `History 0` through `History 33`, waiting for each `Answer N` before
+sending the next. This crosses the native initial history page. Load earlier and
+verify the visible anchor stays in place. Return to latest.
+
+Send `Rich reply`; observe the heading/table/open Rust fence. While streaming,
+load earlier history and switch to Trajectory. Load older Trace, inspect a request,
+and scroll away from the tail. Reconnect while the `settle-chat` gate is held;
+release that gate. The final Markdown list/math/code settles once without jumping
+an off-tail reader. Trace inspector Input may be redacted; it must not fabricate
+hidden payload, usage or timing. Trace has no mutation controls.
+
+Attach a file named `note.txt`, type `Keep this draft`, and Send. Observe the native
+upload attachment. Reconnect; it returns from typed canonical history. Send
+`Image please`: the local MCP fixture returns a managed Tool image. Load it, open
+the lightbox, Escape, reconnect and repeat. The Tool image is deliberately a
+managed artifact; it is **not** the lifetime model of user uploads below.
+
+## 3. Session-owned file/image uploads, exact paths and independent Fork
+
+Restart with `dogfood:server web_upload_conformance`. Create two local input files:
+`acceptance.txt` containing `UPLOAD_NATIVE_SENTINEL`, and any small valid PNG named
+`pixel.png` (each below 256 KiB). Create Session A, attach both, type exactly
+`Use my uploaded files`, Send and Allow once. The real bash Tool reads the uploaded
+text and prints its absolute execution-world path; the answer is
+`Source upload read through native Tool.`.
+
+Inspect `<workspaceA>/.agents/uploads/<SessionId>/<batch>/`. Compare both paths to
+the provider request (`curl -fsS "$control/requests"`): `<user_uploaded_files>`
+precedes the unchanged user body. The model receives usable absolute paths, not
+ArtifactIds. Reload/reconnect; both typed attachments return.
+
+Fork at the `Use my uploaded files` User boundary. This cut is **before** that
+message; the destination composer restores native text/upload receipts. Record the
+new SessionId and confirm destination copies exist beneath its own upload root.
+Keep this draft open. Close the source Session view without switching to it. In a
+second browser page connected to the same Host/server, open the source, Unload
+runtime, then delete it through Actions → Delete → Confirm delete. The source root
+is gone; destination files remain. Return to the first page, Send the restored
+draft and Allow once. Observe `Destination upload read through native Tool.`.
+Reload/reconnect. Finally unload/delete the destination and confirm only its root
+is removed. Do not replace native cleanup with shell deletion. Crash/recovery and
+copy/publication race frontiers are covered by the native upload owner tests.
+
+## 4. Todo, Goal, Queue and commands
+
+Restart with `dogfood:server web_composer_context`. Create A. Todo starts composed
+but empty; to inspect the distinct absent state, disable the Todo extension in User Settings
+and explicitly unload/cold reopen a separate Session, then re-enable/cold reopen
+before continuing this script. Send `Plan the composer
+docks`, expand Todo, and inspect native status/dependencies. Send `Keep working
+until the docks are verified`. At the `goal-round` gate, queue exactly
+`Queued during the Goal round`. The seats are Todo → Goal → Queue → Composer.
+Edit the pending row, save, remove, and queue the original text again. Open its
+editor, release `goal-round`, and wait for `Queued input handled.`. The claimed
+row's obsolete draft must not be sendable. Cancel the draft. Pause/resume Goal;
+edit its objective/budget while paused. Reload; native current data returns.
+Extension activation in Settings is separate from this current domain data.
+
+Restart with `dogfood:server web_commands`. Create A. Type `/mdl`, choose
+`fixture/second-model`; `/permission` offers typed native choices. `/tools` opens
+inventory. Escape returns focus to the composer. `/not-a-command` must refuse,
+not become a prompt. Attach `note.txt`; send `Regenerate my uploaded note`.
+Retry / Regenerate at that User boundary. Release `retry-request-reached` after
+inspecting the new native ConversationId in the same Session. The regenerated
+answer has new lineage. Session tree can still open the original unchanged answer.
+Fork the original boundary to inspect a distinct Session's native restored upload.
+Stale boundaries are refused by Rust; no UI silently substitutes a newer cut.
+
+### Workflow/Agent execution and inventory
+
+Restart with `dogfood:server web_workflow_conformance`, create A and send
+`workflow conformance request`. At `workflow-child-admitted`, inspect the native
+Workflow and Subagent cards, reload/reconnect and compare their identities. In
+Trajectory inspect Workflow Timing: end/duration remain unavailable while running.
+Release the gate and observe `workflow conformance complete`. Settings →
+Integrations contains the existing acceptance Skill, reviewer Agent and review_pr
+Workflow. At Workspace scope toggle the root Workflow selection; its YAML and
+Agent TOML files must remain byte-identical. This is selection, not content editing.
+
+## 5. Settings, authority, trust and integrations
+
+Use a fresh default fixture for configuration-only exploration (no prompts).
+
+- **Provider/model definitions are editable in Web v1.** In User catalog add a
+  Provider with a loopback endpoint and environment-reference metadata; add a
+  model, choose its protocol, explicit input/output text capabilities and limits.
+  OpenAI Chat requires an explicit Chat reasoning replay choice under protocol
+  compatibility (e.g. omit). Save, reload, edit, save, delete and reload. Invalid
+  native combinations reject before changing source. No endpoint probe occurs.
+- Compare User, trusted Workspace and Session selections. Only authorized layers
+  participate; Reset followed by Save removes the selected layer. Effective is
+  read-only. Review canonical target, revision, winner/lower authored layers and
+  apply lifetime; loaded resources/frozen attempts can legitimately differ.
+- **MCP definitions are editable in Web v1**, at User and trusted Workspace only.
+  Add an inert stdio entry (`python3`, arguments as separate rows), round-trip it,
+  then define the same identity at Workspace with HTTP transport and a loopback
+  URL. Clear stdio-only fields when changing transport. Workspace wins as a whole
+  entry; editing the shadowed User entry does not change it. Compare Unconfigured,
+  Disabled and Enabled. Source save does not itself connect/probe an MCP server.
+  There is no browser-direct MCP Probe feature; native resource reload is the
+  available explicit runtime action where exposed. Use the checked-in local
+  `web-console/test/e2e/web09-mcp.py` only when deliberately testing preparation.
+- To inspect stale CAS, edit a draft, append a comment to its printed canonical
+  source in another terminal, then Save. The draft survives conflict; only an
+  explicit reviewed Save retries. Response-loss injection is automated in
+  `recovery.spec.ts`; after uncertainty, reconnect and Reload / discard draft,
+  never blindly repeat the write.
+- **Skill definitions are authored outside Web v1.** Source policy, root
+  visibility, explicit Session paths and the admitted catalog are different
+  controls/facts; inspect native Global/Workspace provenance.
+- **Named Agent definitions are authored outside Web v1.** Root `agent.agents`
+  selection never edits Agent TOML. Same-name Workspace definitions replace User
+  resources as a whole. **Workflow definitions are authored outside Web v1.**
+  Workspace YAML programs remain distinct from root `agent.workflows` selection.
+- Inspect Extensions: toggling one preserves same-source siblings but does not
+  recursively merge scope collections or mutate current Todo/Goal state. Current
+  resource and capability generations are native facts. Unsupported controls stay
+  absent/read-only. Provider/MCP secret values never appear; this Host has no
+  write-only secret endpoint, so supply credentials outside Web.
+- Restart with `dogfood:server web_console_dogfood --untrusted`. Place deliberately
+  invalid `rustx.toml` in the printed A cwd before opening A. Host still authorizes
+  navigation/create; native project controls remain inactive/read-only. Opening
+  A does not grant trust. User/Host security policy cannot be widened by Workspace
+  or Session. To test picker absence, stop Web, set `picker: false` in the printed
+  Host config, restart Web: Add Workspace disappears and no arbitrary path entry
+  replaces it. The automated two-Host/two-process fixture also tests cross-routing
+  rejection; it does not claim OS sandbox isolation.
+
+**Web v1 has no raw TOML/YAML/Markdown/code editor. Web v1 has no Local Workspace
+private configuration layer** (`rustx.local.toml`). Browser persistence holds only
+endpoint/open-view navigation hints; Host metadata holds registrations/names/order.
+Do not hide private project settings there or in unrelated Session fields. A real
+need for a private per-user/per-project layer requires a separate architecture issue.
+
+## 6. Responsive and keyboard pass
+
+At 1600, 1280, 820 and 390 CSS pixels, use the same product: Workspace/session
+navigation, Chat/Trajectory, docks/composer, command popup, Settings, catalog/MCP
+forms, integration inventory and inspectors must remain reachable without page
+horizontal overflow. Scroll long forms and inspect wrapping of source paths.
+
+Use Tab/Shift+Tab without the mouse. Horizontal tabs use Left/Right/Home/End.
+Open `/model`, use its filter/arrows/Enter and Escape; focus must return to the
+composer. Open a Tool image lightbox; Tab stays inside the modal and Escape
+restores its trigger. Inspect visible focus, labels, disabled untrusted controls,
+Goal edit Enter/Escape and long history without a focus trap. Enable reduced motion.
+Repeat Session switching/reconnect and image open/close; automation checks native
+attachment counts, object URL release and bounded caches/log retention directly.

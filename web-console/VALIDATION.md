@@ -1,3 +1,107 @@
+# WEB-10 / #313 final Full Web acceptance — 2026-09-16
+
+See [CONFORMANCE.md](CONFORMANCE.md) for the contract-to-test map and
+[DOGFOODING.md](DOGFOODING.md) for developer steps independent of test source.
+This record distinguishes browser composition from native owner proof.
+
+## Repository and prerequisites
+
+Original checkout `/home/caismis/Documents/codes/rustX` was clean at
+`58f17e3c90f60275c3f58ebf9f9061dc0c5412e7` and remained unchanged/clean.
+Implementation used `/home/caismis/Documents/codes/rustX-issue-313`, branch
+`issue-313-web-conformance`, from fetched `origin/main`
+`9980fc719a573ece0cab0114311345dc4c78b621`. Refetch before delivery found the same
+base; no rebase was needed. #313 including its later #319 dependency comment,
+#303, and prerequisite merged PRs were reinspected. #305, #306, #307, #308, #309,
+#310, #311, #312 and #319 were closed and their merge commits verified ancestors
+of the chosen base (individual merges are in CONFORMANCE.md).
+
+## Commands actually executed
+
+Linux, Rust 1.95.0, Node 24.20.0, pnpm 11.13.1. All final runs below passed.
+Working directories are explicit; each semicolon-separated command in a cell was
+run, not merely recommended. Ignored tests retain the repository's existing policy.
+
+| Directory | Command | Result |
+| --- | --- | --- |
+| `web-console`, `tui`, `protocol/app-server` | `pnpm install --frozen-lockfile` in each | Passed, no lockfile changes |
+| `test-support/fake-provider` | `uv sync --frozen`; `uv run --frozen pytest` | Passed; 51 Python tests |
+| repository | `cargo build --bins` | Passed; real App Server and supervisors |
+| repository | `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::` | 2,894 passed, 1 ignored; bin/example harnesses passed |
+| repository | `cargo test --test contracts --test provider --all-features` | 25 + 166 passed; 5 opt-in live Provider tests ignored |
+| repository | `cargo test --lib --all-features -- boundary_suites::` | 226 passed |
+| repository | `RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test durable --test process --test subagent --test tools --test conformance` | 127 durable, 52 process, 53 subagent, 157 tools, 23 conformance passed |
+| repository | `cargo fmt --all -- --check` | Passed |
+| repository | `cargo clippy --all-targets --all-features -- -D warnings` | Passed |
+| repository | `git diff --check` | Passed |
+| `protocol/app-server` | `pnpm check`; `pnpm typecheck` | Passed; no generated protocol drift |
+| `tui` | `pnpm typecheck`; `pnpm test` | Passed; 816 tests, 96 suites |
+| `web-console` | `pnpm typecheck`; `pnpm test` | Passed; 297 tests, 22 files |
+| `web-console` | `pnpm check:provenance` | 74 destination records; 100 production dependency notices |
+| `web-console` | `node scripts/provenance.ts --reference /home/caismis/Documents/codes/deepseek-harness-reference` | Passed; clean exact pinned HEAD and all 91 upstream input hashes |
+| `web-console` | `pnpm build` | Passed, including generated license/provenance artifact checks |
+| `web-console` | `pnpm test:e2e` | Production rebuild + 18 Chromium tests passed, approximately 1.2 minutes |
+
+Focused Playwright runs for the chat, upload, recovery, settings, accessibility and
+Workflow specs were also used during development, followed by the complete suite.
+Vite reports its existing large-chunk warning (main bundle approximately 1.2 MB);
+this is not a failed build. No dependency or raw-source runtime fetch was added.
+The CI review retained existing deterministic/boundary/protocol/frontend/provenance/
+production/browser classes and renamed the existing Web gate for final conformance.
+No expensive parallel acceptance matrix was added.
+
+## Failures found and repaired
+
+- Real keyboard acceptance failed on arrow navigation for elements already marked
+  as tabs. Shared presentation keyboard handling and labelled panels fixed it.
+- Actual native HTTP MCP save rejected a new draft carrying an empty stdio
+  command. Draft absence is now `null`; native validation stays authoritative.
+- Running the documented launcher outside Playwright exposed a Node strip-only
+  constructor error and missing Host carrier instructions. Explicit property
+  initialization plus printed Host config/single-carrier ownership fixed startup.
+- Test development corrected assumptions about separate provider system reminders,
+  transport loss being `stale`, deliberately discarded drafts on Session navigation,
+  controlled asynchronous checkbox updates, and newly labelled panel selectors.
+  Provider capability validation now deliberately proves rejection before write,
+  then supplies the required explicit replay policy. Subscription instrumentation
+  uses the existing disconnect/connect API. These corrections do not add retries,
+  sleeps, synthetic server state or browser semantic ownership.
+
+## Provenance audit
+
+External checkout HEAD was exactly
+`c291e7961a515f6d7af9304e7fd1d257929aef26`, with a clean worktree. All 74 destination
+records, 91 primary/additional source inputs and 201 recorded inspected paths were
+checked. Existing notices cover 100 production packages; built notices match the
+checked-in inputs. No new Harness source was imported. The existing records for
+adapted Trajectory and Integrations were updated for this PR's changes; the shared
+tab helper is rustX-authored. No Harness Host/Cordis/Session runtime, compatibility
+gateway, branding substitution or build-time source download was introduced.
+
+## Dogfooding actually performed and limitations
+
+The standalone documented `pnpm --dir web-console dogfood:server
+web_console_dogfood` launcher and production preview with
+`RUSTX_WORKSPACE_HOST_CONFIG=... pnpm preview --port 4173 --strictPort` were run.
+Separate exploratory Playwright scripts drove the real same-origin Host route
+(without the E2E Host route interception): concurrent A/B, Settings, narrow MCP
+forms, reconnect, approval/questionnaire and detached question. The provider's
+shutdown report recorded `ok: true`, all eight requests consumed. Desktop and
+390px screenshots were visually inspected; no page error or horizontal overflow
+was observed. The servers were shut down afterward.
+
+This was automated exploratory dogfooding plus screenshot inspection, **not a
+human keyboard/screen-reader session**. The native browser-control tool returned
+`No browser is available`; direct interactive dogfooding through that tool was
+unavailable. The checked-in 18-test browser suite supplies the other documented
+flows, including actual uploads/fork/delete and Workflow execution. Automatic idle
+expiry is proven by native manual-clock tests; the browser exercises explicit
+unload/cold reopen. macOS CI and Firefox/Safari were not run on this Linux machine.
+No WCAG certification, OS sandbox guarantee, live paid Provider call, external MCP
+service, secret-write endpoint or human manual pass is claimed.
+
+---
+
 # Issue #319: Session-owned workspace uploads
 
 The [PR #320 correction record](../docs/pr-320-review-validation.md) supersedes

@@ -5,7 +5,7 @@ import { Button } from '../../presentation/primitives/Button';
 import css from './Settings.module.css';
 
 type Draft = { scope: IntegrationScope; id: string; value: McpDraft; existing: boolean; revision: string; attempted: boolean };
-const empty = (): McpDraft => ({ enabled: false, transport: 'stdio', command: '', args: [], cwd: null, url: null, retained_env: [], retained_headers: [], sensitive_env: {}, sensitive_headers: {} });
+const empty = (): McpDraft => ({ enabled: false, transport: 'stdio', command: null, args: [], cwd: null, url: null, retained_env: [], retained_headers: [], sensitive_env: {}, sensitive_headers: {} });
 export function Integrations({ source, snapshot, busy, save }: {
   source: SourceSettings; snapshot?: RuntimeClientSnapshot; busy: boolean;
   save: (scope: IntegrationScope, mutation: SourceMutation, expectedRevision?: string) => Promise<boolean>;

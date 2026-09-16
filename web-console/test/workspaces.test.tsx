@@ -308,3 +308,34 @@ it('a newer Open is not swallowed by an obsolete authorization for the same Sess
   expect((screen.getByLabelText('Choose Workspace') as HTMLSelectElement).value).toBe('wA');
   expect(server.client.getSnapshot().views.A.attachment).toBe('attached');
 });
+
+it('repeated product remount, Session navigation and reconnect release every presentation subscription', async () => {
+  const subscribed = new Set<() => void>();
+  const original = server.client.subscribe;
+  vi.spyOn(server.client, 'subscribe').mockImplementation(listener => {
+    subscribed.add(listener);
+    const release = original(listener);
+    return () => { subscribed.delete(listener); release(); };
+  });
+  await server.connect();
+  let baseline: number | undefined;
+  for (let cycle = 0; cycle < 4; cycle++) {
+    let view!: ReturnType<typeof render>;
+    await act(async () => { view = render(<App client={server.client} workspaceHost={hostFixture()} />); });
+    for (const name of ['Open Session A', 'Open Session B']) {
+      await act(async () => fireEvent.click(screen.getByRole('button', { name })));
+    }
+    baseline ??= subscribed.size;
+    expect(baseline).toBeGreaterThan(0);
+    expect(subscribed.size).toBe(baseline);
+    await act(async () => { server.client.disconnect(); await server.connect(); });
+    expect(subscribed.size).toBe(baseline);
+    await act(async () => view.unmount());
+    expect(subscribed.size).toBe(0);
+    // UI cleanup must not become a runtime shutdown owner.
+    expect(server.loaded.has('A')).toBe(true);
+    expect(server.loaded.has('B')).toBe(true);
+  }
+  expect(methods()).not.toContain('session/unload');
+  expect(methods()).not.toContain('turn/cancel');
+});

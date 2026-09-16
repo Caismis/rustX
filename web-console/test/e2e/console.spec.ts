@@ -34,6 +34,19 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await page.getByRole('tab', { name: idA.slice(0, 16), exact: true }).click();
     await send('Long action in A'); await fixture.gate('finish-a');
     await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
+    // Configuration source commits cannot rewrite a running admitted attempt.
+    await page.getByRole('tab', { name: 'Settings', exact: true }).click();
+    const settings = page.getByRole('region', { name: 'Settings', exact: true });
+    await settings.getByLabel('Workspace model', { exact: true }).selectOption('fixture/second-model');
+    await settings.getByRole('button', { name: 'Save Workspace', exact: true }).click();
+    await expect(settings.getByRole('region', { name: 'Prospective effective request', exact: true })).toContainText('fixture/second-model');
+    await expect(settings.getByRole('region', { name: 'Runtime effective request', exact: true })).toContainText('fixture/console-model');
+    await expect(settings.getByRole('region', { name: 'Frozen request', exact: true })).toContainText('fixture/console-model');
+    await settings.getByRole('button', { name: 'Reset Workspace', exact: true }).click();
+    await settings.getByRole('button', { name: 'Save Workspace', exact: true }).click();
+    await expect(settings.getByRole('region', { name: 'Prospective effective request', exact: true })).toContainText('fixture/console-model');
+    await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+
     await page.getByRole('tab', { name: idB.slice(0, 16), exact: true }).click(); await send('Use B while A runs');
     await expect(page.getByText('B stayed responsive.', { exact: true })).toBeVisible();
     // The actual TUI client joins the browser's server. Handoff is explicit;

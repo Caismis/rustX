@@ -1,7 +1,7 @@
 import { startWorkspaceHost } from './workspace-host.ts';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -61,6 +61,15 @@ enabled = true
 ` : '';
     const writeSettings = (model = 'console-model') => writeFileSync(settings, `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[native_tools.bash]\napproval = "always"\n[agent.model]\nmodel = "fixture/${model}"\n` + imageSource);
     writeSettings();
+    if (scenario === 'web_workflow_conformance') {
+      mkdirSync(join(workspaceA, '.agents/agents'), { recursive: true });
+      mkdirSync(join(workspaceA, '.agents/workflows'), { recursive: true });
+      mkdirSync(join(workspaceA, '.agents/skills/acceptance'), { recursive: true });
+      writeFileSync(join(workspaceA, '.agents/agents/reviewer.toml'), 'description = "Workflow-only reviewer"\ninstructions = "Review requests carefully."\n');
+      writeFileSync(join(workspaceA, '.agents/workflows/review_pr.yaml'), readFileSync(resolve(root, 'web-console/test/e2e/review_pr.yaml')));
+      writeFileSync(join(workspaceA, '.agents/skills/acceptance/SKILL.md'), '---\nname: acceptance\ndescription: Inspect the native acceptance fixture.\n---\nUse native authority.\n');
+      writeFileSync(join(workspaceA, 'rustx.toml'), '[agent]\nworkflows = ["review_pr"]\n');
+    }
     for (const workspace of trusted ? [workspaceA, workspaceB] : []) {
       const trusted = spawnSync(binary, ['--workspace', workspace, '--trust', 'grant'], { env, encoding: 'utf8' });
       if (trusted.status !== 0) throw new Error(`Trust setup failed: ${trusted.stderr}`);
@@ -75,10 +84,13 @@ enabled = true
       if (!response.ok) throw new Error(`Provider barrier failed: ${await response.text()}`);
       return response.json();
     };
-    const workspaceHost = await startWorkspaceHost({ endpoint: new URL(endpoint).href, picker: true, metadataFile: join(directory, 'workspaces.json'), roots: [
+    const hostConfig = { endpoint: new URL(endpoint).href, picker: true, metadataFile: join(directory, 'workspaces.json'), roots: [
       { id: 'root-a', cwd: workspaceA, displayName: 'Workspace A' }, { id: 'root-b', cwd: workspaceB, displayName: 'Workspace B' },
-    ] });
-    return { workspaceHost, workspaceHostUrl: workspaceHost.url, directory, endpoint, token, tokenFile, workspaceA, workspaceB, providerUrl, settings, writeSettings, control,
+    ] };
+    const workspaceHost = await startWorkspaceHost(hostConfig);
+    const hostConfigFile = join(directory, 'host-config.json');
+    writeFileSync(hostConfigFile, JSON.stringify(hostConfig), { mode: 0o600 });
+    return { hostConfigFile, workspaceHost, workspaceHostUrl: workspaceHost.url, directory, endpoint, token, tokenFile, workspaceA, workspaceB, providerUrl, settings, writeSettings, control,
       revokeWorkspaceTrust: () => {
         const result = spawnSync(binary, ['--workspace', workspaceA, '--trust', 'revoke'], { env, encoding: 'utf8' });
         if (result.status !== 0) throw new Error(`Trust revoke failed: ${result.stderr}`);

@@ -656,6 +656,20 @@ async fn ext256_reload_cannot_recompose_extensions_but_the_next_launch_does() {
 
     // Durable Session work, so the restart below has history to preserve.
     // The attempt against the unreachable provider fails and settles itself.
+    let snapshot = endpoint.handle_request(RuntimeClientRequest::SnapshotGet {
+        id: RequestId::new(101),
+    });
+    let Some(RuntimeClientResult::Snapshot { cursor, .. }) = snapshot.result else {
+        panic!("snapshot returns a subscription cursor");
+    };
+    let subscribed = endpoint.handle_request(RuntimeClientRequest::SubscribeEvents {
+        id: RequestId::new(102),
+        after_cursor: cursor,
+    });
+    assert!(matches!(
+        subscribed.result,
+        Some(RuntimeClientResult::Subscribed { .. })
+    ));
     let submitted = endpoint
         .handle_request_async(RuntimeClientRequest::SubmitInbound {
             id: RequestId::new(2),
@@ -673,15 +687,36 @@ async fn ext256_reload_cannot_recompose_extensions_but_the_next_launch_does() {
         ),
         "unexpected SubmitInbound response: {submitted:?}"
     );
-    // Shutting the runtime down settles the in-flight attempt, so the
-    // pre-restart transcript is read at a quiescent, fully linearized point
-    // rather than racing the attempt's own durable publication.
+    // Acceptance alone may still be Pending Inbound. Observe native settlement
+    // before shutdown so the nonempty canonical-history assertion is meaningful.
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let rustx::runtime_client::EventDelivery::Event(event) = endpoint.next_event().await
+            else {
+                panic!("subscription must remain live until settlement");
+            };
+            if matches!(
+                event.event,
+                rustx::runtime_client::RuntimeClientEvent::AttemptSettled { .. }
+            ) {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("attempt settles before the liveness deadline");
+    // Shutdown quiesces canonical work. Compare the Message Ledger, not the
+    // transcript projection: restart may terminalize an incomplete publication
+    // as a noncanonical audit without rewriting any canonical message.
     product
         .runtime()
         .shutdown()
         .await
         .expect("the runtime shuts down");
-    let before = session_messages(&endpoint, 3);
+    let before = product
+        .runtime()
+        .historical_canonical_history()
+        .expect("canonical history before restart");
     assert!(
         !before.is_empty(),
         "the Session owns durable history before the restart"
@@ -715,7 +750,10 @@ async fn ext256_reload_cannot_recompose_extensions_but_the_next_launch_does() {
         "the restarted launch projects its own extension composition"
     );
     assert_eq!(
-        session_messages(&resumed_endpoint, 5),
+        resumed
+            .runtime()
+            .historical_canonical_history()
+            .expect("canonical history after restart"),
         before,
         "an extension configuration change rewrites no canonical Session history"
     );
@@ -751,27 +789,6 @@ async fn ext256_reload_cannot_recompose_extensions_but_the_next_launch_does() {
         Some(agent_status_absent()),
         "and cannot install one into the effective projection either"
     );
-}
-
-/// The canonical Session messages the Runtime Client projects for the
-/// currently selected Session.
-fn session_messages(
-    endpoint: &rustx::runtime_client::RuntimeClientEndpoint,
-    request_id: u64,
-) -> Vec<String> {
-    let response = endpoint.handle_request(RuntimeClientRequest::TranscriptPageGet {
-        id: RequestId::new(request_id),
-        before_cursor: None,
-        limit: 64,
-    });
-    match response.result {
-        Some(RuntimeClientResult::TranscriptPage { page }) => page
-            .entries
-            .iter()
-            .map(|entry| serde_json::to_string(&entry.item).expect("transcript item JSON"))
-            .collect(),
-        other => panic!("transcript_page_get returned an unexpected result: {other:?}"),
-    }
 }
 
 // ---------------------------------------------------------------------------
