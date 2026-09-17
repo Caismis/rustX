@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-// Intentional updates: pnpm exec playwright test shell.spec.ts --update-snapshots
+// Intentional updates in the pinned browser environment: pnpm test:e2e:update
 // Fixed time, native-protocol fixture and reduced motion keep evidence reviewable.
 test('Harness shell reference states and presentation-only navigation', async ({ page }) => {
   const errors: string[] = [];

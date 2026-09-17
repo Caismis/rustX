@@ -14,8 +14,9 @@
 
 [Architecture/classification](SHELL-ARCHITECTURE.md) and
 [final provenance inventory](PROVENANCE.md) document the source/adapter boundary.
-All changes are in `web-console`; no Rust, generated protocol, Host contract or
-native client semantic implementation changed. The workspace presentation adapter
+The presentation reset changes are in `web-console`; the rendering-infrastructure
+correction also changes the Web lane in `.github/workflows/ci.yml`. No Rust,
+generated protocol, Host contract or native client semantic implementation changed. The workspace presentation adapter
 now rejects classifications paired with a replaced native summary array.
 
 ## Deterministic tests
@@ -59,11 +60,73 @@ Checked-in references under `test/e2e/shell.spec.ts-snapshots/`:
 | [mobile-expanded-dark](test/e2e/shell.spec.ts-snapshots/mobile-expanded-dark-linux.png) | Explicitly expanded Sidebar; upstream squeezed-center behavior retained |
 | [mobile-settings-dark](test/e2e/shell.spec.ts-snapshots/mobile-settings-dark-linux.png) | Narrow Settings with horizontal section navigation |
 
-Intentional reference update:
+### Authoritative rendering contract
+
+The source of truth is `scripts/browser-tests.sh`, invoked by the **Full Web
+conformance** CI lane and by local comparison/update commands. Arbitrary workstation
+rendering is **not** a reference authority. The browser alone runs in a fresh
+container; the existing real App Server, Product Host, provider emulator, native
+TUI and Playwright test runner continue running on the Linux host.
+
+- OS/architecture: Ubuntu **24.04.4 LTS (Noble), linux/amd64**.
+- Immutable image: `mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7`.
+- Playwright: **1.63.0**, exactly pinned in `package.json` / `pnpm-lock.yaml`.
+  The runner rejects a package/image version mismatch. The container uses the
+  lockfile-installed Playwright JS through a read-only `node_modules` mount;
+  there is no separate npm download or floating browser channel.
+- Browser: image-provided Chromium Headless Shell **153.0.8010.12**, Playwright
+  revision **1243**. Browser binaries, fontconfig, FreeType and all OS libraries
+  are fixed by the image digest. Host fonts and browser caches are not mounted.
+- Fonts: image-provided `fonts-liberation` **1:2.1.5-3** (the production Harness
+  stack's Helvetica resolves to **Liberation Sans**; code uses Liberation Mono),
+  `fonts-freefont-ttf` **20211204+svn4273-2**, `fonts-ipafont-gothic`
+  **00303-21ubuntu1**, `fonts-noto-color-emoji` **2.047-0ubuntu0.24.04.1**,
+  `fonts-tlwg-loma-otf` **1:0.7.3-1**, `fonts-unifont` **1:15.1.01-1build1**,
+  `fonts-wqy-zenhei` **0.9.45-8**, plus the image's X fonts. These are test
+  environment prerequisites, not imported Harness source or production assets.
+  A startup guard explicitly checks Helvetica resolves to Liberation Sans.
+- Provisioning: Docker pulls that exact image on first use and reuses its immutable
+  layers afterward. Podman is supported through `CONTAINER_ENGINE=podman`.
+  A native Linux x86_64 host is required; emulated ARM/macOS rendering is not an
+  authority. Host networking lets Chromium reach the unchanged loopback fixtures;
+  the Playwright server binds only to `127.0.0.1` on an ephemeral port. The wrapper
+  removes its container on success, failure or interruption.
+- Comparison: **`threshold: 0`, `maxDiffPixels: 0`**, no retries. Normal runs use
+  `updateSnapshots: 'none'`, so even missing references fail instead of being
+  written. Direct host Playwright runs are rejected with the required command.
+  No screenshot-only fonts/CSS, skipped states or production theme changes.
+
+Install the existing host prerequisites (Node 24, Corepack, Docker or Podman,
+Rust, uv and the repository's Python toolchain), then from the repository root:
 
 ```sh
-pnpm exec playwright test shell.spec.ts foundation.spec.ts --update-snapshots
+cargo build --bins
+(cd tui && corepack enable && corepack install && pnpm install --frozen-lockfile)
+(cd dev && corepack install && pnpm install --frozen-lockfile)
+(cd test-support/fake-provider && uv sync --frozen)
+cd web-console
+corepack enable
+corepack install
+pnpm install --frozen-lockfile
+
+# Intentional update: builds, starts the pinned browser, then executes
+# playwright test shell.spec.ts foundation.spec.ts --update-snapshots
+pnpm test:e2e:update
+
+# Ordinary comparison: builds and runs ALL real-server and reference tests.
+pnpm test:e2e
+
+# Optional focused comparison, using the same authority (build first):
+pnpm build
+bash scripts/browser-tests.sh shell.spec.ts foundation.spec.ts
 ```
+
+For Podman, prefix the three browser commands with `CONTAINER_ENGINE=podman`.
+Do not run a bare `playwright test --update-snapshots` on a workstation. Upgrade
+Playwright, the image tag/digest and the version guard together, then intentionally
+regenerate and review all references. CI compares only. It does not install host
+fonts or Chromium, perform apt upgrades inside the rendering container, or cache a
+mutable browser environment. Existing Rust cache keys and non-Web lanes are unchanged.
 
 Review PNG diffs and the corresponding source change together. Normal `pnpm
 test:e2e` compares the checked-in references and never rewrites them. Reference
@@ -81,11 +144,13 @@ diagnostics and closed before operating content covered by its narrow fullscreen
 panel. Hover/focus reveals upstream row actions; tests use stable native IDs when
 names/automatic titles can change.
 
-## Executed validation
+## Original validation (superseded for screenshot reproducibility)
 
-Environment: Linux, Node 24.20.0, Corepack pnpm 11.13.1, repository-pinned Playwright
-Chromium 1.63.0. Existing system browser libraries sufficed; `--with-deps` was not
-needed locally. CI's Linux browser install convention remains unchanged. The
+The original run used Fedora Linux, Node 24.20.0, Corepack pnpm 11.13.1 and
+Playwright 1.63.0 with host browser libraries. Its local screenshot pass proved
+only consistency on that workstation, **not CI reproducibility**. The following
+historical results are retained as the reset's implementation record; the pinned
+rendering validation below supersedes its screenshot claims. The
 Browser plugin was unavailable, so the repository's regular Playwright workflow
 was used. No external model credentials were needed.
 
@@ -121,3 +186,59 @@ coupled to old chrome/Session titles. Earlier failed runs are not counted as pas
 The build still reports its existing >500kB chunk advisory; this reset adds no
 packages. Browser coverage is Chromium on Linux; it does not claim Safari/Firefox
 or a full Agent/CFG3 experience rewrite.
+
+## PR #348 rendering-infrastructure correction
+
+Inspected the actual remote head `36425bff329a4f210b14ea421f92caeb270b45bd`,
+[existing review thread](https://github.com/Caismis/rustX/pull/348#discussion_r4040309910),
+and [failed run 35255086307](https://github.com/Caismis/rustX/actions/runs/35255086307)
+before editing. Only Full Web conformance failed: `shell.spec.ts:18`,
+`desktop-expanded-light.png`, **13,323 pixels** different under the original
+comparison settings; all preceding semantic assertions and the other **16 E2E
+tests** passed. Inspected expected/actual/diff PNGs, error context and trace.
+The trace records loaded fonts and two identical actual screenshots. Differences
+are glyph shapes/widths and associated text-dependent control layout; the shell
+column boundaries remain aligned. Fedora's system fallback/rasterization stack
+and the rolling GitHub Ubuntu 24.04 host were different rendering environments.
+A `-linux.png` filename did not define either environment sufficiently.
+
+Before updating references, the pinned container on the Fedora host reproduced
+the original GitHub CI actual image with **zero raw pixel differences**. This
+isolates the rendering environment as the cause without changing product code.
+The ten references are normalized under that single image; all representative
+states, fixed clock/data, reduced motion, branding and geometry assertions remain.
+No production dependency, font, theme, asset or Harness provenance record changes.
+
+Manual old/new review covered every PNG: expanded light/dark, collapsed rail,
+Inspector, Workspace/Session search, Settings light/dark, narrow rail, narrow
+expanded Sidebar and narrow Settings. Text metrics change wrapping (including the
+Inspector's main-column toolbar and narrow conversation/composer); the unchanged
+product CSS supplies all geometry. Sidebar/rail widths, Settings frame, icons,
+colors and responsive behavior are preserved. There were no product edits hidden
+in reference regeneration.
+
+Correction validation (Node 24.20.0 / pnpm 11.13.1; browser authority above):
+
+| Command | Result |
+| --- | --- |
+| `corepack enable`, `corepack install`, `pnpm install --frozen-lockfile` | Passed; no dependency/lockfile change |
+| `pnpm typecheck` | Passed |
+| `pnpm test` | Passed: 289 tests / 22 files |
+| `pnpm check:provenance` | Passed: 90 source records / 100 production package notices |
+| `pnpm build` | Passed; existing chunk-size advisory only |
+| `pnpm exec playwright install --with-deps chromium` | Passed in a disposable copy of the pinned image; 0 packages installed/upgraded. That container was discarded; baseline runs use pristine image instances, never apt-mutated state |
+| `CONTAINER_ENGINE=podman pnpm test:e2e:update` | Passed: 2 tests, all 10 references generated under the pinned authority |
+| `CONTAINER_ENGINE=podman pnpm test:e2e` | Passed: 17 tests, 1.3 minutes, no skips/retries; all 10 references compared with zero threshold/differing pixels |
+| `CONTAINER_ENGINE=podman bash scripts/browser-tests.sh shell.spec.ts foundation.spec.ts` | Passed: 2 tests in a second fresh container; all reference comparisons passed |
+| `pnpm exec playwright test --list` outside the wrapper | Rejected as intended with the pinned-environment command, before rendering |
+| `git diff --check` | Passed |
+
+The existing real-server prerequisites also passed: `cargo build --bins`,
+`uv sync --frozen`, TUI dependency install, and dev dependency install/typecheck/
+30 tests. The Browser plugin was unavailable; repository Playwright supplied the
+page identity, no-overlay/page-error, responsive, interaction and screenshot checks.
+Workflow review confirmed only the Web browser provisioning changes: no added
+package installation, unchanged Rust cache policy, no browser cache, unchanged
+non-Web lanes. The digest-addressed image's local layer reuse cannot substitute a
+new browser/font filesystem. GitHub Actions results are recorded in the existing
+PR review thread after the pushed head completes CI.

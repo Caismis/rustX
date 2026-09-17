@@ -14,7 +14,8 @@
     "test": "vitest run",
     "build": "vite build && node scripts/provenance.ts --artifact",
     "preview": "vite preview --host 127.0.0.1",
-    "test:e2e": "pnpm build && playwright test",
+    "test:e2e": "pnpm build && bash scripts/browser-tests.sh",
+    "test:e2e:update": "pnpm build && bash scripts/browser-tests.sh shell.spec.ts foundation.spec.ts --update-snapshots",
     "dogfood:server": "node scripts/dogfood.ts",
     "check:provenance": "node scripts/provenance.ts && node scripts/notices.ts"
   },
