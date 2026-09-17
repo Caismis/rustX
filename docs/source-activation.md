@@ -63,7 +63,7 @@ inactive; admitted enabled sources are eligible for preparation.
 `mcp_servers` overlays names and replaces a same-name entry **as a whole**. A
 replacement includes its own enable decision, command/URL, ordinary environment,
 headers and credential references. Absent members never inherit from the
-replaced entry. An empty map clears the MCP map. Tool allowlists,
+replaced entry. An empty map names no replacement identities and retains the lower entries. Tool allowlists,
 Subagent selectors and Workflow references cannot supply an activation grant.
 
 Project-authored sources may declare ordinary transport configuration and

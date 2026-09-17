@@ -14,6 +14,10 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 type Origins = BTreeMap<String, Origin>;
+
+#[cfg(test)]
+#[path = "authoring_cfg3_tests.rs"]
+mod cfg3_tests;
 fn replace_origin(origins: &mut Origins, path: &str, origin: &Origin) {
     origins.retain(|old, _| old != path && !old.starts_with(&format!("{path}.")));
     origins.insert(path.into(), origin.clone());
@@ -39,14 +43,12 @@ fn named<K: Ord + std::fmt::Display, V>(
 ) {
     if let Some(layer) = layer {
         let target = target.get_or_insert_default();
-        if layer.is_empty() {
-            target.clear();
-            replace_origin(origins, path, origin);
-        } else {
-            for (name, entry) in layer {
-                replace_origin(origins, &format!("{path}.{name}"), origin);
-                target.insert(name, entry);
-            }
+        // Identity maps do not have a container-wide reset operation. An
+        // empty map names no replacement units; an explicitly empty value
+        // at a particular identity still replaces that complete unit.
+        for (name, entry) in layer {
+            replace_origin(origins, &format!("{path}.{name}"), origin);
+            target.insert(name, entry);
         }
     }
 }
@@ -253,104 +255,31 @@ impl McpAuthoring {
     }
 }
 
-macro_rules! merge_record {
-    ($name:ident, [$($replace:ident),*], [$($record:ident),*], [$($map:ident),*]) => {
-        impl $name {
-            fn merge(&mut self, layer: Self, prefix: &str, origin: &Origin, origins: &mut Origins) {
-                $(replace(&mut self.$replace, layer.$replace, &format!("{prefix}{}", stringify!($replace)), origin, origins);)*
-                $(if let Some(child) = layer.$record { self.$record.get_or_insert_default().merge(child, &format!("{prefix}{}.", stringify!($record)), origin, origins); })*
-                $(named(&mut self.$map, layer.$map, &format!("{prefix}{}", stringify!($map)), origin, origins);)*
-            }
-        }
+// These are typed field moves, not recursive table traversal. Each caller
+// lists its semantic replacement units explicitly. In particular a policy
+// object or model selection never delegates to per-member overlay.
+macro_rules! replace_units {
+    ($target:ident, $layer:ident, $prefix:expr, $origin:ident, $origins:ident; $($field:ident),* $(,)?) => {
+        $(replace(&mut $target.$field, $layer.$field,
+            &format!("{}{}", $prefix, stringify!($field)), $origin, $origins);)*
+    };
+}
+
+impl AgentProfileLayer {
+    fn overlay(&mut self, layer: Self, origin: &Origin, origins: &mut Origins) {
+        replace_units!(self, layer, "agent.", origin, origins;
+            description, instructions, model, timeout_ms, tools, skills,
+            disabled_skills, extensions, agents, workflows, agents_md, worktree
+        );
     }
 }
-merge_record!(
-    RuntimeLayer,
-    [
-        models,
-        runtime_root,
-        schema_version,
-        agent_id,
-        approval_mode
-    ],
-    [
-        agent,
-        context,
-        model_timeout_policy,
-        tool_deadline_policy,
-        subagents,
-        native_tools,
-        skills
-    ],
-    [mcp_servers, mcp_tool_policies, environment]
-);
-merge_record!(
-    ModelLayer,
-    [
-        model,
-        reasoning_profile,
-        request_params,
-        max_output_tokens,
-        summary_model
-    ],
-    [],
-    []
-);
-merge_record!(
-    ContextLayer,
-    [reserve_tokens, keep_recent_tokens, summary_output_cap],
-    [],
-    []
-);
-merge_record!(
-    TimeoutLayer,
-    [response_start_timeout_ms, stream_idle_timeout_ms],
-    [],
-    []
-);
-merge_record!(
-    ToolDeadlineLayer,
-    [hard_deadline_ms, idle_liveness_ms],
-    [],
-    []
-);
-merge_record!(SubagentsLayer, [max_concurrent], [], []);
-merge_record!(SkillsLayer, [sources], [], []);
-merge_record!(
-    AgentProfileLayer,
-    [
-        description,
-        instructions,
-        timeout_ms,
-        tools,
-        skills,
-        disabled_skills,
-        extensions,
-        agents,
-        workflows,
-        agents_md,
-        worktree
-    ],
-    [model],
-    []
-);
 impl Copy for NativeToolsLayer {}
 
 impl NativeToolsLayer {
-    fn merge(&mut self, layer: Self, prefix: &str, origin: &Origin, origins: &mut Origins) {
-        if layer.read.is_none()
-            && layer.write.is_none()
-            && layer.edit.is_none()
-            && layer.glob.is_none()
-            && layer.grep.is_none()
-            && layer.bash.is_none()
-        {
-            *self = Self::default();
-            replace_origin(origins, prefix.trim_end_matches('.'), origin);
-            return;
-        }
-        macro_rules! entry { ($($field:ident),*) => { $(replace(&mut self.$field, layer.$field, &format!("{prefix}{}",stringify!($field)),origin,origins);)* } }
-        entry!(read, write, edit, glob, grep, bash);
+    fn overlay(&mut self, layer: Self, origin: &Origin, origins: &mut Origins) {
+        replace_units!(self, layer, "native_tools.", origin, origins;
+            read, write, edit, glob, grep, bash
+        );
     }
 }
 
@@ -486,7 +415,19 @@ impl RuntimeLayer {
             "native_tools.grep",
             "native_tools.bash",
         ] {
-            origins.entry(path.into()).or_insert(Origin::Builtin);
+            // An omitted member of a replaced object is defaulted within
+            // the winning object. Its source is that object, never the
+            // shadowed lower field (nor a synthetic lower Builtin origin).
+            let mut parent = path;
+            let mut owner = Origin::Builtin;
+            while let Some((container, _)) = parent.rsplit_once('.') {
+                if let Some(origin) = origins.get(container) {
+                    owner = origin.clone();
+                    break;
+                }
+                parent = container;
+            }
+            origins.entry(path.into()).or_insert(owner);
         }
         map(origins, "environment", config.environment.keys());
         map(origins, "mcp_servers", config.mcp_servers.keys());
@@ -498,7 +439,41 @@ impl RuntimeLayer {
     }
 
     pub fn overlay(&mut self, layer: Self, origin: &Origin, origins: &mut Origins) {
-        self.merge(layer, "", origin, origins);
+        replace_units!(self, layer, "", origin, origins;
+            models, runtime_root, schema_version, agent_id, approval_mode,
+            context, model_timeout_policy, tool_deadline_policy, subagents, skills
+        );
+        if let Some(agent) = layer.agent {
+            self.agent
+                .get_or_insert_default()
+                .overlay(agent, origin, origins);
+        }
+        if let Some(policies) = layer.native_tools {
+            self.native_tools
+                .get_or_insert_default()
+                .overlay(policies, origin, origins);
+        }
+        named(
+            &mut self.mcp_servers,
+            layer.mcp_servers,
+            "mcp_servers",
+            origin,
+            origins,
+        );
+        named(
+            &mut self.mcp_tool_policies,
+            layer.mcp_tool_policies,
+            "mcp_tool_policies",
+            origin,
+            origins,
+        );
+        named(
+            &mut self.environment,
+            layer.environment,
+            "environment",
+            origin,
+            origins,
+        );
     }
     pub fn model_sections(self) -> Result<(SessionModelConfig, ContextPolicyDocument), String> {
         Ok((
@@ -714,6 +689,7 @@ mode = "disabled"
 
 [agent]
 [agent.model]
+model = "p/m"
 [agent.model.reasoning_profile]
 mode = "catalog_default"
 
@@ -742,10 +718,9 @@ timezone = "UTC"
             chrono_tz::UTC
         );
         for field in [
-            "agent.model.reasoning_profile",
-            "agent.model.max_output_tokens",
-            "context.summary_output_cap",
-            "tool_deadline_policy.idle_liveness_ms",
+            "agent.model",
+            "context",
+            "tool_deadline_policy",
             "agent.extensions",
         ] {
             assert!(matches!(origins[field], Origin::Project { .. }));
@@ -769,6 +744,7 @@ milliseconds = 200
 
 [agent]
 [agent.model]
+model = "p/m"
 [agent.model.reasoning_profile]
 mode = "profile"
 name = "catalog_default"

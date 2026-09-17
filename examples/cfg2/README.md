@@ -3,7 +3,9 @@
 Use this directory as a workspace with an existing host `settings.toml` and
 `models.toml`. Replace the placeholder MCP endpoint before online use. Host
 settings own model/provider credentials and approval; this project contains
-no credentials. Grant workspace trust explicitly before runtime use.
+no credentials. Set `agent.model.model` to a declared model identity (the example
+uses `example/demo-model`). The whole model selection replaces the lower one,
+including its request settings. Grant workspace trust explicitly before runtime use.
 
 ```sh
 rustx config show --agent main --workspace examples/cfg2 --json

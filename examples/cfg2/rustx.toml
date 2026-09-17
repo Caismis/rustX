@@ -17,6 +17,10 @@ disabled_skills = []
 [agent.tools]
 builtin = ["read"]
 
+# A Workspace model selection is complete; it never inherits a lower identity.
+[agent.model]
+model = "example/demo-model"
+
 [agent.model.request_params]
 temperature = 0.7
 top_p = 0.95

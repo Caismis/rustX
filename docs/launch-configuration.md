@@ -166,7 +166,7 @@ settings value, not a live registry and not durable Session authority.
 | `subagents.max_concurrent`, `skills.sources` | Current capacity/source policy frozen per Session composition. Explicit resource reload does not rediscover source authority. |
 | Model/provider catalog including endpoints, protocol, limits, capabilities, reasoning/request defaults and credential references | Current model source content, validated per fresh resolution. Runtime binding uses the captured catalog. |
 | Agent TOML, Workflow YAML, Skill Markdown, AGENTS Markdown, Managed Python package discovery | Current canonical resource content/discovery, captured per resolution and handled by existing domain owners. Python discovery stays inert; preparation is demand-driven. |
-| `SessionConfigInput.cwd`, `config`, `model`, `skill_paths`, `no_automatic_skills`, `no_builtin_tools`, `no_direct_tools`, `tools`, `exclude_tools` | Explicit Session context/selections or allowed host inputs. No generic configuration override. `None` inherits; explicit empty authored lists/maps remain empty; empty exact Tool flag lists are rejected rather than treated as omission; explicit disable flags remain separate. Only existing model Session state has durable behavior today; #286 owns final multi-Session persistence. |
+| `SessionConfigInput.cwd`, `config`, `model`, `skill_paths`, `no_automatic_skills`, `no_builtin_tools`, `no_direct_tools`, `tools`, `exclude_tools` | Explicit Session context/selections or allowed host inputs. No generic configuration override. `None` inherits; explicit empty selection lists remain empty; identity maps replace only named entries; empty exact Tool flag lists are rejected rather than treated as omission; explicit disable flags remain separate. Only existing model Session state has durable behavior today; #286 owns final multi-Session persistence. |
 | `StartupSession`, Session name; estimator, child executable and injected credential environment | Composition/host controls in `LocalRuntimeDependencies`, outside effective settings. |
 | Provenance, trust result, canonical identity, resource roots/document slots, static `CapabilityInspection` | Derived prospective snapshot metadata; never serialized as Session configuration authority. Provenance contains origins, not values. |
 | Tool registries, model bindings, MCP connections, prepared environments, `RuntimeResourceSnapshot`, `CapabilitySnapshot`, native Extensions, admitted attempts, children and Workflow runs | Resolved/live owners. Publication replaces generations atomically; already-admitted work retains owned snapshots. None is configuration authoring authority. |
@@ -193,16 +193,16 @@ higher layer would override them. Unknown fields fail at every schema boundary.
 | Field class | User | Trusted project | CLI | Merge |
 | --- | --- | --- | --- | --- |
 | Model/provider declarations, endpoint, protocol, limits, capabilities, credential source | Host catalog; `models` chooses path | Forbidden | `--models` selects host catalog | Catalog replacement; no provider inference |
-| Agent model selection and request policy (`agent.model`) | Yes | Existing host model only | `--model provider/model` | Explicit model-policy members; CLI selects fresh model policy |
+| Agent model selection and request policy (`agent.model`) | Yes | Existing host model only | `--model provider/model` | Whole model-selection object; omitted members use selection defaults; CLI selects fresh model policy |
 | `agent_id` | Yes | Yes | — | Scalar replacement |
 | `approval_mode` | Yes | Forbidden | — | Host scalar replacement |
-| `context`, `model_timeout_policy`, `tool_deadline_policy` | Yes | Yes | — | Explicit members of these finite records |
+| `context`, `model_timeout_policy`, `tool_deadline_policy` | Yes | Yes | — | Whole policy object; omitted members use product defaults |
 | `agent.tools`, `agent.disabled_skills`, `agent.agents`, `agent.workflows` | Yes | Yes | Tool selection flags | Each selected dimension replaces; names select admitted resources. `agent.skills` is named-Agent authoring and is rejected on the root whenever it is authored, including `skills = []`. |
 | `skills.sources` | Yes | Yes | `--skill`, `--no-automatic-skills` | Session-composition automatic source selection; list replacement, empty list selects none. An unselected source is inert: its root is never validated, scanned, or diagnosed. Resource reload rescans and revalidates the resolved roots but never rereads this policy |
-| `mcp_servers`, `environment` | Yes | Yes | — | Named entries replace whole entries; empty map clears |
-| `native_tools`, `mcp_tool_policies` | Yes | Forbidden | — | Host-only whole named entries; empty map clears |
+| `mcp_servers`, `environment` | Yes | Yes | — | Named entries replace whole entries; empty map names no replacements |
+| `native_tools`, `mcp_tool_policies` | Yes | Forbidden | — | Host-only whole named entries; empty map names no replacements |
 | `agent.extensions` | Yes | Yes | — | Complete dimension replacement; an empty table composes none |
-| `subagents.max_concurrent` | Yes | Yes | — | Runtime child capacity; scalar replacement |
+| `subagents` | Yes | Yes | — | Whole runtime child-capacity object |
 | Runtime state root (`runtime_root`) | Yes | Forbidden | `--runtime-root` | Path replacement |
 | Workspace identity | No settings authority | Forbidden | `--workspace` | Canonical root selection |
 | Trust records/store, credential-store redirection | No settings authority | Forbidden | `--trust grant/revoke` only | Host-owned membership operation |
@@ -229,10 +229,12 @@ three invocation-policy axes and runtime-wide approval mode.
 
 Partial documents preserve absence. An absent list/map leaves the preceding
 value. An explicit empty list replaces with no entries; an empty named map
-clears preceding entries. Nonempty named maps retain other names and replace
-same-name entries entirely, including omitted members of that entry. Structured
-records such as `context = {}` contain no overrides. No arbitrary recursive
-semantic merge, permission union, tombstones, includes or profile inheritance
+names no replacements. Named maps retain other names and replace same-name
+entries entirely, including omitted members of that entry. Atomic policy
+objects such as `context = {}` replace the whole lower object with product
+defaults. A present `agent.model` replaces the complete selection and must
+name its model; it cannot borrow a lower model identity or request setting.
+No arbitrary recursive semantic merge, permission union, tombstones, includes or profile inheritance
 exists. TOML has no null literal. An omitted field inherits; explicit domain
 choices reset an inherited optional setting:
 

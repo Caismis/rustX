@@ -1027,10 +1027,7 @@ mod roundtrip_tests {
             )
             .unwrap();
         assert_eq!(after.user.authored, Some(partial));
-        assert_eq!(
-            after.effective.as_ref().unwrap().request_params["temperature"],
-            0.3
-        );
+        assert!(after.effective.as_ref().unwrap().request_params.is_empty());
         let bytes = std::fs::read_to_string(&owner.sources.settings).unwrap();
         assert!(bytes.contains("KEEP = 'unchanged'"));
         assert!(!bytes.contains("reasoning_profile"));
@@ -1098,7 +1095,7 @@ mod roundtrip_tests {
     }
 
     #[test]
-    fn workspace_policy_without_identity_preserves_omitted_and_explicit_defaults() {
+    fn workspace_model_without_identity_stays_unresolved_until_reset() {
         let (_root, owner, input) = fixture();
         trust(&owner, &input);
         let before = owner.read_source_settings(&input).unwrap();
@@ -1118,14 +1115,9 @@ mod roundtrip_tests {
             )
             .unwrap();
         assert_eq!(first.workspace.authored, Some(partial.clone()));
-        assert!(matches!(
-            first.provenance["agent.model.model"],
-            Origin::User { .. }
-        ));
-        assert!(matches!(
-            first.provenance["agent.model.request_params"],
-            Origin::Project { .. }
-        ));
+        assert!(!first.resolution_available);
+        assert!(first.effective.is_none());
+        assert!(first.provenance.is_empty());
         let mut explicit = partial;
         explicit.reasoning_profile =
             Some(super::super::super::authoring::ReasoningSelection::CatalogDefault {});
@@ -1139,6 +1131,8 @@ mod roundtrip_tests {
             )
             .unwrap();
         assert_eq!(second.workspace.authored, Some(explicit));
+        assert!(!second.resolution_available);
+        assert!(second.effective.is_none());
         let bytes = std::fs::read_to_string(input.cwd.join("rustx.toml")).unwrap();
         assert!(!bytes.contains("model ="));
         assert!(!bytes.contains("max_output_tokens"));
@@ -1163,7 +1157,7 @@ mod roundtrip_tests {
         let (_root, owner, mut input) = fixture();
         trust(&owner, &input);
         let path = input.cwd.join("rustx.toml");
-        std::fs::write(&path, "[agent]\nworkflows = ['check', 'check']\n[agent.model]\nmax_output_tokens = { mode = 'limit', tokens = 1024 }\n").unwrap();
+        std::fs::write(&path, "[agent]\nworkflows = ['check', 'check']\n[agent.model]\nmodel = 'example/demo-model'\nmax_output_tokens = { mode = 'limit', tokens = 1024 }\n").unwrap();
         let first = owner.read_source_settings(&input).unwrap();
         assert!(first.resolution_available);
         assert_eq!(
@@ -1176,15 +1170,19 @@ mod roundtrip_tests {
         );
         assert!(matches!(
             first.provenance["agent.model.model"],
-            Origin::User { .. }
+            Origin::Project { .. }
         ));
         assert!(matches!(
             first.provenance["agent.model.max_output_tokens"],
             Origin::Project { .. }
         ));
         assert_eq!(first.user.authored, Some(authored("example/demo-model")));
-        assert!(first.workspace.authored.as_ref().unwrap().model.is_none());
+        assert_eq!(
+            first.workspace.authored.as_ref().unwrap().model,
+            Some(crate::model::catalog::ModelRef::parse("example/demo-model").unwrap())
+        );
         let partial = AuthoredModelSelection {
+            model: Some(crate::model::catalog::ModelRef::parse("example/demo-model").unwrap()),
             max_output_tokens: Some(crate::local_runtime::authoring::ModelOutput::Limit {
                 tokens: 2048,
             }),
@@ -1204,7 +1202,10 @@ mod roundtrip_tests {
         assert_eq!(saved.effective_request.unwrap().max_output_tokens, 2048);
         let bytes = std::fs::read(&path).unwrap();
         let parsed = super::super::parse_layer(&path, &bytes, true).unwrap();
-        assert!(parsed.agent.unwrap().model.unwrap().model.is_none());
+        assert_eq!(
+            parsed.agent.unwrap().model.unwrap().model,
+            Some(crate::model::catalog::ModelRef::parse("example/demo-model").unwrap())
+        );
         let error = owner.resolve_session(&input).err().unwrap().to_string();
         assert!(error.contains("duplicate"), "{error}");
         input.model = Some(selected("example/second"));

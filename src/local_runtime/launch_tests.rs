@@ -30,7 +30,13 @@ fn cfg279_structured_parameters_check_show_and_project_overlay_are_side_effect_f
             Some("agent.model.request_params.items[1].when"),
         ),
     ] {
-        std::fs::write(&file, format!("[agent.model.request_params]\n{parameters}")).unwrap();
+        std::fs::write(
+            &file,
+            format!(
+                "[agent.model]\nmodel = 'host/one'\n[agent.model.request_params]\n{parameters}"
+            ),
+        )
+        .unwrap();
         for operation in ["config_check", "config_show"] {
             let ((report, launch), effects) = super::static_effects::measure(|| {
                 super::diagnostics::inspect(operation, &f.request, &f.host)
@@ -1737,18 +1743,21 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
     let resolved = f.resolve();
     assert_eq!(
         resolved.settings_view().reasoning_origin,
-        crate::runtime_client::settings::SettingOrigin::User {
+        crate::runtime_client::settings::SettingOrigin::Project {
             document: f
                 .host
-                .config_directory
-                .join("settings.toml")
+                .launch_directory
+                .join("rustx.toml")
                 .display()
                 .to_string(),
         },
     );
     assert_eq!(resolved.config.agent_id.as_str(), "user");
     assert_eq!(resolved.config.context.reserve_tokens, 3000);
-    assert_eq!(resolved.config.context.keep_recent_tokens, 6000);
+    assert_eq!(
+        resolved.config.context.keep_recent_tokens,
+        super::config::ContextPolicyDocument::default().keep_recent_tokens
+    );
     assert!(resolved.config.agent.tools.builtin.is_empty());
     assert_eq!(resolved.config.environment.len(), 2);
     assert_eq!(resolved.config.environment["REPLACED"], "new");
@@ -1767,7 +1776,7 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
     );
     assert!(matches!(
         resolved.provenance["context.keep_recent_tokens"],
-        Origin::User { .. }
+        Origin::Project { .. }
     ));
     assert!(matches!(
         resolved.provenance["context.reserve_tokens"],
@@ -1789,8 +1798,9 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
     assert_eq!(cli.tools, Some(vec!["read".into(), "bash".into()]));
     f.project(json!({"environment":{},"mcp_servers":{},"subagents":{}}));
     let empty = f.resolve();
-    assert!(empty.config.environment.is_empty());
-    assert!(empty.config.mcp_servers.is_empty());
+    assert_eq!(empty.config.environment.len(), 2);
+    assert_eq!(empty.config.environment["REPLACED"], "old");
+    assert_eq!(empty.config.mcp_servers.len(), 2);
     assert!(empty.config.agent.agents.is_empty());
     assert_eq!(empty.config.agent.tools.builtin, ["read", "bash"]);
 }
@@ -3462,6 +3472,10 @@ fn cfg275_committed_end_to_end_example_uses_final_authoring_and_offline_admissio
         std::fs::create_dir_all(target.parent().unwrap()).unwrap();
         std::fs::copy(example.join(file), target).unwrap();
     }
+    // Bind the example's complete selection to this fixture's declared model.
+    let config = f.host.launch_directory.join("rustx.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(config, text.replace("example/demo-model", "host/one")).unwrap();
     let ((report, launch), effects) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_show", &f.request, &f.host)
     });
