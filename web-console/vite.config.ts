@@ -7,5 +7,5 @@ const host = process.env.RUSTX_WORKSPACE_HOST_CONFIG ? new LocalWorkspaceHost(JS
 export default defineConfig({
   plugins: [react(), { name: 'product-host-workspaces', configureServer(server) { server.middlewares.use(workspaceHandler(host)); }, configurePreviewServer(server) { server.middlewares.use(workspaceHandler(host)); } }],
   server: { host: '127.0.0.1', strictPort: true },
-  test: { include: ['test/**/*.test.ts', 'test/**/*.test.tsx'], environment: 'jsdom', restoreMocks: true },
+  test: { setupFiles: ['./test/setup.ts'], include: ['test/**/*.test.ts', 'test/**/*.test.tsx'], environment: 'jsdom', restoreMocks: true },
 });

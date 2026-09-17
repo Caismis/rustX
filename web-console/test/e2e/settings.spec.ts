@@ -1,3 +1,4 @@
+import { chooseWorkspace } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { startDogfood } from './dogfood-server';
@@ -12,11 +13,11 @@ test('CFG3 atomic Provider and Model editing, Root selections, Save and reload f
     await page.getByLabel('Transport token').fill(fixture.token);
     await page.getByRole('button', { name: 'Connect', exact: true }).click();
     await expect(page.locator('.status strong')).toHaveText('connected');
-    await page.getByLabel('Choose Workspace').selectOption({ label: 'Workspace A' });
+    await chooseWorkspace(page, 'Workspace A');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(page.locator('.session-toolbar small')).toContainText('attached');
-    await page.getByRole('tab', { name: 'Settings', exact: true }).click();
-    const settings = page.getByRole('region', { name: 'Settings', exact: true });
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
     const saved = async () => { await expect(settings.getByText(/Source saved. The loaded runtime/)).toBeVisible(); };
     await settings.getByRole('tab', { name: 'User', exact: true }).click();
     await settings.getByRole('button', { name: 'Providers & Models', exact: true }).click();
@@ -69,7 +70,7 @@ test('CFG3 atomic Provider and Model editing, Root selections, Save and reload f
       await source.getByRole('combobox', { name: 'Selection', exact: true }).selectOption('none');
       await source.getByRole('button', { name: `Save Source ${name}`, exact: true }).click(); await saved();
     }
-    await settings.getByRole('button', { name: 'Skills', exact: true }).first().click();
+    await settings.getByRole('button', { name: 'Skill access', exact: true }).click();
     await expect(settings).toContainText('not filesystem access');
     await expect(settings).toContainText(`${fixture.workspaceA}/.agents/skills`);
     await settings.getByRole('combobox', { name: 'Selection', exact: true }).selectOption('all');

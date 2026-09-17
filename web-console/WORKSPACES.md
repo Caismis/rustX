@@ -125,3 +125,22 @@ read-only native projection. Invalid configuration fails native resolution inste
 of silently skipping Workspace content. Save changes authored bytes only; Reload
 publishes a coherent generation. Host metadata introduces no configuration layer,
 credentials or resource definitions. See [Web Settings](../docs/web-settings.md).
+
+## Harness browser presentation (#345)
+
+The Sidebar uses the upstream compact project/Session rows, hover cards, menus,
+search results and collapsed rail. **New Session** opens the registered Workspace
+picker; a project's **New Session** button uses that authorized registration.
+Project title selection changes navigation context; its chevron expands/collapses
+rows. **View options** switches Flat/Grouped view and refreshes the native list.
+Search is native Session metadata search, paged in 32-row windows. It never scans
+browser-owned history. Rename, Fork and Delete are in each Session's menu; Delete
+opens the existing native preview and revision-checked confirmation.
+
+Current authoritative pending interactions (approval/review/question) outrank the
+running marker. Queued inbound input alone is not a pending interaction. Detached,
+unloaded or stale snapshots cannot claim current activity. A Host classification
+result is paired with the exact Session summary array it classified and is thrown
+away on replacement. Collapse and search selection remain disposable; there is no
+persisted Session-to-Workspace membership map. Unregister changes Host metadata
+only, retaining authorized ungrouped Sessions and committed native operations.

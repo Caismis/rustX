@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/deepseek-ai/deepseek-harness",
-  "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+  "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
   "files": [
     {
       "upstream": "packages/client/ui-primitives/src/rank-by-name.ts",
@@ -16,7 +16,9 @@
         "Session Controller and conversation/event authority",
         "Cordis/plugin runtime",
         "Harness queue and retry authority"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "8287272baf715069b8b4cfd20f7b1c14eb72734d3ae244bf537643d663f765bc"
     },
     {
       "upstream": "packages/client/ui-input-trigger/src/client/MenuView.tsx",
@@ -34,19 +36,21 @@
         "Session Controller and conversation/event authority",
         "Cordis/plugin runtime",
         "Harness queue and retry authority"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "1896a85ddabd6be25bb7db78f21464bf0d880741618e773e643f2966bdaa677a"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.tsx",
       "destination": "web-console/src/app/commands/CommandPanel.tsx",
-      "treatment": "rewritten selectors with native Dialog and typed rustX dispatch",
+      "treatment": "rewritten selectors with Harness Modal and typed rustX dispatch",
       "upstream_sha256": "c6a89ae2771f36ff6da26886fbc6719369f41f9eae004e52561644c788df153f",
       "retained_dependencies": [
         "../../../../protocol/app-server/v6",
         "../../bindings/projection",
         "../../client/app-server",
         "../../presentation/primitives/Button",
-        "../../presentation/primitives/Dialog",
+        "../../presentation/primitives/Modal",
         "./Commands.module.css",
         "./native",
         "./registry",
@@ -58,7 +62,9 @@
         "Session Controller and conversation/event authority",
         "Cordis/plugin runtime",
         "Harness queue and retry authority"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "3d8c6825ed7a869baa32b2f6843049f8c5e119a46eedb24e1b1a16993b279170"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.module.css",
@@ -82,12 +88,14 @@
         "Session Controller and conversation/event authority",
         "Cordis/plugin runtime",
         "Harness queue and retry authority"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "841b0593924cd5bcd6e019de4a886ffd7342dd4d78fec2dd568cdaf745897bd1"
     },
     {
       "upstream": "packages/client/ui-primitives/src/Button.tsx",
       "destination": "web-console/src/presentation/primitives/Button.tsx",
-      "treatment": "retained mostly intact",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
       "upstream_sha256": "5f1db06042fa372c45d777feffaab3b1d0c9395a89fa00b735bd9cbc8a389371",
       "retained_dependencies": [
         "./Button.module.css",
@@ -95,24 +103,40 @@
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": []
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "local_sha256": "3d815319babc3837cbfcec1c17788ebe5fbebb6c0011a3449ab00c85cb7056b9",
+      "classification": "A"
     },
     {
       "upstream": "packages/client/ui-primitives/src/Button.module.css",
       "destination": "web-console/src/presentation/primitives/Button.module.css",
-      "treatment": "retained mostly intact",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
       "upstream_sha256": "a32017eff252569cef883d7d3308b2ca01fc41b167b568ad00b923603a902f99",
       "retained_dependencies": [
         "CSS modules",
         "existing theme tokens"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": []
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "local_sha256": "9c783903f8dbd7527ff19dc9f2a99d9d857f61ed6f851c56be0032d324ac5e27",
+      "classification": "A"
     },
     {
       "upstream": "packages/client/ui-primitives/src/Input.tsx",
       "destination": "web-console/src/presentation/primitives/Input.tsx",
-      "treatment": "retained mostly intact",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
       "upstream_sha256": "dcb73dad681f3f37975c08ed3aa97922a1f5337548b406806324877a5d398c51",
       "retained_dependencies": [
         "./Input.module.css",
@@ -120,24 +144,40 @@
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": []
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "local_sha256": "f0a215537e96d4a520e8d79bd22d258f7d6126fc885a2b94b7ba75756c82252f",
+      "classification": "A"
     },
     {
       "upstream": "packages/client/ui-primitives/src/Input.module.css",
       "destination": "web-console/src/presentation/primitives/Input.module.css",
-      "treatment": "retained mostly intact",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
       "upstream_sha256": "f13333abf03b98d52bd65702ac34fbbf00b3c4fc3d8985b793d5e912a3e22b2e",
       "retained_dependencies": [
         "CSS modules",
         "existing theme tokens"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": []
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "local_sha256": "ff7eabf53b32c73e23bf58082cbf3851ea4c701430b56887f4a9de2261a146f4",
+      "classification": "A"
     },
     {
       "upstream": "packages/client/ui-primitives/src/Pill.tsx",
       "destination": "web-console/src/presentation/primitives/Pill.tsx",
-      "treatment": "retained mostly intact",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
       "upstream_sha256": "851727b4f745755f8553a92bc5881e54d0479ea680d1686533ba210cb943ca2f",
       "retained_dependencies": [
         "./Pill.module.css",
@@ -145,43 +185,75 @@
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": []
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "local_sha256": "cc059ffa398112f9b8b546f11d60c6ba2443e427998cd56bcaa8cbd5c83c593e",
+      "classification": "A"
     },
     {
       "upstream": "packages/client/ui-primitives/src/Pill.module.css",
       "destination": "web-console/src/presentation/primitives/Pill.module.css",
-      "treatment": "retained mostly intact",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
       "upstream_sha256": "c1c39eb6adc0e40326f7a33598a32195b388cb9db2627a9c723c009b44a94dab",
       "retained_dependencies": [
         "CSS modules",
         "existing theme tokens"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": []
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "local_sha256": "ff1ab0564e4da8096d626874ddba4013ce6bcdbe308f87f772c20471280f501e",
+      "classification": "A"
     },
     {
       "upstream": "packages/client/ui-primitives/src/StateDot.tsx",
       "destination": "web-console/src/presentation/primitives/StateDot.tsx",
-      "treatment": "retained mostly intact",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
       "upstream_sha256": "94e287b278d5481d6812dae820a95afee6856d34b4056bfd84017f43a5b43ad2",
       "retained_dependencies": [
         "./StateDot.module.css",
         "clsx"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": []
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "local_sha256": "ed5cbb6c95a0e69342f19dd2966b993fbfb5d547ab4795208f44a0eaad9576a2",
+      "classification": "A"
     },
     {
       "upstream": "packages/client/ui-primitives/src/StateDot.module.css",
       "destination": "web-console/src/presentation/primitives/StateDot.module.css",
-      "treatment": "retained mostly intact",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
       "upstream_sha256": "21c9dca85dffbae6e31da3bfd4c4578739282f9ed3b9a3bbf68b6b12338879de",
       "retained_dependencies": [
         "CSS modules",
         "existing theme tokens"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": []
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "local_sha256": "1e0c8640fa25b9e970a240a7dbd9b14c61d6a1475314877daa3751ca5ed235c2",
+      "classification": "A"
     },
     {
       "upstream": "packages/client/ui-primitives/src/DisclosureRow.tsx",
@@ -195,7 +267,9 @@
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": []
+      "excluded_dependencies": [],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "c0085205ef3c8ab34b6c860fcb6f129d78d575764b6e85ac2ed65c0f38d2e113"
     },
     {
       "upstream": "packages/client/ui-primitives/src/DisclosureRow.module.css",
@@ -207,111 +281,106 @@
         "existing theme tokens"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": []
+      "excluded_dependencies": [],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "f8dafcda07dd1744bd0f2e3724ab1b17ab8cdde6f6eb82dec8a7ffdbc78a624d"
     },
     {
       "upstream": "packages/client/ui-primitives/src/icons/props.ts",
       "destination": "web-console/src/presentation/primitives/icons/props.ts",
-      "treatment": "retained mostly intact",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
       "upstream_sha256": "98d350861746bca58f07d5301a0caff7270035c9331ed5b605e702d7f590f1fb",
       "retained_dependencies": [],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": []
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "local_sha256": "2aa0eb3e4e79b5d432c54ecc572f421f38b9766a4aeca6c87c34bca9d2cc581e",
+      "classification": "A"
     },
     {
       "upstream": "packages/client/ui-primitives/src/icons/index.tsx",
       "destination": "web-console/src/presentation/primitives/icons/index.tsx",
-      "treatment": "adapted: eleven generic glyphs (four foundation and seven composer dock glyphs); no branding assets",
-      "upstream_sha256": "c0035537e5c3ffe75614daeca9d3b163d70048023e897a670cfa6fb70238df80",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "upstream_sha256": "0808f16b575502111c00b08181a68da4d065eb6008fd1da4076d458b324bdf78",
       "retained_dependencies": [
         "./props.ts"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": []
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "local_sha256": "dab20ae73fde866385b7b7bc9de8c8a8c63c41b40bb8eb6cf871c49007d3c21b",
+      "classification": "A"
     },
     {
       "upstream": "packages/client/ui-theme/src/styles/base.css",
       "destination": "web-console/src/presentation/theme/base.css",
-      "treatment": "retained mostly intact",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
       "upstream_sha256": "85f8970d2650108ad47d66da1db3ba00ebbe3f26aaec00551cfa69dd029347a3",
       "retained_dependencies": [
         "CSS modules",
         "existing theme tokens"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": []
-    },
-    {
-      "upstream": "packages/client/ui-theme/src/styles/design-platform.css",
-      "destination": "web-console/src/presentation/theme/tokens.css",
-      "treatment": "adapted: generic tokens; brand token renamed accent",
-      "upstream_sha256": "ba4f1ec7f164756c67f33101c6851ec5e8fa26d61cff7e0be61e30c4f58db28c",
-      "retained_dependencies": [
-        "CSS modules",
-        "existing theme tokens"
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
       ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": []
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "local_sha256": "b6b9f7614d9f46838287437ffd5b1edb751740aa83286e766c778cf6675706e1",
+      "classification": "A"
     },
     {
       "upstream": "packages/client/ui-layout/src/client/AppFrame.tsx",
       "destination": "web-console/src/presentation/layout/AppFrame.tsx",
-      "treatment": "substantially refactored: presentation extracted; native rustX bindings",
-      "upstream_sha256": "69f66f2c725120000014c7fc25b66f79632b3b4bb6899b1b81b0678819158841",
+      "treatment": "A: Harness grid/column solve/drag DOM and CSS; local measured React state and explicit render seats replace the injected layout store; desktop integration excluded; upstream platform CSS selectors remain inert",
+      "upstream_sha256": "98abc310aaf2a764fae01235278c4e363ae042102806d752f15a9f68b840675e",
       "retained_dependencies": [
         "./AppFrame.module.css",
+        "./columns",
         "react"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
-        "Harness Host/Cordis/Remote/Session authority",
-        "workspace/file mutation"
-      ]
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "local_sha256": "9041d0996cfbd9f193f825b44c50cbe4d8a3688b0bdf44a8807037e619a36eff",
+      "classification": "A"
     },
     {
       "upstream": "packages/client/ui-layout/src/client/AppFrame.module.css",
       "destination": "web-console/src/presentation/layout/AppFrame.module.css",
-      "treatment": "substantially refactored: presentation extracted; native rustX bindings",
-      "upstream_sha256": "3ea2d3c3035a26484ee5e7760f5f6d53719b5a665cac1e09dca96bf88e8e44ec",
+      "treatment": "A: Harness grid/column solve/drag DOM and CSS; local measured React state and explicit render seats replace the injected layout store; desktop integration excluded; upstream platform CSS selectors remain inert",
+      "upstream_sha256": "d3ecfc590ff09208e9f939c2a43faaa0de1bb41ba329d79725cbe6f98790d9f8",
       "retained_dependencies": [
         "CSS modules",
         "existing theme tokens"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
-        "Harness Host/Cordis/Remote/Session authority",
-        "workspace/file mutation"
-      ]
-    },
-    {
-      "upstream": "packages/client/ui-sidebar/src/client/SidebarRoot.tsx",
-      "destination": "web-console/src/app/components/Sidebar.tsx",
-      "treatment": "substantially refactored: presentation extracted; native rustX bindings",
-      "upstream_sha256": "9b9df86191667670fcbe81d9d8d23f654e01e83cec8571b36edcd55842a96f2b",
-      "retained_dependencies": [
-        "./Sidebar.module.css",
-        "react"
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
       ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Harness Host/Cordis/Remote/Session authority",
-        "workspace/file mutation"
-      ]
-    },
-    {
-      "upstream": "packages/client/ui-sidebar/src/client/SidebarRoot.module.css",
-      "destination": "web-console/src/app/components/Sidebar.module.css",
-      "treatment": "substantially refactored: presentation extracted; native rustX bindings",
-      "upstream_sha256": "aa6b29bceab34a49e00c7c10c0448eaab288acedc1adedf27b96235db4e6265e",
-      "retained_dependencies": [
-        "CSS modules",
-        "existing theme tokens"
-      ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Harness Host/Cordis/Remote/Session authority",
-        "workspace/file mutation"
-      ]
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "local_sha256": "65057571cf2aec805e94a35d999fcd503f026022c3b8f2f0c8d590c84d1e9ad9",
+      "classification": "A"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageItem.tsx",
@@ -326,7 +395,9 @@
       "excluded_dependencies": [
         "Harness Host/Cordis/Remote/Session authority",
         "workspace/file mutation"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "b16a4e9260d2a3aeadf543997da7ee7a2811df88c671d1e52107f376418d972b"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageItem.module.css",
@@ -341,7 +412,9 @@
       "excluded_dependencies": [
         "Harness Host/Cordis/Remote/Session authority",
         "workspace/file mutation"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "f9f8f9dbdd63a92fa34c0fb443ea1758e0ea6521eeca45a3840600091969b72b"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -365,7 +438,9 @@
       "excluded_dependencies": [
         "Harness Host/Cordis/Remote/Session authority",
         "workspace/file mutation"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "dcf3768f18d8337b27b97be29fa1a8bd37295f37257dd043faeccde87332a7ad"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.module.css",
@@ -380,7 +455,9 @@
       "excluded_dependencies": [
         "Harness Host/Cordis/Remote/Session authority",
         "workspace/file mutation"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "0353a4c7f38ac4e2452922e3d0c60bc090eb422e211b062e1e5d7e62816a3287"
     },
     {
       "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.tsx",
@@ -397,7 +474,9 @@
       "excluded_dependencies": [
         "Harness Host/Cordis/Remote/Session authority",
         "workspace/file mutation"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "dc61bc7624137735f32db591ce78ea4b1f69fa327f41495076d1bd71b2cb37a1"
     },
     {
       "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.module.css",
@@ -412,7 +491,9 @@
       "excluded_dependencies": [
         "Harness Host/Cordis/Remote/Session authority",
         "workspace/file mutation"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "34feaa9267d443e6306500ed066fde05ed8d374489584ffa88493cd9dbdbbd97"
     },
     {
       "upstream": "packages/client/ui-approval/src/client/ApprovalPanel.tsx",
@@ -428,7 +509,9 @@
       "excluded_dependencies": [
         "Harness Host/Cordis/Remote/Session authority",
         "workspace/file mutation"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "47f7fe5ae26ea2103ed0a96927cecc7d0980847c86de8b7524717f6482da4694"
     },
     {
       "upstream": "packages/client/ui-approval/src/client/ApprovalPanel.module.css",
@@ -443,7 +526,9 @@
       "excluded_dependencies": [
         "Harness Host/Cordis/Remote/Session authority",
         "workspace/file mutation"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "395ec92ecbca0625d1486e401e393fec022c32e8820c5ba582516c045b9557b7"
     },
     {
       "upstream": "packages/client/ui-user-questions/src/client/QuestionComposer.tsx",
@@ -463,7 +548,9 @@
       "excluded_dependencies": [
         "Harness Host/Cordis/Remote/Session authority",
         "workspace/file mutation"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "bd6383213cc44997264b94935865896e8b7b2a7d3de7bc835be35f1704870687"
     },
     {
       "upstream": "packages/client/ui-user-questions/src/client/QuestionComposer.module.css",
@@ -478,7 +565,9 @@
       "excluded_dependencies": [
         "Harness Host/Cordis/Remote/Session authority",
         "workspace/file mutation"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "b5f6d4480f5160c323a5d5016524fedebc27151da8fe744421f2876e44394a3e"
     },
     {
       "upstream": "LICENSE",
@@ -487,7 +576,9 @@
       "upstream_sha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be",
       "retained_dependencies": [],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": []
+      "excluded_dependencies": [],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/MarkdownText.tsx",
@@ -506,22 +597,29 @@
         "Harness Host/Cordis/Remote/Session authority",
         "workspace/file mutation"
       ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek"
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "dace8937f55d30d47fcab3401edf39edce6b5004cb06062c2437a03d1f73bc79"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/MarkdownText.module.css",
       "destination": "web-console/src/presentation/markdown/MarkdownText.module.css",
-      "treatment": "adapted",
-      "upstream_sha256": "7a6a54cfd2870405f45ea7ed3725bed4f858e410c32c4b5db097cc7e15872465",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "upstream_sha256": "24b5e6756a8b09aef5c9a7238b23784d9d794d10690dc58b43ad67d200209b14",
       "retained_dependencies": [
         "CSS modules",
         "existing theme tokens"
       ],
       "excluded_dependencies": [
-        "Harness Host/Cordis/Remote/Session authority",
-        "workspace/file mutation"
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
       ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek"
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "local_sha256": "67edb17ec417a64ee6af965ee00a94edfcf5c2b38fb60ef05ce70ee7f44a0096",
+      "classification": "A"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/parse.ts",
@@ -542,7 +640,9 @@
         "Harness Host/Cordis/Remote/Session authority",
         "workspace/file mutation"
       ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek"
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "349e25843402e7e82c7c4be0759c5b37939b2ffdc63c6f2b8542548ad104d20c"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/incremental.ts",
@@ -556,7 +656,9 @@
         "Harness Host/Cordis/Remote/Session authority",
         "workspace/file mutation"
       ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek"
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "d0d01e519f6f1c3610762da2f4edc8e46e9e6f16d68f1772286245a42e241b6b"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/render.tsx",
@@ -578,7 +680,9 @@
         "Harness Host/Cordis/Remote/Session authority",
         "workspace/file mutation"
       ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek"
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "fd11f7e342f7ffd44d00ae7210f7def2e69eca3256150bba0a865cf887ff4ccb"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/mathCompatibility.ts",
@@ -596,7 +700,9 @@
         "Harness Host/Cordis/Remote/Session authority",
         "workspace/file mutation"
       ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek"
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "b14aae19f5764a809836e7a779a1da20f1387aa3f20c982ce752df958df08151"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/cjkFriendlyStrong.ts",
@@ -614,7 +720,9 @@
         "Harness Host/Cordis/Remote/Session authority",
         "workspace/file mutation"
       ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek"
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "0554ff517961954ad09b8648adaa8f3c0f2625d9e6ec447269cb61f0e3778235"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/katex.tsx",
@@ -629,7 +737,9 @@
         "Harness Host/Cordis/Remote/Session authority",
         "workspace/file mutation"
       ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek"
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "547a5e04b24f3033a32675b57ed1c9c601801f890fa906a06503509e9c987664"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/CodeBlock.tsx",
@@ -648,22 +758,29 @@
         "Harness Host/Cordis/Remote/Session authority",
         "workspace/file mutation"
       ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek"
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "8f463a5055d9266589cba2d93c0296f4bc927b2786c16050dddb31094320642f"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/CodeBlock.module.css",
       "destination": "web-console/src/presentation/markdown/CodeBlock.module.css",
-      "treatment": "adapted",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
       "upstream_sha256": "5a7ed14f12cb63ebf3f77d57e67340f7e9a399b0b07a90bec773fad3ddfa312f",
       "retained_dependencies": [
         "CSS modules",
         "existing theme tokens"
       ],
       "excluded_dependencies": [
-        "Harness Host/Cordis/Remote/Session authority",
-        "workspace/file mutation"
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
       ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek"
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "local_sha256": "6bd229d5d95947696e0ee3f10c6ee77ed9dc4a07319c06ea6f18b1960b60a701",
+      "classification": "A"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/highlight.ts",
@@ -684,7 +801,9 @@
         "Harness Host/Cordis/Remote/Session authority",
         "workspace/file mutation"
       ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek"
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "4a4a3d040e1c5ad08aeb85f7b6a2cb172506f266494213fb73f069bbc6f4d362"
     },
     {
       "upstream": "packages/client/ui-primitives/src/markdown/useViewportHighlighting.ts",
@@ -699,43 +818,69 @@
         "Harness Host/Cordis/Remote/Session authority",
         "workspace/file mutation"
       ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek"
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "ee70704ebd5786784efd06ee0179ce77843ad8f567f6b49013cc6fe3bf01f9ff"
     },
     {
       "upstream": "packages/client/ui-theme/src/styles/shiki.css",
       "destination": "web-console/src/presentation/theme/shiki.css",
-      "treatment": "adapted",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
       "upstream_sha256": "14f2b00083b035d8f92e26243a669d1b04a8d564c20d91856b20706cc79b8828",
       "retained_dependencies": [
         "CSS modules",
         "existing theme tokens"
       ],
-      "excluded_dependencies": [],
-      "license": "MIT; Copyright (c) 2026 DeepSeek"
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "local_sha256": "b06f9978b12decd881cde2f74b77014680c6ddeb3e019645f460761ec6f157b5",
+      "classification": "A"
     },
     {
       "upstream": "packages/client/ui-primitives/src/Menu.module.css",
       "destination": "web-console/src/presentation/primitives/Menu.module.css",
-      "treatment": "adapted",
-      "upstream_sha256": "281d01fd38a35f72bb2f6827873512d5ee3511a0f04553f1d532d886dfd78b91",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "upstream_sha256": "62742423924c7ea62e3b5fa377c39c62b48168c1bcabcfa8dfede64ef01e2bad",
       "retained_dependencies": [
         "CSS modules",
         "existing theme tokens"
       ],
-      "excluded_dependencies": [],
-      "license": "MIT; Copyright (c) 2026 DeepSeek"
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "local_sha256": "2ccfc4d0a72c7399f1c2e7747cdb64451307235f3af7ead270f1f95debb4f790",
+      "classification": "A"
     },
     {
       "upstream": "packages/client/ui-primitives/src/Modal.module.css",
       "destination": "web-console/src/presentation/primitives/Modal.module.css",
-      "treatment": "adapted",
+      "treatment": "A: upstream card geometry/elevation; max-height and scroll bounds keep large native reports dismissible",
       "upstream_sha256": "0e1de6a6cfcd5333e6b02c8b2583c09ad90f98a618f3b80ec60acfc5c59ee68c",
       "retained_dependencies": [
         "CSS modules",
         "existing theme tokens"
       ],
-      "excluded_dependencies": [],
-      "license": "MIT; Copyright (c) 2026 DeepSeek"
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "local_sha256": "55627ed805c31a8af3fb86b4f0449464ff9464cfcfbe14b2cd80b86a259d4678",
+      "classification": "A"
     },
     {
       "upstream": "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
@@ -751,7 +896,9 @@
         "vitest"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": []
+      "excluded_dependencies": [],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "f0fc59700dcad8c7f21cf94ba758306743145a447dfc6c83676c8f2203f4bb48"
     },
     {
       "upstream": "packages/client/ui-primitives/tests/streaming-code-block.client.spec.tsx",
@@ -765,61 +912,33 @@
         "vitest"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": []
+      "excluded_dependencies": [],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "a729e4bf6c6d31fb472f36b04a17141149f8c793ad12232b7df32f75b5206142"
     },
     {
       "upstream": "packages/client/ui-primitives/src/Menu.tsx",
       "destination": "web-console/src/presentation/primitives/Menu.tsx",
-      "treatment": "rewritten from: flat action menu, native buttons, focus navigation; no submenu/grace/portal modes",
-      "upstream_sha256": "905ce9ef6ff3e2ee3fef051ddea8383cd9988be0a81cf68c34e83d3ff5149094",
+      "treatment": "A: upstream anchored/portaled menu, submenus, keyboard and pointer grace; local imports; autofocus waits for portal placement",
+      "upstream_sha256": "e7e71f29eb88b9c11516b19ea3e9e49012fd348a995d1ebac11c23e75474c571",
       "retained_dependencies": [
-        "./Button",
         "./Menu.module.css",
-        "./useAnchoredSurface",
+        "./icons/index.tsx",
+        "./pointer-grace.ts",
+        "clsx",
         "react",
         "react-dom"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": []
-    },
-    {
-      "upstream": "packages/client/ui-primitives/src/HoverCard.tsx",
-      "destination": "web-console/src/presentation/primitives/Popover.tsx",
-      "treatment": "rewritten from: anchored surface and outside dismissal; explicit activation and keyboard focus replaces hover-only behavior",
-      "upstream_sha256": "e4fcb43d12de00d011717b033b496f5f57fb00c297f34e0a2f03206befd03e13",
-      "retained_dependencies": [
-        "./Button",
-        "./Menu.module.css",
-        "./useAnchoredSurface",
-        "react",
-        "react-dom"
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
       ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": []
-    },
-    {
-      "upstream": "packages/client/ui-primitives/src/Modal.tsx",
-      "destination": "web-console/src/presentation/primitives/Dialog.tsx",
-      "treatment": "rewritten from: modal chrome and controlled close; native dialog replaces manual portal/mask for browser focus isolation",
-      "upstream_sha256": "1c2ed7f8b9ef84b892b4f0a69570db2379ecaa07fb46fe71008443e2388a4a53",
-      "retained_dependencies": [
-        "./Button",
-        "./Modal.module.css",
-        "react"
-      ],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": []
-    },
-    {
-      "upstream": "packages/client/ui-primitives/src/Menu.tsx",
-      "destination": "web-console/src/presentation/primitives/useAnchoredSurface.ts",
-      "treatment": "adapted: shared viewport clamping and scroll/resize placement; no stores or portal modes",
-      "upstream_sha256": "905ce9ef6ff3e2ee3fef051ddea8383cd9988be0a81cf68c34e83d3ff5149094",
-      "retained_dependencies": [
-        "react"
-      ],
-      "excluded_dependencies": [],
-      "license": "MIT; Copyright (c) 2026 DeepSeek"
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "local_sha256": "74398207ecd813a4d62e43466231bc3e339b0d97f1f2a4af8ff5d562fc6bcfd6",
+      "classification": "A"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
@@ -834,7 +953,9 @@
         "Harness Session/Host/Remote authority",
         "Cordis slots and lifecycle",
         "Harness attachment identity and storage"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "e2a5bbabebc0635d0100334883918a00e91b2cc083400049fe6361222837532b"
     },
     {
       "upstream": "packages/client/ui-attachment/src/MessageImage.tsx",
@@ -843,7 +964,7 @@
       "upstream_sha256": "5deb09445813e6b612465cb00aea8e7b400eba0f55b783a57c867d2dfa51500b",
       "retained_dependencies": [
         "../primitives/Button",
-        "../primitives/Dialog",
+        "../primitives/Modal",
         "./AttachmentCard.module.css",
         "react"
       ],
@@ -859,7 +980,9 @@
           "upstream_sha256": "e9842a3b35b12bf4b96fc00c8f24a52edd5c06f47ee8f20d325fd1c0d7bee846",
           "treatment": "rewritten from: ordered file card, status and removal controls"
         }
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "3c8075701c1200a8ef06e00e1e89bbe59c37cc660293a8e0ce4ff0a85344f50b"
     },
     {
       "upstream": "packages/client/ui-attachment/src/MessageImage.module.css",
@@ -872,7 +995,9 @@
         "Harness Session/Host/Remote authority",
         "Cordis slots and lifecycle",
         "Harness attachment identity and storage"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "ebb6bde44dd0f8bf564e30df0c994f1cfd68e685bd7a87e88ebf8c66b5cbf2ae"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -915,7 +1040,9 @@
           "treatment": "inspected and rewritten for native Trace props",
           "upstream_sha256": "cce8c7e0a630bf53f4324c88a811c0df8b44930972f42db457d0be4efa9f84d1"
         }
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "d26b9e31f3bb6932093bad8b17e66de556c983dbe34b861b663ead825949c452"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -933,7 +1060,9 @@
         "dynamic view registry",
         "diff",
         "provider configuration authority"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "09c3f33d8316152cfae3c00986eefe3e3652baaf6394ed121ab2ef138722037a"
     },
     {
       "upstream": "packages/client/ui-trajectory/tests/table.client.spec.tsx",
@@ -957,7 +1086,9 @@
         "dynamic view registry",
         "diff",
         "provider configuration authority"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "609754c60afe12f5a9c6cc6dc90dd0e683bdfa0b059ccd333eae7aa312a6abf7"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx",
@@ -973,7 +1104,9 @@
         "Cordis slots and registration order",
         "renderSlotChain composer overlays",
         "hero, workspace and settling chrome"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "95c591c13d914ee587ea35500b2ec4602fb8170e926aabafcff8cf78b94024e2"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
@@ -989,7 +1122,9 @@
         "hero and settling phases",
         "width handles",
         "sticky composer seat and scroll body"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "98d7654be2b4190fb3fa7b2c2d539c21a2e4589b06dc8ad8af4e4e9217052190"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.tsx",
@@ -1009,7 +1144,9 @@
         "useProjection host kit",
         "Cordis slot registration",
         "Harness locale runtime"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "a24d2a2d8167dbda3fc8736c44627cb545e5ae2dd66b932c85e1a5b6117d74ff"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.module.css",
@@ -1021,7 +1158,9 @@
         "existing theme tokens"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": []
+      "excluded_dependencies": [],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "01526ffe224e9f892b417f41ec992e8e0d990c509807f99c1d05563e09ae5c98"
     },
     {
       "upstream": "packages/client/ui-goal/src/client/GoalBar.tsx",
@@ -1043,7 +1182,9 @@
         "Harness Tooltip and icon set",
         "Cordis slot injection",
         "clear/tombstone control"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "8e8798662911fd7fe1ad279131981eaab0a75c980ae0e7e34bc53848b4d4a64e"
     },
     {
       "upstream": "packages/client/ui-goal/src/client/GoalBar.module.css",
@@ -1055,7 +1196,9 @@
         "existing theme tokens"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": []
+      "excluded_dependencies": [],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "bf957977761c1b96c0505771a469bef00b9ac32e800df195d23e265b5fb4519c"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.tsx",
@@ -1076,7 +1219,9 @@
         "attachment thumbnails and image loading",
         "Cordis slot registration",
         "Harness per-row steer/reclassification and queue storage"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "4c3cad312be4e68435c0e28909e41bb79a832945dce05d0bbf68b1bb477c9cd7"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.module.css",
@@ -1088,7 +1233,9 @@
         "existing theme tokens"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": []
+      "excluded_dependencies": [],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "e0201639551250852d0b818ff25f3090e1cc0ca6d704e72e26f6ca820b4e64e8"
     },
     {
       "upstream": "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx",
@@ -1100,10 +1247,10 @@
         "../bindings/projection",
         "../client/app-server",
         "../presentation/primitives/Button",
-        "../presentation/primitives/Dialog",
         "../presentation/primitives/Input",
-        "../presentation/primitives/StateDot",
-        "./WorkspaceNavigation.module.css",
+        "../presentation/primitives/Modal",
+        "../presentation/workspace/WorkspaceBrowser",
+        "../presentation/workspace/types",
         "./endpoint",
         "./host",
         "react"
@@ -1131,28 +1278,9 @@
           "treatment": "inspected and adapted presentation only",
           "upstream_sha256": "e42beb178c3c9bd6f102f6c1693895b18161ce824393daabd95f96dc47b6e9e3"
         }
-      ]
-    },
-    {
-      "upstream": "packages/client/ui-workspace/src/client/rows/Rows.module.css",
-      "destination": "web-console/src/workspaces/WorkspaceNavigation.module.css",
-      "treatment": "adapted grouped/flat navigation, bounded metadata search, capability-gated picker and metadata actions; native and Product Host authority replace Harness controllers",
-      "upstream_sha256": "04999adb9e02fe22184193ef5ef06431c87969d30c3f94b54710d5b0328ad1fa",
-      "retained_dependencies": [],
-      "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "excluded_dependencies": [
-        "Cordis/plugin runtime and Remote gateway",
-        "Harness Workspace Registry/Controller Session membership",
-        "Harness Session Controller, automatic blank Session allocation, archive/subagent/schedule semantics",
-        "Harness directory filesystem authority and content search"
       ],
-      "additional_sources": [
-        {
-          "upstream": "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.module.css",
-          "treatment": "inspected and adapted presentation only",
-          "upstream_sha256": "1aca37fb6c3409d638ea5dad4627b43f89056dae2a18d24dc487154a665a078d"
-        }
-      ]
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "e0eb7e8011ec791052da194e01dec90940f10dc4d0d8db14b7af22216747b234"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
@@ -1163,6 +1291,7 @@
         "../../../../protocol/app-server/v6",
         "../../client/app-server",
         "../../presentation/primitives/Button",
+        "../../presentation/settings/SettingsRoot",
         "./AgentEditor",
         "./CatalogEditor",
         "./Integrations",
@@ -1184,7 +1313,9 @@
           "upstream_sha256": "65d857471275ac833d3f87613d2996b4e5f9a651ebe332756f31c3d1409111b6",
           "treatment": "adapted presentation only"
         }
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "46a8067261e9fc34241429ca9fea986fe983751659519b6d649631e82a144a57"
     },
     {
       "upstream": "packages/client/ui-settings-models/src/client/ProviderEditor.tsx",
@@ -1211,7 +1342,9 @@
           "upstream_sha256": "20b6c0bfc6b4b387c4d4a98605007362077206867393eec1562a5af56e39e283",
           "treatment": "adapted presentation only"
         }
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "96aae1cd14e34d3839443591880caed892d4ac2cf18248ae337c2919b2b39d2a"
     },
     {
       "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
@@ -1224,7 +1357,9 @@
         "Harness Host/Remote settings and credentials",
         "Cordis plugin runtime",
         "Harness source merge and model catalog authority"
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "8d344bf79e699a36a92d7ed895007462dca84dc7824f9a4687117633d5a84f35"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -1274,210 +1409,756 @@
           "upstream_sha256": "4992001b68c2f2974fb57253f2ad62474b7330320139df4e5d446a5404856654",
           "treatment": "inspected presentation pattern; rewritten for native Rust Settings"
         }
-      ]
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "e0844ef2e4a976a3b0c86aa28087a4ae536457161a2a419b1615c4dfc0b84ef2"
+    },
+    {
+      "destination": "web-console/src/presentation/primitives/HoverCard.tsx",
+      "upstream": "packages/client/ui-primitives/src/HoverCard.tsx",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "upstream_sha256": "e4fcb43d12de00d011717b033b496f5f57fb00c297f34e0a2f03206befd03e13",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "retained_dependencies": [
+        "./HoverCard.module.css",
+        "./clipboard.ts",
+        "./pointer-grace.ts",
+        "react",
+        "react-dom"
+      ],
+      "local_sha256": "ed5b6b4e97e981ef6fbdeb30bcad94b3f85b192c848d286b0f27129599df79db",
+      "classification": "A"
+    },
+    {
+      "destination": "web-console/src/presentation/primitives/HoverCard.module.css",
+      "upstream": "packages/client/ui-primitives/src/HoverCard.module.css",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "upstream_sha256": "4d8fbf2368bd9f232f09422af94bf3527b4c9715445deaae18cf04fc1306475b",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "local_sha256": "68c378f240b1fe2253c7aa953f50b337a335babbca68e2fb294e7e93971a06aa",
+      "retained_dependencies": [],
+      "classification": "A"
+    },
+    {
+      "destination": "web-console/src/presentation/primitives/Tooltip.tsx",
+      "upstream": "packages/client/ui-primitives/src/Tooltip.tsx",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "upstream_sha256": "25a55725dd11f9d6729c4167f0996691113ca4076d1258ae705f94862601169c",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "retained_dependencies": [
+        "./Tooltip.module.css",
+        "react"
+      ],
+      "local_sha256": "18fd7d4645126924a0e123e5a8c97c5ed2322700e94895c364715edf93d0fb30",
+      "classification": "A"
+    },
+    {
+      "destination": "web-console/src/presentation/primitives/Tooltip.module.css",
+      "upstream": "packages/client/ui-primitives/src/Tooltip.module.css",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "upstream_sha256": "6ee070b9ce1c62eaaddaed1e96be8ff6d59eb4e09df708b219cd4ba3f676ca6b",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "local_sha256": "d30c9c5c8dacfa4c0a917f01544146555c484af8836461eb9c13959b0547c6f6",
+      "retained_dependencies": [],
+      "classification": "A"
+    },
+    {
+      "destination": "web-console/src/presentation/primitives/Modal.tsx",
+      "upstream": "packages/client/ui-primitives/src/Modal.tsx",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "A: upstream portal mask/card/header/body/footer DOM; shared focus/Escape isolation for nested live dialogs",
+      "upstream_sha256": "548ed9ee7d0182a85571b76304d55c220a61f88f8654852c14acc2cf385e7d26",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "retained_dependencies": [
+        "./Modal.module.css",
+        "./icons/index.tsx",
+        "./useModalFocus",
+        "clsx",
+        "react",
+        "react-dom"
+      ],
+      "local_sha256": "efe3becd2944b315ce0b498a32896200aadc5281ef7f3df48a87d90535b549c1",
+      "classification": "A"
+    },
+    {
+      "destination": "web-console/src/presentation/primitives/pointer-grace.ts",
+      "upstream": "packages/client/ui-primitives/src/pointer-grace.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "upstream_sha256": "cba1529e052cf3ea09fd3851990219e2b80d61fa4b3d35da490f28ba9f9965c6",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "retained_dependencies": [
+        "react"
+      ],
+      "local_sha256": "dcac3876ea6535ea2230adee9646b36604a845a6a8fe72094a660f0603e3db21",
+      "classification": "A"
+    },
+    {
+      "destination": "web-console/src/presentation/primitives/clipboard.ts",
+      "upstream": "packages/client/ui-primitives/src/clipboard.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "A: bounded clipboard helper, async browser API only; deprecated execCommand compatibility removed",
+      "upstream_sha256": "f3c5ff3d5ac550adda2366e245d33cf4d91d219bfb8692ef1943866d83748a0f",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "8285fe21f3d8f7a22337faed5bffc74547a194e7ae9be765590f048542f0d3a5",
+      "classification": "A"
+    },
+    {
+      "destination": "web-console/src/presentation/primitives/relative-time.ts",
+      "upstream": "packages/client/ui-primitives/src/relative-time.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "upstream_sha256": "a3f20285eb17903464d4b69178046704a0ba7a2618d7cedb532eb6e171bc2c09",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "73d194680d004d2ec86d54c38f2720f7543155d82f324b76f70ab5f3934bc910",
+      "classification": "A"
+    },
+    {
+      "destination": "web-console/src/presentation/theme/scrollbar.css",
+      "upstream": "packages/client/ui-theme/src/styles/scrollbar.css",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "upstream_sha256": "16d27a2a4600d6439b9ed6c5cfb504885bb5e9d0a7d8a5120c23e7516bf1c1d5",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "local_sha256": "2c39c9597d541eb40bd49f4ad6f54cf6af18a46e576a49c97facc041a0d7f8d5",
+      "retained_dependencies": [],
+      "classification": "A"
+    },
+    {
+      "destination": "web-console/src/presentation/theme/design-platform.css",
+      "upstream": "packages/client/ui-theme/src/styles/design-platform.css",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "upstream_sha256": "df484e2cf10d1d0d0787ec09bda78c2add7b8593f8dd0e77896ba21a91b613f4",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "local_sha256": "ac3b8d8e0224af953536861982fd3ad43f6ff24c80257a01dd404cb615c98664",
+      "retained_dependencies": [],
+      "classification": "A"
+    },
+    {
+      "destination": "web-console/src/presentation/theme/corner-shape.css",
+      "upstream": "packages/client/ui-theme/src/styles/corner-shape.css",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "upstream_sha256": "d94f82e1332b6d37e8345aafe1b6b4129faed65891edd3861c00b88940ec4d3f",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "local_sha256": "5bf84e5e2f38b66fcc300937b6df986de628aa024777e01c84f4cb141bbfa016",
+      "retained_dependencies": [],
+      "classification": "A"
+    },
+    {
+      "destination": "web-console/src/presentation/layout/columns.ts",
+      "upstream": "packages/client/ui-layout/src/client/columns.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "A: Harness grid/column solve/drag DOM and CSS; local measured React state and explicit render seats replace the injected layout store; desktop integration excluded; upstream platform CSS selectors remain inert",
+      "upstream_sha256": "db5e8fda5eef38ee4760e97ec15b0271f7f20639af5d936bdc78a36dd5a75e88",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "8be7be41d7ed6872024a78541d9ad6e25fad5b3bd44dc7fe2bbd7aa150df1bbd",
+      "classification": "A"
+    },
+    {
+      "destination": "web-console/src/presentation/sidebar/SidebarRoot.tsx",
+      "upstream": "packages/client/ui-sidebar/src/client/SidebarRoot.tsx",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "B: Harness UI + rustX binding; explicit props replace runtime/registry injection",
+      "upstream_sha256": "7ffff715e71603e04412d574dd6b67d2d450609d62fe2d187cb7580233396243",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "retained_dependencies": [
+        "../layout/AppFrame",
+        "../primitives/Tooltip",
+        "../primitives/icons",
+        "./SidebarRoot.module.css",
+        "clsx",
+        "react"
+      ],
+      "local_sha256": "07b696d1b83a3dd5eecff089c4c15bc5fccbc6bbbf445ebb683cebe65052b6b4",
+      "classification": "B"
+    },
+    {
+      "destination": "web-console/src/presentation/sidebar/SidebarRoot.module.css",
+      "upstream": "packages/client/ui-sidebar/src/client/SidebarRoot.module.css",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "upstream_sha256": "59783ec45c5813e01b70daee1630e595d21239611aeb8f0305e045c1c2a38dbc",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "local_sha256": "0d321629286570bf8241653564a56992f8aaa6257707a55bcf00811b6b6829e0",
+      "retained_dependencies": [],
+      "classification": "B"
+    },
+    {
+      "destination": "web-console/src/presentation/workspace/Rows.tsx",
+      "upstream": "packages/client/ui-workspace/src/client/rows/Rows.tsx",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "B: upstream project, Session and search rows; native view models and callbacks; accessible open/toggle controls; omit provisional identity, archive, reorder and schedule affordances; native deletion preview replaces archive",
+      "upstream_sha256": "e61586fd63c0ae8f54ab6076905d8c96c97482576770964552c0a03acbcce6d4",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "retained_dependencies": [
+        "../locale/translate",
+        "../primitives/HoverCard",
+        "../primitives/Menu",
+        "../primitives/StateDot",
+        "../primitives/icons",
+        "../primitives/relative-time",
+        "./Rows.module.css",
+        "./types",
+        "clsx",
+        "react"
+      ],
+      "local_sha256": "8803ed7863295a250210a9a9256d3d69eedfed4b3a66f913cb57cdea0a48ad7a",
+      "classification": "B"
+    },
+    {
+      "destination": "web-console/src/presentation/workspace/Rows.module.css",
+      "upstream": "packages/client/ui-workspace/src/client/rows/Rows.module.css",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "upstream_sha256": "baee8fbdccbfb13855ed6254d3c2cadab524e15c16bb277d463f74c1bf16377f",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "local_sha256": "38a31429bf8c4230ea9075408e1967d862ac5e9a6d3edcef48b815d8024a76b1",
+      "retained_dependencies": [],
+      "classification": "B"
+    },
+    {
+      "destination": "web-console/src/presentation/workspace/WorkspaceBrowser.module.css",
+      "upstream": "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.module.css",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "upstream_sha256": "95190edcbe40455651e26aaf0b42b1c952bd45dd6777179de5fc179153c2d5d3",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "local_sha256": "79d21a765bf15f9acc14b243f9b9459f950e4951dbc83b32e4fc9ff366eefd4b",
+      "retained_dependencies": [],
+      "classification": "B"
+    },
+    {
+      "destination": "web-console/src/presentation/settings/SettingsRoot.tsx",
+      "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "B: upstream overlay/nav/content DOM with explicit section seats, body portal and modal focus isolation; native CFG3 editors and Appearance content supplied by app adapter",
+      "upstream_sha256": "7ce55121345e28bed96b01c2e08641162d7bee4569083bad46b98c1574577ecb",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "retained_dependencies": [
+        "../primitives/icons",
+        "../primitives/useModalFocus",
+        "./SettingsRoot.module.css",
+        "clsx",
+        "react",
+        "react-dom"
+      ],
+      "local_sha256": "ef5a75093dadffa672ed49da3d18fa0ce7f203b0cc5577cf2489a90a1438d4eb",
+      "classification": "B"
+    },
+    {
+      "destination": "web-console/src/presentation/settings/SettingsRoot.module.css",
+      "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.module.css",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "upstream_sha256": "52a665b2c19ce30b35811c7b8b4c73e4ee94342d86e8e6fec77e61e1ced5738b",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "local_sha256": "ed4b09bb78d14b32cb7a521f190fa93c9c66d04ed568001785f3a1e3d7b5e803",
+      "retained_dependencies": [],
+      "classification": "B"
+    },
+    {
+      "destination": "web-console/src/presentation/right-panel/SidebarRight.module.css",
+      "upstream": "packages/client/ui-sidebar-right/src/client/shell/SidebarRight.module.css",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "upstream_sha256": "faa7ed08b9e57e8e97bb5f5f728b0e7f172daf6fe0a72432c001b3345038330e",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "local_sha256": "f0806ba3fea33bc1befde9919535ac426208431f3511baee309aff6c8cf728e3",
+      "retained_dependencies": [],
+      "classification": "B"
+    },
+    {
+      "destination": "web-console/src/presentation/locale/workspace.ts",
+      "upstream": "packages/client/ui-workspace/src/client/locales.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "A: English dictionary selected from upstream locales; unused Chinese dictionary and locale-service dependency omitted",
+      "upstream_sha256": "d2b2c7e89a031e6c729b7b141a72e2b6e632e254e9a3b7e35dbd908ede870155",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "retained_dependencies": [],
+      "local_sha256": "5082a2433acbea700d4281a523581215af54e2f577f83ca6ba34ba57ec076ebc",
+      "classification": "A"
+    },
+    {
+      "destination": "web-console/src/presentation/workspace/WorkspaceBrowser.tsx",
+      "upstream": "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "B: Harness UI + rustX binding; explicit props replace runtime/registry injection",
+      "upstream_sha256": "861c3a98489e6ddb7c9383c514a0af7ce59eedd03317b09d51063b0c69c6c775",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "retained_dependencies": [
+        "../locale/translate",
+        "../primitives/Menu",
+        "../primitives/Tooltip",
+        "../primitives/icons",
+        "./Rows",
+        "./WorkspaceBrowser.module.css",
+        "./types",
+        "clsx",
+        "react"
+      ],
+      "local_sha256": "b63a53003f7d0622ddb3f996b9781b567a1ee542f91a89d300907bbd4d9a4947",
+      "classification": "B"
+    },
+    {
+      "destination": "web-console/src/presentation/right-panel/RightPanel.tsx",
+      "upstream": "packages/client/ui-sidebar-right/src/client/shell/SidebarRight.tsx",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "treatment": "B: Harness UI + rustX binding; explicit props replace runtime/registry injection",
+      "upstream_sha256": "718c0b7d21d48d32dba1676c91c9715c524a6ed23d9fdbe29d7b2c24bce55c60",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "excluded_dependencies": [
+        "Cordis/slot registry",
+        "Harness Host/Remote/Session Controller/Workspace Controller",
+        "desktop/titlebar/update authority",
+        "provisional Session identity, archive, durable browser membership"
+      ],
+      "retained_dependencies": [
+        "../primitives/Button",
+        "./SidebarRight.module.css",
+        "react"
+      ],
+      "local_sha256": "240afe3eb47abfaf2da28a89f32d5bb8f264c60da7fbdfda0aa7a8f426f8f48d",
+      "classification": "B"
     }
   ],
-  "inspected": [
-    "packages/client/ui-commands/README.md",
-    "packages/client/ui-commands/src/client/directory.ts",
-    "packages/client/ui-commands/src/client/resolution.ts",
-    "packages/client/ui-commands/src/client/presentation.ts",
-    "packages/client/ui-commands/src/client/popup.ts",
-    "packages/client/ui-commands/src/client/service.ts",
-    "packages/client/ui-commands/src/client/PopupSelectView.module.css",
-    "packages/client/ui-commands/tests/popup.client.spec.ts",
-    "packages/client/ui-commands/tests/popup-view.client.spec.tsx",
-    "packages/client/ui-input-trigger/README.md",
-    "packages/client/ui-input-trigger/src/core/detect.ts",
-    "packages/client/ui-input-trigger/src/core/menu.ts",
-    "packages/client/ui-input-trigger/src/client/MenuView.module.css",
-    "packages/client/ui-conversation/src/client/skeleton/InputBar.module.css",
-    "packages/client/ui-conversation/src/client/skeleton/PermissionSelect.tsx",
-    "packages/client/ui-conversation/src/client/apply.ts",
-    "packages/client/ui-conversation/tests/keymap-routing.client.spec.tsx",
-    "packages/client/ui-workspace/README.md",
-    "packages/client/ui-workspace/src/client/index.ts",
-    "packages/client/ui-workspace/src/client/navigation.ts",
-    "packages/client/ui-workspace/tests/apply.client.spec.ts",
-    "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
-    "packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx",
-    "packages/client/ui-model-selection/README.md",
-    "packages/client/ui-model-selection/src/client/catalog.ts",
-    "packages/client/ui-model-selection/src/client/ModelSelect.tsx",
-    "packages/client/ui-model-selection/src/client/ModelSelect.module.css",
-    "packages/client/ui-model-selection/tests/catalog.client.spec.ts",
-    "packages/client/ui-permission-presets/README.md",
-    "packages/client/ui-permission-presets/src/client/PermissionRow.module.css",
-    "packages/client/ui-primitives/src/rank-by-name.ts",
-    "packages/client/ui-primitives/tests/rank-by-name.client.spec.ts",
-    "packages/client/README.md",
-    "packages/client/ui-attachment/README.md",
-    "packages/client/ui-attachment/src/AttachmentRail.module.css",
-    "packages/client/ui-attachment/src/AttachmentRail.tsx",
-    "packages/client/ui-attachment/src/DropOverlay.module.css",
-    "packages/client/ui-attachment/src/FileCard.tsx",
-    "packages/client/ui-attachment/src/ImageLightbox.tsx",
-    "packages/client/ui-attachment/src/MessageImage.module.css",
-    "packages/client/ui-attachment/src/MessageImage.tsx",
-    "packages/client/ui-attachment/src/client/ComposerAttachments.tsx",
-    "packages/client/ui-attachment/tests/composer-attachments.client.spec.tsx",
-    "packages/client/ui-attachment/tests/image-lightbox.client.spec.tsx",
-    "packages/client/ui-attachment/tests/message-image.client.spec.tsx",
-    "packages/client/ui-chat/README.md",
-    "packages/client/ui-chat/package.json",
-    "packages/client/ui-chat/src/client/chat/AssistantMarkdown.tsx",
-    "packages/client/ui-chat/src/client/chat/ChatView.tsx",
-    "packages/client/ui-chat/src/client/chat/MessageItem.tsx",
-    "packages/client/ui-chat/src/client/chat/ReasoningRow.tsx",
-    "packages/client/ui-chat/src/client/chat/turn-assistant.ts",
-    "packages/client/ui-chat/tests/conversation.client.spec.ts",
-    "packages/client/ui-commands/package.json",
-    "packages/client/ui-commands/src/client/PopupSelectView.tsx",
-    "packages/client/ui-conversation/README.md",
-    "packages/client/ui-conversation/package.json",
-    "packages/client/ui-conversation/src/client/contract/request-inspection.ts",
-    "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
-    "packages/client/ui-conversation/tests/selection-survival.client.spec.tsx",
-    "packages/client/ui-conversation/tests/submission-policy.client.spec.ts",
-    "packages/client/ui-layout/package.json",
-    "packages/client/ui-layout/src/client/AppFrame.tsx",
-    "packages/client/ui-primitives/README.md",
-    "packages/client/ui-primitives/package.json",
-    "packages/client/ui-primitives/src/DisclosureRow.tsx",
-    "packages/client/ui-primitives/src/HoverCard.tsx",
-    "packages/client/ui-primitives/src/Menu.module.css",
-    "packages/client/ui-primitives/src/Menu.tsx",
-    "packages/client/ui-primitives/src/Modal.module.css",
-    "packages/client/ui-primitives/src/Modal.tsx",
-    "packages/client/ui-primitives/src/clipboard.ts",
-    "packages/client/ui-primitives/src/markdown/CodeBlock.module.css",
-    "packages/client/ui-primitives/src/markdown/CodeBlock.tsx",
-    "packages/client/ui-primitives/src/markdown/MarkdownText.module.css",
-    "packages/client/ui-primitives/src/markdown/MarkdownText.tsx",
-    "packages/client/ui-primitives/src/markdown/cjkFriendlyStrong.ts",
-    "packages/client/ui-primitives/src/markdown/highlight.ts",
-    "packages/client/ui-primitives/src/markdown/incremental.ts",
-    "packages/client/ui-primitives/src/markdown/katex.tsx",
-    "packages/client/ui-primitives/src/markdown/mathCompatibility.ts",
-    "packages/client/ui-primitives/src/markdown/parse.ts",
-    "packages/client/ui-primitives/src/markdown/render.tsx",
-    "packages/client/ui-primitives/src/markdown/useViewportHighlighting.ts",
-    "packages/client/ui-primitives/tests/atoms.client.spec.tsx",
-    "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
-    "packages/client/ui-primitives/tests/markdown.client.spec.tsx",
-    "packages/client/ui-primitives/tests/streaming-code-block.client.spec.tsx",
-    "packages/client/ui-theme/package.json",
-    "packages/client/ui-theme/src/styles/shiki.css",
-    "packages/client/ui-tool/README.md",
-    "packages/client/ui-tool/src/client/tool/ToolCallTree.module.css",
-    "packages/client/ui-tool/src/client/tool/ToolCallTree.tsx",
-    "packages/client/ui-tool/src/client/tool/components/ToolRow.module.css",
-    "packages/client/ui-tool/src/client/tool/components/ToolRow.tsx",
-    "packages/client/ui-tool/tests/tool-row.client.spec.tsx",
-    "packages/client/ui-trajectory/README.md",
-    "packages/client/ui-trajectory/package.json",
-    "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
-    "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
-    "packages/client/ui-trajectory/src/client/TrajectoryTimeline.tsx",
-    "packages/client/ui-trajectory/src/client/trajectory-assistant-definition.ts",
-    "packages/client/ui-trajectory/src/client/trajectory-compaction-definition.ts",
-    "packages/client/ui-trajectory/src/client/trajectory-contract.ts",
-    "packages/client/ui-trajectory/src/client/trajectory-event-projection.ts",
-    "packages/client/ui-trajectory/src/client/trajectory-record.ts",
-    "packages/client/ui-trajectory/src/client/trajectory-search-index.ts",
-    "packages/client/ui-trajectory/src/client/trajectory-snapshot-builder.ts",
-    "packages/client/ui-trajectory/src/client/trajectory-virtual-rows.ts",
-    "packages/client/ui-trajectory/tests/layout.client.spec.tsx",
-    "packages/client/ui-trajectory/tests/snapshot-builder.client.spec.ts",
-    "packages/client/ui-trajectory/tests/table.client.spec.tsx",
-    "packages/client/ui-trajectory/tests/virtual-rows.client.spec.ts",
-    "packages/session/session-projection/README.md",
-    "packages/session/session-projection/package.json",
-    "packages/session/session-projection/src/index.ts",
-    "packages/session/session-projection/src/types.ts",
-    "packages/session/session-projection/tests/registry.spec.ts",
-    "packages/client/ui-goal/README.md",
-    "packages/client/ui-goal/src/client/GoalBar.tsx",
-    "packages/client/ui-goal/src/client/GoalBar.module.css",
-    "packages/client/ui-goal/src/client/activation-source.ts",
-    "packages/client/ui-goal/src/client/slots.ts",
-    "packages/client/ui-goal/src/client/locales.ts",
-    "packages/client/ui-goal/tests/goalbar.client.spec.tsx",
-    "packages/client/ui-conversation/src/client/skeleton/TodoPanel.tsx",
-    "packages/client/ui-conversation/src/client/skeleton/TodoPanel.module.css",
-    "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx",
-    "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
-    "packages/client/ui-conversation/src/client/queue/QueueDock.tsx",
-    "packages/client/ui-conversation/src/client/queue/QueueDock.module.css",
-    "packages/client/ui-conversation/src/client/contract/queue.ts",
-    "packages/client/ui-conversation/src/client/locales.ts",
-    "packages/client/ui-conversation/tests/todo-panel.client.spec.tsx",
-    "packages/client/ui-conversation/tests/queue-dock.client.spec.tsx",
-    "packages/client/ui-conversation/tests/skeleton.client.spec.tsx",
-    "packages/client/ui-conversation/tests/input-bar.client.spec.tsx",
-    "packages/client/ui-primitives/src/icons/index.tsx",
-    "packages/client/ui-conversation/src/client/input/queue-store.ts",
-    "packages/client/ui-conversation/src/client/input/submission-policy.ts",
-    "packages/client/ui-conversation/src/client/input/facade.ts",
-    "packages/api/workspace-controller/README.md",
-    "packages/api/workspace-controller/src/directory-picker.ts",
-    "packages/api/workspace-controller/src/types.ts",
-    "packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx",
-    "packages/client/ui-conversation/src/client/skeleton/HeroShell.module.css",
-    "packages/client/ui-directory-picker-browse/src/client/flow.ts",
-    "packages/client/ui-directory-picker-native/src/client/flow.ts",
-    "packages/client/ui-sidebar/src/client/SidebarRoot.module.css",
-    "packages/client/ui-sidebar/src/client/SidebarRoot.tsx",
-    "packages/client/ui-sidebar/tests/sidebar-root.client.spec.tsx",
-    "packages/client/ui-workspace/src/client/WorkspacePicker.module.css",
-    "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",
-    "packages/client/ui-workspace/src/client/rows/Rows.module.css",
-    "packages/client/ui-workspace/src/client/rows/Rows.tsx",
-    "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.module.css",
-    "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx",
-    "packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx",
-    "packages/client/ui-workspace/tests/workspace-picker.client.spec.tsx",
-    "packages/host/directory-picker/README.md",
-    "packages/host/directory-picker/src/types.ts",
-    "packages/api/workspace-controller/tests/directory-picker.host.spec.ts",
-    "packages/host/directory-picker/tests/seam.spec.ts",
-    "packages/client/ui-directory-picker-browse/tests/client-flow.client.spec.tsx",
-    "packages/client/ui-directory-picker-browse/src/client/DirectoryBrowser.module.css",
-    "packages/client/ui-sidebar/README.md",
-    "packages/api/workspace-controller/src/commands.ts",
-    "packages/client/ui-settings/README.md",
-    "packages/client/ui-settings/src/client/settings-scope.ts",
-    "packages/client/ui-settings/tests/settings-scope.client.spec.ts",
-    "packages/client/ui-settings-general/README.md",
-    "packages/client/ui-settings-general/src/client/SettingsRoot.module.css",
-    "packages/client/ui-settings-models/README.md",
-    "packages/client/ui-settings-models/tests/apply.client.spec.ts",
-    "packages/client/ui-model-selection/src/client/directory.ts",
-    "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
-    "packages/client/ui-settings-models/src/client/ProviderEditor.tsx",
-    "packages/client/ui-settings-models/src/client/EditorFooter.tsx",
-    "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
-    "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
-    "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.module.css",
-    "packages/client/ui-settings-plugins/src/client/PluginCard.tsx",
-    "packages/client/ui-settings-plugins/src/client/PluginCard.module.css",
-    "packages/client/ui-settings-plugins/src/client/card-form.ts",
-    "packages/client/ui-settings-plugins/src/client/fields.tsx",
-    "packages/client/ui-settings-plugins/src/client/fields.module.css",
-    "packages/client/ui-settings/src/client/settings-contract.ts",
-    "packages/client/ui-settings/src/client/schema.ts",
-    "packages/client/ui-settings-plugins/src/client/PluginsSettingsSection.tsx",
-    "packages/client/ui-settings-plugins/README.md",
-    "packages/client/ui-settings-plugins/tests/fields.client.spec.tsx",
-    "packages/client/ui-settings-plugins/tests/apply.client.spec.ts",
-    "packages/client/ui-settings-plugin-inventory/tests/components.client.spec.tsx",
-    "packages/client/ui-settings-plugin-inventory/README.md",
-    "packages/mcp/mcp-client/src/index.ts",
-    "packages/mcp/mcp-client/README.md",
-    "packages/client/ui-primitives/src/Tag.tsx",
-    "packages/client/ui-primitives/src/Tag.module.css",
-    "packages/client/ui-primitives/src/StateDot.tsx",
-    "packages/mcp/mcp-client/src/transport.ts",
-    "packages/mcp/mcp-client/tests/apply.spec.ts"
-  ]
+  "inspected_only": [
+    {
+      "upstream": "apps/web/src/main.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "24d7f72cae2d3f6e3a0c2d5c0ee55c81756747122f89ab41871d0ccf387a7628",
+      "treatment": "inspected only; semantic/plugin owner excluded"
+    },
+    {
+      "upstream": "packages/client/web/src/mount.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "45b6e01d0872c3b2b568415425d1e0794e58aee891fa6c6bf5d4e5ac36be8801",
+      "treatment": "inspected only; semantic/plugin owner excluded"
+    },
+    {
+      "upstream": "packages/client/web/src/seed.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "863a3b7bb6ca0933aead9d14915a615951014e75ad9c60ed93c1478f3e6f6908",
+      "treatment": "inspected only; semantic/plugin owner excluded"
+    },
+    {
+      "upstream": "packages/client/ui-layout/src/client/stores.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "b2b34de29bb7ff749323aeae94d7dc6758debe6f5cdd2dc3985da485a9d239a1",
+      "treatment": "inspected only; semantic/plugin owner excluded"
+    },
+    {
+      "upstream": "packages/client/ui-layout/src/client/index.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "303956d0b9a995f7c320c3e3997b8f712ac447f0c158cb80e5b963d8ad4dd2e9",
+      "treatment": "inspected only; semantic/plugin owner excluded"
+    },
+    {
+      "upstream": "packages/client/ui-sidebar/src/client/index.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "2c9fa11c15deafb4b81d02065251994a300f6df1b7dc5298ef18b9a02fe97051",
+      "treatment": "inspected only; semantic/plugin owner excluded"
+    },
+    {
+      "upstream": "packages/client/ui-workspace/src/client/tree.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "b4d961df4422910089cb8e0fee7eb71e0dce6c58d225936a2f8a053589542bc0",
+      "treatment": "inspected only; semantic/plugin owner excluded"
+    },
+    {
+      "upstream": "packages/client/ui-workspace/src/client/stores.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "75d8421cc57827f1715a901c42f731ba26c63d7a7dbd11aa53d44f67111cf487",
+      "treatment": "inspected only; semantic/plugin owner excluded"
+    },
+    {
+      "upstream": "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "465952b8488857e437739b72585295d28535e3cd7f593c2d02aaf3ad14fcfab5",
+      "treatment": "inspected only; semantic/plugin owner excluded"
+    },
+    {
+      "upstream": "packages/client/ui-settings-general/src/client/index.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "2037af5dd66f6566337dbbd16024d334f86d62689b0e632787cdf3dc65103c0f",
+      "treatment": "inspected only; semantic/plugin owner excluded"
+    },
+    {
+      "upstream": "packages/client/ui-settings/src/client/settings-mirror.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "25bee3ed765af0f09f975110218072c0f7179e1b214d3aa3327ce41f86beaf78",
+      "treatment": "inspected only; semantic/plugin owner excluded"
+    },
+    {
+      "upstream": "packages/client/locale/src/client/index.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "dc4e41ceb3bbe599d43ef6a3e6be5b7870162f11b3477a224b84fa98fd090102",
+      "treatment": "inspected only; semantic/plugin owner excluded"
+    },
+    {
+      "upstream": "packages/client/ui-theme/src/client/index.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "05b789633a67b0c22979de808ba391c0e6dbc7295bffedf9e39938c103ee6961",
+      "treatment": "inspected only; semantic/plugin owner excluded"
+    },
+    {
+      "upstream": "packages/client/ui-theme/src/client/styles.ts",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "e59d387cf828b9a99613025f23319e960135bb94cdbddf8bd2eb3e346a89c7bd",
+      "treatment": "inspected only; semantic/plugin owner excluded"
+    },
+    {
+      "upstream": "packages/client/ui-primitives/package.json",
+      "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
+      "upstream_sha256": "ec59a3bb1746e0636a23c2ed65f31abe742df457f5fff9bf708f00bd654bf0c2",
+      "treatment": "inspected only; semantic/plugin owner excluded"
+    }
+  ],
+  "historical_inspection": {
+    "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+    "treatment": "Historical inspected-only paths for retained Agent interiors; not the WEB-RESET-01 shell baseline. No source bytes implied by this list.",
+    "paths": [
+      "packages/client/ui-commands/README.md",
+      "packages/client/ui-commands/src/client/directory.ts",
+      "packages/client/ui-commands/src/client/resolution.ts",
+      "packages/client/ui-commands/src/client/presentation.ts",
+      "packages/client/ui-commands/src/client/popup.ts",
+      "packages/client/ui-commands/src/client/service.ts",
+      "packages/client/ui-commands/src/client/PopupSelectView.module.css",
+      "packages/client/ui-commands/tests/popup.client.spec.ts",
+      "packages/client/ui-commands/tests/popup-view.client.spec.tsx",
+      "packages/client/ui-input-trigger/README.md",
+      "packages/client/ui-input-trigger/src/core/detect.ts",
+      "packages/client/ui-input-trigger/src/core/menu.ts",
+      "packages/client/ui-input-trigger/src/client/MenuView.module.css",
+      "packages/client/ui-conversation/src/client/skeleton/InputBar.module.css",
+      "packages/client/ui-conversation/src/client/skeleton/PermissionSelect.tsx",
+      "packages/client/ui-conversation/src/client/apply.ts",
+      "packages/client/ui-conversation/tests/keymap-routing.client.spec.tsx",
+      "packages/client/ui-workspace/README.md",
+      "packages/client/ui-workspace/src/client/index.ts",
+      "packages/client/ui-workspace/src/client/navigation.ts",
+      "packages/client/ui-workspace/tests/apply.client.spec.ts",
+      "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
+      "packages/client/ui-chat/tests/chat-branch-tails.client.spec.tsx",
+      "packages/client/ui-model-selection/README.md",
+      "packages/client/ui-model-selection/src/client/catalog.ts",
+      "packages/client/ui-model-selection/src/client/ModelSelect.tsx",
+      "packages/client/ui-model-selection/src/client/ModelSelect.module.css",
+      "packages/client/ui-model-selection/tests/catalog.client.spec.ts",
+      "packages/client/ui-permission-presets/README.md",
+      "packages/client/ui-permission-presets/src/client/PermissionRow.module.css",
+      "packages/client/ui-primitives/src/rank-by-name.ts",
+      "packages/client/ui-primitives/tests/rank-by-name.client.spec.ts",
+      "packages/client/README.md",
+      "packages/client/ui-attachment/README.md",
+      "packages/client/ui-attachment/src/AttachmentRail.module.css",
+      "packages/client/ui-attachment/src/AttachmentRail.tsx",
+      "packages/client/ui-attachment/src/DropOverlay.module.css",
+      "packages/client/ui-attachment/src/FileCard.tsx",
+      "packages/client/ui-attachment/src/ImageLightbox.tsx",
+      "packages/client/ui-attachment/src/MessageImage.module.css",
+      "packages/client/ui-attachment/src/MessageImage.tsx",
+      "packages/client/ui-attachment/src/client/ComposerAttachments.tsx",
+      "packages/client/ui-attachment/tests/composer-attachments.client.spec.tsx",
+      "packages/client/ui-attachment/tests/image-lightbox.client.spec.tsx",
+      "packages/client/ui-attachment/tests/message-image.client.spec.tsx",
+      "packages/client/ui-chat/README.md",
+      "packages/client/ui-chat/package.json",
+      "packages/client/ui-chat/src/client/chat/AssistantMarkdown.tsx",
+      "packages/client/ui-chat/src/client/chat/ChatView.tsx",
+      "packages/client/ui-chat/src/client/chat/MessageItem.tsx",
+      "packages/client/ui-chat/src/client/chat/ReasoningRow.tsx",
+      "packages/client/ui-chat/src/client/chat/turn-assistant.ts",
+      "packages/client/ui-chat/tests/conversation.client.spec.ts",
+      "packages/client/ui-commands/package.json",
+      "packages/client/ui-commands/src/client/PopupSelectView.tsx",
+      "packages/client/ui-conversation/README.md",
+      "packages/client/ui-conversation/package.json",
+      "packages/client/ui-conversation/src/client/contract/request-inspection.ts",
+      "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
+      "packages/client/ui-conversation/tests/selection-survival.client.spec.tsx",
+      "packages/client/ui-conversation/tests/submission-policy.client.spec.ts",
+      "packages/client/ui-layout/package.json",
+      "packages/client/ui-layout/src/client/AppFrame.tsx",
+      "packages/client/ui-primitives/README.md",
+      "packages/client/ui-primitives/package.json",
+      "packages/client/ui-primitives/src/DisclosureRow.tsx",
+      "packages/client/ui-primitives/src/HoverCard.tsx",
+      "packages/client/ui-primitives/src/Menu.module.css",
+      "packages/client/ui-primitives/src/Menu.tsx",
+      "packages/client/ui-primitives/src/Modal.module.css",
+      "packages/client/ui-primitives/src/Modal.tsx",
+      "packages/client/ui-primitives/src/clipboard.ts",
+      "packages/client/ui-primitives/src/markdown/CodeBlock.module.css",
+      "packages/client/ui-primitives/src/markdown/CodeBlock.tsx",
+      "packages/client/ui-primitives/src/markdown/MarkdownText.module.css",
+      "packages/client/ui-primitives/src/markdown/MarkdownText.tsx",
+      "packages/client/ui-primitives/src/markdown/cjkFriendlyStrong.ts",
+      "packages/client/ui-primitives/src/markdown/highlight.ts",
+      "packages/client/ui-primitives/src/markdown/incremental.ts",
+      "packages/client/ui-primitives/src/markdown/katex.tsx",
+      "packages/client/ui-primitives/src/markdown/mathCompatibility.ts",
+      "packages/client/ui-primitives/src/markdown/parse.ts",
+      "packages/client/ui-primitives/src/markdown/render.tsx",
+      "packages/client/ui-primitives/src/markdown/useViewportHighlighting.ts",
+      "packages/client/ui-primitives/tests/atoms.client.spec.tsx",
+      "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
+      "packages/client/ui-primitives/tests/markdown.client.spec.tsx",
+      "packages/client/ui-primitives/tests/streaming-code-block.client.spec.tsx",
+      "packages/client/ui-theme/package.json",
+      "packages/client/ui-theme/src/styles/shiki.css",
+      "packages/client/ui-tool/README.md",
+      "packages/client/ui-tool/src/client/tool/ToolCallTree.module.css",
+      "packages/client/ui-tool/src/client/tool/ToolCallTree.tsx",
+      "packages/client/ui-tool/src/client/tool/components/ToolRow.module.css",
+      "packages/client/ui-tool/src/client/tool/components/ToolRow.tsx",
+      "packages/client/ui-tool/tests/tool-row.client.spec.tsx",
+      "packages/client/ui-trajectory/README.md",
+      "packages/client/ui-trajectory/package.json",
+      "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
+      "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
+      "packages/client/ui-trajectory/src/client/TrajectoryTimeline.tsx",
+      "packages/client/ui-trajectory/src/client/trajectory-assistant-definition.ts",
+      "packages/client/ui-trajectory/src/client/trajectory-compaction-definition.ts",
+      "packages/client/ui-trajectory/src/client/trajectory-contract.ts",
+      "packages/client/ui-trajectory/src/client/trajectory-event-projection.ts",
+      "packages/client/ui-trajectory/src/client/trajectory-record.ts",
+      "packages/client/ui-trajectory/src/client/trajectory-search-index.ts",
+      "packages/client/ui-trajectory/src/client/trajectory-snapshot-builder.ts",
+      "packages/client/ui-trajectory/src/client/trajectory-virtual-rows.ts",
+      "packages/client/ui-trajectory/tests/layout.client.spec.tsx",
+      "packages/client/ui-trajectory/tests/snapshot-builder.client.spec.ts",
+      "packages/client/ui-trajectory/tests/table.client.spec.tsx",
+      "packages/client/ui-trajectory/tests/virtual-rows.client.spec.ts",
+      "packages/session/session-projection/README.md",
+      "packages/session/session-projection/package.json",
+      "packages/session/session-projection/src/index.ts",
+      "packages/session/session-projection/src/types.ts",
+      "packages/session/session-projection/tests/registry.spec.ts",
+      "packages/client/ui-goal/README.md",
+      "packages/client/ui-goal/src/client/GoalBar.tsx",
+      "packages/client/ui-goal/src/client/GoalBar.module.css",
+      "packages/client/ui-goal/src/client/activation-source.ts",
+      "packages/client/ui-goal/src/client/slots.ts",
+      "packages/client/ui-goal/src/client/locales.ts",
+      "packages/client/ui-goal/tests/goalbar.client.spec.tsx",
+      "packages/client/ui-conversation/src/client/skeleton/TodoPanel.tsx",
+      "packages/client/ui-conversation/src/client/skeleton/TodoPanel.module.css",
+      "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.tsx",
+      "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
+      "packages/client/ui-conversation/src/client/queue/QueueDock.tsx",
+      "packages/client/ui-conversation/src/client/queue/QueueDock.module.css",
+      "packages/client/ui-conversation/src/client/contract/queue.ts",
+      "packages/client/ui-conversation/src/client/locales.ts",
+      "packages/client/ui-conversation/tests/todo-panel.client.spec.tsx",
+      "packages/client/ui-conversation/tests/queue-dock.client.spec.tsx",
+      "packages/client/ui-conversation/tests/skeleton.client.spec.tsx",
+      "packages/client/ui-conversation/tests/input-bar.client.spec.tsx",
+      "packages/client/ui-primitives/src/icons/index.tsx",
+      "packages/client/ui-conversation/src/client/input/queue-store.ts",
+      "packages/client/ui-conversation/src/client/input/submission-policy.ts",
+      "packages/client/ui-conversation/src/client/input/facade.ts",
+      "packages/api/workspace-controller/README.md",
+      "packages/api/workspace-controller/src/directory-picker.ts",
+      "packages/api/workspace-controller/src/types.ts",
+      "packages/client/ui-conversation/src/client/skeleton/EmptyHero.tsx",
+      "packages/client/ui-conversation/src/client/skeleton/HeroShell.module.css",
+      "packages/client/ui-directory-picker-browse/src/client/flow.ts",
+      "packages/client/ui-directory-picker-native/src/client/flow.ts",
+      "packages/client/ui-sidebar/src/client/SidebarRoot.module.css",
+      "packages/client/ui-sidebar/src/client/SidebarRoot.tsx",
+      "packages/client/ui-sidebar/tests/sidebar-root.client.spec.tsx",
+      "packages/client/ui-workspace/src/client/WorkspacePicker.module.css",
+      "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",
+      "packages/client/ui-workspace/src/client/rows/Rows.module.css",
+      "packages/client/ui-workspace/src/client/rows/Rows.tsx",
+      "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.module.css",
+      "packages/client/ui-workspace/src/client/rows/WorkspaceBrowser.tsx",
+      "packages/client/ui-workspace/tests/workspace-browser.client.spec.tsx",
+      "packages/client/ui-workspace/tests/workspace-picker.client.spec.tsx",
+      "packages/host/directory-picker/README.md",
+      "packages/host/directory-picker/src/types.ts",
+      "packages/api/workspace-controller/tests/directory-picker.host.spec.ts",
+      "packages/host/directory-picker/tests/seam.spec.ts",
+      "packages/client/ui-directory-picker-browse/tests/client-flow.client.spec.tsx",
+      "packages/client/ui-directory-picker-browse/src/client/DirectoryBrowser.module.css",
+      "packages/client/ui-sidebar/README.md",
+      "packages/api/workspace-controller/src/commands.ts",
+      "packages/client/ui-settings/README.md",
+      "packages/client/ui-settings/src/client/settings-scope.ts",
+      "packages/client/ui-settings/tests/settings-scope.client.spec.ts",
+      "packages/client/ui-settings-general/README.md",
+      "packages/client/ui-settings-general/src/client/SettingsRoot.module.css",
+      "packages/client/ui-settings-models/README.md",
+      "packages/client/ui-settings-models/tests/apply.client.spec.ts",
+      "packages/client/ui-model-selection/src/client/directory.ts",
+      "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
+      "packages/client/ui-settings-models/src/client/ProviderEditor.tsx",
+      "packages/client/ui-settings-models/src/client/EditorFooter.tsx",
+      "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
+      "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
+      "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.module.css",
+      "packages/client/ui-settings-plugins/src/client/PluginCard.tsx",
+      "packages/client/ui-settings-plugins/src/client/PluginCard.module.css",
+      "packages/client/ui-settings-plugins/src/client/card-form.ts",
+      "packages/client/ui-settings-plugins/src/client/fields.tsx",
+      "packages/client/ui-settings-plugins/src/client/fields.module.css",
+      "packages/client/ui-settings/src/client/settings-contract.ts",
+      "packages/client/ui-settings/src/client/schema.ts",
+      "packages/client/ui-settings-plugins/src/client/PluginsSettingsSection.tsx",
+      "packages/client/ui-settings-plugins/README.md",
+      "packages/client/ui-settings-plugins/tests/fields.client.spec.tsx",
+      "packages/client/ui-settings-plugins/tests/apply.client.spec.ts",
+      "packages/client/ui-settings-plugin-inventory/tests/components.client.spec.tsx",
+      "packages/client/ui-settings-plugin-inventory/README.md",
+      "packages/mcp/mcp-client/src/index.ts",
+      "packages/mcp/mcp-client/README.md",
+      "packages/client/ui-primitives/src/Tag.tsx",
+      "packages/client/ui-primitives/src/Tag.module.css",
+      "packages/client/ui-primitives/src/StateDot.tsx",
+      "packages/mcp/mcp-client/src/transport.ts",
+      "packages/mcp/mcp-client/tests/apply.spec.ts"
+    ]
+  }
 }

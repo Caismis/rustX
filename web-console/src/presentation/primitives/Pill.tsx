@@ -1,4 +1,4 @@
-/* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
+/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 // Pill: capsule at the 24px text-line size, selectable when given `onClick`
 // (view switcher tabs, filters) and a static span otherwise — TerminalBlock's
 // exit status is the read-only case. The 11px read-only badge is `Tag`; size

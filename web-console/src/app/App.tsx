@@ -20,7 +20,11 @@ import { ArtifactResources } from '../client/artifacts';
 import { ArtifactContext } from './components/Artifact';
 import { ChatViewport } from '../presentation/layout/ChatViewport';
 import { AppFrame } from '../presentation/layout/AppFrame';
-import { Sidebar } from './components/Sidebar';
+import { SidebarRoot } from '../presentation/sidebar/SidebarRoot';
+import { SettingsTrigger } from '../presentation/settings/SettingsRoot';
+import { Modal } from '../presentation/primitives/Modal';
+import { IconApiOutline14, IconInspectOutline12 } from '../presentation/primitives/icons';
+import { RightPanel } from '../presentation/right-panel/RightPanel';
 import { InputBar } from './components/InputBar';
 import { Button } from '../presentation/primitives/Button';
 import { Input } from '../presentation/primitives/Input';
@@ -45,7 +49,14 @@ function readPreferences(): { endpoint: string; tabs: string[] } {
 const defaultWorkspaceHost = new HttpWorkspaceHost();
 export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: AppServerClient; workspaceHost?: ProductHostWorkspaces }) {
   const state = useSyncExternalStore(client.subscribe, client.getSnapshot);
-  const [conversationMode, setConversationMode] = useState<'chat' | 'trajectory' | 'settings'>('chat');
+  const [connectionOpen, setConnectionOpen] = useState(client.getSnapshot().connection !== 'connected');
+  const [createOpen, setCreateOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  useEffect(() => { document.body.toggleAttribute('data-ds-dark-theme', theme === 'dark'); document.documentElement.style.colorScheme = theme; }, [theme]);
+  useEffect(() => { if (state.connection === 'connected') setConnectionOpen(false); }, [state.connection]);
+  const [conversationMode, setConversationMode] = useState<'chat' | 'trajectory'>('chat');
   const [preferences] = useState(readPreferences);
   const [endpoint, setEndpoint] = useState(preferences.endpoint);
   const [token, setToken] = useState('');
@@ -156,12 +167,21 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
     if (result.result.status === 'preview') setPreview(result.result.preview);
     else setError(`Delete preview: ${json(result.result)}`);
   });
-  return <AppFrame navigation={<Sidebar footer={<>
-    <p className="muted">Native App Server · protocol v6</p><a href="https://github.com/Caismis/rustX" target="_blank" rel="noreferrer">rustX source</a>
-    <p className="muted">UI source adapted from DeepSeek Harness. <a href="/LICENSE-DeepSeek-Harness.txt" target="_blank" rel="noreferrer">MIT notice</a></p>
-  </>}>
+  return <AppFrame sidebar={geometry => <SidebarRoot {...geometry} startSession={() => { setCreateOpen(true); }}
+    panels={[{ id: 'connection', label: 'Connection', icon: <IconApiOutline14 />, active: connectionOpen, select: () => setConnectionOpen(true) }]}
+    browser={(wide, expand) => <WorkspaceNavigation wide={wide} expand={expand} createOpen={createOpen} closeCreate={() => setCreateOpen(false)} host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
+      creating={creating === state.generation} metadataChanged={removed => { if (selected) focusSession(selected, { preserveDraft: true }); else if (removed) setFocus(value => value.workspaceId === removed ? {} : value); }}
+      workspace={workspace} selected={selected} selectWorkspace={id => { navigation.invalidate(); setCommand(undefined); setRestored(undefined); setFocus({ workspaceId: id, generation: state.generation }); }}
+      openSession={open} createSession={createInWorkspace} deleteSession={deletePreview}
+      forkSession={id => open(id, () => {
+        setCommand({ request: { id: 'fork' }, current: navigation.capture(), generation: client.getSnapshot().generation, sessionId: id, conversationId: client.getSnapshot().views[id]?.target?.conversation_id });
+      })} />}
+    settings={wide => <SettingsTrigger wide={wide} onClick={() => setSettingsOpen(true)} />} />}
+    rightOpen={inspectorOpen} rightPanel={geometry => <RightPanel {...geometry} open={inspectorOpen} close={() => setInspectorOpen(false)} title="Developer inspector"><Inspector client={client} state={state} view={view} /></RightPanel>}
+    overlay={<>
+      <Modal open={connectionOpen} title="Connection" closeLabel="Close dialog" onClose={() => setConnectionOpen(false)}>
     <section className="connection-form" aria-label="Connection">
-      <div className="status"><StateDot state={connected ? 'done' : state.connection === 'error' || state.connection === 'incompatible' ? 'error' : state.connection === 'disconnected' ? 'idle' : 'warning'} /><strong>{state.connection}</strong><small>g{state.generation}</small></div>
+      <div className="connection-status"><StateDot state={connected ? 'done' : state.connection === 'error' || state.connection === 'incompatible' ? 'error' : state.connection === 'disconnected' ? 'idle' : 'warning'} /><strong>{state.connection}</strong><small>g{state.generation}</small></div>
       <details open={!connected}><summary>Connection settings</summary>
       <label>WebSocket endpoint<Input aria-label="WebSocket endpoint" value={endpoint} disabled={busy || connected} onChange={event => setEndpoint(event.target.value)} /></label>
       <label>Transport token<Input type="password" autoComplete="off" aria-label="Transport token" value={token} onChange={event => setToken(event.target.value)} /></label>
@@ -171,15 +191,10 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
       <Button variant="outline" disabled={state.connection === 'disconnected'} onClick={() => { navigation.invalidate(); client.disconnect(); }}>Disconnect</Button>
       <Button variant="outline" disabled={busy || !token} onClick={() => connect(true)}>Reconnect</Button>
     </section>
-    <WorkspaceNavigation openSettings={() => setConversationMode('settings')} host={workspaceHost} client={client} state={state} endpoint={endpoint} navigation={navigation}
-      creating={creating === state.generation} metadataChanged={removed => { if (selected) focusSession(selected, { preserveDraft: true }); else if (removed) setFocus(value => value.workspaceId === removed ? {} : value); }}
-      workspace={workspace} selected={selected} selectWorkspace={id => { navigation.invalidate(); setCommand(undefined); setRestored(undefined); setFocus({ workspaceId: id, generation: state.generation }); }}
-      openSession={open} createSession={createInWorkspace} deleteSession={deletePreview}
-      forkSession={id => open(id, () => {
-        setCommand({ request: { id: 'fork' }, current: navigation.capture(), generation: client.getSnapshot().generation, sessionId: id, conversationId: client.getSnapshot().views[id]?.target?.conversation_id });
-      })} />
-  </Sidebar>} dockLabel="Developer inspector" dock={<Inspector client={client} state={state} view={view} />}>
-    <header className="console-header"><div><div className="eyebrow">DEVELOPER WEB CONSOLE</div><h1>Sessions, in motion.</h1></div><Pill>{state.connection}</Pill></header>
+      </Modal>
+      {settingsOpen && <Settings key={view?.id} onConnection={() => setConnectionOpen(true)} client={client} sessionId={view?.id} onClose={() => setSettingsOpen(false)} theme={theme} setTheme={setTheme} />}
+    </>}>
+    <header className="console-header"><strong>{view ? state.sessions.find(item => item.id === view.id)?.name ?? 'Session' : 'rustX'}</strong><div className="row"><span className="status"><strong>{state.connection}</strong></span><Button aria-label="Toggle Inspector" onClick={() => setInspectorOpen(value => !value)}><IconInspectOutline12 /></Button></div></header>
     <nav className="tabs" role="tablist" aria-label="Open Session views" onKeyDown={navigateTabs}>{tabs.map(id => <div className="tab" key={id}>
       <Pill role="tab" aria-label={state.sessions.find(item => item.id === id)?.name ?? id} title={id} id={`session-tab-${id}`} aria-controls="session-view" tabIndex={selected === id ? 0 : -1} active={selected === id} aria-selected={selected === id} onClick={() => focusSession(id)}>{state.sessions.find(item => item.id === id)?.name ?? id.slice(0, 16)}</Pill>
       <button className="close-tab" aria-label={`Close view ${id}`} onClick={() => {
@@ -212,9 +227,9 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
           <Button size="sm" disabled={!attached} onClick={() => run(() => client.release(view.id, true))}>Unload runtime</Button></div>
       </section>
       {view.attachment !== 'attached' && <p className="notice">{view.attachment}: last observed values may be stale. Execution and pending interactions remain server-owned. {view.error}</p>}
-      <div className="row" role="tablist" aria-label="Conversation view" onKeyDown={navigateTabs}>{(['chat', 'trajectory', 'settings'] as const).map(mode => <Button key={mode} role="tab" id={`view-tab-${mode}`} aria-controls="conversation-view" tabIndex={conversationMode === mode ? 0 : -1} aria-selected={conversationMode === mode} onClick={() => setConversationMode(mode)}>{mode === 'chat' ? 'Chat' : mode === 'trajectory' ? 'Trajectory' : 'Settings'}</Button>)}</div>
+      <div className="row" role="tablist" aria-label="Conversation view" onKeyDown={navigateTabs}>{(['chat', 'trajectory'] as const).map(mode => <Button key={mode} role="tab" id={`view-tab-${mode}`} aria-controls="conversation-view" tabIndex={conversationMode === mode ? 0 : -1} aria-selected={conversationMode === mode} onClick={() => setConversationMode(mode)}>{mode === 'chat' ? 'Chat' : 'Trajectory'}</Button>)}</div>
       <section className="conversation-panel" id="conversation-view" role="tabpanel" aria-labelledby={`view-tab-${conversationMode}`} tabIndex={0}>
-      <ArtifactContext.Provider value={artifacts}>{conversationMode === 'settings' ? <Settings key={view.id} client={client} sessionId={view.id} /> : conversationMode === 'trajectory' && view.trace ? <Trajectory key={view.id} cache={view.trace} onSelect={id => client.selectTrace(view.id, id)} loadEarlier={() => run(() => client.loadEarlierTrace(view.id))} latest={() => client.latestTrace(view.id)} /> : <ChatViewport key={`${view.id}:${view.target?.attachment_id ?? state.generation}`}>
+      <ArtifactContext.Provider value={artifacts}>{conversationMode === 'trajectory' && view.trace ? <Trajectory key={view.id} cache={view.trace} onSelect={id => client.selectTrace(view.id, id)} loadEarlier={() => run(() => client.loadEarlierTrace(view.id))} latest={() => client.latestTrace(view.id)} /> : <ChatViewport key={`${view.id}:${view.target?.attachment_id ?? state.generation}`}>
         {view.snapshot && <><Conversation snapshot={view.snapshot} history={view.history} loadEarlier={() => run(() => client.loadEarlier(view.id))} latest={() => client.latestTranscript(view.id)}
           lineageSwitchSafe={lineageSwitchSafe(view)} historicalDisabled={composerDisabled || commandOpen} onHistorical={(id, messageId) => invokeCommand({ id, messageId })} /><RuntimeFacts snapshot={view.snapshot} />
           <div className="attempt-status" role="status">Attempt: {view.snapshot.attempt ? `${view.snapshot.attempt.attempt_id} · ${view.snapshot.attempt.phase.type}` : 'none observed'}{view.snapshot.attempt?.phase.type === 'settled' && ` · ${view.snapshot.attempt.phase.outcome.type}`}</div>
@@ -222,7 +237,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
         </>}
       </ChatViewport>}</ArtifactContext.Provider>
       {/* Keyed by Session: no dock or draft state crosses Session views. */}
-      {conversationMode !== 'settings' && <ComposerContextStack key={view.id}
+      <ComposerContextStack key={view.id}
         todo={<TodoDock state={todoDock(view.snapshot)} />}
         goal={<GoalDock state={goalDock(view.snapshot)} observation={view.snapshot} disabled={composerDisabled}
           mutate={(expected, mutation) => client.controlGoal(view.id, expected, mutation)} />}
@@ -236,7 +251,7 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
             try { await client.send(view.id, text, receipts, delivery); return generation === client.getSnapshot().generation; }
             catch (cause) { if (generation === client.getSnapshot().generation) setError(String(cause)); return false; }
             finally { if (generation === client.getSnapshot().generation) setSending(current => { const next = { ...current }; delete next[view.id]; return next; }); }
-          }} />} />}
+          }} />} />
       </section>
       {commandOpen && <CommandPanel key={`${command.generation}:${command.sessionId}:${command.request.id}:${command.request.messageId ?? ''}`} request={command.request} client={client} sessionId={command.sessionId} current={() => command.current() && client.getSnapshot().generation === command.generation}
         succeeded={() => { setConsumed(previous => ({ id: command.request.id, sequence: (previous?.sequence ?? 0) + 1 })); }}
@@ -249,6 +264,6 @@ export function App({ client, workspaceHost = defaultWorkspaceHost }: { client: 
           setTabs(current => current.includes(result.session.id) ? current : [...current, result.session.id]);
         }} />}
 
-    </section> : <div className="empty"><h2>One runtime. Many Sessions.</h2><p>Choose a Host-authorized Workspace in the sidebar, then create a Session. Project trust is resolved independently by rustX.</p><p>Switching or closing views never cancels work.</p></div>}
+    </section> : <div className="empty"><h2>One runtime. Many Sessions.</h2><p>Choose New Session to select a Workspace, or open an existing Session from the sidebar.</p><p>Switching or closing views never cancels work.</p></div>}
   </AppFrame>;
 }

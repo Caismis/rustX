@@ -81,7 +81,7 @@ it('keeps shadowed User resources visible using native shadowing facts', async (
   render(<Settings client={subject.client} sessionId={cfg3Session} />);
   await screen.findByText('server-frozen-model');
   fireEvent.click(screen.getByRole('tab', { name: 'User' }));
-  fireEvent.click(screen.getAllByRole('button', { name: 'Skills' })[1]!);
+  fireEvent.click(screen.getByRole('button', { name: 'Skills' }));
   expect(screen.getByText(/Shadowed by Workspace/).textContent).toContain('/home/user/rustx/.agents/skills/review/SKILL.md');
   expect(screen.queryByText(/Root visible/)).toBeNull();
 });

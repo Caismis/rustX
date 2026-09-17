@@ -473,9 +473,9 @@ jobs:
         run: uv sync --frozen
       - name: Build the real App Server and native Tool supervisors
         run: cargo build --bins
-      - name: Install Chromium
-        working-directory: web-console
-        run: pnpm exec playwright install --with-deps chromium
+      # browser-tests.sh supplies Chromium, fonts and rasterization libraries in
+      # one digest-pinned Playwright container, also used for reference updates.
+      # No host browser/font install or browser cache can change the rendering.
       - name: Full product browser acceptance against the real App Server and Product Host
         working-directory: web-console
         run: pnpm test:e2e

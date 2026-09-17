@@ -1,4 +1,4 @@
-/* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
+/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 /** Shared props for every ic_ds_* icon component. */
 export interface IconProps {
   /** Square edge in px; defaults to the glyph's own drawn size. */

@@ -1,3 +1,4 @@
+import { chooseWorkspace, connectionAction } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { readFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -13,15 +14,15 @@ test('CFG3 committed write and reload response loss reconstructs native state wi
     await page.getByLabel('Transport token').fill(fixture.token);
     await page.getByRole('button', { name: 'Connect', exact: true }).click();
     await expect(page.locator('.status strong')).toHaveText('connected');
-    await page.getByLabel('Choose Workspace').selectOption({ label: 'Workspace A' });
+    await chooseWorkspace(page, 'Workspace A');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
-    await page.getByRole('tab', { name: 'Settings', exact: true }).click();
-    const settings = page.getByRole('region', { name: 'Settings', exact: true });
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
     const writes = () => wire.requests.filter(request => request.method === 'configuration/sourceWrite');
     const reconnect = async () => {
       await expect(page.locator('.status strong')).toHaveText('stale');
-      await page.getByRole('button', { name: 'Reconnect', exact: true }).click();
+      await connectionAction(page, 'Reconnect');
       await expect(page.locator('.status strong')).toHaveText('connected');
       await settings.getByRole('button', { name: 'Read current sources', exact: true }).click();
     };
@@ -68,10 +69,10 @@ test('CFG3 committed write and reload response loss reconstructs native state wi
     expect(writes()).toHaveLength(3);
     // Remounting a different Session reconstructs its own authoritative source scope.
     await settings.getByLabel('MCP command', { exact: true }).fill('unsaved-draft');
-    await page.getByLabel('Choose Workspace').selectOption({ label: 'Workspace B' });
+    await chooseWorkspace(page, 'Workspace B');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(page.locator('.session-toolbar small')).toContainText(fixture.workspaceB);
-    await page.getByRole('tab', { name: 'Settings', exact: true }).click();
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await settings.getByRole('tab', { name: 'User', exact: true }).click();
     await settings.getByRole('button', { name: 'MCP', exact: true }).click();
     await settings.getByRole('button', { name: 'Edit MCP loss-fixture', exact: true }).click();

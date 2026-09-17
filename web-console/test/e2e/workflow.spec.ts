@@ -1,3 +1,4 @@
+import { chooseWorkspace, closeSettings } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -18,7 +19,7 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
   };
   try {
     await routeWorkspaceHost(page, fixture); await page.goto('/'); await connect();
-    await page.getByLabel('Choose Workspace').selectOption({ label: 'Workspace A' });
+    await chooseWorkspace(page, 'Workspace A');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await page.getByLabel('Message', { exact: true }).fill('workflow conformance request');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
@@ -41,16 +42,16 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await inspector.getByRole('tab', { name: 'Timing', exact: true }).click();
     await expect(inspector).toContainText('Unavailable');
     await fixture.release('workflow-child-admitted');
-    await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+    await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
     await expect(page.getByText('workflow conformance complete', { exact: true })).toBeVisible();
     await expect(run).toContainText('completed');
-    await page.getByRole('tab', { name: 'Settings', exact: true }).click();
-    const settings = page.getByRole('region', { name: 'Settings', exact: true });
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
     await settings.getByRole('button', { name: 'Agents', exact: true }).click();
     await expect(settings).toContainText('reviewer');
     await settings.getByRole('button', { name: 'Workflows', exact: true }).click();
     await expect(settings).toContainText('review_pr');
-    await settings.getByRole('button', { name: 'Skills', exact: true }).last().click();
+    await settings.getByRole('button', { name: 'Skills', exact: true }).click();
     await expect(settings).toContainText('acceptance');
     await settings.getByRole('tab', { name: 'Workspace', exact: true }).click();
     await settings.getByRole('button', { name: 'Agents & Workflows', exact: true }).click();

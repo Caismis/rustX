@@ -9,7 +9,7 @@ import { ToolRow } from './components/ToolRow';
 import { ApprovalPanel } from './components/ApprovalPanel';
 import { QuestionComposer } from './components/QuestionComposer';
 import { Button } from '../presentation/primitives/Button';
-import { Feedback } from '../presentation/primitives/Surface';
+import { Feedback } from './components/ConversationFeedback';
 import { Content, Message } from './components/ChatMessage';
 import { entryIdentity, HISTORY_LIMIT, type TranscriptCache } from '../client/transcript';
 import { useState } from 'react';

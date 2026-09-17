@@ -1,4 +1,4 @@
-/* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
+/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 // Input: single-line text input atom (search boxes, inline forms). Composer
 // textareas are NOT this atom — they live with the conversation package.
 

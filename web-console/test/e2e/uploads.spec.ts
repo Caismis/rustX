@@ -1,3 +1,5 @@
+import { showInspector } from './shell-actions';
+import { chooseWorkspace } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -18,7 +20,7 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
     await page.getByLabel('WebSocket endpoint').fill(fixture.endpoint);
     await page.getByLabel('Transport token').fill(fixture.token);
     await page.getByRole('button', { name: 'Connect', exact: true }).click();
-    await expect(page.locator('.status strong')).toHaveText('connected');
+    await expect(page.locator('.status strong')).toHaveText('connected'); await showInspector(page);
   };
   const submit = async (phase: string) => {
     await page.getByRole('button', { name: 'Send', exact: true }).click();
@@ -33,7 +35,7 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
   };
   try {
     await routeWorkspaceHost(page, fixture); await page.goto('/'); await connect();
-    await page.getByLabel('Choose Workspace').selectOption({ label: 'Workspace A' });
+    await chooseWorkspace(page, 'Workspace A');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(message).toBeEnabled(); const source = await id();
     await message.fill('Use my uploaded files');
@@ -70,14 +72,15 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
     // Release the source controller without abandoning the destination editor.
     // The actual TUI adapter cold/unload operation shares the native owner.
     await page.getByRole('button', { name: `Close view ${source}` }).click();
-    await expect(page.getByRole('button', { name: `Open ${source}`, exact: true })).toContainText('detached');
+    await expect(page.locator(`button[data-session-id="${source}"]`)).toHaveAttribute('title', /detached/i);
     const observer = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
     try {
       const attached = await observer.client.call('session/attach', { session_id: source }, 'attached');
       await observer.client.call('session/unload', { target: attached.target }, 'unloaded');
     } finally { await observer.shutdown(); }
-    await page.getByLabel(`Actions ${source}`, { exact: true }).click();
-    await page.getByRole('button', { name: `Delete ${source}`, exact: true }).click();
+    await page.locator(`button[data-session-id="${source}"]`).hover();
+    await page.locator(`button[data-session-actions="${source}"]`).click();
+    await page.getByRole('menuitem', { name: 'Delete Session', exact: true }).click();
     await page.getByRole('button', { name: 'Confirm delete', exact: true }).click();
     await expect(page.getByRole('alert')).toContainText('"status": "deleted"');
     expect(existsSync(root(source))).toBe(false);
@@ -97,8 +100,9 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
     expect(wire.requests.filter(request => request.method === 'artifact/read')).toHaveLength(0);
     await page.getByRole('button', { name: 'Unload runtime', exact: true }).click();
     await expect(page.locator('.session-toolbar small')).toContainText('unloaded');
-    await page.getByLabel(`Actions ${destination}`, { exact: true }).click();
-    await page.getByRole('button', { name: `Delete ${destination}`, exact: true }).click();
+    await page.locator(`button[data-session-id="${destination}"]`).hover();
+    await page.locator(`button[data-session-actions="${destination}"]`).click();
+    await page.getByRole('menuitem', { name: 'Delete Session', exact: true }).click();
     await page.getByRole('button', { name: 'Confirm delete', exact: true }).click();
     await expect(page.getByRole('alert')).toContainText('"status": "deleted"');
     expect(existsSync(root(destination))).toBe(false);

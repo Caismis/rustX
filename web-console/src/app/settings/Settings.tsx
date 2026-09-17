@@ -10,13 +10,14 @@ import { RootEditor, type RootSection } from './RootEditor';
 import { RuntimeEditor } from './RuntimeEditor';
 import type { SaveSource } from './controls';
 import css from './Settings.module.css';
+import { SettingsPanel } from '../../presentation/settings/SettingsRoot';
 
 const sections = [
   ['overview', 'Overview', ''], ['general', 'General', 'Runtime'], ['catalog', 'Providers & Models', 'Runtime'], ['policies', 'Tool Policies', 'Runtime'],
-  ['root-model', 'Model', 'Root Agent'], ['root-tools', 'Tools', 'Root Agent'], ['root-skills', 'Skills', 'Root Agent'], ['root-plugins', 'Plugins', 'Root Agent'], ['root-agents', 'Agents & Workflows', 'Root Agent'],
+  ['root-model', 'Model', 'Root Agent'], ['root-tools', 'Tools', 'Root Agent'], ['root-skills', 'Skill access', 'Root Agent'], ['root-plugins', 'Plugins', 'Root Agent'], ['root-agents', 'Agents & Workflows', 'Root Agent'],
   ['mcp', 'MCP', 'Resources'], ['python', 'Managed Python', 'Resources'], ['skills', 'Skills', 'Resources'], ['agents', 'Agents', 'Resources'], ['workflows', 'Workflows', 'Resources'], ['advanced', 'Diagnostics & source facts', 'Advanced'],
 ] as const;
-type Section = typeof sections[number][0];
+type Section = typeof sections[number][0] | 'appearance';
 function sourceRevision(source: SourceSettings, mutation: SourceMutation) {
   if (mutation.kind === 'config') return source[mutation.scope].revision;
   if (mutation.kind === 'mcp') return (mutation.scope === 'user' ? source.user_mcp : source.workspace_mcp).revision;
@@ -31,14 +32,15 @@ function nativeDiagnostic(cause: unknown): string {
   return cause.error.message;
 }
 
-export function Settings({ client, sessionId }: { client: AppServerClient; sessionId: string }) {
+export function Settings({ client, sessionId, onClose = () => {}, theme = 'light', setTheme, onConnection }: { client: AppServerClient; sessionId?: string; onClose?: () => void; theme?: 'light' | 'dark'; setTheme?: (theme: 'light' | 'dark') => void; onConnection?: () => void }) {
   const transport = useSyncExternalStore(client.subscribe, client.getSnapshot);
-  const target = transport.views[sessionId]?.target;
+  const target = sessionId ? transport.views[sessionId]?.target : undefined;
   const [scope, setScope] = useState<'effective' | SourceScope>('effective'), [section, setSection] = useState<Section>('overview');
   const [source, setSource] = useState<SourceSettings>(), [effective, setEffective] = useState<EffectiveConfiguration>();
   const [message, setMessage] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const writing = useRef(false), epoch = useRef(0);
   const read = useCallback(async () => {
+    if (!sessionId) return { source: undefined, effective: undefined };
     const [authored, published] = await Promise.all([
       client.request({ method: 'configuration/sourcesRead', params: { session_id: sessionId } }, 'source_settings'),
       target ? client.request({ method: 'configuration/effective', params: { target } }, 'effective_configuration') : Promise.resolve(undefined),
@@ -61,7 +63,7 @@ export function Settings({ client, sessionId }: { client: AppServerClient; sessi
     writing.current = true; setBusy(true); setError(''); setMessage('');
     const at = epoch.current;
     try {
-      const result = await client.request({ method: 'configuration/sourceWrite', params: { session_id: sessionId, expected_revision, mutation } }, 'source_settings');
+      const result = await client.request({ method: 'configuration/sourceWrite', params: { session_id: sessionId!, expected_revision, mutation } }, 'source_settings');
       if (at !== epoch.current) return undefined;
       setSource(result.projection);
       setMessage('Source saved. The loaded runtime is unchanged; Reload publishes a new generation.');
@@ -83,7 +85,7 @@ export function Settings({ client, sessionId }: { client: AppServerClient; sessi
       await client.request({ method: 'configuration/reload', params: { target } }, 'configuration_reloaded');
       published = true;
       const current = await refresh();
-      if (at === epoch.current) setMessage(`Configuration published: ${old ?? 'previous'} → ${current.effective?.generation ?? current.source.loaded?.generation}.`);
+      if (at === epoch.current) setMessage(`Configuration published: ${old ?? 'previous'} → ${current.effective?.generation ?? current.source?.loaded?.generation}.`);
     } catch (cause) {
       if (at !== epoch.current) return;
       if (published || isOutcomeUncertain(cause)) {
@@ -95,14 +97,15 @@ export function Settings({ client, sessionId }: { client: AppServerClient; sessi
       }
     } finally { writing.current = false; setBusy(false); }
   };
-  if (!source) return <section className={css.settings} aria-label="Settings"><h2>Settings</h2>{error ? <p role="alert">{error}</p> : <p role="status">Loading configuration…</p>}<Button onClick={() => void refresh().catch(cause => setError(nativeDiagnostic(cause)))}>Read current sources</Button></section>;
+  const frame = (children: import('react').ReactNode) => <SettingsPanel rows={[{ id: 'appearance', label: 'Appearance' }, ...sections.map(([id, label]) => ({ id, label }))]} activeId={section} onSelect={id => setSection(id as Section)} onClose={onClose} actions={onConnection && <Button onClick={onConnection}>Connection</Button>}>{children}</SettingsPanel>;
+  if (section === 'appearance') return frame(<section><h2>Appearance</h2><label>Theme<select aria-label="Theme" value={theme} onChange={event => setTheme?.(event.target.value as 'light' | 'dark')}><option value="light">Light</option><option value="dark">Dark</option></select></label></section>);
+  if (!source) return frame(<section className={css.settings} aria-label="Settings">{error ? <p role="alert">{error}</p> : <p role="status">{sessionId ? 'Loading configuration…' : 'Open a Session to inspect its native configuration.'}</p>}<Button onClick={() => void refresh().catch(cause => setError(nativeDiagnostic(cause)))}>Read current sources</Button></section>);
   const selected = scope === 'effective' ? undefined : source[scope];
   const models = Object.keys(effective?.document.models ?? {});
   const roots = [`${source.user_resource_root}/skills`, `${source.workspace_resource_root}/skills`];
-  return <section className={css.settings} aria-label="Settings" aria-busy={busy}>
-    <header><h2>Settings</h2><Button disabled={busy} onClick={() => void refresh().catch(cause => setError(nativeDiagnostic(cause)))}>Read current sources</Button></header>
+  return frame(<section className={css.settings} aria-label="Settings" aria-busy={busy}>
+    <header><h2>Configuration</h2><Button disabled={busy} onClick={() => void refresh().catch(cause => setError(nativeDiagnostic(cause)))}>Read current sources</Button></header>
     <div role="tablist" aria-label="Configuration scope" className={css.tabs}>{(['effective', 'user', 'workspace'] as const).map(value => <button key={value} role="tab" aria-selected={scope === value} onClick={() => setScope(value)}>{value[0].toUpperCase() + value.slice(1)}</button>)}</div>
-    <div className={css.layout}><nav aria-label="Settings sections">{sections.map(([id, title, group], index) => <div key={id}>{group && group !== sections[index - 1]?.[2] && <h3>{group}</h3>}<button aria-current={section === id ? 'page' : undefined} onClick={() => setSection(id)}>{title}</button></div>)}</nav>
       <div className={css.content}>
         <div className={css.generation}><span>Runtime generation {effective?.generation ?? source.loaded?.generation ?? 'not loaded'} · {source.loaded?.pending_reload ? 'Pending reload' : 'Sources unchanged'}</span><Button variant="primary" disabled={busy || !target} onClick={() => void reload()}>Reload</Button></div>
         {message && <p role="status">{message}</p>}{error && <p className={css.error} role="alert">{error}</p>}
@@ -121,8 +124,7 @@ export function Settings({ client, sessionId }: { client: AppServerClient; sessi
         </fieldset>}
         <footer><h4>Source paths</h4><dl><dt>User config</dt><dd>{source.user.path}</dd><dt>User resources</dt><dd>{source.user_resource_root}</dd><dt>Workspace config</dt><dd>{source.workspace.path}</dd><dt>Workspace resources</dt><dd>{source.workspace_resource_root}</dd><dt>Runtime root</dt><dd>{source.runtime_root} · fixed for this process</dd></dl></footer>
       </div>
-    </div>
-  </section>;
+  </section>);
 }
 function EffectiveView({ value, source, section }: { value: EffectiveConfiguration; source: SourceSettings; section: Section }) {
   return <section aria-label="Effective configuration"><p>Read-only published configuration · generation {value.generation}</p>

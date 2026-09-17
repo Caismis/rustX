@@ -10,7 +10,8 @@ afterEach(() => { cleanup(); server.client.disconnect(); });
 
 it('boots the source-derived shell with no Host backend and exposes only supported controls', () => {
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
-  expect(screen.getByRole('heading', { name: 'Sessions, in motion.' })).toBeTruthy();
+  expect(document.querySelector('[data-harness-frame]')).toBeTruthy();
+  expect(screen.getAllByText('rustX').length).toBeGreaterThan(0);
   expect(screen.getByRole('button', { name: 'Connect' })).toBeTruthy();
   expect(screen.queryByText(/Workspace manager|Provider settings|Install plugin|Retry turn|Queue prompt|Open file/)).toBeNull();
   expect(server.requests).toEqual([]);
