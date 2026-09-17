@@ -192,6 +192,9 @@ async fn python_shadowing_is_inert_and_a_malformed_higher_file_blocks_selected_a
     }
 }
 fn sources(root: &Path, user: &str, workspace: &str) -> (HostEnvironment, LaunchRequest) {
+    // Compare published path identities against the same canonical fixture root
+    // used by native resolution, including macOS temporary-directory aliases.
+    let root = root.canonicalize().unwrap();
     let home = root.join("home");
     let cwd = root.join("workspace");
     std::fs::create_dir_all(home.join("rustx")).unwrap();
@@ -206,6 +209,24 @@ fn sources(root: &Path, user: &str, workspace: &str) -> (HostEnvironment, Launch
             ..Default::default()
         },
     )
+}
+
+#[cfg(unix)]
+#[test]
+fn source_fixture_uses_canonical_bindings_through_a_parent_alias() {
+    let root = tempfile::tempdir().unwrap();
+    let canonical = root.path().canonicalize().unwrap();
+    let alias = canonical.join("alias");
+    std::os::unix::fs::symlink(&canonical, &alias).unwrap();
+    let (host, request) = sources(&alias, &format!("{PROVIDER}{MODEL}{ROOT}"), "");
+    assert_eq!(host.home_directory, canonical.join("home"));
+    assert_eq!(host.launch_directory, canonical.join("workspace"));
+    let (manager, input) = request.session_input(&host).unwrap();
+    assert_eq!(
+        manager.runtime_root(),
+        host.home_directory.join("rustx/runtime")
+    );
+    assert!(manager.resolve_session(&input).is_ok());
 }
 
 #[tokio::test]

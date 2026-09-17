@@ -112,5 +112,12 @@ before writes and discovery, matching production. A deterministic parent-symlink
 regression checks the same fixture helper and verifies Python identity discovery
 without materialization. This changes test setup, not runtime path policy.
 
+The following macOS run passed all in-crate tests and reached the external CFG3
+catalog target. Four assertions still compared canonical published paths against
+the catalog fixture's aliased home spelling. That fixture now canonicalizes its
+root before constructing bindings. A parent-alias regression and all 28 catalog
+tests under an aliased temporary root verify path identity, shadow provenance and
+resource-revision lookup together. Published path semantics remain unchanged.
+
 Full local validation and exact pushed-head GitHub Actions results are reported
 with the PR update. Local success is not evidence of GitHub CI success.
