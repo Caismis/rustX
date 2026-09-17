@@ -1701,7 +1701,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "f57cf2546d5cc63cc81e34deb2731c47ba6a4a89c3cc6d8a203118cccacf3ca5",
+      "local_sha256": "8803ed7863295a250210a9a9256d3d69eedfed4b3a66f913cb57cdea0a48ad7a",
       "classification": "B"
     },
     {
@@ -1800,7 +1800,7 @@
       "destination": "web-console/src/presentation/locale/workspace.ts",
       "upstream": "packages/client/ui-workspace/src/client/locales.ts",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "B: Harness UI + rustX binding; explicit props replace runtime/registry injection",
+      "treatment": "A: English dictionary selected from upstream locales; unused Chinese dictionary and locale-service dependency omitted",
       "upstream_sha256": "d2b2c7e89a031e6c729b7b141a72e2b6e632e254e9a3b7e35dbd908ede870155",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -1810,7 +1810,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "retained_dependencies": [],
-      "local_sha256": "d2a1e3e89c50c31067566de8e445f692b2d92abf7f8c7e863b5bb4fb69673ae8",
+      "local_sha256": "5082a2433acbea700d4281a523581215af54e2f577f83ca6ba34ba57ec076ebc",
       "classification": "A"
     },
     {
