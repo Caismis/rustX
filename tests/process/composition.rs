@@ -341,7 +341,7 @@ async fn the_endpoint_speaks_for_the_one_composed_host() {
     );
 
     // The model catalog is reachable through the protocol, so a client never
-    // reads models.toml itself.
+    // reads rustx.toml itself.
     let response = endpoint.handle_request(RuntimeClientRequest::ModelCatalogGet {
         id: RequestId::new(2),
     });

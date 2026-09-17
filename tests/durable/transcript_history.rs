@@ -1233,7 +1233,7 @@ fn transcript_reference_identity_is_typed_and_collision_free() {
     ));
 }
 
-/// Requirement 13: resource reload changes future resource state only; it
+/// Requirement 13: configuration reload changes future resource state only; it
 /// cannot append a transcript item or rewrite an existing one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn requirement_13_resource_reload_has_no_transcript_item_or_diff() {

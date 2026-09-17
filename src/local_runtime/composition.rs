@@ -1131,27 +1131,17 @@ impl LocalConversationCore {
                     .unwrap_or_else(|| runtime_config.initial_model().clone()),
             )?;
 
-            // The root Agent's native Agent Extension composition freeze point
-            // (Issues #256, #259). It is resolved once, here, from this launch's
-            // already-resolved configuration document. Nothing downstream reads
-            // `runtime_config.agent.extensions` again, and resource reload publishes a
-            // new `RuntimeResourceSnapshot` that deliberately cannot reach this
-            // value: a running ConversationRuntime executes against the
-            // composition frozen for its launch.
-            //
-            // It is resolved before the tool runtime because it decides one of
-            // the tool runtime's owned resources: the conversation's task list
-            // exists exactly when this composition includes the Todo extension.
-            //
-            // It is deliberately *not* handed to the subagent spawn plan: root
-            // and named-role extension sets are independently authored, and a
-            // child's set is frozen by the resolver from its own definition.
+            // Initial Root Plugin selection comes from the resolved CFG3 profile.
+            // Later safe-boundary reload publishes a new profile; admitted work
+            // retains its generation. Conversation Todo/Goal state owners remain
+            // stable independently of whether a generation exposes their Tools.
+            // Named Agents resolve their own independent Plugin profiles.
             let extensions = runtime_config.extension_composition();
 
             // 5-6. The conversation identity authority and the one conversation
             // tool runtime (workspace, runtime-private artifact root, canonical
             // mailbox, background registry, base authorized environment, and the
-            // Todo extension owner when composed).
+            // Todo/Goal domain owners).
             let base_environment = runtime_config.tool_environment()?;
             let mut tool_runtime_config = crate::tools::runtime::ConversationRuntimeConfig::new(
                 &paths.workspace,
@@ -1254,8 +1244,8 @@ impl LocalConversationCore {
                         tool_runtime.workspace().root(),
                         conversation_access,
                     ),
-                    // Launch-scoped: capacity belongs to the live registry, and
-                    // resource reload deliberately never resizes it.
+                    // Generation-owned capacity belongs to the live registry;
+                    // safe-boundary publication replaces capacity when no child owns it.
                     max_active: runtime_config.subagents.max_concurrent,
                 },
             );
@@ -1287,17 +1277,15 @@ impl LocalConversationCore {
                 detail: format!("{error:?}"),
             })?;
 
-            // Launch resolution already resolved the automatic source roots
-            // from the session `[skills].sources` policy, and rebased the
-            // explicit launch paths according to authority. Package discovery
-            // retains its own canonical identity validation.
+            // Launch resolution froze the fixed User and Workspace Skill roots.
+            // Package discovery reserves Workspace shadows before validation;
+            // Agent profiles independently select prompt visibility.
             let skill_discovery = SkillDiscoveryConfig {
                 automatic: paths.skill_sources.clone(),
             };
 
-            // 9. The resolver supplied launch controls and layered settings. The
-            // coordinator receives the activation policy
-            // and applies it to the available capability registrations.
+            // 9. The resolver supplied the complete CFG3 profile and policies.
+            // The existing coordinator prepares only finite admitted source demand.
             let capability = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
                 source_demand: admitted_source_demand(
                     &runtime_config,
@@ -1308,10 +1296,9 @@ impl LocalConversationCore {
                 conversation_id: tool_runtime.conversation_id().clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(base_registry),
-                // The extension Tool surfaces the tool runtime above actually
-                // materialized. The coordinator composes them once, outside its
-                // reloadable inputs (Issue #259); it is handed no second
-                // composition decision of its own.
+                // Stable owner-backed Plugin registrations. Each generation's
+                // authored profile selects enabled Plugins independently of
+                // ordinary Tool availability; Todo/Goal state remains domain-owned.
                 extension_tools: tool_runtime.extension_tool_plane(),
                 agent_activation: AgentActivation {
                     profile: runtime_config.agent.clone(),
@@ -3141,7 +3128,7 @@ chat_reasoning_replay = "omit"
         // enables the extension and configures it differently.
         std::fs::write(
             dir.path().join("workspace/rustx.toml"),
-            r#"schema_version = 8
+            r#"schema_version = 9
 agent_id = "agent-host"
 
 [context]
@@ -3154,16 +3141,16 @@ keep_recent_tokens = 0
 model = "local/model-a"
 
 
-[agent.extensions]
-[agent.extensions.agent_status]
+[agent.plugins]
+[agent.plugins.agent_status]
 enabled = true
 
-[agent.extensions.agent_status.time]
+[agent.plugins.agent_status.time]
 enabled = true
 timezone = "America/New_York"
 
 
-[agent.extensions.agent_status.background]
+[agent.plugins.agent_status.background]
 enabled = true
 "#,
         )
@@ -3303,7 +3290,7 @@ enabled = true
         let dir = lab();
         std::fs::write(
             dir.path().join("workspace/rustx.toml"),
-            r#"schema_version = 8
+            r#"schema_version = 9
 agent_id = "agent-host"
 
 [context]
@@ -3316,16 +3303,16 @@ keep_recent_tokens = 0
 model = "local/model-a"
 
 
-[agent.extensions]
-[agent.extensions.agent_status]
+[agent.plugins]
+[agent.plugins.agent_status]
 enabled = true
 
-[agent.extensions.agent_status.time]
+[agent.plugins.agent_status.time]
 enabled = true
 timezone = "America/New_York"
 
 
-[agent.extensions.agent_status.background]
+[agent.plugins.agent_status.background]
 enabled = true
 "#,
         )

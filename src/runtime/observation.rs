@@ -243,7 +243,7 @@ pub(crate) enum ConversationObservation {
     /// #81). The availability may change without a revision swap (a
     /// diagnostic-only change); the snapshot never changes without one.
     ///
-    /// A runtime resource reload does **not** publish this variant: it
+    /// A runtime configuration reload does **not** publish this variant: it
     /// commits a capability generation and a resource generation together
     /// and publishes both as one [`ConversationObservation::Resources`], so
     /// no consumer can fold half a generation.
@@ -257,7 +257,7 @@ pub(crate) enum ConversationObservation {
     /// One published immutable runtime resource generation, **including the
     /// capability generation it was built against**.
     ///
-    /// This is the complete result of one resource reload and the only
+    /// This is the complete result of one configuration reload and the only
     /// observation a reload emits. The capability half is deliberately not
     /// published separately: the two writes are ordered inside the runtime,
     /// but the consumer folding this queue runs on its own task under its

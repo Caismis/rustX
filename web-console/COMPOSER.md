@@ -47,9 +47,9 @@ extension. Three states stay distinct:
   `blocked_by` is shown as the native relation (`after #1`), never as an invented
   status. An in-progress task shows its `active_form`.
 
-The dock has no mutation. Todo tasks are never written to `settings.toml`,
-`rustx.toml`, Agent TOML, `SessionPersistentState` or browser storage. Whether
-Todo is composed is `agent.extensions.todo` configuration at User/Workspace or
+The dock has no mutation. Todo tasks are never written to `rustx.toml`,
+Agent TOML, `SessionPersistentState` or browser storage. Whether
+Todo is composed is `agent.plugins.todo` configuration at User/Workspace or
 named-Agent scope; there is no Session extension override and the dock offers no
 configuration control.
 
@@ -199,7 +199,7 @@ keeping the capability panel open; consumption and panel dismissal are separate.
 | Command | Typed integration |
 | --- | --- |
 | `/model` | `settings/model` + `settings/models`, then `settings/setModel` with an exact catalog model reference and native defaults |
-| `/permission` (`/approval`) | Native `policy` / `full_access`, `settings/setApprovalMode`, authoritative snapshot reread |
+| Global approval policy | Settings → User or Workspace → Runtime; Save source bytes, then Reload separately |
 | `/compact` | Native `context/compact`, available with no active Attempt; pending inbound alone is permitted by native maintenance |
 | `/new` | `session/create` using native Session cwd; attach/open only after success |
 | `/fork` | Native exact user-boundary selection and independent `session/fork` |

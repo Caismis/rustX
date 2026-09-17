@@ -693,7 +693,7 @@ pub struct SubagentSnapshot {
     /// The deterministic definition digest frozen at start (Issue #144).
     ///
     /// The snapshot reports the definition the child actually started with,
-    /// so a resource reload that redefines the same agent name can never
+    /// so a configuration reload that redefines the same agent name can never
     /// make an already-running child appear to have the new definition.
     pub definition_digest: String,
     /// The deterministic **effective execution profile** digest frozen at

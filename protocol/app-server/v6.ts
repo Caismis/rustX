@@ -1967,7 +1967,7 @@ export type SkillDiagnostic =
        */
       source: 'user' | 'workspace';
       /**
-       * Every root configured for that source, in canonical order.
+       * The fixed collection root, represented in canonical order.
        */
       roots: string[];
       /**
@@ -5447,7 +5447,7 @@ export interface RuntimeClientSubagent {
    * The deterministic definition digest frozen at start (Issue #144).
    *
    * A client observing an already-running child sees the definition it
-   * actually started with, so a later resource reload that redefines the
+   * actually started with, so a later configuration reload that redefines the
    * same agent name can never be mistaken for a change to that child.
    */
   definition_digest: string;
@@ -7746,12 +7746,9 @@ export interface ToolDeadlinePolicyDocument {
  */
 export interface SubagentsDocument {
   /**
-   * The per-conversation concurrency bound frozen at admission.
-   *
-   * It is read once, at composition, and is deliberately not resized by
-   * resource reload: capacity is live-registry state, and shrinking it
-   * under already-committed children would either orphan ownership or
-   * silently lie about the bound.
+   * Runtime-global child capacity resolved from User < Workspace as one object.
+   * Safe-boundary configuration publication updates the registry policy only
+   * when no admitted child owns it; existing child specs remain frozen.
    */
   maxConcurrent?: number;
 }
@@ -8600,7 +8597,7 @@ export interface RuntimeClientSubagent1 {
    * The deterministic definition digest frozen at start (Issue #144).
    *
    * A client observing an already-running child sees the definition it
-   * actually started with, so a later resource reload that redefines the
+   * actually started with, so a later configuration reload that redefines the
    * same agent name can never be mistaken for a change to that child.
    */
   definition_digest: string;

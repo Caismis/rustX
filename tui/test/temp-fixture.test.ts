@@ -30,13 +30,13 @@ describe("TempFixture owns its temporary root", () => {
   it("backs representative TUI integration usage under the root", () => {
     const current = fixture;
     assert.ok(current);
-    // Mirrors the real integration setup: models.toml, rustx.toml, and a
+    // Mirrors the real integration setup: rustx.toml, notes.md, and a
     // workspace directory all live under the single owned root.
-    writeFileSync(current.path("models.toml"), "{}");
     writeFileSync(current.path("rustx.toml"), "{}");
+    writeFileSync(current.path("notes.md"), "fixture notes");
     mkdirSync(current.path("workspace"), { recursive: true });
-    assert.ok(existsSync(current.path("models.toml")));
     assert.ok(existsSync(current.path("rustx.toml")));
+    assert.ok(existsSync(current.path("notes.md")));
     assert.ok(existsSync(current.path("workspace")));
   });
 

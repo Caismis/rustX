@@ -38,7 +38,7 @@
 //!
 //! ```text
 //! reload:prepared / reload:published
-//!     the resource reload's build/publish boundary, under the runtime's own
+//!     the configuration reload's build/publish boundary, under the runtime's own
 //!     one-reload-at-a-time gate
 //!
 //! before/after:publish_session, before/after:publish_node

@@ -49,7 +49,7 @@ impl std::fmt::Display for ToolSourceId {
 
 /// Finite source demand admitted by the composition owner for one candidate.
 /// The Python catalog carries discovery/path authority; selecting a missing
-/// identity cannot manufacture a package or a source enablement grant.
+/// identity cannot manufacture a package or admitted materialization demand.
 #[derive(Debug, Clone, Default)]
 pub struct ToolSourceDemand {
     pub sources: std::collections::BTreeSet<ToolSourceId>,

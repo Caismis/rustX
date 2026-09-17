@@ -645,7 +645,7 @@ Implemented in the current architecture:
   `commit_dispatch` with `BackgroundDispatchError::ConversationInactive`,
   and the capability coordinator refuses a runtime-owned ordinary `commit`
   with `CapabilityCommitError::RuntimePublicationRequired` — all consuming
-  nothing. Live capability publication uses the resource reload owner.
+  nothing. Live capability publication uses the configuration reload owner.
   Activation has **one authoritative lifecycle state**: the shared
   `ConversationLifecycle` token composed by the runtime, read by the
   mailbox (runtime ownership is the handle itself), the background
@@ -715,11 +715,11 @@ Implemented in the current architecture:
   (an activation-gate test parks `activate` before the lifecycle
   transition and proves both sides: while parked, background commit,
   ordinary capability commit, and mailbox enqueue are refused typed, while
-  live capability publication remains owned by resource reload; after the
+  live capability publication remains owned by configuration reload; after the
   transition the same operations follow the normal running semantics; a
   real-time ordered cross-subsystem regression parks a background commit
   after it has observed `Running` at the registry ownership-commit boundary
-  and proves a resource reload that begins afterwards — and one that begins
+  and proves a configuration reload that begins afterwards — and one that begins
   after the background completed — cannot create mixed authority; a
   host-bind-vs-activate race proves
   the host binds with the bootstrap seed at cursor 0 while `activate` is
@@ -1449,13 +1449,14 @@ registry, `CapabilityCoordinator` (prepared and committed before serving),
   semantic conversation coordinator), and one `RuntimeClientHost`
   projection/control adapter over it — and serves its endpoint over the
   Issue #38 stdio/JSONL transport with a protocol-only stdout.
-CFG-01 (#232) now supplies one validated `AdmittedSessionConfig` from bounded discovery,
-explicit-presence layering, host-owned trust and domain defaults before composition.
+CFG3 (#332) supplies one validated `AdmittedSessionConfig` from two fixed source
+scopes, typed semantic overlay and domain defaults before composition. Source
+definitions are inert; admitted demand drives materialization. See
+[configuration](configuration.md) for the current contract.
 
-Further M10 work productizes that established seam. Beyond CFG-01's bounded
-discovery and precedence, it covers manifest/workspace UX, an interactive config
-editor, durability/recovery UX, and soak testing — **not** the composition
-ownership, which is frozen.
+CFG3 also supplies structured configuration authoring and explicit reload across
+the CLI, App Server, TUI and Web. Remaining product work can build on these
+current ownership boundaries; earlier M10 suggestions below are planning history.
 
 Build an interactive CLI for sustained manual testing.
 

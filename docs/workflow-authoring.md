@@ -24,7 +24,7 @@ admission never grants invocation approval or certifies provider connectivity.
 
 ## One authority
 
-1. `launch::analyze` resolves authorized configuration, source policy and canonical
+1. `launch::analyze` resolves User < Workspace configuration, finite demand and canonical
    resources without capturing credentials or preparing sources.
 2. `workflow_resources::load` reads canonical YAML through strict owner-native
    authoring types. `WorkflowProgram::compile` validates graph structure, lexical

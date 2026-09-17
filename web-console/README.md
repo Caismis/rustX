@@ -186,7 +186,7 @@ telemetry is used by it.
 
 Supported native gestures: list/create/open, delete preview and revision-checked
 delete, Send/Queue/Steer and cancel, Goal pause/resume/edit, typed slash commands,
-native Fork/Branch/Retry and Session tree navigation, model/approval selectors,
+native Fork/Branch/Retry and Session tree navigation, explicit model selection and configuration-owned approval policy,
 answer/decline/cancel interactions, resync, detach, unload/cold attach and reconnect.
 Commands are client grammar, never server command strings. Unsupported slash input
 is refused without prompt fallback. Retry creates a native branch and executes its

@@ -8,90 +8,25 @@
 //! source identity and root resolution, and
 //! [`crate::runtime::agent_profile`] owns capability selection.
 //!
-//! # Discovery pipeline
+//! # Discovery and ownership
 //!
-//! ```text
-//! configured sources (automatic roots + explicit launch paths)
-//!         |
-//!         v
-//! enumerate candidate package directories per source
-//!         |
-//!         v
-//! canonicalize + source containment
-//!         |
-//!         v
-//! validate each candidate independently
-//!         |
-//!         +-- valid   -> source-local candidate
-//!         |
-//!         +-- invalid -> excluded + typed generation diagnostic
-//!         |
-//!         v
-//! same-scope logical-identity conflict elimination
-//!         |
-//!         v
-//! cross-source merge (explicit > workspace > global)
-//!         |
-//!         v
-//! SkillDiscoveryOutcome: packages + provenance + diagnostics
-//! ```
+//! The process binds exactly User `~/rustx/.agents/skills` and Workspace
+//! `<workspace>/.agents/skills`. Discovery enumerates bounded direct child
+//! package identities and reserves Workspace winners before parsing. A malformed
+//! Workspace duplicate shadows the complete User package without fallback.
+//! Unused malformed packages produce ordered diagnostics; exact selection of
+//! an invalid package fails through Agent profile admission.
 //!
-//! **One malformed Skill package never suppresses unrelated valid Skills.**
-//! A candidate that fails validation is excluded and represented by a typed
-//! [`SkillDiagnostic`](crate::skills::SkillDiagnostic); the rest of its
-//! source still publishes. Only a failure of the *explicit launch authority*
-//! itself — a `--skill` path that does not exist, more explicit paths than
-//! the bound allows, or more explicit candidate packages than one source's
-//! cumulative budget allows — is an error, because that is authored launch
-//! intent rather than discovered content.
+//! Discovery is inert metadata/package capture. Root and named Agents separately
+//! select all/exact/none prompt visibility; package bodies remain progressive
+//! disclosure through the normal Read path. Visibility is not filesystem policy.
 //!
-//! # Resource bounding
-//!
-//! Enumeration is separated from validation so that a source's complete
-//! candidate count is known before a single `SKILL.md` is parsed.
-//! [`MAX_SOURCE_SKILL_PACKAGES`] then bounds one logical **source**,
-//! cumulatively across every root that source aggregates — see its
-//! documentation for why that is not a per-root bound. An automatic source
-//! that overruns its budget is excluded whole with a typed diagnostic; the
-//! explicit authority's overrun is a launch error.
-//!
-//! # Package root invariant
-//!
-//! Discovery accepts non-canonical inputs — a relative `--skill` path, an
-//! ancestor symlink, an embedded `..` — but an *accepted* package always
-//! carries one canonical absolute host root, and a `location` that is that
-//! root's `SKILL.md` losslessly representable as UTF-8. Everything
-//! downstream (the catalog, snapshot equality, and every native tool the
-//! model hands the published path to) consumes that single fact, so no
-//! consumer can re-resolve a published path against a different base and
-//! reach a different file. A candidate whose root cannot be canonicalized,
-//! or whose canonical path is not valid UTF-8, is excluded rather than
-//! published in a lossy spelling.
-//!
-//! A source is a bounded authority: an accepted candidate's canonical root
-//! must remain inside its own source's canonical root. Global and workspace
-//! are *different* authorities, so containment is always package-in-source,
-//! never package-in-workspace.
-//!
-//! Discovery is one level only: direct child directories of the Skill
-//! root, each containing a `SKILL.md`. Nested Skill packages are never
-//! discovered recursively.
-//!
-//! # Discovery semantics
-//!
-//! - a missing automatic Skill root is an empty set and a benign fact;
-//! - an automatic root that exists but cannot be scanned excludes only that
-//!   source;
-//! - hidden direct entries (names beginning with `.`) are ignored;
-//! - ordinary unrelated files directly under an automatic Skill root are
-//!   ignored;
-//! - each non-hidden candidate directory must contain `SKILL.md`;
-//! - symlinked Skill package roots and symlink entries inside a Skill
-//!   package are rejected (this is Skill-package validation only; the
-//!   general Workspace symlink contract for ordinary tools is unchanged);
-//! - results are deterministically ordered by validated Skill name,
-//!   independent of filesystem enumeration order and of configured root
-//!   order.
+//! Missing roots are empty sets. Unreadable roots or over-budget collections
+//! produce bounded diagnostics without authorizing a lower identity whose shadow
+//! cannot be determined. Package symlinks are rejected and accepted locations are
+//! absolute, canonical, UTF-8 paths contained within their resource authority.
+//! Hidden/unrelated entries are ignored; nested packages are not recursively
+//! discovered. Result order is deterministic and independent of enumeration order.
 //!
 //! # Frontmatter contract
 //!
@@ -150,20 +85,8 @@ pub const MAX_SKILL_COMPATIBILITY_CHARS: usize = 500;
 /// This bounds one `read_dir`, so it is deliberately per directory: it is the
 /// cost of enumerating that directory, not the cost of the source.
 pub const MAX_SKILL_ROOT_ENTRIES: usize = 1024;
-/// The maximum number of candidate packages **one logical source** may offer,
-/// cumulatively across every root that source aggregates.
-///
-/// This is a per-source bound, not a per-root one. A source may aggregate
-/// several roots — every `--skill` collection path and every explicitly named
-/// package path feeds the one [`SkillSource::Explicit`] domain — and all of
-/// them draw from the same budget. Charging the bound per root instead would
-/// silently multiply the ceiling by the number of configured roots, so a
-/// launch with sixteen `--skill` collections could admit sixteen times the
-/// intended startup and reload work.
-///
-/// The budget is charged against *candidates*, before validation, because the
-/// work being bounded is the per-candidate validation itself: an excluded
-/// malformed package still costs a `SKILL.md` parse and a package walk.
+/// Maximum candidate packages in one fixed User or Workspace collection.
+/// Candidates consume this budget before parsing, including malformed packages.
 pub const MAX_SOURCE_SKILL_PACKAGES: usize = 128;
 
 /// A parsing/validation failure of **one** Skill package.

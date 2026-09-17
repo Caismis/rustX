@@ -238,7 +238,7 @@ impl RuntimeAttachment {
                 unreachable!("manual compaction is handled asynchronously")
             }
             RuntimeClientRequest::ReloadConfiguration { .. } => {
-                unreachable!("resource reload is handled asynchronously")
+                unreachable!("configuration reload is handled asynchronously")
             }
             RuntimeClientRequest::InteractionRespond { .. } => {
                 unreachable!("interaction responses are handled asynchronously")

@@ -3,7 +3,7 @@
  *
  * The contract under test is provenance, not layout: every name the banner
  * prints comes from a runtime-published field, a section the runtime said
- * nothing about is absent rather than empty, and a resource reload is a fact
+ * nothing about is absent rather than empty, and a configuration reload is a fact
  * the client folds on its own — not something it infers from a capability
  * revision that did not move.
  */

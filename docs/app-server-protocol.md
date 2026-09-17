@@ -356,7 +356,7 @@ type RuntimeClientCursor = string;
 ```
 
 This covers runtime incarnation, event and transcript cursors, Surface revision,
-settings/approval CAS revisions, capability and resource revisions, Goal
+Session model CAS revisions, capability and resource revisions, Goal
 references, Workflow revision and run invocation, candidate version, child
 observation revision, compaction generation, inbound sequence, and Todo IDs,
 dependencies and allocator position. Natural string identities and default
@@ -445,7 +445,7 @@ module via `#[path = "..."]`, supply a fresh connection and two idle Policy-mode
 Sessions, and implement drivers that exchange the same DTOs over stdio or WebSocket.
 
 The scenario checks version rejection/initialization, pipelined correlation,
-two-Session attachment routing, authoritative approval-setting changes and routed
+two-Session attachment routing, authoritative configuration-policy publication and routed
 events/cursors, snapshots, and detach/reattach without changing incarnation or
 runtime settings. It needs no provider timing, framing, retries or network state.
 Adapters own transport mechanics, not expected semantic outcomes. This supplements

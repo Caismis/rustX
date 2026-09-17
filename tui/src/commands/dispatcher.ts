@@ -911,7 +911,7 @@ export function renderTools(state: PresentationState): string {
   const lines = [
     `### Tools (capability revision ${state.capabilities.revision})`,
     "Active tools are the exact model authority. Available but inactive tools cannot be invoked by this model.",
-    "Exposure filters do not disable source preparation; source activation is controlled separately.",
+    "Definitions are inert. Agent/Workflow selection creates finite admitted demand before source preparation.",
   ];
   appendToolGroups(lines, "Active tools", activeGroups);
   appendToolGroups(lines, "Available but inactive", inactiveGroups);

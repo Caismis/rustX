@@ -166,14 +166,11 @@ struct CoordinatorInner {
     /// The mutex is held only across the synchronous store construction
     /// (a bounded `create_dir_all` sequence) — never across `.await`.
     python_store: Mutex<Option<PythonToolStore>>,
-    /// The extension-provided Tool registrations of the frozen composition
-    /// (Issue #259).
-    ///
-    /// Composed once at construction and never replaced: this is the whole
-    /// reason a resource reload cannot hot-install or hot-remove a
-    /// Tool-providing extension. Every candidate — full preparation,
-    /// base-only, and selected-only — composes exactly this set on top of its
-    /// own ordinary selection.
+    /// Closed Plugin Tool registrations backed by this conversation's domain owners.
+    /// The owner-backed registration set is stable. Each candidate's resolved
+    /// profile independently selects explicitly enabled Plugins from that set;
+    /// configuration reload can change that selection at the safe publication
+    /// boundary without replacing Todo/Goal current state.
     extension_tools: crate::extensions::ExtensionToolPlane,
     environment_store: EnvironmentStore,
     state: Mutex<CoordinatorState>,
@@ -296,7 +293,7 @@ pub struct CapabilityCoordinator {
 }
 
 /// The unforgeable capability-publication authority held by a live
-/// `ConversationRuntime`. A runtime resource reload must present this token
+/// `ConversationRuntime`. A runtime configuration reload must present this token
 /// to advance the capability generation; ordinary callers only retain the
 /// standalone coordinator commit API.
 pub(crate) struct RuntimeCapabilityPublication {
@@ -339,7 +336,7 @@ pub struct CapabilityResourceInputs {
 ///
 /// **Exception.** A commit made by the claiming `ConversationRuntime`
 /// (see [`CapabilityCoordinator::commit_runtime`]) fires no callback at
-/// all. That commit is one half of a runtime resource reload, and the
+/// all. That commit is one half of a runtime configuration reload, and the
 /// runtime publishes the whole generation — capability, availability, and
 /// resources — as a single observation. Firing here as well would let a
 /// consumer fold the capability half on its own and briefly present a
@@ -396,7 +393,7 @@ pub struct PreparedCapabilityCandidate {
     /// publishes back as the coordinator's authoritative reload state.
     effective_mcp_servers: crate::tools::mcp::McpServerBindings,
     resource_inputs: CapabilityResourceInputs,
-    /// Explicit runtime-resource reload must publish the candidate registry
+    /// Explicit runtime-configuration reload must publish the candidate registry
     /// even when model-facing definitions are byte-identical: executor
     /// configuration is not represented by those definitions.
     force_publish: bool,

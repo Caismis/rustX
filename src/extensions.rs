@@ -547,16 +547,14 @@ impl NativeAgentExtensions {
     /// materialized.
     ///
     /// ```text
-    /// ordinary selected Tool capabilities      agent.tools.builtin / --tools /
-    ///                                          --exclude-tools / tools.builtin
-    /// + enabled extension-provided Tools       the extension plane
+    /// ordinary selected Tool capabilities      agent.tools / named tools
+    /// + explicitly enabled Plugin Tools        agent.plugins / named plugins
     /// + already-admitted domain protocols      Workflow output, ...
     /// ```
     ///
-    /// The two planes never filter one another: `--no-direct-tools` selects zero
-    /// *ordinary* capabilities and says nothing about an independently
-    /// composed extension, and an extension can never be switched on by
-    /// naming its Tool in an ordinary allowlist.
+    /// An empty ordinary Tool selection does not disable an explicitly enabled
+    /// Plugin. Naming a Plugin Tool in the ordinary whitelist cannot enable it.
+    /// Root and named-Agent Plugins default off.
     ///
     /// The answer is deliberately a list of **names**, not registrations: a
     /// prospective description must not be able to put an executable Tool

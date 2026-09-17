@@ -9681,7 +9681,7 @@
           "type": "string"
         },
         "definition_digest": {
-          "description": "The deterministic definition digest frozen at start (Issue #144).\n\nA client observing an already-running child sees the definition it\nactually started with, so a later resource reload that redefines the\nsame agent name can never be mistaken for a change to that child.",
+          "description": "The deterministic definition digest frozen at start (Issue #144).\n\nA client observing an already-running child sees the definition it\nactually started with, so a later configuration reload that redefines the\nsame agent name can never be mistaken for a change to that child.",
           "type": "string"
         },
         "profile_digest": {
@@ -14073,7 +14073,7 @@
       "description": "One typed generation-scoped Skill discovery fact.\n\nThe variant declaration order, followed by the field order, **is** the\ncanonical diagnostic order: the derived [`Ord`] is the only sort key, so\nno consumer can observe a filesystem-enumeration-dependent ordering.",
       "oneOf": [
         {
-          "description": "A configured automatic source root does not exist. This is the normal\nstate of a machine without global Skills and is never a failure.",
+          "description": "A fixed User or Workspace source root does not exist. This is the normal\nstate of a machine without User Skills and is never a failure.",
           "type": "object",
           "properties": {
             "source": {
@@ -14096,7 +14096,7 @@
           ]
         },
         {
-          "description": "A configured automatic source root exists but cannot be used as a\nSkill collection directory. The source contributes no packages; every\nother source is unaffected.",
+          "description": "A fixed User or Workspace source root exists but cannot be used as a\nSkill collection directory. It contributes no packages. An unreadable\nWorkspace collection also withholds lower User candidates because their\nshadow status cannot be established.",
           "type": "object",
           "properties": {
             "source": {
@@ -14119,7 +14119,7 @@
           ]
         },
         {
-          "description": "One source offered more candidate packages than its cumulative budget\nallows, so it contributes nothing.\n\nThe budget belongs to the logical *source*, not to any single root (see\n[`MAX_SOURCE_SKILL_PACKAGES`](crate::skills::package::MAX_SOURCE_SKILL_PACKAGES)),\nso the count is the source's total and the exclusion applies to the\nwhole source. Every other source is unaffected. Enumeration is separated\nfrom validation upstream, so this decision is a function of the source\nalone and never of the order its roots were configured in.",
+          "description": "One fixed User or Workspace collection exceeded its candidate budget.\nEnumeration is bounded before package validation. The collection contributes\nnothing; an over-budget Workspace collection also withholds lower candidates\nwhose shadow status cannot be established.",
           "type": "object",
           "properties": {
             "source": {
@@ -14127,7 +14127,7 @@
               "$ref": "#/$defs/SkillSource"
             },
             "roots": {
-              "description": "Every root configured for that source, in canonical order.",
+              "description": "The fixed collection root, represented in canonical order.",
               "type": "array",
               "items": {
                 "type": "string"
@@ -15137,7 +15137,7 @@
       "type": "object",
       "properties": {
         "maxConcurrent": {
-          "description": "The per-conversation concurrency bound frozen at admission.\n\nIt is read once, at composition, and is deliberately not resized by\nresource reload: capacity is live-registry state, and shrinking it\nunder already-committed children would either orphan ownership or\nsilently lie about the bound.",
+          "description": "Runtime-global child capacity resolved from User < Workspace as one object.\nSafe-boundary configuration publication updates the registry policy only\nwhen no admitted child owns it; existing child specs remain frozen.",
           "type": "integer",
           "format": "uint",
           "minimum": 0,
@@ -15980,7 +15980,7 @@
           "const": "compaction"
         },
         {
-          "description": "Another resource reload already owns the narrow admission gate.",
+          "description": "Another configuration reload already owns the narrow admission gate.",
           "type": "string",
           "const": "reload"
         }

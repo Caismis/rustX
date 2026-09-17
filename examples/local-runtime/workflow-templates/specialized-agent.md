@@ -56,7 +56,7 @@ role already has or what its own frozen admitted profile holds. See
 [Canonical named Subagent resources](../../../docs/subagent-resources.md#invocation-scoped-overrides).
 
 Nothing else is overridable. Model, instructions, timeout, workspace policy,
-`AGENTS.md` policy, approval policy, credentials, and source enablement belong
+`AGENTS.md` policy, global invocation policy, credentials, and source materialization belong
 to the role definition alone.
 
 ## Running the checks

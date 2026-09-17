@@ -2955,15 +2955,11 @@ the launch-boundary policy inheritance.
   compiled and validated once into an immutable `WorkflowProgram`, and is
   never interpreted by the execution path. The canonical filename is the only
   identity. Discovery and a YAML `name` field cannot grant admission.
-- **Project Agent resources have one ownership namespace.** Project-authored
-  Skills, Python tools, Subagent files, and native Workflow files use the
-  workspace-owned `.agents/` tree as their canonical layout. Skill discovery
-  receives only the two canonical automatic sources — `global`
-  (`<home>/.agents/skills`) and `workspace` (`<workspace>/.agents/skills`),
-  selected by the launch-scoped `[skills].sources` policy — plus the explicit
-  `--skill` launch authority. The runtime root is disjoint from the workspace and
-  remains runtime-owned/generated state and is not a Workflow, Subagent, or
-  general project-resource fallback.
+- **Agent resources have two fixed ownership roots.** User resources live at
+  `~/rustx/.agents`; Workspace resources live at `<workspace>/.agents`. Skill
+  packages use `skills/<name>/SKILL.md` within those roots. User configuration
+  rebinding never relocates resource roots or runtime storage. Runtime storage
+  defaults to `~/rustx/runtime`, independently of Workspace identity.
 - **Persistent workspace identity has an explicit Unix byte contract.** On
   Linux/macOS, hash the canonical workspace path's Unix-native bytes
   (`OsStrExt::as_bytes()`) with SHA-256 and encode the full digest as lowercase
@@ -2972,10 +2968,11 @@ the launch-boundary policy inheritance.
   aliases converge through canonicalization; different Git worktrees remain
   separate. Moving a workspace changes identity, without automatic old-state
   migration or legacy lookup. Unsupported platforms have no implied encoding.
-- **Project trust never grants Tool approval authority.** Project settings
-  reject `approvalMode`, `nativeTools`, and `mcpToolPolicies` before merging,
-  including empty objects and execution/concurrency-only policies. These are
-  host/user-owned complete policy objects.
+- **Global invocation policy uses typed User < Workspace overlay.** Approval,
+  Native Tool policy, MCP Tool policy, context, deadlines, environment and child
+  capacity are ordinary CFG3 configuration. Per-Tool/per-source policy objects
+  replace atomically. Agent selection never overrides invocation policy. Process
+  bindings and User-only `app_server` policy remain process-owned.
 - **Project resource authority follows provenance, not absolute spelling.**
   Project-origin Skills, Subagent instruction/agents_md files and path-valued
   MCP command/cwd must resolve within the canonical Workspace. Traversal,
@@ -2985,41 +2982,19 @@ the launch-boundary policy inheritance.
   generation. Automatic project roots and instruction/Workflow reads follow the
   same rule. Host/CLI resources and execution paths remain separate authorities;
   this is not an OS sandbox.
-- **Canonical discovery establishes existence.** Bounded `.agents/agents/*.toml`,
-  `.agents/skills/*/SKILL.md`, `.agents/tools/*/` and `.agents/workflows/*.yaml`
-  produce deterministic generation-scoped catalogs. Settings never repeat their
-  existence. Invalid canonical Agent or Workflow content rejects the candidate.
-  A malformed *Skill package* is the one deliberate exception: it is excluded
-  with a typed generation-scoped diagnostic while every unrelated valid package
-  still publishes, because one malformed Skill must never suppress the catalog.
-- **Skill sources decide discovery; Agent Profiles decide selection; loading
-  stays lazy.** `[skills].sources` selects which automatic roots are scanned and
-  nothing else: it names no individual Skill and preloads no content. Its array
-  order is never precedence — precedence is the architectural rule
-  `explicit --skill > workspace > global`. A source the launch did not select is
-  completely inert: its root is never validated, scanned, or diagnosed, so an
-  invalid `<workspace>/.agents/skills` cannot fail a `sources = ["global"]`
-  launch or its reloads. Resource bounding is per logical source, cumulative
-  across every root that source aggregates, never per root. Validation and
-  same-scope logical conflict elimination run before cross-source winner
-  selection, so an invalid or conflicting candidate never wins by living in the
-  higher-precedence source; a same-scope conflict excludes every definition
-  rather than choosing by filesystem enumeration order. A shadowed valid package
-  is retained as generation provenance, never as model input. The root Agent has
-  no positive Skill list: its visible set is the effective eligible catalog minus
-  `agent.disabled_skills`, which is root-only *visibility* and never deletes a
-  Skill from the generation catalog or constrains a named Agent. A field illegal
-  for an Agent kind is rejected on authored *presence*, never on emptiness, so
-  root `skills = []` and named `disabled_skills = []` are both hard authoring
-  errors rather than silently inverted intent. A rediscovery is a publication
-  no-op only when the complete generation is unchanged: executable Skill
-  semantics *plus* effective provenance *plus* typed diagnostics, so a
-  diagnostics-only or provenance-only change still publishes a new generation. A
-  package declaring `disable-model-invocation` is not widened by automatic root
-  selection. Selecting a Skill — for the root, a named Agent, or a Workflow
-  child — publishes compact metadata (name, description, host location) and
-  frozen identity/version bindings only; a `SKILL.md` body reaches a model
-  solely through the existing lazy Read path.
+- **Canonical discovery establishes existence, never Agent authority.** Both
+  roots supply Skills, named Agents, Workflows, MCP definitions and Python packages.
+  Workspace reserves a same-name identity before parsing, replacing the complete
+  User resource. A malformed Workspace winner never falls back to User. Unused
+  malformed resources yield bounded ordered diagnostics; selected invalid resources
+  fail typed resolution/admission. MCP/Python discovery has no materialization effects.
+- **Skill selection is prompt visibility; loading stays lazy.** Root and named
+  Agents independently select `"all"`, exact names, or `[]`. The system prompt
+  supplies resolved absolute User and Workspace collection roots, without enumerating
+  every absolute package path. Package bodies are read through progressive disclosure.
+  Visibility is not filesystem authorization. Workspace whole-package shadowing
+  applies even when the higher package is malformed. A package declaring
+  `disable-model-invocation` remains outside model-facing prompt visibility.
 - **Discovery and admission are independent.** Whole project Agents replace user
   Agents without merging instructions or capabilities. `agent.agents` and
   `agent.workflows` select delegation and Workflow invocation capabilities from
@@ -3181,7 +3156,7 @@ hold attempt leases and never block a capability commit.
   unchanged.
 - Skill, native-tool, and MCP capability mutations (a Python tool package's
   included, since it is an MCP source) in a live product
-  runtime occur through its explicit resource reload and only while the
+  runtime occur through its explicit configuration reload and only while the
   conversation runtime is quiescent in the M6 sense. After the runtime claim,
   the ordinary `CapabilityCoordinator::commit` API is rejected; only the
   runtime's private resource-publication authority can advance live
@@ -5639,7 +5614,7 @@ The frozen invariants:
     `CapabilityCommitError::RuntimePublicationRequired` before and after
     activation; the startup commit performed *before* the conversation
     runtime is constructed remains allowed. Live publication uses the
-    runtime's resource reload owner.
+    runtime's configuration reload owner.
 
   Capability candidate preparation is the one composition/readiness
   exception: it may run while inactive, but its counted owner prevents an
@@ -5967,7 +5942,7 @@ semantic normalization boundary. The frozen invariants:
   proposals inside them render as proposed/unaccepted/unexecuted and can
   never produce Tool Plane execution, a ToolResult, or side effects.
   Interaction requested/settled rows are audit evidence only; recovery never
-  reconstructs their pending waiters. Resource reload produces no transcript
+  reconstructs their pending waiters. Configuration reload produces no transcript
   item, and a RequestSnapshot still reproduces its old System/resource bytes
   after a cold reopen.
 - **Client detach never implies semantic cancellation.** Detaching an
@@ -7046,17 +7021,12 @@ contracts and provider protocols. These invariants are frozen by M2:
   specialized result adapters receive content only. ANSI-stripped text still
   distinguishes every native outcome, including stdout that happens to say `ok`.
 
-- **Approval intent is not policy authority (Issue #267).** `/approval` opens
-  a focused picker without mutation. Policy commits once on selection; Full
-  access commits once only after a second safe-default confirmation. Focus,
-  cancellation before submission and pending-request deduplication are client
-  state. Esc after submission closes only the popup; the current owner still
-  receives success/error feedback. Submitted operations carry unique tokens and
-  attachment/presentation leases: stale completions cannot block a new owner,
-  repaint it, or clear its newer token. Only admitted/running native attempt
-  phases permit the label `Current attempt`; idle/settled uses `Effective`.
-  Native effective and pending modes remain distinct; resync closes stale
-  surfaces without replaying controls or promoting a highlight into policy.
+- **Global approval policy belongs to configuration.** User < Workspace authoring
+  determines approval policy through typed semantic overlay. Saving source bytes
+  does not change a running generation; configuration reload publishes at the safe
+  boundary. Clients project effective policy and answer individual runtime-owned
+  approval interactions. They do not persist a Session policy override or replay
+  configuration mutations on reconnect.
 
 - **Stable footer and transient work have distinct owners (Issue #267).** The
   footer projects model/policy/context and exceptional connection/read-only

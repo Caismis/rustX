@@ -9,7 +9,7 @@ This is the product integration map and runbook. Semantic definitions remain in
 
 `tests/process/app_server.rs::app_server_reference_host_two_users_and_external_crash_recovery`
 is the executable reference. Its `users` mapping stands for already-authenticated
-identities. For each identity it supplies a distinct canonical TOML/model/skill sources,
+identities. For each identity it supplies distinct User/Workspace configuration and resource sources,
 runtime root, authorized tool environment, fake process credential and workspace.
 It starts one external WebSocket process, waits for its advertised bound address,
 initializes the public protocol and creates/opens a Session with explicit cwd.
@@ -65,25 +65,24 @@ uv run --frozen fake-provider --scenario tui_multi_session --port 8765
 
 Before starting the TUI, append `[model_timeout_policy]` with
 `response_start_timeout_ms = 600000` and `stream_idle_timeout_ms = 600000` to
-the test user settings TOML. These finite ten-minute deadlines leave time for
+the test User rustx.toml. These finite ten-minute deadlines leave time for
 human gate control; the normal defaults may expire while reading this runbook.
 
 
 In another terminal, choose private test directories outside the repository:
 
 ```sh
-export XDG_CONFIG_HOME=/tmp/rustx-dogfood-config
-export XDG_STATE_HOME=/tmp/rustx-dogfood-state
+dogfood_home=/tmp/rustx-dogfood-home
+mkdir -p "$dogfood_home"
 export RUSTX_DOGFOOD_KEY=fake-only
 mkdir -p /tmp/rustx-dogfood-work
 # Use the built binary's absolute path for these commands.
-rustx init --template openai-chat --provider fixture --model-id integration-model \
+env HOME="$dogfood_home" rustx init --template openai-chat --provider fixture --model-id integration-model \
   --endpoint http://127.0.0.1:8765/v1 --credential-env RUSTX_DOGFOOD_KEY \
   --context-window 128000 --max-output 4096 --tool-calls true --reasoning false \
   --compat 'chat_reasoning_replay = "omit"'
-rustx --workspace /tmp/rustx-dogfood-work --trust grant
 # From the repository root, through the canonical development owner:
-pnpm --dir dev tui -- --workspace /tmp/rustx-dogfood-work \
+env HOME="$dogfood_home" pnpm --dir dev tui -- --workspace /tmp/rustx-dogfood-work \
   --runtime-root /tmp/rustx-dogfood-runtime
 ```
 

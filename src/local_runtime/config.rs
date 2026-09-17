@@ -39,7 +39,7 @@ pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 9;
 /// frozen per runtime generation, not mutable Session intent.
 /// Source bindings and explicit input presence live in `configuration` owners;
 /// no complete effective value is durable Session configuration authority.
-/// See docs/launch-configuration.md for the exhaustive field ownership table.
+/// See docs/configuration.md for the exhaustive semantic overlay table.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
@@ -50,43 +50,41 @@ pub struct CurrentRuntimeConfig {
     /// The agent executed by attempts of this conversation.
     #[serde(default = "default_agent_id")]
     pub agent_id: AgentId,
-    /// The current runtime-wide approval control mode. This is launch
-    /// host-only configuration, never project authority or Session history.
+    /// Runtime-wide approval mode resolved from User < Workspace configuration.
+    /// Frozen in the published generation, never deliberate Session intent.
     #[serde(default)]
     pub approval_mode: ApprovalMode,
     /// The root Agent uses the same profile document as canonical named Agents.
     #[serde(default)]
     pub agent: AgentProfileDocument,
-    /// The current runtime context policy.
+    /// Complete context policy resolved from User < Workspace; atomic replacement.
     #[serde(default)]
     pub context: ContextPolicyDocument,
     /// The finite runtime-owned deadline policy shared by primary and
-    /// summarizer model requests. This is current launch state, never model
-    /// input or historical request state.
+    /// summarizer model requests. This is published generation policy resolved
+    /// atomically from User < Workspace, frozen into admitted requests.
     #[serde(default)]
     pub model_timeout_policy: ModelTimeoutPolicyDocument,
     /// The finite runtime-owned execution-liveness deadline policy of
     /// foreground Tool executions (Issue #204): one generic hard deadline,
     /// plus an optional idle-liveness window refreshed by executor progress.
-    /// This is current launch state, never model input, executor-visible
-    /// data, or historical execution state.
+    /// User < Workspace replaces this complete policy atomically; admitted
+    /// execution retains the frozen generation policy.
     #[serde(default)]
     pub tool_deadline_policy: ToolDeadlinePolicyDocument,
     /// The ecosystem-compatible named MCP server map, keyed by server
     /// identity exactly as mainstream MCP clients spell it.
     #[serde(default)]
     pub mcp_servers: BTreeMap<McpServerId, McpServerDocument>,
-    /// The host-owned per-server tool invocation policy overlay; forbidden in project layers.
-    ///
-    /// Deliberately not part of `mcpServers`: an `mcpServers` entry must stay
-    /// copy-pasteable from an MCP server's own documentation.
+    /// Global invocation policy, atomically replaced per MCP source by User < Workspace.
+    /// Kept separate from inert `.agents/mcp.toml` connection definitions.
     #[serde(default)]
     pub mcp_tool_policies: BTreeMap<McpServerId, InvocationPolicyDocument>,
     /// The per-tool execution, concurrency, and approval policies of the
-    /// native tool plane. This complete object is host-only, including execution/concurrency.
+    /// Native Tool plane, atomically replaced per Tool by User < Workspace.
     #[serde(default)]
     pub native_tools: NativeToolPoliciesDocument,
-    /// The current base authorized tool environment.
+    /// Literal Tool environment; User < Workspace replaces one variable at a time.
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
     /// Runtime-global child capacity for the published generation.
@@ -99,12 +97,9 @@ pub struct CurrentRuntimeConfig {
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 #[derive(schemars::JsonSchema)]
 pub struct SubagentsDocument {
-    /// The per-conversation concurrency bound frozen at admission.
-    ///
-    /// It is read once, at composition, and is deliberately not resized by
-    /// resource reload: capacity is live-registry state, and shrinking it
-    /// under already-committed children would either orphan ownership or
-    /// silently lie about the bound.
+    /// Runtime-global child capacity resolved from User < Workspace as one object.
+    /// Safe-boundary configuration publication updates the registry policy only
+    /// when no admitted child owns it; existing child specs remain frozen.
     pub max_concurrent: usize,
 }
 
@@ -116,10 +111,10 @@ impl Default for SubagentsDocument {
     }
 }
 
-/// The launch-scoped subagent capacity used when the document omits it.
+/// The generation-owned subagent capacity used when the document omits it.
 pub const DEFAULT_MAX_CONCURRENT_SUBAGENTS: usize = 4;
 
-/// The hard upper bound of the launch-scoped subagent capacity.
+/// The hard upper bound of the generation-owned subagent capacity.
 pub const MAX_MAX_CONCURRENT_SUBAGENTS: usize = 64;
 
 /// Strict Agent Profile authoring shared by root and named Agents.
@@ -1047,13 +1042,14 @@ impl ConcurrencyPolicyDocument {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
 pub struct McpServerDocument {
-    /// Host-only explicit secret references; ordinary `env` is literal.
+    /// Explicit references owned by the complete winning User/Workspace definition;
+    /// ordinary `env` is literal. Resolution happens only for admitted demand.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sensitive_env: BTreeMap<String, crate::credentials::EnvironmentReference>,
-    /// Host-only explicit secret references; ordinary `headers` is literal.
+    /// Explicit references owned by the complete winning definition; ordinary
+    /// `headers` is literal. Workspace never borrows shadowed User credentials.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sensitive_headers: BTreeMap<String, crate::credentials::EnvironmentReference>,
-    /// Omission is discovery only; true explicitly admits preparation under host trust.
     /// The explicit transport selector, when the entry declares one.
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub transport_type: Option<McpTransportType>,

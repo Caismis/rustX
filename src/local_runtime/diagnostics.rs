@@ -435,7 +435,7 @@ fn project(operation: &'static str, launch: &ProspectiveSessionConfig) -> Report
         classification: "warning",
         category: "unresolved",
         file: None,
-        path: format!("providers.{}", &launch.models.model(&launch.session_model().model).expect("resolved model").provider),
+        path: format!("providers.{}", launch.models.model(&launch.session_model().model).expect("resolved model").provider),
         reason: "provider credential availability, endpoint connectivity and model compatibility were not verified".into(),
         correction: "supply credentials at runtime; static validation does not verify provider execution".into(),
         line: None,

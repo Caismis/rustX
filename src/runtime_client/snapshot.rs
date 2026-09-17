@@ -875,7 +875,7 @@ pub struct RuntimeClientSubagent {
     /// The deterministic definition digest frozen at start (Issue #144).
     ///
     /// A client observing an already-running child sees the definition it
-    /// actually started with, so a later resource reload that redefines the
+    /// actually started with, so a later configuration reload that redefines the
     /// same agent name can never be mistaken for a change to that child.
     pub definition_digest: String,
     /// The deterministic **effective execution profile** digest frozen at

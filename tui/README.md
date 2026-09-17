@@ -215,7 +215,7 @@ surfaces are App Server facts or canonical conversation history.
 | **Picker** | Existing focused selectors and approval interactions remain overlays with their existing selection and focus semantics. |
 | **Transient** | One current item, owned by the app. New feedback replaces old feedback; any input acknowledges it, and attachment/session replacement clears it. Producers keep the payload compact enough for the three-line bound; a defensive overflow is marked explicitly, and no wall-clock timer is used. |
 | **Local scrollback** | Deliberately not implemented. These client events have no honest interleaving point with runtime conversation history, so they use the finite transient surface instead of a second local event store. |
-| **Task panel** | The task list the runtime published, drawn between the conversation and the editor because it answers a question the reader has while typing the next message. It is derived from the runtime's own snapshot projection and the committed `todo` results observed since, holds no state of its own, is bounded so a long plan cannot push the conversation off screen, and disappears entirely when the list is empty or when the attached runtime composes no Todo Agent Extension. Task text is sanitized before it is drawn, so one task is always one physical row and no model-written escape sequence reaches the terminal. |
+| **Task panel** | The task list the runtime published, drawn between the conversation and the editor because it answers a question the reader has while typing the next message. It is derived from the runtime's own snapshot projection and the committed `todo` results observed since, holds no state of its own, is bounded so a long plan cannot push the conversation off screen, and disappears entirely when the list is empty or when the attached runtime composes no Todo Plugin. Task text is sanitized before it is drawn, so one task is always one physical row and no model-written escape sequence reaches the terminal. |
 | **Preference** | Reasoning visibility and expansion choices stay in client display preferences and never become runtime messages. |
 | **Control** | Canonical commands still go through the App Server. Their short acknowledgement is transient; runtime status and settlement remain authoritative runtime projection. |
 | **Quit** | Shutdown is a control intent. Lifecycle failures are committed in a final Pi frame before the TUI stops, and are never turned into fake transcript messages. |
@@ -233,7 +233,6 @@ The command-to-surface classification is:
 | `/name` | inspection of the active Session's name, as transient feedback |
 | `/name <text>`, `/model <provider/model>` | control with transient result |
 | `/cancel`, `/compact` | control with transient acceptance/validation result |
-| `/approval` | focused approval picker; Full access requires confirmation |
 | `/show-reasoning`, `/expand` | preference |
 | `/quit` | quit |
 | invalid, unknown, or empty-result command feedback | transient |
@@ -312,11 +311,11 @@ does not implement a parallel Session system.
 - `/tools` — show the runtime-published Active Tools and the Available but
   inactive Tools separately.
 - `/skills` — show the active Skill catalog: the effective identities the
-  attached Agent can lazily load, which for the root Agent is every eligible
-  catalog Skill minus `agent.disabled_skills`.
+  attached Agent can lazily load under its all/exact/none prompt-visibility
+  selection. Native projections provide User and Workspace collection roots.
 - `/todos` — print the complete task list the agent is tracking, grouped by
   status. The panel above the editor shows the same list, bounded. When the
-  attached runtime composes no Todo Agent Extension, it says so rather than
+  attached runtime composes no Todo Plugin, it says so rather than
   reporting an empty list: there is no task list and no `todo` tool to create
   one.
 - `/status` — show the runtime-composed Agent Status and diagnostics.
@@ -327,8 +326,6 @@ does not implement a parallel Session system.
   a background execution by id.
 - `/compact` — ask the runtime to compact the canonical context while idle;
   progress and completion remain authoritative App Server facts.
-- `/approval` — open the focused approval picker. Policy respects per-tool
-  approval policy. Full access requires a second, safe-default confirmation.
 - `/debug` — show bounded presentation and protocol diagnostics.
 - `/show-reasoning [on|off]` — change the display preference for model reasoning;
   it does not change runtime model configuration.
@@ -351,8 +348,8 @@ runtime's own Agent Status rendering; `/compact` invokes one
 `/debug` shows bounded diagnostics and
 never a credential; the human-input surface sends one finite typed response
 per explicit action to one runtime-owned interaction, routed by its exact
-`InteractionRef`, and `/approval` requests a runtime control-plane
-mode change. The TUI never
+`InteractionRef`. Global approval policy is authored in `rustx.toml` and published
+by configuration reload. The TUI never
 edits displayed Tool arguments, suppresses pending prompts, auto-answers them,
 or keeps a local outcome.
 
@@ -518,19 +515,10 @@ and explicit status text use local foreground accents. Output, arguments and
 truncation hints do not inherit success/error backgrounds. Specialized adapters
 receive result content only; the common card owns native lifecycle metadata.
 
-`/approval` opens without a mutation. Highlighting and Esc also send nothing.
-Policy selection sends one typed native request. Full access selection opens a
-confirmation with Cancel focused; only explicitly enabling sends one request.
-Repeated keys and reopening during a pending request cannot duplicate it for the
-same current owner. Esc after submission closes the popup only: the native request
-continues, and its current owner still receives acceptance or bounded error feedback.
-An attachment/Session replacement invalidates old presentation callbacks without
-erasing the submitted operation. Pending requests carry owner/identity tokens, so
-old requests cannot block new owners or clear their pending operations.
-Full access lets already-admitted Tools skip ordinary approval prompts, including
-command execution or file-changing operations when those Tools are available.
-It does not grant unavailable Tools/capabilities, answer Questionnaire or Workflow
-Review, or define a filesystem/network sandbox profile.
+Global approval policy follows the published CFG3 generation. `/settings` reads
+native effective policy and provenance. Edit User or Workspace `rustx.toml`, save,
+then use `/reload` to publish at the native safe boundary. Tool approval prompts
+remain runtime-owned interactions; answering one does not change global policy.
 
 The picker, confirmation and footer read native effective/pending facts. During a
 frozen Policy attempt, requesting Full access shows `Current attempt: Policy` and

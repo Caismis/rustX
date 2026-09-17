@@ -398,7 +398,7 @@ describe("CommandDispatcher", () => {
     );
     const changing = h.dispatcher.submit("/model beta/model-b");
 
-    // The client reads the runtime's own catalog. It never opens models.toml.
+    // The client reads the runtime's own catalog. It never opens rustx.toml.
     const catalog = await nextRequest(h, "settings/models");
     h.transport.respond(catalog.id, {
       type: "models",
@@ -526,7 +526,7 @@ describe("CommandDispatcher", () => {
   it("opens the model selector from the runtime catalog", async () => {
     const h = await harness();
     const choosing = h.dispatcher.submit("/model");
-    // The selector reads the runtime catalog, never models.toml.
+    // The selector reads the runtime catalog, never rustx.toml.
     const catalog = await nextRequest(h, "settings/models");
     h.transport.respond(catalog.id, {
       type: "models",

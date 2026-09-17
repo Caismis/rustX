@@ -175,10 +175,10 @@ mod tests {
     #[test]
     fn ext256_effective_extension_protocol_fixture_round_trips_exactly() {
         let fixture: serde_json::Value = serde_json::from_str(include_str!(
-            "../../tests/fixtures/runtime-client/settings-v26.json"
+            "../../tests/fixtures/runtime-client/plugins.json"
         ))
         .unwrap();
-        let extensions = &fixture["effective_extensions"];
+        let extensions = &fixture;
         for state in [
             "composed",
             "contributors_disabled",

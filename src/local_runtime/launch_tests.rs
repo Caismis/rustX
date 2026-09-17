@@ -2093,10 +2093,8 @@ async fn selected_workspace_guidance_cannot_escape_its_resource_root() {
     product.runtime().shutdown().await.unwrap();
 }
 
-/// #280 (1)(2)(3)(4)(13)(22)(23): the launch owner resolves the automatic
-/// Skill sources from the session policy and the **captured host home**, not
-/// from any rustX configuration directory, and the explicit `--skill` launch
-/// authority passes through the same validation and merge.
+/// CFG3 binds exactly the captured User home and Workspace Skill roots;
+/// Workspace reserves a complete same-name shadow before package validation.
 #[tokio::test]
 async fn cfg3_launch_freezes_two_skill_roots_with_whole_workspace_shadowing() {
     let f = Fixture::new();

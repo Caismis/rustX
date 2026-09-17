@@ -3,7 +3,7 @@
 Workspace registrations are Product Host navigation/authorization metadata.
 `SessionPersistentState.cwd` is the single durable rustX cwd authority. A Host
 registration is neither a runtime container nor a trusted-project configuration
-layer. Host authorization and native project trust are separate facts.
+layer. Host navigation authorization is separate from native User < Workspace configuration.
 
 ## Concrete local Host
 
@@ -116,26 +116,12 @@ Create and `/new` resolve the selected Host registration to an explicit cwd befo
 creation, attachment and Fork continuations. Supersession never cancels an operation
 already committed on the server; the result remains discoverable through the list.
 
-## Trust source and configuration authority
+## Configuration authority
 
-`settings/read.project_trusted` is a read-only projection from
-`UserConfigManager::project_trusted`, using the same canonical location identity and
-native trust store as source resolution. Null/failure/not-yet-read/stale is unknown,
-never trusted. This is current **source** trust at observation time. Runtime resource
-activation remains the admitted native generation; existing native resource/source
-activation projections (including `untrusted`) retain their meaning.
-
-The prior resolver rejected all untrusted runtime admission. WEB-07 separates cwd
-use from project source activation at that owner: untrusted cold resolution skips
-project `rustx.toml`, project Agents/Skills/Workflows/Python Tools and implicit
-project instructions. User configuration, User resources, built-ins and explicitly
-authorized Session selections remain their existing authorities. Untrusted project
-bytes are not parsed. Reload retains admitted project authority and document/Skill
-roots: navigating or later granting trust cannot activate a previously inert runtime.
-Fresh/cold native resolution applies an explicit external trust change. Trust grant
-and revoke remain native CLI operations; there is no Web trust mutation or store.
-
-Workspace Settings is disabled for unknown/untrusted native source state. For an
-observed trusted source, the entry displays read-only source/lifetime information.
-The structured editors are owned by WEB-08/WEB-09. Host metadata introduces no
-`rustx.local.toml`, precedence layer, overrides, credentials or resource definitions.
+Host registration authorizes product navigation and exact Workspace routing; it is
+not configuration precedence. Native CFG3 resolves User < Workspace with no trust
+gate. Both source scopes are editable in structured Settings; Effective is a
+read-only native projection. Invalid configuration fails native resolution instead
+of silently skipping Workspace content. Save changes authored bytes only; Reload
+publishes a coherent generation. Host metadata introduces no configuration layer,
+credentials or resource definitions. See [Web Settings](../docs/web-settings.md).

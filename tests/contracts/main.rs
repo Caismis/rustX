@@ -5,5 +5,6 @@
 //! runtime, no provider, no process: these suites pin the deterministic
 //! serialization contract only.
 
+mod documentation;
 mod protocol_fixtures;
 mod runtime_examples;

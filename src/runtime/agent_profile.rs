@@ -1,5 +1,5 @@
 //! One Agent semantic model and resolution boundary. Selection never grants
-//! discovery, source activation, host policy, or physical launch authority.
+//! discovery, source materialization, host policy, or physical launch authority.
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::capabilities::selection::{AgentToolSelection, ToolSelectionError};
@@ -115,7 +115,7 @@ pub struct AgentProfile {
     pub workspace_policy: WorkspacePolicy,
 }
 impl AgentProfile {
-    /// Lower strict authoring with project files already loaded by their trust owner.
+    /// Lower strict authoring with project files already captured by their resource owner.
     ///
     /// # Errors
     /// Rejects malformed selections, invalid deadlines and native text bounds.

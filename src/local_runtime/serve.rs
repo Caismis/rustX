@@ -46,7 +46,6 @@ use super::composition::{
 pub enum ProcessOutcome {
     /// The transport closed cleanly; the process exits with code 0.
     TransportClosed(StdioSessionEnd),
-    /// A host-owned trust operation completed without runtime composition.
     /// Startup configuration failed; nothing was ever written to stdout.
     StartupFailed(String),
     /// The transport terminated abnormally after serving began.

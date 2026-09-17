@@ -5136,7 +5136,7 @@ mod tests {
         .expect("SKILL.md");
     }
 
-    /// A resource reload is one generation or nothing — in the snapshot the
+    /// A configuration reload is one generation or nothing — in the snapshot the
     /// projection folds *and* in the event stream a client folds. Every cut
     /// of both is checked, so a consumer can never see the new capability
     /// generation beside the retired resource generation.
@@ -5193,7 +5193,7 @@ mod tests {
         let reloaded = runtime
             .reload_configuration()
             .await
-            .expect("resource reload");
+            .expect("configuration reload");
         assert!(
             reloaded.capability_revision > baseline.capabilities.revision,
             "the reload advanced the capability generation"
@@ -5733,7 +5733,7 @@ mod tests {
     }
 
     /// An inert package directory cannot change source readiness or the
-    /// executable revision. Resource reload still publishes its generation
+    /// executable revision. Configuration reload still publishes its generation
     /// event, and the folded client snapshot agrees with that event.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn inert_python_directory_does_not_change_executable_revision_or_source_readiness() {
@@ -7329,7 +7329,7 @@ mod tests {
         })
         .await;
 
-        // A resource reload lands mid-attempt: the runtime rejects it
+        // A configuration reload lands mid-attempt: the runtime rejects it
         // deterministically — the attempt's lease pins the revision.
         write_probe_skill(
             fixture.runtime.tool_runtime().workspace().root(),
@@ -8610,7 +8610,7 @@ model = "scripted/scripted"
             .runtime
             .reload_configuration()
             .await
-            .expect("a runtime-owned resource reload succeeds after activation");
+            .expect("a runtime-owned configuration reload succeeds after activation");
         assert_eq!(
             activated.capability_revision.get(),
             2,
@@ -9099,7 +9099,7 @@ model = "scripted/scripted"
     /// afterwards fails typed `ConversationInactive` — no record published,
     /// the prepared runner rolls back, and the runtime remains inert until
     /// `activate()`. Ordinary capability commits are independently rejected
-    /// because live publication belongs to resource reload; after activation,
+    /// because live publication belongs to configuration reload; after activation,
     /// a fresh background dispatch commits normally.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn runtime_claim_racing_the_background_commit_wins_and_commit_fails_inactive() {
@@ -9383,7 +9383,7 @@ model = "scripted/scripted"
     ///
     /// The registry commit-boundary hook parks a background commit after it
     /// has already observed `Running` inside its critical section; a
-    /// resource reload that begins afterwards is parked at the capability
+    /// configuration reload that begins afterwards is parked at the capability
     /// publication boundary, then a second reload follows the background
     /// completion. The parks and task joins prove the real-time ordering with
     /// no timing assumptions.

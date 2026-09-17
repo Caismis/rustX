@@ -255,7 +255,7 @@ live response, or authorizes a tool from historical `Approved`.
 | `after:commit_compaction` | one `CompactionCompleted` | exactly the planned span replaced by its summary | historical prefix intact, summary appended | `compaction_surface_replace_is_atomic` |
 | project instructions and Skill catalog edited across the compaction | — | the post-compaction request still carries the loaded generation | no canonical project-instruction or Skill-guidance fact | `compaction_never_refreshes_resource_derived_authority` |
 
-Compaction is not a resource reload boundary: it does not discover, refresh,
+Compaction is not a configuration reload boundary: it does not discover, refresh,
 suppress, or remove resource-derived System authority, and the resource
 revision of the request after a committed compaction equals the one before it.
 

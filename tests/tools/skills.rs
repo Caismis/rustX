@@ -72,7 +72,7 @@ fn invalid_cause(workspace: &Workspace) -> SkillPackageError {
     cause.clone()
 }
 
-/// Isolates the project-root tests from the developer's global Skill roots.
+/// Isolates the project-root tests from the developer's User Skill roots.
 fn project_discovery(workspace: &Workspace) -> SkillDiscovery {
     SkillDiscovery::with_config(
         workspace,
@@ -341,11 +341,9 @@ fn a_non_canonical_package_root_is_published_canonically() {
     let workspace = Workspace::new(&workspace_root).expect("workspace");
 
     for explicit in [
-        // Relative input from a low-level discovery caller. Production
-        // composition resolves CLI/config Skill paths against the canonical
-        // Workspace root before this boundary, so discovery is not the only
-        // thing standing between a relative `--skill` and the model — but it
-        // is what makes the invariant hold for every caller.
+        // Relative input from a low-level discovery caller. Production binds
+        // the fixed User/Workspace collections before this boundary. Discovery
+        // preserves canonical package identity for every caller.
         relative_root.join("work/.agents/skills/deck"),
         // Absolute but non-canonical: an embedded `..` is a different
         // spelling of the same package.

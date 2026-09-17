@@ -378,7 +378,7 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
         .expect("enqueue");
     // The enqueued message is admitted by the runtime's idle wakeup; the
     // admitted attempt settles immediately. Waiting for its request-history
-    // transfer makes the runtime provably idle before the resource reload
+    // transfer makes the runtime provably idle before the configuration reload
     // below, so the reload can never be rejected as Busy by an active attempt
     // lease.
     tokio::time::timeout(std::time::Duration::from_mins(2), async {
@@ -390,7 +390,7 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
         }
     })
     .await
-    .expect("the admitted attempt must settle before the resource reload");
+    .expect("the admitted attempt must settle before the configuration reload");
     // Consume the first attempt's terminal event before submitting the next
     // inbound. Otherwise the later wait could mistake this already-published
     // event for the second attempt, making the request-count assertion depend
@@ -422,7 +422,7 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
     let committed = runtime
         .reload_configuration()
         .await
-        .expect("resource reload");
+        .expect("configuration reload");
     // The background registry transition is published under the registry's
     // ownership commit, so its arrival at the observer is exact.
     let background_id = dispatch_background(&bundle.runtime);

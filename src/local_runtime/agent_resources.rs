@@ -206,15 +206,34 @@ pub(crate) mod test_support {
     }
     static GATES: Mutex<Vec<(PathBuf, Weak<Gate>)>> = Mutex::new(Vec::new());
     pub(crate) fn arm(workspace: &Path) -> Arc<Gate> {
+        // Match the canonical Workspace used by the real candidate loader,
+        // including macOS temporary-directory aliases.
+        let workspace = workspace.canonicalize().expect("existing test Workspace");
         let gate = Arc::new(Gate {
             entered: watch::channel(false).0,
             release: watch::channel(false).0,
         });
         let mut gates = GATES.lock().unwrap();
-        gates.retain(|(path, weak)| path != workspace && weak.strong_count() > 0);
-        gates.push((workspace.into(), Arc::downgrade(&gate)));
+        gates.retain(|(path, weak)| path != &workspace && weak.strong_count() > 0);
+        gates.push((workspace, Arc::downgrade(&gate)));
         gate
     }
+    #[tokio::test]
+    async fn publication_gate_matches_a_workspace_alias() {
+        let root = tempfile::tempdir().unwrap();
+        let canonical = root.path().canonicalize().unwrap();
+        let alias = canonical.join("alias");
+        std::os::unix::fs::symlink(&canonical, &alias).unwrap();
+        let gate = arm(&alias);
+        let candidate = tokio::spawn(async move { before_publication(&canonical).await });
+        tokio::time::timeout(std::time::Duration::from_secs(10), gate.entered())
+            .await
+            .expect("candidate must reach the gate through its canonical Workspace");
+        assert!(!candidate.is_finished());
+        gate.release();
+        candidate.await.unwrap();
+    }
+
     impl Gate {
         pub(crate) async fn entered(&self) {
             self.entered

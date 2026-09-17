@@ -23,8 +23,8 @@ rustX currently supports:
   streams;
 - native Read, Write, Edit, Grep, Glob, and Bash tools, plus Skills, MCP tools,
   and custom Python tools;
-- a `todo` task list the model keeps as it works — an optional Native Agent
-  Extension, enabled by default — drawn as a live panel above the editor and
+- a `todo` task list the model keeps as it works — an optional closed Rust-owned
+  Plugin, off unless explicitly enabled — drawn as a live panel above the editor and
   printed in full by `/todos`;
 - cancellation, recovery, runtime supervision, and background tool
   execution;
@@ -100,19 +100,19 @@ backend is required.
 conventional project/source tree. It is not a general filesystem sandbox for
 native Read, Write, Edit, Grep, or Glob.
 
-Project-authored Agent resources use the workspace-owned `.agents/` namespace:
-Skills and Python tools retain their discovery semantics, while Subagents and
-native Workflows are admitted explicitly by `rustx.toml`. The configured
-runtime root is runtime-owned/generated state outside the workspace and
-is not a project-resource fallback. `.agents/skills/` is the canonical project
-layout; the two automatic Skill sources are `global` (`~/.agents/skills`) and
-`workspace` (`<workspace>/.agents/skills`), selected by `[skills].sources`,
-with `workspace` shadowing `global` for the same Skill identity. Explicit
-`--skill` paths are a separate launch authority and take precedence over both.
-The root Agent automatically sees every eligible Skill in that catalog minus
-`agent.disabled_skills`; named Agents select identities explicitly, and every
-Agent loads a Skill's contents lazily. Paths are resolved by the
-[launch resolver](docs/launch-configuration.md).
+Agent resources have exactly two roots: User `~/rustx/.agents` and Workspace
+`<workspace>/.agents`. Workspace same-name resources shadow the complete User
+resource, including malformed higher definitions. Resource existence grants no
+Root authority. Root Native Tools use the explicit `agent.tools.builtin` whitelist;
+MCP and Managed Python Tools use `agent.tools.sources`. Named Agents own independent
+complete Tool profiles.
+
+Skill roots are `~/rustx/.agents/skills` and `<workspace>/.agents/skills`, with
+whole-package Workspace shadowing. Root and named Agents each select `skills` as
+`"all"`, an exact name array, or `[]`. This controls prompt visibility, not filesystem
+authorization. The model receives absolute collection roots and reads package
+contents progressively. There is no configurable source-selection layer.
+The [CFG3 reference](docs/configuration.md) defines the complete ownership model.
 
 For those native file tools, relative paths resolve from the execution cwd and
 absolute paths are valid host filesystem paths. `.` and `..` are resolved
@@ -155,6 +155,9 @@ not copy dirty tracked or arbitrary untracked state, and overlay-only edits in
 the child remain ignored by ordinary Git settlement and do not create a
 source-worktree handoff.
 
+Root and named-Agent Plugins all default off, including Todo, Goal and Agent Status.
+Only an explicitly authored enabled Plugin is composed.
+
 ## Native Sessions
 
 Sessions are runtime-owned. The reference TUI currently exposes `/new`,
@@ -183,9 +186,10 @@ workflow.
 ## License
 
 MIT
-External sources are opt-in: see [source activation and credentials](docs/source-activation.md).
+External sources materialize on admitted demand: see [source demand and credentials](docs/source-activation.md).
 Native-only startup needs no Python, `uv`, MCP executable/endpoint or external
-source secret. `--no-direct-tools` controls model exposure; source disabling controls preparation.
+source secret. Definitions and discovery are inert; Agent/Workflow selection
+produces finite admitted demand before connection or Python preparation.
 
 For typed generation diagnostics and offline Agent/Workflow inspection, see
 [capability inspection](docs/capability-inspection.md) and the [CFG3 example](examples/local-runtime/README.md).

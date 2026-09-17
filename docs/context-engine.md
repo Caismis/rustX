@@ -287,7 +287,7 @@ ConversationState::commit, and records the accepted ContextGeneration.
 Contributors cannot select provenance or identity.
 
 Agent Status is a **Native Agent Extension** (Issue #256): it is optional,
-composed for a launch through the closed `extensions` surface, and absent
+selected by the admitted generation through the closed `plugins` surface, and absent
 entirely when that composition omits it. Composition ownership does not change
 admission ownership — Context Assembly remains the request-time owner, and
 Agent Status never becomes a second Context Engine, message authority, or

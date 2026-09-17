@@ -1435,7 +1435,7 @@ fn the_runtime_client_projection_carries_the_named_identity() {
 // re-resolved against mutable state the child can observe changing.
 // ---------------------------------------------------------------------------
 
-/// A `models.toml` whose `local/model-a` has materially different semantics
+/// A `rustx.toml` whose `local/model-a` has materially different semantics
 /// from [`MODELS`]: a different endpoint, protocol, context window, output
 /// budget, compat metadata, and request parameters — and no `model-b` at
 /// all, so a re-resolving child would also *fail* where the parent

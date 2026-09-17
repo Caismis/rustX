@@ -17,13 +17,10 @@
 //!
 //! The `todo` Tool is **not** an ordinary native capability and is
 //! deliberately absent from every composition below. It is contributed by the
-//! Todo Native Agent Extension
-//! ([`ExtensionToolPlane`](crate::extensions::ExtensionToolPlane)),
-//! which is why it cannot be named in `agent.tools.builtin`, `--tools`,
-//! `--exclude-tools`, a role's `tools.builtin`, or a Workflow capability
-//! selection — and why `--no-direct-tools` does not remove it. Its module lives here
-//! because this is where native Tool implementations live; ownership of its
-//! *activation* does not.
+//! closed Todo Plugin ([`ExtensionToolPlane`](crate::extensions::ExtensionToolPlane)).
+//! Ordinary Tool whitelists cannot enable or disable that Plugin; its profile
+//! must explicitly enable it. Root and named Plugins default off. The Tool's
+//! implementation lives here, while composition belongs to the Plugin owner.
 //!
 //! Read/Glob/Grep default to foreground, parallel, approval-never.
 //! Write/Edit default to foreground, sequential, approval-always.

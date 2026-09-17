@@ -5782,7 +5782,7 @@ pub enum RuntimeResourceReloadBusyReason {
     Interaction,
     /// Manual context compaction owns the conversation.
     Compaction,
-    /// Another resource reload already owns the narrow admission gate.
+    /// Another configuration reload already owns the narrow admission gate.
     Reload,
 }
 
@@ -5806,13 +5806,13 @@ impl core::fmt::Display for RuntimeResourceReloadBusyReason {
             Self::Attempt => "an attempt is active",
             Self::Interaction => "a Questionnaire or Approval interaction is pending",
             Self::Compaction => "manual context compaction is active",
-            Self::Reload => "another resource reload is active",
+            Self::Reload => "another configuration reload is active",
             Self::OwnedWork => "background or child work is active",
         })
     }
 }
 
-/// An explicit runtime resource reload refusal or failure.
+/// An explicit runtime configuration reload refusal or failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeResourceReloadError {
     /// The runtime is not activated.
@@ -5839,7 +5839,7 @@ impl core::fmt::Display for RuntimeResourceReloadError {
             Self::Shutdown => formatter.write_str("the runtime is shutting down"),
             Self::Busy { reason } => write!(formatter, "runtime resources are busy: {reason}"),
             Self::Failed { message } => {
-                write!(formatter, "runtime resource reload failed: {message}")
+                write!(formatter, "runtime configuration reload failed: {message}")
             }
         }
     }
@@ -9551,7 +9551,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(
         clippy::too_many_lines,
-        reason = "one gated resource reload and retirement scenario"
+        reason = "one gated configuration reload and retirement scenario"
     )]
     async fn failed_reload_retires_candidate_mcp_runtime_after_project_failure() {
         use crate::tools::mcp::fixture::{
@@ -12405,7 +12405,7 @@ mod tests {
     }
 
     /// Lifecycle Draining remains the generic admission authority for an
-    /// explicit resource reload after MCP failure publication. The old
+    /// explicit configuration reload after MCP failure publication. The old
     /// generation stays the live resource authority and no reload gate is
     /// established.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -17353,7 +17353,7 @@ mod tests {
         );
     }
 
-    /// Issue #144: a resource reload can never commit a new generation
+    /// Issue #144: a configuration reload can never commit a new generation
     /// underneath a live attempt, so an attempt's tool execution cannot
     /// observe a generation other than the one it was admitted with.
     ///

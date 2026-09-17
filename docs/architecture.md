@@ -4679,8 +4679,8 @@ Version 24 added the typed question
 vocabulary, its canonical scalar domains — a finite-binary64 `Number` carried
 as canonical binary64 text and an `Integer` carried as canonical decimal text,
 neither of them as a JSON number a JavaScript client would re-spell — and
-canonical Questionnaire requester identity (Issue #242) on top of version 23, which added distinct
-source activation/unprepared projections. Version 22 added the
+canonical Questionnaire requester identity (Issue #242) on top of version 23, which added
+the former source-state/unprepared projections. Version 22 added the
 [native Workflow projection and cursor handoff](workflow-run-projection.md).
 Version 21 adds Review and
 Questionnaire invocation correlation. Version 20 adds borrowed
@@ -4997,7 +4997,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   `commit_dispatch` with `BackgroundDispatchError::ConversationInactive`,
   and the capability coordinator refuses a runtime-owned ordinary `commit`
   with `CapabilityCommitError::RuntimePublicationRequired`; live capability
-  mutation must use the resource reload publication owner. No admission worker
+  mutation must use the configuration reload publication owner. No admission worker
   exists, `admit_next_attempt` is a no-op, and an inactive runtime
   therefore publishes no observation at all.
 

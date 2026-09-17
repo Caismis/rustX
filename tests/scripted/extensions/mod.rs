@@ -1153,10 +1153,10 @@ async fn published_tools(
 /// ```text
 /// Todo on,  every ordinary default        -> todo present
 /// Todo on,  agent.tools.builtin naming only read -> todo present
-/// Todo on,  --tools read (exact)          -> todo present
-/// Todo on,  --no-direct-tools                    -> todo present
+/// Todo on,  exact read-only selection          -> todo present
+/// Todo on,  empty ordinary Tool selection                    -> todo present
 /// Todo off, every ordinary default        -> todo absent
-/// Todo off, --no-direct-tools                    -> no Tool at all
+/// Todo off, empty ordinary Tool selection                    -> no Tool at all
 /// ```
 ///
 /// The last two rows are the documented refinement of #234's exact-selection
@@ -1226,7 +1226,7 @@ async fn ext259_ordinary_tool_selection_neither_adds_nor_removes_the_extension_t
     }
 
     // The exact shape of the two ends of the range.
-    let (no_direct_tools_with_todo, _) = published_tools(
+    let (empty_selection_with_todo, _) = published_tools(
         &enabled,
         Selection {
             profile: {
@@ -1239,9 +1239,9 @@ async fn ext259_ordinary_tool_selection_neither_adds_nor_removes_the_extension_t
     )
     .await;
     assert_eq!(
-        no_direct_tools_with_todo,
+        empty_selection_with_todo,
         vec!["todo".to_owned()],
-        "--no-direct-tools selects zero ordinary capabilities and says nothing about an extension"
+        "empty ordinary Tool selection selects zero ordinary capabilities and says nothing about an extension"
     );
     let (nothing, _) = published_tools(
         &todo_and_status(false, true),
