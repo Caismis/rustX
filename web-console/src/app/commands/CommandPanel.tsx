@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { UserInputBlock, SessionSnapshot } from '../../../../protocol/app-server/v6';
 import type { AppServerClient } from '../../client/app-server';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
-import { Dialog } from '../../presentation/primitives/Dialog';
+import { Modal } from '../../presentation/primitives/Modal';
 import { Button } from '../../presentation/primitives/Button';
 import { CommandSession, type HistoricalSelection, type HistoryAction } from './native';
 import type { CommandId } from './registry';
@@ -99,7 +99,7 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
   const filtered = rows.filter(row => `${row.label} ${row.detail ?? ''}`.toLowerCase().includes(query.toLowerCase()));
   useEffect(() => { options.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' }); }, [active, query]);
   const stale = !scope.current();
-  return <Dialog open title={request.id === 'tree' ? 'Session tree' : request.id === 'retry' ? 'Retry / Regenerate' : `/${request.id}`} onClose={close}>
+  return <Modal closeLabel="Close dialog" open title={request.id === 'tree' ? 'Session tree' : request.id === 'retry' ? 'Retry / Regenerate' : `/${request.id}`} onClose={close}>
     <p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{detail}</p>
     {error && <p role="alert">{error}</p>}
     {blocked && <p role="status">Waiting for native execution and accepted inbound to settle.</p>}
@@ -117,5 +117,5 @@ export function CommandPanel({ request, client, sessionId, current, close, succe
         <span>{row.label}</span><small>{row.detail}</small>
       </button>)}</div></>}
     {(historical || request.id === 'tree') && next != null && !request.messageId && <Button disabled={busy} onClick={() => { setBusy(true); void (request.id === 'tree' ? loadTree(next) : loadBoundaries(next)).catch(cause => { if (valid()) setError(String(cause)); }).finally(() => { if (valid()) setBusy(false); }); }}>More {historical ? 'boundaries' : 'nodes'}</Button>}
-  </Dialog>;
+  </Modal>;
 }

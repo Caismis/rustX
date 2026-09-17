@@ -1,4 +1,4 @@
-/* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
+/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 import clsx from 'clsx'
 import css from './StateDot.module.css'
 

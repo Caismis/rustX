@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Rewritten from ui-attachment/MessageImage.tsx and FileCard.tsx; see PROVENANCE.md. */
 import { useState } from 'react';
-import { Dialog } from '../primitives/Dialog';
+import { Modal } from '../primitives/Modal';
 import { Button } from '../primitives/Button';
 import css from './AttachmentCard.module.css';
 /** URLs, transfer status and removal are supplied by the resource/draft owner. */
@@ -17,6 +17,6 @@ export function AttachmentCard({ name, image, url, error, loading, onLoad, onRem
       {!image && url && <a href={url} download={name}>Download</a>}
     </div>}
     {onRemove && <Button size="sm" aria-label={`Remove ${name}`} onClick={onRemove}>×</Button>}
-    {open && url && !error && <Dialog open title={name} onClose={() => setOpen(false)}><img className={css.original} src={url} alt={name} onError={onDecodeError} /></Dialog>}
+    {open && url && !error && <Modal closeLabel="Close dialog" open title={name} onClose={() => setOpen(false)}><img className={css.original} src={url} alt={name} onError={onDecodeError} /></Modal>}
   </div>;
 }

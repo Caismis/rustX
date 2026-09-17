@@ -21,6 +21,7 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await tabTo(page.getByLabel('Transport token')); await page.keyboard.type(fixture.token);
     await tabTo(page.getByRole('button', { name: 'Connect', exact: true })); await page.keyboard.press('Enter');
     await expect(page.locator('.status strong')).toHaveText('connected');
+    await tabTo(page.getByRole('button', { name: 'New Session', exact: true }).first()); await page.keyboard.press('Enter');
     const workspace = page.getByLabel('Choose Workspace');
     await tabTo(workspace); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
     await tabTo(page.getByRole('button', { name: 'Create Session', exact: true })); await page.keyboard.press('Enter');
@@ -35,9 +36,8 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await expect(page.getByRole('tab', { name: 'Trajectory', exact: true })).toBeFocused();
     await page.keyboard.press('Enter');
     await expect(page.getByRole('region', { name: 'Trajectory', exact: true })).toBeVisible();
-    await page.keyboard.press('End'); await page.keyboard.press('Enter');
-    await expect(page.getByRole('tab', { name: 'Settings', exact: true })).toBeFocused();
-    const settings = page.getByRole('region', { name: 'Settings', exact: true });
+    await tabTo(page.getByRole('button', { name: 'Settings', exact: true })); await page.keyboard.press('Enter');
+    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
     await tabTo(settings.getByRole('tab', { name: 'User', exact: true })); await page.keyboard.press('Enter');
     await tabTo(settings.getByRole('button', { name: 'Providers & Models', exact: true })); await page.keyboard.press('Enter');
     await tabTo(settings.getByRole('button', { name: 'Edit Provider fixture', exact: true })); await page.keyboard.press('Enter');

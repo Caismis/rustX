@@ -1,8 +1,8 @@
-/* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
+/* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 // Button: token-styled button atom. Variants map to the --dsw-alias-button-*
 // fill families; no framework imports, all behavior via props.
 
-import type { ButtonHTMLAttributes, ReactNode, Ref } from 'react'
+import type { ButtonHTMLAttributes, ReactNode } from 'react'
 import clsx from 'clsx'
 import css from './Button.module.css'
 
@@ -17,7 +17,6 @@ export type ButtonVariant = 'primary' | 'ghost' | 'outline' | 'toolbar'
  * @returns the button element; native button attributes pass through.
  */
 export function Button({ variant = 'ghost', size = 'md', icon, className, children, ...rest }: {
-  ref?: Ref<HTMLButtonElement>
   variant?: ButtonVariant
   size?: 'md' | 'sm'
   icon?: ReactNode

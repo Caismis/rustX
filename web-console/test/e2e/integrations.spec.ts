@@ -1,3 +1,4 @@
+import { chooseWorkspace } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { appendFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -14,11 +15,11 @@ test('CFG3 structured source authoring, inert definitions, CAS and explicit publ
     await page.getByLabel('Transport token').fill(fixture.token);
     await page.getByRole('button', { name: 'Connect', exact: true }).click();
     await expect(page.locator('.status strong')).toHaveText('connected');
-    await page.getByLabel('Choose Workspace').selectOption({ label: 'Workspace A' });
+    await chooseWorkspace(page, 'Workspace A');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(page.locator('.session-toolbar small')).toContainText('attached');
-    await page.getByRole('tab', { name: 'Settings', exact: true }).click();
-    const settings = page.getByRole('region', { name: 'Settings', exact: true });
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
     await expect(settings.getByRole('tab', { name: 'Effective', exact: true })).toHaveAttribute('aria-selected', 'true');
     await expect(settings.getByText(fixture.settings, { exact: true })).toBeVisible();
     await expect(settings.getByText(join(fixture.directory, 'home/rustx/.agents'), { exact: true })).toBeVisible();

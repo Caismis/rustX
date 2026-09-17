@@ -16,8 +16,6 @@ let server: Server;
 beforeEach(() => {
   server = new Server();
   localStorage.clear();
-  HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', ''); };
-  HTMLDialogElement.prototype.close = function () { this.removeAttribute('open'); };
 });
 afterEach(() => { cleanup(); server.client.disconnect(); vi.restoreAllMocks(); });
 const methods = () => server.requests.map(item => item.request.method);
@@ -128,7 +126,7 @@ describe('successful command draft consumption', () => {
   });
   it('dismissal preserves a fuzzy invocation', async () => {
     const input = await open('/mdl');
-    fireEvent(screen.getByRole('dialog'), new Event('cancel', { bubbles: true, cancelable: true }));
+    fireEvent.keyDown(document, { key: 'Escape' });
     expect(input).toHaveProperty('value', '/mdl'); expect(document.activeElement).toBe(input);
   });
   it('known model refusal preserves its fuzzy invocation', async () => {

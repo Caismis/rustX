@@ -7,7 +7,7 @@ const web = resolve(import.meta.dirname, '..');
 const repository = resolve(web, '..');
 const inventory = JSON.parse(readFileSync(resolve(web, 'source-inventory.json'), 'utf8'));
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message); }
-assert(inventory.commit === 'c291e7961a515f6d7af9304e7fd1d257929aef26', 'Unreviewed Harness revision');
+assert(inventory.commit === 'ddefc45fbc7f8e46dd73185e68295696d1297887', 'Unreviewed Harness revision');
 assert(inventory.repository === 'https://github.com/deepseek-ai/deepseek-harness', 'Wrong upstream');
 // Optional maintainer audit against the external checkout. Ordinary build/CI
 // remains offline and never downloads or executes upstream source.
@@ -18,10 +18,10 @@ if (referenceIndex >= 0) {
   assert(execFileSync('git', ['-C', reference, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() === inventory.commit, 'Reference HEAD differs from pinned Harness');
   assert(execFileSync('git', ['-C', reference, 'status', '--porcelain'], { encoding: 'utf8' }).trim() === '', 'Reference checkout is dirty');
 }
-function verifyReference(source: { upstream: string; upstream_sha256: string }) {
+function verifyReference(source: { upstream: string; upstream_sha256: string; commit?: string }) {
   if (!reference) return;
   assert(!source.upstream.includes('..') && !source.upstream.startsWith('/'), 'Invalid upstream path');
-  assert(createHash('sha256').update(readFileSync(resolve(reference, source.upstream))).digest('hex') === source.upstream_sha256, `Upstream hash mismatch: ${source.upstream}`);
+  assert(createHash('sha256').update(execFileSync('git', ['-C', reference, 'show', `${source.commit ?? inventory.commit}:${source.upstream}`])).digest('hex') === source.upstream_sha256, `Upstream hash mismatch: ${source.upstream}`);
 }
 const destinations = new Set<string>();
 for (const entry of inventory.files) {
@@ -33,9 +33,11 @@ for (const entry of inventory.files) {
   assert(entry.license.includes('DeepSeek') && Array.isArray(entry.retained_dependencies) && Array.isArray(entry.excluded_dependencies), 'Missing closure/license');
   for (const source of entry.additional_sources ?? []) {
     assert(source.upstream && source.treatment && /^[a-f0-9]{64}$/.test(source.upstream_sha256), 'Incomplete additional source provenance');
-    verifyReference(source);
+    verifyReference({ ...source, commit: source.commit ?? entry.commit });
   }
   const file = resolve(repository, entry.destination);
+  assert(/^[a-f0-9]{40}$/.test(entry.commit), 'Missing immutable per-file baseline');
+  assert(createHash('sha256').update(readFileSync(file)).digest('hex') === entry.local_sha256, `Local source drift ${file}`);
   assert(existsSync(file), `Missing destination ${entry.destination}`);
   if (/\.(tsx?|css)$/.test(file)) assert(readFileSync(file, 'utf8').includes('Copyright (c) 2026 DeepSeek'), `Missing header ${file}`);
   if (/\.tsx?$/.test(file)) {
@@ -55,6 +57,7 @@ for (const file of [...walk(resolve(web, 'src')), ...walk(resolve(web, 'test'))]
   const content = readFileSync(file, 'utf8');
   if (content.includes('Copyright (c) 2026 DeepSeek')) assert(destinations.has(relative(repository, file)), `Uninventoried derived source ${file}`);
   if (!/\.tsx?$/.test(file) || !file.includes('/src/presentation/')) continue;
+  assert(!/\b(localStorage|sessionStorage|indexedDB|WebSocket)\b|\bfetch\s*\(/.test(content), `Presentation authority or persistence API in ${file}`);
   const ast = ts.createSourceFile(file, content, ts.ScriptTarget.Latest, true);
   function check(node: ts.Node) {
     let specifier: string | undefined;
@@ -68,6 +71,7 @@ for (const file of [...walk(resolve(web, 'src')), ...walk(resolve(web, 'test'))]
   }
   check(ast);
 }
+for (const entry of inventory.inspected_only) verifyReference(entry);
 const notice = inventory.files.find((entry: { upstream: string }) => entry.upstream === 'LICENSE');
 assert(createHash('sha256').update(readFileSync(resolve(repository, notice.destination))).digest('hex') === notice.upstream_sha256, 'Harness license changed');
 if (process.argv.includes('--artifact')) {

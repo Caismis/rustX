@@ -1,3 +1,4 @@
+import { chooseWorkspace, connectionAction } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { expect, test, type Locator } from '@playwright/test';
 import { readFileSync } from 'node:fs';
@@ -19,12 +20,14 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
   const queue = page.getByRole('region', { name: 'Queue' });
   const revision = async () => Number(/ r(\d+)/.exec(await goal.innerText())![1]);
   const aligned = async (docks: Locator[]) => {
-    const card = (await page.locator('[data-composer-card]').boundingBox())!;
+    // ResizeObserver and the Harness grid transition settle independently of
+    // the viewport call. Observe the geometry contract, never sleep for it.
     for (const dock of docks) {
-      const box = (await dock.boundingBox())!;
-      // One shared column: every dock is the composer card minus four 8px insets.
-      expect(Math.abs(box.width - (card.width - 32))).toBeLessThanOrEqual(1);
-      expect(Math.abs(box.x + box.width / 2 - (card.x + card.width / 2))).toBeLessThanOrEqual(1);
+      await expect.poll(async () => {
+        const card = (await page.locator('[data-composer-card]').boundingBox())!;
+        const box = (await dock.boundingBox())!;
+        return Math.max(Math.abs(box.width - (card.width - 32)), Math.abs(box.x + box.width / 2 - (card.x + card.width / 2)));
+      }).toBeLessThanOrEqual(1);
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   };
@@ -32,7 +35,7 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
   try {
     await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await connect();
-    await page.getByLabel('Choose Workspace').selectOption({ label: 'Workspace A' });
+    await chooseWorkspace(page, 'Workspace A');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(page.locator('.session-toolbar small')).toHaveText(`${fixture.workspaceA} · attached`);
     // Composed Todo with no current list is its own bounded fact; no Goal and no queue take space.
@@ -119,10 +122,10 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     expect(settings).not.toMatch(/Verify the composer docks|Bind native Todo|Queued during/);
     expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toMatch(/Verify the composer docks|Bind native Todo|Queued during/);
 
-    await page.getByRole('button', { name: 'Disconnect', exact: true }).click();
+    await connectionAction(page, 'Disconnect');
     await expect(page.locator('.status strong')).toHaveText('disconnected');
     await expect(goal.getByRole('button', { name: 'Resume goal' })).toBeDisabled();
-    await page.getByRole('button', { name: 'Reconnect', exact: true }).click();
+    await connectionAction(page, 'Reconnect');
     await expect(page.locator('.status strong')).toHaveText('connected');
     await expect(goal).toContainText('Paused Goal'); await expect(goal).toContainText('1/3 rounds');
     expect(await revision()).toBe(settled);

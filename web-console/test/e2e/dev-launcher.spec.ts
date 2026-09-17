@@ -1,3 +1,4 @@
+import { chooseWorkspace } from './shell-actions';
 import { test, expect } from '@playwright/test';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -46,14 +47,14 @@ compat = { chat_reasoning_replay = "omit" }
     await page.getByLabel('Transport token').fill(token);
     await page.getByRole('button', { name: 'Connect', exact: true }).click();
     await expect(page.locator('.status strong')).toHaveText('connected');
-    await expect(page.getByLabel('Choose Workspace')).toContainText('workspace with spaces');
+    await expect(page.getByRole('button', { name: 'Select Workspace workspace with spaces' })).toBeVisible();
     const catalog = await (await page.request.post(`${ready.url}product-host/list`, { data: {} })).json();
     expect(catalog.endpoint).toBe(ready.endpoint);
     expect(catalog.workspaces.map((row: { displayPath: string }) => row.displayPath)).toEqual([workspace]);
     const classified = await (await page.request.post(`${ready.url}product-host/classify`, { data: { endpoint: ready.endpoint, cwds: [workspace, nested, directory] } })).json();
     expect(classified.map((row: { authorized: boolean }) => row.authorized)).toEqual([true, false, false]);
     expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain(token);
-    await page.getByLabel('Choose Workspace').selectOption({ label: 'workspace with spaces' });
+    await chooseWorkspace(page, 'workspace with spaces');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(page.locator('.session-toolbar small')).toContainText('attached');
     expect(errors).toEqual([]);

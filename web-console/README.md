@@ -7,7 +7,7 @@ cover strict acceptance fixtures.
 **Reuse the UI; keep runtime and protocol authority in rustX.**
 
 Selected DeepSeek Harness source is checked in under `src/presentation/`, pinned to
-`c291e7961a515f6d7af9304e7fd1d257929aef26`. Read [PROVENANCE.md](PROVENANCE.md)
+`ddefc45fbc7f8e46dd73185e68295696d1297887`. Read [PROVENANCE.md](PROVENANCE.md)
 and the per-file [source inventory](source-inventory.json). Building or running this
 package never fetches Harness and requires no Harness Host or Agent.
 
@@ -226,7 +226,8 @@ interactions, detached publication, cold settings resolution and the wire inspec
 Named provider gates and explicit observations establish ordering; there are no
 race-proof sleeps. The provider scenario's final report **and exit status** must
 succeed. Missing browser, Rust binary or emulator is a failure, never a silent skip.
-Desktop/mobile screenshots and failure traces go to ignored `test-results/`.
+Runtime screenshots and failure traces go to ignored `test-results/`. The ten deterministic
+#345 shell references are checked in under `test/e2e/shell.spec.ts-snapshots/`.
 
 ## Manual dogfooding procedure
 
@@ -238,16 +239,20 @@ configuration; running an unconfigured Web server intentionally fails closed.
 See [VALIDATION.md](VALIDATION.md) for executed checks, environment limits and
 which observations were automated versus manually inspected.
 
-## WEB-01 reusable foundation
+## Harness presentation shell
 
-Use direct imports from `presentation/primitives`, `presentation/layout` and
-`presentation/markdown`; there is one theme and no component registry or provider.
-`AppFrame` accepts optional `navigation`, `children`, `dock`, and `dockLabel`.
-It arranges three wide columns, moves the dock below at 1100px, and stacks at
-650px. Chat, Settings and Workspace supply their own occupants and actions.
-Menu/Popover own only their open/focus state. Dialog accepts controlled open/close.
-Button defaults to `type="button"`; Input and existing composer textareas retain
-native form semantics. Card/Feedback reuse the tokens for passive content/status.
+[SHELL-ARCHITECTURE.md](SHELL-ARCHITECTURE.md) records the #345 reset. Direct imports
+from `presentation/` form one Harness-derived foundation. AppFrame accepts Sidebar,
+main, right-panel and overlay seats. Its measured columns retain the upstream
+280px Sidebar, 56px rail, 1024px responsive collapse and right-panel constraints.
+The Sidebar Settings entry opens the shared modal/navigation frame; existing CFG3
+editors supply its content. Inspector uses the right panel and is closed initially.
+Connection settings are reachable from the Sidebar and Settings frame.
+
+Menus, HoverCards, Tooltips and Modals own only presentation/focus state. The
+workspace adapter projects native list/cwd, Host classification and current
+snapshot status. Only AppServerClient and rustX's native owners execute product
+operations. No old shell, alternate primitives or compatibility exports remain.
 
 `MarkdownText` receives `{ text, streaming?, labels? }`. Canonical content is always
 plain text from rustX. The parser freezes all but the final two blocks and caches
@@ -276,7 +281,7 @@ The normal real-server acceptance test still runs against the production build.
 Additional browser contracts use an isolated Vite fixture on port 5174, excluded
 from the production entry tree, to exercise native focus and layout at 390/900/1440px.
 See [PROVENANCE.md](PROVENANCE.md) for the source/closure audit and
-[VALIDATION.md](VALIDATION.md) for WEB-01 evidence.
+[RESET-345-VALIDATION.md](RESET-345-VALIDATION.md) for current shell evidence.
 
 ## CFG3 Settings
 

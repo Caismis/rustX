@@ -1,3 +1,5 @@
+import { showInspector } from './shell-actions';
+import { chooseWorkspace, connectionAction } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { test, expect } from '@playwright/test';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -21,8 +23,8 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await page.getByLabel('WebSocket endpoint').fill(fixture.endpoint);
     await page.getByLabel('Transport token').fill(fixture.token);
     await page.getByRole('button', { name: 'Connect', exact: true }).click();
-    await expect(page.locator('.status strong')).toHaveText('connected');
-    await page.getByLabel('Choose Workspace').selectOption({ label: 'Workspace A' });
+    await expect(page.locator('.status strong')).toHaveText('connected'); await showInspector(page);
+    await chooseWorkspace(page, 'Workspace A');
     await page.getByRole('button', { name: 'Create Session', exact: true }).click();
     await expect(message).toBeEnabled();
     const originalId = JSON.parse(await facts.innerText()).SessionId as string;
@@ -39,8 +41,8 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     popup = await command('model'); await popup.getByLabel('Filter options').press('Escape');
     await expect(popup).toHaveCount(0); await expect(message).toBeFocused();
     await expect(message).toHaveValue('/model');
-    await page.getByRole('button', { name: 'Reconnect', exact: true }).click();
-    await expect(page.locator('.status strong')).toHaveText('connected');
+    await connectionAction(page, 'Reconnect');
+    await expect(page.locator('.status strong')).toHaveText('connected'); await showInspector(page);
     await expect(facts).toContainText('fixture/second-model');
     await message.fill('/not-a-command'); await message.press('Enter');
     await expect(page.getByRole('alert')).toContainText('Unsupported command');
@@ -91,13 +93,14 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     const batches = readdirSync(root);
     expect(batches).toHaveLength(1);
     expect(readFileSync(join(root, batches[0], 'note.txt'), 'utf8')).toBe('Owned by native Session');
-    await page.getByRole('button', { name: 'Reconnect', exact: true }).click();
-    await expect(page.locator('.status strong')).toHaveText('connected');
+    await connectionAction(page, 'Reconnect');
+    await expect(page.locator('.status strong')).toHaveText('connected'); await showInspector(page);
     await expect(message).toBeEnabled();
     // Live settings are Conversation-owned. A new cold lineage uses the native
     // Session/launch configuration, never a browser copy of the old live values.
     await expect(facts).toContainText('fixture/console-model');
     await expect(facts).toContainText('policy');
+    await page.getByRole('button', { name: 'Close Inspector' }).click();
     await page.setViewportSize({ width: 390, height: 844 });
     await page.getByRole('button', { name: 'Remove draft upload' }).click();
     popup = await command('model'); await expect(popup.getByRole('option', { name: /fixture\/second-model/ })).toBeVisible();
